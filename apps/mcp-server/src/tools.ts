@@ -55,12 +55,20 @@ const DEFAULT_FINISH_TASK_REVIEW_MODE = 'off';
 
 type CaptureSourceMode = 'external_reference' | 'extracted_snapshot' | 'local_copy';
 type ReviewProposalMode = 'off' | 'suggest' | 'auto_propose';
+type MemoryProposalRule = 'review_queue' | 'disabled';
 type SensitiveTextScan = { ok: true } | { ok: false; reason: string };
+
+interface MemoryRulesContext {
+	globalMemoryRule?: unknown;
+	projectMemoryRule?: unknown;
+	taskMemoryProposalMode?: unknown;
+}
 
 interface ToolContext {
 	defaultVaultRoot?: string;
 	vaultConfigDir?: string;
 	graphProfile?: unknown;
+	memoryRules?: MemoryRulesContext;
 }
 
 export interface ToolInvocationContext extends ToolContext {
@@ -538,6 +546,68 @@ function coerceReviewProposalMode(value: unknown, fallback: ReviewProposalMode =
 	throw new ToolInputError('review_proposal_mode must be one of: off, suggest, auto_propose.');
 }
 
+function normalizeReviewProposalMode(value: unknown, fallback: ReviewProposalMode = DEFAULT_FINISH_TASK_REVIEW_MODE): ReviewProposalMode {
+	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+	return normalized === 'off' || normalized === 'suggest' || normalized === 'auto_propose'
+		? normalized
+		: fallback;
+}
+
+function defaultReviewProposalMode(context: ToolContext): ReviewProposalMode {
+	return normalizeReviewProposalMode(context.memoryRules?.taskMemoryProposalMode, DEFAULT_FINISH_TASK_REVIEW_MODE);
+}
+
+function normalizeMemoryProposalRule(value: unknown): MemoryProposalRule {
+	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+	return normalized === 'disabled' ? 'disabled' : 'review_queue';
+}
+
+function isProjectMemoryProposal(proposalKind: string, targetNote: string, projectHint: string): boolean {
+	const normalizedKind = proposalKind.trim().toLowerCase();
+	const normalizedTarget = targetNote.trim().toLowerCase();
+	return Boolean(
+		projectHint.trim()
+		|| normalizedKind.includes('project')
+		|| normalizedKind.includes('workspace')
+		|| normalizedKind.includes('repo')
+		|| normalizedTarget.startsWith('05_projects/')
+	);
+}
+
+function memoryProposalRuleFor(
+	proposalKind: string,
+	targetNote: string,
+	projectHint: string,
+	context: ToolContext
+): MemoryProposalRule {
+	const projectScoped = isProjectMemoryProposal(proposalKind, targetNote, projectHint);
+	return normalizeMemoryProposalRule(projectScoped
+		? context.memoryRules?.projectMemoryRule
+		: context.memoryRules?.globalMemoryRule);
+}
+
+function isMemoryProposalAllowed(
+	proposalKind: string,
+	targetNote: string,
+	projectHint: string,
+	context: ToolContext
+): boolean {
+	return memoryProposalRuleFor(proposalKind, targetNote, projectHint, context) !== 'disabled';
+}
+
+function assertMemoryProposalAllowed(
+	proposalKind: string,
+	targetNote: string,
+	projectHint: string,
+	context: ToolContext
+): void {
+	if (isMemoryProposalAllowed(proposalKind, targetNote, projectHint, context)) {
+		return;
+	}
+	const scope = isProjectMemoryProposal(proposalKind, targetNote, projectHint) ? 'project' : 'global';
+	throw new ToolInputError(`${scope} memory proposals are disabled by Tracekeeper memory rules.`);
+}
+
 interface ProjectScopeFilter {
 	projectHint: string;
 	projectId: string;
@@ -845,6 +915,9 @@ function buildFinishTaskProposals(
 	const proposals: Array<{ kind: string; path: string }> = [];
 	for (const group of groups) {
 		if (group.values.length === 0) {
+			continue;
+		}
+		if (!isMemoryProposalAllowed(group.kind, '', projectHint, context)) {
 			continue;
 		}
 		const note = createFinishTaskProposal(
@@ -3888,6 +3961,7 @@ function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolContext) {
 	const filename = buildSafeFilename(rawArgs.filename, 'proposal', context);
 	const taskId = coerceOptionalString(rawArgs.task_id) || null;
 	const now = new Date().toISOString();
+	assertMemoryProposalAllowed(proposalKind, targetNote, '', context);
 	assertNoSensitiveText([
 		{ label: 'content', value: content },
 		{ label: 'evidence', value: evidence },
@@ -4169,6 +4243,7 @@ function createDistillProposal(
 	proposalKind: string,
 	kindLabel: string,
 	contentItems: string[],
+	projectHint: string,
 	context: ToolContext
 ): { path: string } {
 	const body = [
@@ -4193,6 +4268,7 @@ function createDistillProposal(
 			risk_level: 'medium',
 			created_at: now,
 			task_id: taskId,
+			project_hint: projectHint || null,
 		},
 		body,
 		taskId,
@@ -4218,7 +4294,7 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 	const memoryCandidates = coerceStringOrStringArray(rawArgs.memory_candidates, 'memory_candidates');
 	const reviewProposalMode = coerceReviewProposalMode(
 		rawArgs.review_proposal_mode,
-		DEFAULT_FINISH_TASK_REVIEW_MODE
+		defaultReviewProposalMode(context)
 	);
 	const client = coerceOptionalString(rawArgs.client);
 	const projectHint = coerceOptionalString(rawArgs.project_hint);
@@ -4399,26 +4475,32 @@ function handleDistillSession(rawArgs: DistillSessionArgs, context: ToolContext)
 
 	const proposals: string[] = [];
 	if (decisions.length > 0) {
-		const proposal = createDistillProposal(
-			vaultRoot,
-			taskId,
-			'distill_decisions',
-			'Decisions',
-			decisions,
-			context
-		);
-		proposals.push(proposal.path);
+		if (isMemoryProposalAllowed('distill_decisions', '', projectHint, context)) {
+			const proposal = createDistillProposal(
+				vaultRoot,
+				taskId,
+				'distill_decisions',
+				'Decisions',
+				decisions,
+				projectHint,
+				context
+			);
+			proposals.push(proposal.path);
+		}
 	}
 	if (possiblePreferences.length > 0) {
-		const proposal = createDistillProposal(
-			vaultRoot,
-			taskId,
-			'distill_preferences',
-			'Possible Preferences',
-			possiblePreferences,
-			context
-		);
-		proposals.push(proposal.path);
+		if (isMemoryProposalAllowed('distill_preferences', '', projectHint, context)) {
+			const proposal = createDistillProposal(
+				vaultRoot,
+				taskId,
+				'distill_preferences',
+				'Possible Preferences',
+				possiblePreferences,
+				projectHint,
+				context
+			);
+			proposals.push(proposal.path);
+		}
 	}
 	updateAgentTaskRecord(vaultRoot, taskId, {
 		session_note: note.path,

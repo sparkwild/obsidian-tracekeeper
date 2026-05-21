@@ -441,8 +441,12 @@ const memoryProposalStatusLabel = (status: MemoryProposalStatus): string => {
 
 type GraphProfile = 'off' | 'advisory' | 'strict';
 type GraphProfileIssueSeverity = 'warning' | 'error';
+type MemoryProposalRule = 'review_queue' | 'disabled';
+type TaskMemoryProposalMode = 'off' | 'suggest' | 'auto_propose';
 
 const GRAPH_PROFILES: GraphProfile[] = ['off', 'advisory', 'strict'];
+const MEMORY_PROPOSAL_RULES: MemoryProposalRule[] = ['review_queue', 'disabled'];
+const TASK_MEMORY_PROPOSAL_MODES: TaskMemoryProposalMode[] = ['off', 'suggest', 'auto_propose'];
 
 const normalizeGraphProfileValue = (value: unknown): GraphProfile => {
 	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -460,6 +464,42 @@ const graphProfileLabel = (profile: GraphProfile): string => {
 		case 'advisory':
 		default:
 			return ui('建议', 'Advisory');
+	}
+};
+
+const normalizeMemoryProposalRule = (value: unknown): MemoryProposalRule => {
+	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+	return MEMORY_PROPOSAL_RULES.includes(normalized as MemoryProposalRule)
+		? normalized as MemoryProposalRule
+		: 'review_queue';
+};
+
+const memoryProposalRuleLabel = (rule: MemoryProposalRule): string => {
+	switch (rule) {
+		case 'disabled':
+			return ui('不接收提案', 'Do not accept proposals');
+		case 'review_queue':
+		default:
+			return ui('进入审核队列', 'Send to review queue');
+	}
+};
+
+const normalizeTaskMemoryProposalMode = (value: unknown): TaskMemoryProposalMode => {
+	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+	return TASK_MEMORY_PROPOSAL_MODES.includes(normalized as TaskMemoryProposalMode)
+		? normalized as TaskMemoryProposalMode
+		: 'off';
+};
+
+const taskMemoryProposalModeLabel = (mode: TaskMemoryProposalMode): string => {
+	switch (mode) {
+		case 'suggest':
+			return ui('建议生成', 'Suggest');
+		case 'auto_propose':
+			return ui('自动提交到审核队列', 'Auto-propose to review queue');
+		case 'off':
+		default:
+			return ui('关闭', 'Off');
 	}
 };
 
@@ -764,6 +804,11 @@ interface DesktopNodeApi {
 
 type StreamableHttpRuntimeOptionsWithGraphProfile = ConstructorParameters<typeof StreamableHttpMcpRuntime>[0] & {
 	graphProfile?: GraphProfile;
+	memoryRules?: {
+		globalMemoryRule: MemoryProposalRule;
+		projectMemoryRule: MemoryProposalRule;
+		taskMemoryProposalMode: TaskMemoryProposalMode;
+	};
 };
 
 interface AgentConnectionsSnapshot {
@@ -785,6 +830,9 @@ interface TracekeeperSettings {
 	runtimeToken: string;
 	runtimeTokenCreatedAt: string;
 	graphProfile: GraphProfile;
+	globalMemoryRule: MemoryProposalRule;
+	projectMemoryRule: MemoryProposalRule;
+	taskMemoryProposalMode: TaskMemoryProposalMode;
 }
 
 const DEFAULT_SETTINGS: TracekeeperSettings = {
@@ -794,6 +842,9 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 	runtimeToken: '',
 	runtimeTokenCreatedAt: '',
 	graphProfile: 'advisory',
+	globalMemoryRule: 'review_queue',
+	projectMemoryRule: 'review_queue',
+	taskMemoryProposalMode: 'off',
 };
 
 export default class TracekeeperPlugin extends Plugin {
@@ -957,6 +1008,9 @@ export default class TracekeeperPlugin extends Plugin {
 			? this.normalizeTimestamp(saved.runtimeTokenCreatedAt)
 			: new Date().toISOString();
 		next.graphProfile = normalizeGraphProfileValue(saved.graphProfile);
+		next.globalMemoryRule = normalizeMemoryProposalRule(saved.globalMemoryRule);
+		next.projectMemoryRule = normalizeMemoryProposalRule(saved.projectMemoryRule);
+		next.taskMemoryProposalMode = normalizeTaskMemoryProposalMode(saved.taskMemoryProposalMode);
 		return next;
 	}
 
@@ -1054,6 +1108,11 @@ export default class TracekeeperPlugin extends Plugin {
 			defaultVaultRoot: vaultRoot,
 			vaultConfigDir: this.app.vault.configDir,
 			graphProfile: this.settings.graphProfile,
+			memoryRules: {
+				globalMemoryRule: this.settings.globalMemoryRule,
+				projectMemoryRule: this.settings.projectMemoryRule,
+				taskMemoryProposalMode: this.settings.taskMemoryProposalMode,
+			},
 		};
 		const runtime = new StreamableHttpMcpRuntime(runtimeOptions);
 		this.mcpRuntime = runtime;
@@ -4204,14 +4263,10 @@ class TracekeeperActivityView extends ItemView {
 			this.runtimeStatusClass(snapshot.runtimeStatus)
 		);
 		this.renderStatusItem(statusBar, ui('当前仓库', 'Current repository'), this.formatVaultLabel(snapshot.vaultRoot));
-		this.renderStatusItem(statusBar, ui('记录', 'Records'), snapshot.structureStatus.state === 'initialized' ? ui('可读取', 'Readable') : snapshot.structureStatus.label);
-		this.renderStatusItem(statusBar, ui('知识库', 'Knowledge base'), snapshot.structureStatus.label);
-		this.renderStatusItem(statusBar, ui('权限', 'Permission'), ui('先审核再写入', 'Review before writing'));
 		this.renderStatusItem(statusBar, ui('刷新', 'Refresh'), this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt)));
 
 		const metrics = contentEl.createDiv({ cls: 'tracekeeper-metric-grid' });
 		this.renderMetricCard(metrics, ui('待审核', 'Pending review'), String(snapshot.recentProposals.filter((proposal) => proposal.approvalStatus === 'pending').length), ui('需要你确认的记忆更新', 'Memory updates waiting for your review'));
-		this.renderMetricCard(metrics, ui('来源请求', 'Source requests'), String(snapshot.recentSourceRequests.filter((request) => this.isSourceRequestPending(request.status)).length), ui('待处理资料请求', 'Pending material requests'));
 		this.renderMetricCard(metrics, ui('最近连接', 'Recent connections'), String(snapshot.recentAgentCount), ui('最近出现的 AI 工具', 'Recently seen AI tools'));
 		this.renderMetricCard(metrics, ui('工具使用', 'Tool usage'), String(snapshot.recentToolCallCount), ui('最近连接操作记录', 'Recent connection activity'));
 
@@ -5718,8 +5773,9 @@ class TracekeeperSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.addClass('tracekeeper-settings-root');
 		this.renderConnectionInfoSection(containerEl, snapshot);
-		this.renderAgentClientConfigSection(containerEl, snapshot);
 		this.renderTokenSection(containerEl);
+		this.renderAgentClientConfigSection(containerEl, snapshot);
+		this.renderMemoryRulesSection(containerEl);
 		this.renderKnowledgeRulesSection(containerEl);
 	}
 
@@ -5782,7 +5838,7 @@ class TracekeeperSettingTab extends PluginSettingTab {
 	private renderTokenSection(container: HTMLElement): void {
 		const section = this.createSection(
 			container,
-			ui('本地连接令牌', 'Local connection token'),
+			ui('令牌管理', 'Token management'),
 			ui('令牌只脱敏展示，复制时会复制完整值。', 'The token is masked here; copying uses the full value.')
 		);
 		const runtimeToken = this.plugin.settings.runtimeToken;
@@ -5808,6 +5864,77 @@ class TracekeeperSettingTab extends PluginSettingTab {
 				() => this.display()
 			).open();
 		});
+	}
+
+	private renderMemoryRulesSection(container: HTMLElement): void {
+		const section = this.createSection(
+			container,
+			ui('记忆规则', 'Memory rules'),
+			ui('设置 Agent 提交记忆更新时的默认规则。', 'Set default rules for agent-submitted memory updates.')
+		);
+		new Setting(section)
+			.setName(ui('全局记忆', 'Global memory'))
+			.setDesc(ui(
+				'控制通用偏好、长期决策等非项目级记忆是否进入审核队列。',
+				'Controls whether general preferences, long-term decisions, and other non-project memory enter the review queue.'
+			))
+			.addDropdown((dropdown) => {
+				for (const rule of MEMORY_PROPOSAL_RULES) {
+					dropdown.addOption(rule, memoryProposalRuleLabel(rule));
+				}
+				dropdown
+					.setValue(this.plugin.settings.globalMemoryRule)
+					.onChange((value: string) => {
+						this.plugin.settings.globalMemoryRule = normalizeMemoryProposalRule(value);
+						void this.plugin.saveSettings()
+							.then(() => this.plugin.restartMcpRuntime())
+							.catch((error) => {
+								console.error('tracekeeper failed to update global memory rule', error);
+							});
+					});
+			});
+		new Setting(section)
+			.setName(ui('项目记忆', 'Project memory'))
+			.setDesc(ui(
+				'控制项目、仓库或工作区相关记忆是否进入审核队列。',
+				'Controls whether project, repository, or workspace-scoped memory enters the review queue.'
+			))
+			.addDropdown((dropdown) => {
+				for (const rule of MEMORY_PROPOSAL_RULES) {
+					dropdown.addOption(rule, memoryProposalRuleLabel(rule));
+				}
+				dropdown
+					.setValue(this.plugin.settings.projectMemoryRule)
+					.onChange((value: string) => {
+						this.plugin.settings.projectMemoryRule = normalizeMemoryProposalRule(value);
+						void this.plugin.saveSettings()
+							.then(() => this.plugin.restartMcpRuntime())
+							.catch((error) => {
+								console.error('tracekeeper failed to update project memory rule', error);
+							});
+					});
+			});
+		new Setting(section)
+			.setName(ui('任务结束记忆提案', 'Task closeout memory proposals'))
+			.setDesc(ui(
+				'作为 Agent 未显式指定时的默认规则；即使自动提交，也只会进入审核队列。',
+				'Default when an agent does not specify a mode; even auto-proposals only enter the review queue.'
+			))
+			.addDropdown((dropdown) => {
+				for (const mode of TASK_MEMORY_PROPOSAL_MODES) {
+					dropdown.addOption(mode, taskMemoryProposalModeLabel(mode));
+				}
+				dropdown
+					.setValue(this.plugin.settings.taskMemoryProposalMode)
+					.onChange((value: string) => {
+						this.plugin.settings.taskMemoryProposalMode = normalizeTaskMemoryProposalMode(value);
+						void this.plugin.saveSettings()
+							.then(() => this.plugin.restartMcpRuntime())
+							.catch((error) => {
+								console.error('tracekeeper failed to update task memory proposal mode', error);
+							});
+					});
+			});
 	}
 
 	private renderKnowledgeRulesSection(container: HTMLElement): void {

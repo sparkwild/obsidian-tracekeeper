@@ -48,6 +48,7 @@ class McpJsonRpcHandler {
         this.defaultVaultRoot = options.defaultVaultRoot;
         this.vaultConfigDir = options.vaultConfigDir;
         this.graphProfile = options.graphProfile;
+        this.memoryRules = options.memoryRules;
         this.runtimeVersion = options.runtimeVersion || exports.MCP_SERVER_VERSION;
         this.transport = options.transport || exports.STREAMABLE_HTTP_TRANSPORT;
     }
@@ -138,6 +139,7 @@ class McpJsonRpcHandler {
             defaultVaultRoot: this.defaultVaultRoot,
             vaultConfigDir: this.vaultConfigDir,
             graphProfile: this.graphProfile,
+            memoryRules: this.memoryRules,
             agentId: state.agentId,
             sessionId: state.sessionId,
             clientName: state.clientName,
