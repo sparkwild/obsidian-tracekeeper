@@ -475,6 +475,7 @@ interface TracekeeperSettings {
 	defaultAgentScope: string;
 	mcpPort: number;
 	runtimeToken: string;
+	runtimeTokenCreatedAt: string;
 	graphProfile: GraphProfile;
 }
 
@@ -482,6 +483,7 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 	defaultAgentScope: 'vault',
 	mcpPort: DEFAULT_MCP_PORT,
 	runtimeToken: '',
+	runtimeTokenCreatedAt: '',
 	graphProfile: 'advisory',
 };
 
@@ -648,11 +650,21 @@ export default class TracekeeperPlugin extends Plugin {
 			? saved.defaultAgentScope.trim()
 			: DEFAULT_SETTINGS.defaultAgentScope;
 		next.mcpPort = this.normalizePort(saved.mcpPort ?? next.mcpPort);
-		next.runtimeToken = typeof saved.runtimeToken === 'string' && saved.runtimeToken.trim()
-			? saved.runtimeToken.trim()
-			: this.generateRuntimeToken();
+		const savedRuntimeToken = typeof saved.runtimeToken === 'string' ? saved.runtimeToken.trim() : '';
+		next.runtimeToken = savedRuntimeToken || this.generateRuntimeToken();
+		next.runtimeTokenCreatedAt = savedRuntimeToken
+			? this.normalizeTimestamp(saved.runtimeTokenCreatedAt)
+			: new Date().toISOString();
 		next.graphProfile = normalizeGraphProfileValue(saved.graphProfile);
 		return next;
+	}
+
+	private normalizeTimestamp(value: unknown): string {
+		const trimmed = typeof value === 'string' ? value.trim() : '';
+		if (trimmed && Number.isFinite(Date.parse(trimmed))) {
+			return trimmed;
+		}
+		return new Date().toISOString();
 	}
 
 	private normalizePort(value: unknown): number {
@@ -681,6 +693,17 @@ export default class TracekeeperPlugin extends Plugin {
 		return randomBytes(24).toString('hex');
 	}
 
+	formatRuntimeToken(value: string): string {
+		const trimmed = value.trim();
+		if (!trimmed) {
+			return ui('未生成', 'Not generated');
+		}
+		if (trimmed.length <= 12) {
+			return `${trimmed.slice(0, 2)}••••${trimmed.slice(-2)}`;
+		}
+		return `${trimmed.slice(0, 6)}••••${trimmed.slice(-6)}`;
+	}
+
 	async restartMcpRuntime(): Promise<void> {
 		await this.stopMcpRuntime();
 		await this.startMcpRuntime();
@@ -689,6 +712,7 @@ export default class TracekeeperPlugin extends Plugin {
 
 	async regenerateRuntimeToken(): Promise<void> {
 		this.settings.runtimeToken = this.generateRuntimeToken();
+		this.settings.runtimeTokenCreatedAt = new Date().toISOString();
 		await this.saveSettings();
 		new Notice(ui('本地连接令牌已重新生成，请更新已配置的 AI 工具。', 'Local connection token regenerated. Update configured AI tools.'));
 		await this.restartMcpRuntime();
@@ -5037,12 +5061,30 @@ class TracekeeperSettingTab extends PluginSettingTab {
 					})
 			);
 
+		const runtimeToken = this.plugin.settings.runtimeToken;
+		const runtimeTokenSummary = this.plugin.formatRuntimeToken(runtimeToken);
+		const runtimeTokenCreatedAt = this.plugin.formatDisplayTime(Date.parse(this.plugin.settings.runtimeTokenCreatedAt));
+
 		new Setting(containerEl)
 			.setName(ui('本地连接令牌', 'Local connection token'))
 			.setDesc(
-				this.plugin.settings.runtimeToken
-					? ui('已生成。令牌不会明文展示，只会写入 AI 工具配置。', 'Generated. The token is not displayed and is only written into AI tool configs.')
+				runtimeToken
+					? ui(
+						`已生成：${runtimeTokenSummary}；创建时间：${runtimeTokenCreatedAt}。令牌仅脱敏展示，可复制完整令牌写入 AI 工具配置。`,
+						`Generated: ${runtimeTokenSummary}; created at: ${runtimeTokenCreatedAt}. The token is masked here; copy the full token into AI tool configs.`
+					)
 					: ui('尚未生成，保存设置后会自动生成。', 'Not generated yet. It will be generated after settings are saved.')
+			)
+			.addButton((button) =>
+				button
+					.setButtonText(ui('复制令牌', 'Copy token'))
+					.setDisabled(!runtimeToken)
+					.onClick(() => {
+						void this.plugin.copyToClipboard(
+							runtimeToken,
+							ui('已复制本地连接令牌。', 'Local connection token copied.')
+						);
+					})
 			)
 			.addButton((button) =>
 				button
