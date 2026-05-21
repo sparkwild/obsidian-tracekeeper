@@ -5023,31 +5023,6 @@ class TracekeeperSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName(ui('状态文本', 'Status message'))
-			.setDesc(ui(
-				'开启欢迎信息后显示在活动页顶部；留空则使用默认文案。',
-				'Shown at the top of the activity page when welcome messages are enabled. Leave empty to use the default message.'
-			))
-			.addText((text) =>
-				text
-					.setPlaceholder(defaultStatusMessage())
-					.setValue(this.plugin.settings.statusMessage)
-					.onChange((value: string) => {
-						this.plugin.settings.statusMessage = value;
-						void this.plugin.saveSettings();
-					})
-			)
-			.addExtraButton((button) =>
-				button
-					.setIcon('rotate-ccw')
-					.setTooltip(ui('恢复默认', 'Restore default'))
-					.onClick(() => {
-						this.plugin.settings.statusMessage = DEFAULT_SETTINGS.statusMessage;
-						void this.plugin.saveSettings().then(() => this.display());
-					})
-			);
-
-		new Setting(containerEl)
 			.setName(ui('知识图谱检查', 'Graph health profile'))
 			.setDesc(ui(
 				'off 仅保留手动查看；advisory 只给建议；strict 会把入口、hub、孤立节点和未解析链接标为阻塞问题。',
