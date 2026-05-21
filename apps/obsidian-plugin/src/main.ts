@@ -5070,10 +5070,10 @@ class TracekeeperSettingTab extends PluginSettingTab {
 			.setDesc(
 				runtimeToken
 					? ui(
-						`已生成：${runtimeTokenSummary}；创建时间：${runtimeTokenCreatedAt}。令牌仅脱敏展示，可复制完整令牌写入 AI 工具配置。`,
-						`Generated: ${runtimeTokenSummary}; created at: ${runtimeTokenCreatedAt}. The token is masked here; copy the full token into AI tool configs.`
+						`${runtimeTokenSummary}；创建时间：${runtimeTokenCreatedAt}`,
+						`${runtimeTokenSummary}; created at: ${runtimeTokenCreatedAt}`
 					)
-					: ui('尚未生成，保存设置后会自动生成。', 'Not generated yet. It will be generated after settings are saved.')
+					: ui('未生成', 'Not generated')
 			)
 			.addButton((button) =>
 				button
