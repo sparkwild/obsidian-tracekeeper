@@ -4728,7 +4728,7 @@ class RuntimeTokenRegenerateConfirmModal extends Modal {
 		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
 		cancel.addEventListener('click', () => this.close());
 		const confirm = actions.createEl('button', {
-			text: ui('重新生成', 'Regenerate'),
+			text: ui('确认', 'Confirm'),
 			cls: 'mod-warning',
 		});
 		confirm.addEventListener('click', () => {
