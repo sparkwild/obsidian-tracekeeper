@@ -60,6 +60,8 @@ const MAX_TASK_ROWS = 6;
 const MAX_AUDIT_ROWS = 12;
 const MAX_SOURCE_STATUS_ROWS = 20;
 const MAX_REVIEW_QUEUE_ROWS = 20;
+const ACTIVITY_TIMELINE_PREVIEW_ROWS = 5;
+const ACTIVITY_TIMELINE_PAGE_SIZE = 10;
 const MAX_ACTIVITY_CONTEXT_PACK_ROWS = 5;
 const MAX_ACTIVITY_SOURCE_CAPTURE_ROWS = 5;
 const MAX_ACTIVITY_PROPOSAL_ROWS = 5;
@@ -298,6 +300,24 @@ interface MemoryReviewQueueSnapshot {
 	updatedAt: string;
 }
 
+interface ActivityTimelineItem {
+	time: number;
+	type: string;
+	title: string;
+	meta: string;
+	body: string;
+	path: string;
+}
+
+interface ActivityTimelineSnapshot {
+	items: ActivityTimelineItem[];
+	page: number;
+	pageSize: number;
+	totalItems: number;
+	totalPages: number;
+	updatedAt: string;
+}
+
 interface GraphHealthHubCandidate {
 	path: string;
 	degree: number;
@@ -354,6 +374,7 @@ interface AgentActivitySnapshot {
 	recentSourceRequests: SourceRequestRecord[];
 	recentProposals: MemoryProposalRecord[];
 	recentAuditEvents: AuditEventRecord[];
+	timelineItems: ActivityTimelineItem[];
 	missingTaskFolder: boolean;
 	missingAuditSources: boolean;
 	updatedAt: string;
@@ -575,7 +596,7 @@ export default class TracekeeperPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'open-audit-log',
-			name: ui('打开操作记录', 'Open activity log'),
+			name: ui('打开活动时间线', 'Open activity timeline'),
 			callback: () => {
 				void this.openPluginView(TRACEKEEPER_AUDIT_LOG_VIEW);
 			},
@@ -1168,6 +1189,14 @@ export default class TracekeeperPlugin extends Plugin {
 			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditLog) === null;
 		const auditDirMissing =
 			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditDir) === null;
+		const timelineItems = this.buildActivityTimelineItems({
+			tasks: recentTasks,
+			contextPacks: recentContextPacks,
+			sourceCaptures: recentSourceCaptures,
+			sourceRequests: recentSourceRequests,
+			proposals: recentProposals,
+			auditEvents: recentAuditEvents,
+		}).slice(0, ACTIVITY_TIMELINE_PREVIEW_ROWS);
 
 		return {
 			runtimeStatus: this.getRuntimeViewStatus(),
@@ -1179,9 +1208,131 @@ export default class TracekeeperPlugin extends Plugin {
 			recentSourceRequests,
 			recentProposals,
 			recentAuditEvents,
+			timelineItems,
 			missingTaskFolder: taskFolderMissing,
 			missingAuditSources: auditLogMissing && auditDirMissing,
 			updatedAt: new Date().toISOString(),
+		};
+	}
+
+	async loadActivityTimelineSnapshot(
+		page: number,
+		pageSize = ACTIVITY_TIMELINE_PAGE_SIZE
+	): Promise<ActivityTimelineSnapshot> {
+		const safePageSize = Math.max(1, Math.floor(pageSize));
+		const [
+			tasks,
+			contextPacks,
+			sourceCaptures,
+			sourceRequests,
+			proposals,
+			auditEvents,
+		] = await Promise.all([
+			this.readRecentAgentTasks(Number.MAX_SAFE_INTEGER),
+			this.readRecentContextPacks(Number.MAX_SAFE_INTEGER),
+			this.readRecentSourceCaptures(Number.MAX_SAFE_INTEGER),
+			this.readRecentSourceRequests(Number.MAX_SAFE_INTEGER),
+			this.readRecentMemoryProposals(Number.MAX_SAFE_INTEGER),
+			this.readRecentAuditEvents(Number.MAX_SAFE_INTEGER),
+		]);
+		const timelineItems = this.buildActivityTimelineItems({
+			tasks,
+			contextPacks,
+			sourceCaptures,
+			sourceRequests,
+			proposals,
+			auditEvents,
+		});
+		const totalItems = timelineItems.length;
+		const totalPages = Math.max(1, Math.ceil(totalItems / safePageSize));
+		const safePage = Math.min(Math.max(1, Math.floor(page) || 1), totalPages);
+		const start = (safePage - 1) * safePageSize;
+
+		return {
+			items: timelineItems.slice(start, start + safePageSize),
+			page: safePage,
+			pageSize: safePageSize,
+			totalItems,
+			totalPages,
+			updatedAt: new Date().toISOString(),
+		};
+	}
+
+	private buildActivityTimelineItems(input: {
+		tasks: AgentTaskRecord[];
+		contextPacks: ContextPackRecord[];
+		sourceCaptures: SourceCaptureRecord[];
+		sourceRequests: SourceRequestRecord[];
+		proposals: MemoryProposalRecord[];
+		auditEvents: AuditEventRecord[];
+	}): ActivityTimelineItem[] {
+		return [
+			...input.tasks.map((task) => ({
+				time: task.sortTimestamp,
+				type: ui('任务', 'Task'),
+				title: task.taskId,
+				meta: `${task.agent} • ${task.status}`,
+				body: task.objective || task.snippet,
+				path: task.path,
+			})),
+			...input.contextPacks.map((contextPack) => ({
+				time: contextPack.sortTimestamp,
+				type: 'context',
+				title: contextPack.title,
+				meta: contextPack.taskId,
+				body: contextPack.snippet,
+				path: contextPack.path,
+			})),
+			...input.sourceCaptures.map((source) => ({
+				time: source.sortTimestamp,
+				type: ui('来源', 'Source'),
+				title: source.sourceKind,
+				meta: source.mode || source.type,
+				body: source.source || source.snippet,
+				path: source.path,
+			})),
+			...input.sourceRequests.map((request) => ({
+				time: request.sortTimestamp,
+				type: ui('来源请求', 'Source request'),
+				title: request.sourceKind,
+				meta: request.status,
+				body: request.source || request.summary,
+				path: request.path,
+			})),
+			...input.proposals.map((proposal) => ({
+				time: proposal.sortTimestamp,
+				type: ui('提案', 'Proposal'),
+				title: proposal.proposalId,
+				meta: `${memoryProposalStatusLabel(proposal.approvalStatus)} • ${proposal.proposalKind}`,
+				body: proposal.snippet,
+				path: proposal.path,
+			})),
+			...input.auditEvents.map((event) => this.toActivityTimelineAuditItem(event)),
+		].sort((a, b) => b.time - a.time);
+	}
+
+	private toActivityTimelineAuditItem(event: AuditEventRecord): ActivityTimelineItem {
+		const isConnection =
+			event.eventType === 'connection' ||
+			event.eventType === 'agent-connection-event' ||
+			event.action === 'connection' ||
+			event.action === 'mcp.initialize';
+		const agentLabel = this.formatAgentDisplayName(event.clientName, event.agentId);
+		return {
+			time: event.sortTimestamp,
+			type: event.toolName
+				? ui(`${agentLabel} 操作`, `${agentLabel} action`)
+				: isConnection
+					? ui(`${agentLabel} 连接`, `${agentLabel} connection`)
+					: ui('记录', 'Record'),
+			title: event.toolName
+				? this.formatToolDisplayName(event.toolName)
+				: isConnection
+					? ui('建立连接', 'Connected')
+					: event.action,
+			meta: event.resultStatus ? this.formatResultLabel(event.resultStatus) : event.actor,
+			body: event.reason || event.snippet,
+			path: event.target || event.path,
 		};
 	}
 
@@ -3064,6 +3215,24 @@ export default class TracekeeperPlugin extends Plugin {
 		new Notice(successMessage);
 	}
 
+	renderTimelineItem(container: HTMLElement, item: ActivityTimelineItem): void {
+		const row = container.createDiv({ cls: 'tracekeeper-timeline__item' });
+		row.createEl('div', { text: item.type, cls: 'tracekeeper-badge' });
+		const body = row.createDiv({ cls: 'tracekeeper-timeline__body' });
+		body.createEl('strong', {
+			text: `${item.title || ui('未命名', 'Untitled')} • ${this.formatDisplayTime(item.time)}`,
+		});
+		if (item.meta) {
+			body.createEl('div', { text: item.meta, cls: 'tracekeeper-view__description' });
+		}
+		if (item.body) {
+			body.createEl('div', { text: this.trimText(item.body, 160) });
+		}
+		if (item.path) {
+			body.createEl('small', { text: item.path });
+		}
+	}
+
 	formatToolDisplayName(toolName: string): string {
 		const normalized = toolName.replace(/^tracekeeper[._]/, '').trim();
 		const labels: Record<string, string> = {
@@ -3488,75 +3657,16 @@ class TracekeeperActivityView extends ItemView {
 			this.renderTaskEntry(currentSection, snapshot.currentTask, true);
 		}
 
-		const timelineItems = [
-			...snapshot.recentTasks.map((task) => ({
-				time: task.sortTimestamp,
-				type: ui('任务', 'Task'),
-				title: task.taskId,
-				meta: `${task.agent} • ${task.status}`,
-				body: task.objective || task.snippet,
-				path: task.path,
-			})),
-			...snapshot.recentContextPacks.map((contextPack) => ({
-				time: contextPack.sortTimestamp,
-				type: 'context',
-				title: contextPack.title,
-				meta: contextPack.taskId,
-				body: contextPack.snippet,
-				path: contextPack.path,
-			})),
-			...snapshot.recentSourceCaptures.map((source) => ({
-				time: source.sortTimestamp,
-				type: ui('来源', 'Source'),
-				title: source.sourceKind,
-				meta: source.mode || source.type,
-				body: source.source || source.snippet,
-				path: source.path,
-			})),
-			...snapshot.recentSourceRequests.map((request) => ({
-				time: request.sortTimestamp,
-				type: ui('来源请求', 'Source request'),
-				title: request.sourceKind,
-				meta: request.status,
-				body: request.source || request.summary,
-				path: request.path,
-			})),
-			...snapshot.recentProposals.map((proposal) => ({
-				time: proposal.sortTimestamp,
-				type: ui('提案', 'Proposal'),
-				title: proposal.proposalId,
-				meta: `${memoryProposalStatusLabel(proposal.approvalStatus)} • ${proposal.proposalKind}`,
-				body: proposal.snippet,
-				path: proposal.path,
-			})),
-			...snapshot.recentAuditEvents.map((event) => {
-				const isConnection =
-					event.eventType === 'connection' ||
-					event.eventType === 'agent-connection-event' ||
-					event.action === 'connection' ||
-					event.action === 'mcp.initialize';
-				const agentLabel = this.plugin.formatAgentDisplayName(event.clientName, event.agentId);
-				return {
-					time: event.sortTimestamp,
-					type: event.toolName
-						? ui(`${agentLabel} 操作`, `${agentLabel} action`)
-						: isConnection
-							? ui(`${agentLabel} 连接`, `${agentLabel} connection`)
-							: ui('记录', 'Record'),
-					title: event.toolName
-						? this.plugin.formatToolDisplayName(event.toolName)
-						: isConnection
-							? ui('建立连接', 'Connected')
-							: event.action,
-					meta: event.resultStatus ? this.plugin.formatResultLabel(event.resultStatus) : event.actor,
-					body: event.reason || event.snippet,
-					path: event.target || event.path,
-				};
-			}),
-		].sort((a, b) => b.time - a.time).slice(0, 18);
-
 		const timeline = contentEl.createDiv({ cls: 'tracekeeper-card' });
-		timeline.createEl('h3', { text: ui('活动时间线', 'Activity timeline') });
+		const timelineHeader = timeline.createDiv({ cls: 'tracekeeper-card__header' });
+		timelineHeader.createEl('h3', { text: ui('活动时间线', 'Activity timeline') });
+		const viewAllButton = timelineHeader.createEl('button', {
+			text: ui('查看全部', 'View all'),
+		});
+		viewAllButton.addEventListener('click', () => {
+			void this.plugin.openPluginView(TRACEKEEPER_AUDIT_LOG_VIEW);
+		});
+		const timelineItems = snapshot.timelineItems;
 		if (timelineItems.length === 0) {
 			this.renderEmptyState(
 				timeline,
@@ -3566,19 +3676,7 @@ class TracekeeperActivityView extends ItemView {
 		} else {
 			const list = timeline.createDiv({ cls: 'tracekeeper-timeline' });
 			for (const item of timelineItems) {
-				const row = list.createDiv({ cls: 'tracekeeper-timeline__item' });
-				row.createEl('div', { text: item.type, cls: 'tracekeeper-badge' });
-				const body = row.createDiv({ cls: 'tracekeeper-timeline__body' });
-				body.createEl('strong', { text: `${item.title || ui('未命名', 'Untitled')} • ${this.plugin.formatDisplayTime(item.time)}` });
-				if (item.meta) {
-					body.createEl('div', { text: item.meta, cls: 'tracekeeper-view__description' });
-				}
-				if (item.body) {
-					body.createEl('div', { text: this.plugin.trimText(item.body, 160) });
-				}
-				if (item.path) {
-					body.createEl('small', { text: item.path });
-				}
+				this.plugin.renderTimelineItem(list, item);
 			}
 		}
 	}
@@ -4797,6 +4895,8 @@ class TracekeeperMemoryInspectorView extends ItemView {
 }
 
 class TracekeeperAuditLogView extends ItemView {
+	private page = 1;
+
 	constructor(
 		leaf: WorkspaceLeaf,
 		private plugin: TracekeeperPlugin
@@ -4809,7 +4909,7 @@ class TracekeeperAuditLogView extends ItemView {
 	}
 
 	getDisplayText() {
-		return ui('操作记录', 'Activity log');
+		return ui('活动时间线', 'Activity timeline');
 	}
 
 	getViewData() {
@@ -4826,22 +4926,87 @@ class TracekeeperAuditLogView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
-		this.render();
+		await this.refresh();
 	}
 
-	private render() {
+	private async refresh(): Promise<void> {
+		const snapshot = await this.plugin.loadActivityTimelineSnapshot(
+			this.page,
+			ACTIVITY_TIMELINE_PAGE_SIZE
+		);
+		this.page = snapshot.page;
+		this.render(snapshot);
+	}
+
+	private render(snapshot: ActivityTimelineSnapshot): void {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass('tracekeeper-view-root');
 
-		contentEl.createEl('h2', { text: ui('操作记录', 'Activity log'), cls: 'tracekeeper-view__title' });
-		contentEl.createEl('p', {
+		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
+		header.createDiv().createEl('h2', {
+			text: ui('活动时间线', 'Activity timeline'),
+			cls: 'tracekeeper-view__title',
+		});
+		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
+		const refreshButton = actions.createEl('button', {
+			text: ui('刷新', 'Refresh'),
+			cls: 'mod-cta',
+		});
+		refreshButton.addEventListener('click', () => {
+			void this.refresh();
+		});
+
+		const summary = contentEl.createDiv({ cls: 'tracekeeper-view__description' });
+		summary.setText(ui(
+			`共 ${snapshot.totalItems} 条 · 第 ${snapshot.page} / ${snapshot.totalPages} 页`,
+			`${snapshot.totalItems} total · Page ${snapshot.page} of ${snapshot.totalPages}`
+		));
+
+		if (snapshot.items.length === 0) {
+			this.renderEmptyState(
+				contentEl,
+				ui('还没有可展示的活动。', 'No activity to display yet.'),
+				ui('开始使用 AI 助手后，这里会显示活动记录。', 'Activity records appear here after your AI assistant starts using Tracekeeper.')
+			);
+			return;
+		}
+
+		const list = contentEl.createDiv({ cls: 'tracekeeper-card tracekeeper-timeline-page' });
+		const timeline = list.createDiv({ cls: 'tracekeeper-timeline' });
+		for (const item of snapshot.items) {
+			this.plugin.renderTimelineItem(timeline, item);
+		}
+		this.renderPagination(contentEl, snapshot);
+	}
+
+	private renderPagination(container: HTMLElement, snapshot: ActivityTimelineSnapshot): void {
+		const pager = container.createDiv({ cls: 'tracekeeper-pagination' });
+		const previous = pager.createEl('button', { text: ui('上一页', 'Previous') });
+		previous.disabled = snapshot.page <= 1;
+		previous.addEventListener('click', () => {
+			this.page = Math.max(1, snapshot.page - 1);
+			void this.refresh();
+		});
+		pager.createEl('span', {
 			text: ui(
-				'连接、审核和写回操作会形成记录，便于你追溯谁在什么时候改了什么。最近活动也会显示在活动页中。',
-				'Connection, review, and writeback actions are recorded so you can trace what changed and when. Recent activity is also shown on the activity page.'
+				`第 ${snapshot.page} / ${snapshot.totalPages} 页`,
+				`Page ${snapshot.page} of ${snapshot.totalPages}`
 			),
 			cls: 'tracekeeper-view__description',
 		});
+		const next = pager.createEl('button', { text: ui('下一页', 'Next') });
+		next.disabled = snapshot.page >= snapshot.totalPages;
+		next.addEventListener('click', () => {
+			this.page = Math.min(snapshot.totalPages, snapshot.page + 1);
+			void this.refresh();
+		});
+	}
+
+	private renderEmptyState(container: HTMLElement, title: string, detail: string): void {
+		const state = container.createDiv({ cls: 'tracekeeper-empty-state' });
+		state.createEl('strong', { text: title });
+		state.createEl('p', { text: detail });
 	}
 }
 

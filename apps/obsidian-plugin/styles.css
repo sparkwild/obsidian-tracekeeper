@@ -193,6 +193,10 @@
 	margin-bottom: 8px;
 }
 
+.tracekeeper-card__header h3 {
+	margin: 0;
+}
+
 .tracekeeper-badge-row,
 .tracekeeper-action-row,
 .tracekeeper-filter-tabs {
@@ -347,6 +351,18 @@
 
 .tracekeeper-timeline__body {
 	min-width: 0;
+}
+
+.tracekeeper-timeline-page {
+	margin-bottom: 10px;
+}
+
+.tracekeeper-pagination {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 10px;
 }
 
 .tracekeeper-table-list {
