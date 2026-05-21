@@ -1953,7 +1953,7 @@ export default class TracekeeperPlugin extends Plugin {
 			capabilities: {},
 			clientInfo: {
 				name: 'tracekeeper-plugin-ui',
-				version: '0.1.6',
+				version: '0.1.7',
 			},
 		}, false);
 		if (!this.isRecord(result)) {
@@ -3745,7 +3745,10 @@ class TracekeeperReviewQueueView extends ItemView {
 			this.renderEmptyState(
 				contentEl,
 				ui('还没有待审核的记忆更新。', 'No memory updates waiting for review yet.'),
-				ui('长期记忆、用户偏好和重要决定会先进入审核队列，由你确认后才会写入。', 'Long-term memory, preferences, and important decisions appear here for your review before they are saved.')
+				ui(
+					'审核队列只在 AI 助手提交记忆提案后出现内容：通过 tracekeeper.propose_memory、tracekeeper.distill_session，或在 tracekeeper.finish_task 中启用 review_proposal_mode。先完成任务 closeout，再到这里决定是否批准。Tracekeeper 不会自动写入长期记忆。',
+					'Proposals appear here only after an agent submits one: tracekeeper.propose_memory, tracekeeper.distill_session, or tracekeeper.finish_task with review_proposal_mode enabled. Finish task closeout first, then approve here. Tracekeeper does not write durable memory automatically.'
+				)
 			);
 			return;
 		}

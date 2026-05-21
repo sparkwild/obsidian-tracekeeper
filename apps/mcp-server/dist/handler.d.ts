@@ -1,6 +1,6 @@
 import { type JsonRpcResponse } from './protocol';
 export declare const MCP_PROTOCOL_VERSION = "2025-06-18";
-export declare const MCP_SERVER_VERSION = "0.1.6";
+export declare const MCP_SERVER_VERSION = "0.1.7";
 export declare const STREAMABLE_HTTP_TRANSPORT = "streamable-http";
 export interface McpConnectionState {
     sessionId: string;

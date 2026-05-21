@@ -41,6 +41,8 @@ const AUDIT_LOG_PATH = '00_control/audit_log.md';
 const MAX_LIST_QUEUE_ITEMS = 20;
 const MAX_AUDIT_ITEMS = 20;
 const MAX_APPROVED_WRITEBACKS = 20;
+const MAX_PROJECT_TOOL_ITEMS = 20;
+const MAX_PROJECT_SCOPE_CANDIDATES = 8;
 const CONTEXT_PACK_DIR = '06_outputs/context_packs';
 const SESSION_NOTE_DIR = '02_timeline/sessions';
 const AGENT_TASK_DIR = '02_timeline/agent_tasks';
@@ -49,8 +51,10 @@ const SOURCES_DIR = '03_sources';
 const SOURCE_ANALYSIS_REPORT_DIR = '06_outputs/source_analysis';
 const MEMORY_PROPOSAL_DIR = '01_inbox/review_queue';
 const MAX_SOURCE_EXCERPT_LENGTH = 1000;
+const DEFAULT_FINISH_TASK_REVIEW_MODE = 'off';
 
 type CaptureSourceMode = 'external_reference' | 'extracted_snapshot' | 'local_copy';
+type ReviewProposalMode = 'off' | 'suggest' | 'auto_propose';
 type SensitiveTextScan = { ok: true } | { ok: false; reason: string };
 
 interface ToolContext {
@@ -93,6 +97,8 @@ const READ_ONLY_TOOL_NAMES = new Set([
 	'tracekeeper.status',
 	'tracekeeper.graph_health',
 	'tracekeeper.recall',
+	'tracekeeper.project_context',
+	'tracekeeper.project_history',
 	'tracekeeper.read_note',
 	'tracekeeper.list_review_queue',
 	'tracekeeper.list_source_requests',
@@ -133,6 +139,8 @@ type ToolName =
 	| 'tracekeeper.graph_health'
 	| 'tracekeeper.start_task'
 	| 'tracekeeper.recall'
+	| 'tracekeeper.project_context'
+	| 'tracekeeper.project_history'
 	| 'tracekeeper.read_note'
 	| 'tracekeeper.list_review_queue'
 	| 'tracekeeper.list_source_requests'
@@ -154,6 +162,8 @@ const TOOL_NAME_SET = new Set<string>([
 	'tracekeeper.graph_health',
 	'tracekeeper.start_task',
 	'tracekeeper.recall',
+	'tracekeeper.project_context',
+	'tracekeeper.project_history',
 	'tracekeeper.read_note',
 	'tracekeeper.list_review_queue',
 	'tracekeeper.list_source_requests',
@@ -192,6 +202,24 @@ interface StartTaskArgs extends ToolArgs {
 	project_hint?: unknown;
 }
 
+interface ProjectScopeArgs extends ToolArgs {
+	project_hint?: unknown;
+	project_id?: unknown;
+	repo_path?: unknown;
+	repo?: unknown;
+	project_path?: unknown;
+}
+
+interface ProjectContextArgs extends ProjectScopeArgs {
+	query?: unknown;
+	max_items?: unknown;
+}
+
+interface ProjectHistoryArgs extends ProjectScopeArgs {
+	query?: unknown;
+	max_items?: unknown;
+}
+
 interface BuildContextPackArgs extends ToolArgs {
 	query?: unknown;
 	task_id?: unknown;
@@ -211,6 +239,12 @@ interface FinishTaskArgs extends ToolArgs {
 	task_id?: unknown;
 	summary?: unknown;
 	outcomes?: unknown;
+	decisions?: unknown;
+	solution_changes?: unknown;
+	lessons?: unknown;
+	preferences?: unknown;
+	memory_candidates?: unknown;
+	review_proposal_mode?: unknown;
 	next_actions?: unknown;
 	client?: unknown;
 	project_hint?: unknown;
@@ -491,6 +525,345 @@ function coerceStringOrStringArray(value: unknown, field: string, required = fal
 	}
 
 	throw new ToolInputError(`${field} must be a string or string array.`);
+}
+
+function coerceReviewProposalMode(value: unknown, fallback: ReviewProposalMode = DEFAULT_FINISH_TASK_REVIEW_MODE): ReviewProposalMode {
+	const normalized = coerceOptionalString(value).toLowerCase();
+	if (!normalized) {
+		return fallback;
+	}
+	if (normalized === 'off' || normalized === 'suggest' || normalized === 'auto_propose') {
+		return normalized;
+	}
+	throw new ToolInputError('review_proposal_mode must be one of: off, suggest, auto_propose.');
+}
+
+interface ProjectScopeFilter {
+	projectHint: string;
+	projectId: string;
+	repoPath: string;
+}
+
+function coerceProjectScope(rawArgs: ProjectScopeArgs): ProjectScopeFilter {
+	return {
+		projectHint: coerceOptionalString(rawArgs.project_hint),
+		projectId: coerceOptionalString(rawArgs.project_id),
+		repoPath:
+			coerceOptionalString(rawArgs.repo_path) ||
+			coerceOptionalString(rawArgs.repo) ||
+			coerceOptionalString(rawArgs.project_path),
+	};
+}
+
+function hasProjectScope(scope: ProjectScopeFilter): boolean {
+	return Boolean(scope.projectHint || scope.projectId || scope.repoPath);
+}
+
+function normalizeRepoPrefix(value: string): string {
+	return value
+		.replace(/^\/+/, '')
+		.replace(/\/+$/, '')
+		.replace(/\\/g, '/');
+}
+
+function valueContainsAnyToken(value: string, tokens: string[]): boolean {
+	const normalized = value.toLowerCase();
+	return tokens.some((token) => token.length > 0 && normalized.includes(token));
+}
+
+function projectTokens(value: string): string[] {
+	const normalized = value.toLowerCase().trim();
+	if (!normalized) {
+		return [];
+	}
+	const variants = new Set<string>([
+		normalized,
+		normalized.replace(/\s+/g, '-'),
+		normalized.replace(/\s+/g, '_'),
+		normalized.replace(/[-_]+/g, ' '),
+	]);
+	return Array.from(variants).filter(Boolean);
+}
+
+function noteMatchesRepoPath(note: ScannedNote, repoPath: string): boolean {
+	if (!repoPath) {
+		return false;
+	}
+	const normalizedRepo = normalizeRepoPrefix(repoPath).toLowerCase();
+	if (!normalizedRepo) {
+		return false;
+	}
+	const repoLeaf = normalizedRepo.split('/').filter(Boolean).pop() || normalizedRepo;
+	const pathValue = note.relativePath.toLowerCase();
+	if (pathValue.startsWith(normalizedRepo) || pathValue.includes(`/${repoLeaf}/`) || pathValue.includes(`/${repoLeaf}.`)) {
+		return true;
+	}
+	const frontmatterValue = [
+		readFrontmatterString(note.frontmatter, ['repo_path', 'repoPath', 'repository_path', 'repositoryPath']),
+		readFrontmatterString(note.frontmatter, ['repo', 'repository']),
+		readFrontmatterString(note.frontmatter, ['project_path', 'projectPath', 'project_paths', 'projectPaths']),
+		readFrontmatterString(note.frontmatter, ['workspace', 'cwd']),
+	].join(' ');
+	return valueContainsAnyToken(frontmatterValue, [normalizedRepo, repoLeaf]);
+}
+
+function noteMatchesProjectId(note: ScannedNote, projectId: string): boolean {
+	if (!projectId) {
+		return false;
+	}
+	const token = projectId.toLowerCase();
+	const source = [
+		readFrontmatterString(note.frontmatter, ['project_id', 'projectId', 'project-id', 'pid']),
+		readFrontmatterString(note.frontmatter, ['id']),
+		note.title,
+	].map((item) => item.toLowerCase());
+	if (source.some((item) => item.includes(token))) {
+		return true;
+	}
+	const pathValue = note.relativePath.toLowerCase();
+	return pathValue.includes(`/${token}/`) || pathValue.includes(`_${token}_`) || pathValue.includes(`-${token}-`);
+}
+
+function noteMatchesProjectHint(note: ScannedNote, projectHint: string): boolean {
+	if (!projectHint) {
+		return false;
+	}
+	const tokens = projectTokens(projectHint);
+	if (tokens.length === 0) {
+		return false;
+	}
+	const pathValue = note.relativePath.toLowerCase();
+	if (tokens.some((token) => pathValue.includes(`04_projects/${token}`) || pathValue.includes(`/${token}/`))) {
+		return true;
+	}
+	if (tokens.some((token) => pathValue.startsWith(`04_projects/${token}/`))) {
+		return true;
+	}
+	const frontmatterValues = [
+		readFrontmatterString(note.frontmatter, ['project', 'project_hint', 'related_project', 'relatedProject']),
+		readFrontmatterString(note.frontmatter, ['project_name', 'project-name']),
+		readFrontmatterString(note.frontmatter, ['tags']),
+		note.title,
+	].join(' ');
+	return valueContainsAnyToken(frontmatterValues, tokens);
+}
+
+function filterNotesByProjectScope(notes: ScannedNote[], scope: ProjectScopeFilter): ScannedNote[] {
+	if (!hasProjectScope(scope)) {
+		return notes.filter((note) => note.relativePath.startsWith('04_projects/'));
+	}
+	const hasRepoPath = Boolean(scope.repoPath);
+	const normalizedRepo = hasRepoPath ? normalizeRepoPrefix(scope.repoPath).toLowerCase() : '';
+	const projectHint = scope.projectHint.toLowerCase();
+	const projectId = scope.projectId.toLowerCase();
+	return notes.filter((note) => {
+		if (hasRepoPath && !noteMatchesRepoPath(note, normalizedRepo)) {
+			return false;
+		}
+		if (projectHint && !noteMatchesProjectHint(note, projectHint)) {
+			return false;
+		}
+		if (projectId && !noteMatchesProjectId(note, projectId)) {
+			return false;
+		}
+		return true;
+	});
+}
+
+function collectProjectCandidates(notes: ScannedNote[], scope: ProjectScopeFilter, maxItems: number): string[] {
+	const candidates: string[] = [];
+	const seen = new Set<string>();
+	for (const note of notes) {
+		const pathParts = note.relativePath.split('/');
+		if (pathParts.length >= 2 && pathParts[0] === '04_projects') {
+			const candidate = `04_projects/${pathParts[1]}`;
+			if (!seen.has(candidate)) {
+				seen.add(candidate);
+				candidates.push(candidate);
+			}
+		}
+		const notePath = note.relativePath.toLowerCase();
+		const hintTokens = projectTokens(scope.projectHint);
+		if (
+			scope.projectId &&
+			(notePath.includes(scope.projectId.toLowerCase()) || valueContainsAnyToken(notePath, hintTokens))
+		) {
+			if (!seen.has(note.relativePath)) {
+				seen.add(note.relativePath);
+				candidates.push(note.relativePath);
+			}
+		}
+		if (candidates.length >= maxItems) {
+			break;
+		}
+	}
+	return candidates.slice(0, maxItems);
+}
+
+function buildProjectHistoryEntries(matches: ScannedNote[]) {
+	return matches.map((note) => ({
+		path: note.relativePath,
+		title: note.title,
+		type: note.type,
+		modifiedAt: note.modifiedAt,
+		task_id: readFrontmatterString(note.frontmatter, ['task_id', 'taskId']),
+		project_hint: readFrontmatterString(note.frontmatter, ['project_hint', 'related_project', 'project']),
+	}));
+}
+
+function matchesProjectQuery(note: ScannedNote, query: string): boolean {
+	const normalizedQuery = query.trim().toLowerCase();
+	if (!normalizedQuery) {
+		return true;
+	}
+	const haystack = [
+		note.relativePath,
+		note.title,
+		note.type,
+		note.tokens,
+		JSON.stringify(note.frontmatter),
+	].join(' ').toLowerCase();
+	return haystack.includes(normalizedQuery);
+}
+
+function buildProjectScopeMetadata(scope: ProjectScopeFilter) {
+	return {
+		project_hint: scope.projectHint || null,
+		project_id: scope.projectId || null,
+		repo_path: scope.repoPath || null,
+	};
+}
+
+function buildFinishTaskProposalEvidence(
+	taskId: string,
+	sessionNotePath: string,
+	projectHint: string,
+	proposalKind: string,
+	mode: ReviewProposalMode
+): string {
+	const parts = [
+		`tool_name=tracekeeper.finish_task`,
+		`task_id=${taskId}`,
+		`session_note=${sessionNotePath}`,
+		`project_hint=${projectHint || 'unset'}`,
+		`proposal_kind=${proposalKind}`,
+		`proposal_mode=${mode}`,
+	];
+	return parts.join(' | ');
+}
+
+function createFinishTaskProposal(
+	vaultRoot: string,
+	taskId: string,
+	sessionNotePath: string,
+	proposalKind: string,
+	label: string,
+	values: string[],
+	projectHint: string,
+	reviewProposalMode: ReviewProposalMode,
+	context: ToolContext
+): { path: string } {
+	const now = new Date().toISOString();
+	const filename = buildSafeFilename(
+		`finish-task-${proposalKind}-${taskId}-${crypto.randomUUID()}`,
+		'proposal',
+		context
+	);
+	const evidence = buildFinishTaskProposalEvidence(taskId, sessionNotePath, projectHint, proposalKind, reviewProposalMode);
+	const body = [
+		'## Finish Task Proposal Source',
+		`- tool_name: tracekeeper.finish_task`,
+		`- task_id: ${taskId}`,
+		`- session_note: ${sessionNotePath}`,
+		projectHint ? `- project_hint: ${projectHint}` : '',
+		`- proposal_kind: ${proposalKind}`,
+		`- evidence: ${evidence}`,
+		'',
+		`## ${label}`,
+		...values.map((item) => `- ${item}`),
+	].filter(Boolean).join('\n');
+
+	return buildAndWriteNote(
+		vaultRoot,
+		'tracekeeper.finish_task',
+		MEMORY_PROPOSAL_DIR,
+		filename,
+		{
+			tool: 'tracekeeper.finish_task',
+			type: 'memory_proposal',
+			title: `${label} ${taskId}`,
+			proposal_kind: proposalKind,
+			status: 'pending',
+			target_note: null,
+			risk_level: 'medium',
+			proposal_source_tool: 'tracekeeper.finish_task',
+			proposal_source_task_id: taskId,
+			proposal_source_session_note: sessionNotePath,
+			project_hint: projectHint || null,
+			evidence,
+			created_at: now,
+			task_id: taskId,
+		},
+		body,
+		taskId,
+		context,
+		{
+			target_type: 'memory_proposal',
+			proposal_kind: proposalKind,
+			source_note: sessionNotePath,
+		}
+	);
+}
+
+function buildFinishTaskProposals(
+	vaultRoot: string,
+	taskId: string,
+	sessionNotePath: string,
+	proposalMode: ReviewProposalMode,
+	projectHint: string,
+	closeout: {
+		decisions: string[];
+		solution_changes: string[];
+		lessons: string[];
+		preferences: string[];
+		next_actions: string[];
+		memory_candidates: string[];
+	},
+	context: ToolContext
+): Array<{ kind: string; path: string }> {
+	if (proposalMode === 'off') {
+		return [];
+	}
+	const groups = [
+		{ kind: 'task_decision', label: 'Task Decisions', values: closeout.decisions },
+		{ kind: 'solution_change', label: 'Solution Changes', values: closeout.solution_changes },
+		{ kind: 'lesson_learned', label: 'Lessons', values: closeout.lessons },
+		{ kind: 'user_preference', label: 'User Preferences', values: closeout.preferences },
+		{ kind: 'project_next_action', label: 'Project Next Actions', values: closeout.next_actions },
+		{ kind: 'memory_candidate', label: 'Memory Candidates', values: closeout.memory_candidates },
+	] as const;
+	const proposals: Array<{ kind: string; path: string }> = [];
+	for (const group of groups) {
+		if (group.values.length === 0) {
+			continue;
+		}
+		const note = createFinishTaskProposal(
+			vaultRoot,
+			taskId,
+			sessionNotePath,
+			group.kind,
+			group.label,
+			group.values,
+			projectHint,
+			proposalMode,
+			context
+		);
+		proposals.push({
+			kind: group.kind,
+			path: note.path,
+		});
+	}
+	return proposals;
 }
 
 function formatListMarkdown(values: string[]): string {
@@ -1848,6 +2221,101 @@ export function toolDefinitions(): McpToolDefinition[] {
 			},
 		},
 		{
+			name: 'tracekeeper.project_context',
+			title: 'tracekeeper.project_context',
+			description:
+				'[read-only] Project-scoped recall using project_hint/project_id/repo_path filters.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					vaultRoot: {
+						type: 'string',
+						description: 'Vault root path. If omitted, uses server configured --vault-root.',
+					},
+					query: {
+						type: 'string',
+						description: 'Project-scoped recall query.',
+					},
+					project_hint: {
+						type: 'string',
+						description: 'Project hint for scoped matching.',
+					},
+					project_id: {
+						type: 'string',
+						description: 'Project id for scoped matching.',
+					},
+					repo_path: {
+						type: 'string',
+						description: 'Repository/path prefix for scoped matching.',
+					},
+					repo: {
+						type: 'string',
+						description: 'Alias of repo_path for repository-scoped matching.',
+					},
+					project_path: {
+						type: 'string',
+						description: 'Alias of repo_path for workspace/project path matching.',
+					},
+					max_items: {
+						type: 'integer',
+						description: 'Maximum number of matches to return.',
+					},
+				},
+				required: ['query'],
+				additionalProperties: false,
+			},
+			annotations: {
+				readOnlyHint: true,
+			},
+		},
+		{
+			name: 'tracekeeper.project_history',
+			title: 'tracekeeper.project_history',
+			description: '[read-only] Project-scoped note history for continuity and context.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					vaultRoot: {
+						type: 'string',
+						description: 'Vault root path. If omitted, uses server configured --vault-root.',
+					},
+					project_hint: {
+						type: 'string',
+						description: 'Project hint for scoped matching.',
+					},
+					project_id: {
+						type: 'string',
+						description: 'Project id for scoped matching.',
+					},
+					repo_path: {
+						type: 'string',
+						description: 'Repository/path prefix for scoped matching.',
+					},
+					repo: {
+						type: 'string',
+						description: 'Alias of repo_path for repository-scoped matching.',
+					},
+					project_path: {
+						type: 'string',
+						description: 'Alias of repo_path for workspace/project path matching.',
+					},
+					query: {
+						type: 'string',
+						description: 'Optional query filter.',
+					},
+					max_items: {
+						type: 'integer',
+						description: 'Maximum number of entries to return.',
+					},
+				},
+				required: [],
+				additionalProperties: false,
+			},
+			annotations: {
+				readOnlyHint: true,
+			},
+		},
+		{
 			name: 'tracekeeper.read_note',
 			title: 'tracekeeper.read_note',
 			description: '[read-only] Read markdown/text content of one note in vault.',
@@ -2141,9 +2609,34 @@ export function toolDefinitions(): McpToolDefinition[] {
 						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
 						description: 'Optional outcomes.',
 					},
+					decisions: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional decisions.',
+					},
+					solution_changes: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional solution changes.',
+					},
+					lessons: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional lessons learned.',
+					},
+					preferences: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional user preferences.',
+					},
+					memory_candidates: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional memory candidates.',
+					},
 					next_actions: {
 						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
 						description: 'Optional next actions.',
+					},
+					review_proposal_mode: {
+						type: 'string',
+						enum: ['off', 'suggest', 'auto_propose'],
+						description: 'Propose mode for closeout fields.',
 					},
 					client: {
 						type: 'string',
@@ -2376,6 +2869,12 @@ export function callTool(
 			case 'tracekeeper.read_note':
 				toolResult = toolResultWithError(handleReadNote(args, context));
 				break;
+			case 'tracekeeper.project_context':
+				toolResult = toolResultWithError(handleProjectContext(args, context));
+				break;
+			case 'tracekeeper.project_history':
+				toolResult = toolResultWithError(handleProjectHistory(args, context));
+				break;
 			case 'tracekeeper.list_review_queue':
 				toolResult = toolResultWithError(handleReviewQueue(args, context));
 				break;
@@ -2524,7 +3023,7 @@ function handleStartTask(rawArgs: StartTaskArgs, context: ToolInvocationContext)
 	const contextPack = buildContextPackForContext(vaultRoot, goal, context, { limit: 8 });
 	const taskId = `obs_task_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
 	const relatedProjects = scan.notes
-		.filter((note) => note.relativePath.startsWith('05_projects/'))
+		.filter((note) => note.relativePath.startsWith('04_projects/'))
 		.slice(0, 10)
 		.map((note) => ({ path: note.relativePath, title: note.title }));
 	const task = createAgentTaskRecord(vaultRoot, {
@@ -2556,7 +3055,7 @@ function handleStartTask(rawArgs: StartTaskArgs, context: ToolInvocationContext)
 		related_projects: relatedProjects,
 		recent_sessions: buildRecentSessions(scan.notes),
 		user_preferences: buildUserPreferences(scan),
-		recommended_next_tool: 'tracekeeper.recall',
+		recommended_next_tool: projectHint ? 'tracekeeper.project_context' : 'tracekeeper.recall',
 	};
 }
 
@@ -2598,6 +3097,67 @@ function handleReadNote(rawArgs: ReadNoteArgs, context: ToolContext) {
 		mime_type: data.path.endsWith('.txt') || data.path.endsWith('.text') ? 'text/plain' : 'text/markdown',
 		content: data.text,
 		excerpt: parsed.body.slice(0, 1024),
+	};
+}
+
+function handleProjectContext(rawArgs: ProjectContextArgs, context: ToolContext) {
+	const vaultRoot = vaultRootFromArgs(rawArgs, context);
+	const query = coerceNonEmptyString(rawArgs.query, true, 'query');
+	const scope = coerceProjectScope(rawArgs);
+	const maxItems = coercePositiveInt(rawArgs.max_items, MAX_PROJECT_TOOL_ITEMS, 1, MAX_PROJECT_TOOL_ITEMS);
+	const scan = scanVaultForContext(vaultRoot, context);
+	const scopedNotes = filterNotesByProjectScope(scan.notes, scope);
+	const uncertain = !hasProjectScope(scope);
+	const matches = recallNotes(scopedNotes, query, { limit: maxItems });
+	const candidates = collectProjectCandidates(scan.notes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
+
+	return {
+		ok: true,
+		read_only: true,
+		vault_root: vaultRoot,
+		query,
+		uncertain: uncertain,
+		scope: buildProjectScopeMetadata(scope),
+		max_items: maxItems,
+		matched_count: matches.length,
+		candidates: candidates,
+		entries: matches.map((match) => ({
+			path: match.note.relativePath,
+			title: match.note.title,
+			type: match.note.type,
+			score: match.score,
+			matched_tokens: match.matchedTokens,
+		})),
+	};
+}
+
+function handleProjectHistory(rawArgs: ProjectHistoryArgs, context: ToolContext) {
+	const vaultRoot = vaultRootFromArgs(rawArgs, context);
+	const query = coerceOptionalString(rawArgs.query);
+	const scope = coerceProjectScope(rawArgs);
+	const maxItems = coercePositiveInt(rawArgs.max_items, MAX_PROJECT_TOOL_ITEMS, 1, MAX_PROJECT_TOOL_ITEMS);
+	const scan = scanVaultForContext(vaultRoot, context);
+	const scopedNotes = filterNotesByProjectScope(scan.notes, scope);
+	const uncertain = !hasProjectScope(scope);
+	const filteredByQuery = query ? scopedNotes.filter((note) => matchesProjectQuery(note, query)) : scopedNotes;
+	const sortedMatches = filteredByQuery
+		.filter((note) => note.relativePath !== '')
+		.sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
+	const candidates = collectProjectCandidates(scan.notes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
+	const matches = sortedMatches.slice(0, maxItems);
+
+	return {
+		ok: true,
+		read_only: true,
+		vault_root: vaultRoot,
+		query: query || null,
+		uncertain: uncertain,
+		scope: buildProjectScopeMetadata(scope),
+		max_items: maxItems,
+		matched_count: matches.length,
+		total_matches: sortedMatches.length,
+		candidates,
+		entries: buildProjectHistoryEntries(matches),
 	};
 }
 
@@ -3533,6 +4093,47 @@ function buildSessionNoteBody(summary: string, outcomes: string[], nextActions: 
 	return lines.trim();
 }
 
+function buildSessionNoteBodyWithCloseout(
+	summary: string,
+	outcomes: string[],
+	nextActions: string[],
+	decisions: string[],
+	solutionChanges: string[],
+	lessons: string[],
+	preferences: string[],
+	memoryCandidates: string[],
+): string {
+	const lines = [
+		'# Task Session Note',
+		`- created_at: ${new Date().toISOString()}`,
+		'',
+		'## Summary',
+		summary,
+		'',
+		'## Outcomes',
+		...formatListMarkdown(outcomes).split('\n'),
+		'',
+		'## Next Actions',
+		...formatListMarkdown(nextActions).split('\n'),
+		'',
+		'## Decisions',
+		...formatListMarkdown(decisions).split('\n'),
+		'',
+		'## Solution Changes',
+		...formatListMarkdown(solutionChanges).split('\n'),
+		'',
+		'## Lessons',
+		...formatListMarkdown(lessons).split('\n'),
+		'',
+		'## Preferences',
+		...formatListMarkdown(preferences).split('\n'),
+		'',
+		'## Memory Candidates',
+		...formatListMarkdown(memoryCandidates).split('\n'),
+	].join('\n');
+	return lines.trim();
+}
+
 function buildSessionNoteBodyWithDistill(
 	summary: string,
 	outcomes: string[],
@@ -3610,16 +4211,39 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 	const summary = coerceNonEmptyString(rawArgs.summary, true, 'summary');
 	const outcomes = coerceStringOrStringArray(rawArgs.outcomes, 'outcomes');
 	const nextActions = coerceStringOrStringArray(rawArgs.next_actions, 'next_actions');
+	const decisions = coerceStringOrStringArray(rawArgs.decisions, 'decisions');
+	const solutionChanges = coerceStringOrStringArray(rawArgs.solution_changes, 'solution_changes');
+	const lessons = coerceStringOrStringArray(rawArgs.lessons, 'lessons');
+	const preferences = coerceStringOrStringArray(rawArgs.preferences, 'preferences');
+	const memoryCandidates = coerceStringOrStringArray(rawArgs.memory_candidates, 'memory_candidates');
+	const reviewProposalMode = coerceReviewProposalMode(
+		rawArgs.review_proposal_mode,
+		DEFAULT_FINISH_TASK_REVIEW_MODE
+	);
 	const client = coerceOptionalString(rawArgs.client);
 	const projectHint = coerceOptionalString(rawArgs.project_hint);
 	const filename = buildSafeFilename(rawArgs.filename, 'session', context);
 	const now = new Date().toISOString();
 
-	const body = buildSessionNoteBody(summary, outcomes, nextActions);
+	const body = buildSessionNoteBodyWithCloseout(
+		summary,
+		outcomes,
+		nextActions,
+		decisions,
+		solutionChanges,
+		lessons,
+		preferences,
+		memoryCandidates
+	);
 	assertNoSensitiveText([
 		{ label: 'summary', value: summary },
 		{ label: 'outcomes', value: outcomes.join('\n') },
 		{ label: 'next_actions', value: nextActions.join('\n') },
+		{ label: 'decisions', value: decisions.join('\n') },
+		{ label: 'solution_changes', value: solutionChanges.join('\n') },
+		{ label: 'lessons', value: lessons.join('\n') },
+		{ label: 'preferences', value: preferences.join('\n') },
+		{ label: 'memory_candidates', value: memoryCandidates.join('\n') },
 		{ label: 'client', value: client },
 		{ label: 'project_hint', value: projectHint },
 	]);
@@ -3637,6 +4261,7 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 			client: client || null,
 			project_hint: projectHint || null,
 			created_at: now,
+			review_proposal_mode: reviewProposalMode || null,
 		},
 		body,
 		taskId,
@@ -3646,6 +4271,24 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 			task_stage: 'finish',
 		}
 	);
+
+	const proposals = buildFinishTaskProposals(
+		vaultRoot,
+		taskId,
+		note.path,
+		reviewProposalMode,
+		projectHint,
+		{
+			decisions,
+			solution_changes: solutionChanges,
+			lessons,
+			preferences,
+			next_actions: nextActions,
+			memory_candidates: memoryCandidates,
+		},
+		context
+	);
+
 	const taskPath = updateAgentTaskRecord(
 		vaultRoot,
 		taskId,
@@ -3656,10 +4299,17 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 			session_note: note.path,
 			outcomes: outcomes.join(', '),
 			next_actions: nextActions.join(', '),
+			decisions: decisions.join(', '),
+			solution_changes: solutionChanges.join(', '),
+			lessons: lessons.join(', '),
+			preferences: preferences.join(', '),
+			memory_candidates: memoryCandidates.join(', '),
+			review_proposal_mode: reviewProposalMode,
 		},
 		context,
 		{
 			memory_writes: [note.path],
+			proposals: proposals.map((proposal) => proposal.path),
 		},
 		[
 			'## Completion Summary',
@@ -3670,6 +4320,21 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 			'',
 			'## Next Actions',
 			...formatListMarkdown(nextActions).split('\n'),
+			'',
+			'## Decisions',
+			...formatListMarkdown(decisions).split('\n'),
+			'',
+			'## Solution Changes',
+			...formatListMarkdown(solutionChanges).split('\n'),
+			'',
+			'## Lessons',
+			...formatListMarkdown(lessons).split('\n'),
+			'',
+			'## Preferences',
+			...formatListMarkdown(preferences).split('\n'),
+			'',
+			'## Memory Candidates',
+			...formatListMarkdown(memoryCandidates).split('\n'),
 		].join('\n')
 	);
 
@@ -3680,6 +4345,9 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 		task_path: taskPath,
 		path: note.path,
 		audit_path: note.audit_path,
+		review_proposal_mode: reviewProposalMode,
+		proposal_count: proposals.length,
+		proposals: proposals.map((proposal) => ({ kind: proposal.kind, path: proposal.path })),
 		outcome_count: outcomes.length,
 		next_action_count: nextActions.length,
 	};

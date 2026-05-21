@@ -2,9 +2,9 @@
 
 [简体中文说明](./README.zh-CN.md)
 
-Tracekeeper is an Obsidian plugin for people who want AI to help maintain a personal wiki without letting automation rewrite their memory unchecked.
+Tracekeeper is an Obsidian plugin for local memory workflows that stay Memory-first with optional Wiki layers.
 
-It turns AI-assisted knowledge work into reviewable traces: source notes, proposed updates, and human decisions stay visible inside Obsidian.
+It turns AI-assisted work into reviewable traces: task memories, session records, and proposals stay visible inside Obsidian.
 
 ## Installation
 
@@ -27,13 +27,19 @@ Before community listing, install from the latest GitHub release:
 
 AI assistants are useful for finding patterns, summarizing long conversations, and turning scattered material into structured knowledge. A personal vault still needs a human steward.
 
-Tracekeeper keeps that boundary clear. AI can help recall context, draft wiki updates, and prepare long-term memory entries, while you keep the final decision before anything becomes durable knowledge.
+Tracekeeper keeps that boundary clear:
+
+- Memory first: task memory, session memory, and project memory are the core durable layer.
+- Wiki second: topic hubs and graph structuring are optional, and only applied through the same review process.
+- No external database is required, and no app auto-sync platform is required.
+
+AI can help recall context, draft proposals, and prepare updates, while you keep the final decision before anything becomes durable knowledge.
 
 ## Why It Exists
 
 Personal knowledge bases often fail in two opposite ways: conversations stay trapped in chat history, or automation writes too eagerly and pollutes the vault. Tracekeeper sits between those extremes.
 
-Tracekeeper treats every AI suggestion as a candidate. You can inspect it, adjust it, approve it, or reject it from the same place where your notes already live.
+Tracekeeper treats every AI suggestion as a candidate memory proposal. You can inspect it, adjust it, approve it, or reject it from the same place where your notes already live.
 
 ## First Use
 
@@ -50,9 +56,13 @@ Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian i
 
 AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and propose memory updates for review. It does not give an assistant permission to silently rewrite long-term memory.
 
+For shared use across Codex, Claude, OpenClaw, and other MCP clients, use the same pattern: start a task, recall only project-scoped context, finish the task, and send durable memories to the Review Queue. See [Agent MCP usage](./docs/AGENT_MCP_USAGE.md).
+
 The connection is local-first:
 
 - no hosted Tracekeeper backend
+- no external database
+- no app auto-sync or background sync service
 - no default network upload
 - no shell command execution
 - no vault-outside file access from MCP tools
@@ -66,11 +76,11 @@ Approved writeback is a separate action. Tracekeeper only applies an approved pr
 
 ## What It Helps With
 
-- Turning scattered project notes into coherent wiki pages.
+- Turning scattered project notes into coherent task/session memories first.
 - Capturing recurring preferences, decisions, and lessons as long-term memory.
 - Reviewing AI-generated knowledge before it becomes part of your vault.
 - Keeping AI collaboration grounded in your own Obsidian workspace.
-- Finding graph entry gaps so AI tools can assemble context from stable hubs instead of scattered leaf notes.
+- Optional wiki support such as graph entry gaps and topic hubs for easier recall.
 - Building a personal knowledge system where automation suggests and the user decides.
 
 ## Graph Health

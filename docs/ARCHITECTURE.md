@@ -70,8 +70,10 @@ Current MCP tools:
 | --- | --- | --- |
 | `tracekeeper.status` | `read-only` | Scans vault summary counts. |
 | `tracekeeper.graph_health` | `read-only` | Reports wikilink graph metrics, graph profile issues, and hub recommendations. |
-| `tracekeeper.start_task` | `read-only` | Creates a deterministic task context summary without writing. |
+| `tracekeeper.start_task` | `low-risk write` | Creates an active task record and returns a deterministic context summary. |
 | `tracekeeper.recall` | `read-only` | Returns matching vault notes for a query. |
+| `tracekeeper.project_context` | `read-only` | Returns project-scoped recall results using project, repo, or path hints. |
+| `tracekeeper.project_history` | `read-only` | Returns recent project-scoped notes, sessions, and task records. |
 | `tracekeeper.read_note` | `read-only` | Reads one vault-relative note. |
 | `tracekeeper.list_review_queue` | `read-only` | Reads pending proposals. |
 | `tracekeeper.list_source_requests` | `read-only` | Reads pending source-analysis requests. |
@@ -79,7 +81,7 @@ Current MCP tools:
 | `tracekeeper.audit_recent` | `read-only` | Reads recent audit entries. |
 | `tracekeeper.lint` | `read-only` | Runs vault checks and returns issues. |
 | `tracekeeper.build_context_pack` | `read-only` / `optional write` | Builds context and optionally writes a context-pack artifact. |
-| `tracekeeper.finish_task` | `low-risk write` | Writes a task session summary. |
+| `tracekeeper.finish_task` | `low-risk write` | Writes a task session summary and can create Review Queue proposals when `review_proposal_mode` is enabled. |
 | `tracekeeper.distill_session` | `low-risk write` | Writes a session note and review proposals. |
 | `tracekeeper.write_context_pack` | `low-risk write` | Writes under context pack outputs only. |
 | `tracekeeper.write_session_note` | `low-risk write` | Writes under session notes only. |
@@ -87,6 +89,31 @@ Current MCP tools:
 | `tracekeeper.propose_memory` | `low-risk write` | Writes a Review Queue proposal, not durable memory directly. |
 | `tracekeeper.analyze_source_request` | `low-risk write` | Processes an existing source request into records and proposals. |
 | `tracekeeper.apply_approved_writeback` | `review-gated apply` | Applies only approved proposals. |
+
+## Cross-agent MCP Workflow (Practical)
+
+Use this flow for multi-agent safety:
+
+1. Start task context
+   - Call `tracekeeper.start_task` with `goal` and optional `project_hint`.
+   - Save the returned `task_id`.
+   - Use the same `task_id` for later closeout and proposal calls.
+2. Project-scoped recall
+   - Start from `related_projects` returned by `start_task`.
+   - Prefer `tracekeeper.project_context` for targeted recall and `tracekeeper.project_history` for recent project continuity.
+   - Pass `project_hint`, `project_id`, `repo_path`, `repo`, or `project_path` when the agent knows the current project.
+   - If the project scope is uncertain, inspect the returned candidates instead of loading unrelated project memory.
+   - Use `project_hint` on closeout/proposal calls to keep generated notes and proposals linked to the project.
+3. Task closeout
+   - Use `tracekeeper.finish_task` for closure summary.
+   - Add `decisions`, `solution_changes`, `lessons`, `preferences`, `next_actions`, or `memory_candidates` when the task produced durable knowledge.
+   - Set `review_proposal_mode` to `suggest` or `auto_propose` when those closeout fields should create Review Queue proposals.
+4. Review Queue proposals
+   - Proposals enter Review Queue when an agent calls `tracekeeper.propose_memory`, `tracekeeper.distill_session`, or `tracekeeper.finish_task` with proposal mode enabled.
+   - In Obsidian, review proposals and approve, reject, defer, or request revisions.
+5. Durability rule
+   - Tracekeeper never writes durable memory automatically.
+   - Durable writeback only runs through `tracekeeper.apply_approved_writeback` after Review Queue approval.
 
 The MCP server must not expose tools that:
 

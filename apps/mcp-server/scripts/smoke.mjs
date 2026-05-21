@@ -283,7 +283,7 @@ async function main() {
 			capabilities: {},
 			clientInfo: {
 				name: 'tracekeeper-smoke',
-				version: '0.1.6',
+				version: '0.1.7',
 			},
 		});
 		assert.equal(initialize.capabilities.tools.listChanged, false);
@@ -306,6 +306,8 @@ async function main() {
 			'tracekeeper.graph_health',
 			'tracekeeper.start_task',
 			'tracekeeper.recall',
+			'tracekeeper.project_context',
+			'tracekeeper.project_history',
 			'tracekeeper.read_note',
 			'tracekeeper.list_review_queue',
 			'tracekeeper.list_approved_writebacks',
@@ -565,6 +567,67 @@ async function main() {
 		taskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
 		assert.ok(taskText.includes('status: completed') || taskText.includes('status: "completed"'));
 		assert.ok(taskText.includes(finishTask.path));
+
+		const projectContext = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.project_context',
+			arguments: {
+				query: 'project_overview',
+				project_hint: 'demo',
+				max_items: 5,
+			},
+		}));
+		assert.equal(projectContext.ok, true);
+		assert.equal(projectContext.read_only, true);
+		assert.equal(projectContext.uncertain, false);
+		assert.ok(projectContext.entries.length >= 1);
+		assert.equal(projectContext.scope.project_hint, 'demo');
+		assert.ok(Array.isArray(projectContext.entries));
+
+		const projectHistory = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.project_history',
+			arguments: {
+				project_hint: 'demo',
+				max_items: 5,
+			},
+		}));
+		assert.equal(projectHistory.ok, true);
+		assert.equal(projectHistory.read_only, true);
+		assert.equal(projectHistory.uncertain, false);
+		assert.ok(Array.isArray(projectHistory.entries));
+		assert.ok(projectHistory.entries.length >= 1);
+
+		const finishWithProposals = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: {
+				task_id: taskId,
+				summary: 'Smoke finish task with proposal modes.',
+				outcomes: ['Closeout proposal capture'],
+				next_actions: ['Verify memory proposals'],
+				decisions: ['Use project-scoped recall for context'],
+				solution_changes: ['Added finish_task closeout proposal flow'],
+				lessons: ['Prefer explicit session scope filtering'],
+				preferences: ['Favor local vault-first memory'],
+				memory_candidates: ['04_projects/demo/project_overview.md'],
+				review_proposal_mode: 'suggest',
+			},
+		}));
+		assert.equal(finishWithProposals.ok, true);
+		assert.equal(finishWithProposals.read_only, false);
+		assert.equal(finishWithProposals.review_proposal_mode, 'suggest');
+		assert.equal(typeof finishWithProposals.proposal_count, 'number');
+		assert.equal(finishWithProposals.proposal_count, 6);
+		assert.ok(Array.isArray(finishWithProposals.proposals));
+		assert.equal(finishWithProposals.proposals.length, 6);
+		for (const proposal of finishWithProposals.proposals) {
+			assert.ok(fs.existsSync(path.join(vaultRoot, proposal.path)));
+		}
+		const kinds = finishWithProposals.proposals.map((proposal) => proposal.kind).sort();
+		assert.ok(kinds.includes('task_decision'));
+		assert.ok(kinds.includes('solution_change'));
+		assert.ok(kinds.includes('lesson_learned'));
+		assert.ok(kinds.includes('user_preference'));
+		assert.ok(kinds.includes('project_next_action'));
+		assert.ok(kinds.includes('memory_candidate'));
 
 		const distillSession = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.distill_session',

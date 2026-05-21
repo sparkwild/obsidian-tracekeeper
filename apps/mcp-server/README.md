@@ -18,6 +18,8 @@ Streamable HTTP MCP Runtime for Tracekeeper operations. It is read-only by defau
 - `tracekeeper.graph_health`
 - `tracekeeper.start_task`
 - `tracekeeper.recall`
+- `tracekeeper.project_context`
+- `tracekeeper.project_history`
 - `tracekeeper.read_note`
 - `tracekeeper.list_review_queue`
 - `tracekeeper.list_source_requests`
@@ -101,12 +103,16 @@ npm run smoke
 - non-wildcard CORS origin reflection for allowed loopback origins
 - initialize/tools/list/resources/list/prompts/list
 - read_note and status paths
+- project_context and project_history scoped recall
 - controlled write tools
+- finish_task closeout proposal creation
 - analyze_source_request source-analysis flow
 - apply_approved_writeback review-gated flow
 
 ## Notes
 
 - `read_note` accepts `{ vaultRoot, path }` and validates vault scope + path traversal.
-- `start_task` returns `task_id` plus a context pack summary without writing files.
+- `start_task` returns `task_id` plus a context pack summary and writes a bounded active task record.
+- `project_context` and `project_history` accept project, repo, or path hints so agents do not load all project memory indiscriminately.
+- `finish_task` records a session note and can create Review Queue proposals when `review_proposal_mode` is `suggest` or `auto_propose`.
 - `audit_recent` parses `00_control/audit_log.md` and returns sectionized entries.

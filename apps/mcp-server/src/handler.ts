@@ -14,7 +14,7 @@ import {
 } from './tools';
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
-export const MCP_SERVER_VERSION = '0.1.6';
+export const MCP_SERVER_VERSION = '0.1.7';
 export const STREAMABLE_HTTP_TRANSPORT = 'streamable-http';
 
 interface ResourcesResource {
