@@ -379,11 +379,22 @@
 
 .tracekeeper-timeline__item {
 	display: grid;
-	grid-template-columns: auto minmax(0, 1fr);
-	gap: 8px;
+	grid-template-columns: 104px minmax(0, 1fr);
+	gap: 12px;
 	align-items: start;
 	padding: 8px 0;
 	border-top: 1px solid var(--background-modifier-border);
+}
+
+.tracekeeper-timeline__item > .tracekeeper-badge {
+	box-sizing: border-box;
+	display: block;
+	width: 100%;
+	min-width: 0;
+	overflow: hidden;
+	text-align: center;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .tracekeeper-timeline__item:first-child {
