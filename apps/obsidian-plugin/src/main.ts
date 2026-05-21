@@ -367,7 +367,7 @@ interface GraphHealthSnapshot {
 interface AgentActivitySnapshot {
 	runtimeStatus: RuntimeViewStatus;
 	structureStatus: TracekeeperStructureStatus;
-	currentTask: AgentTaskRecord | null;
+	latestTask: AgentTaskRecord | null;
 	recentTasks: AgentTaskRecord[];
 	recentContextPacks: ContextPackRecord[];
 	recentSourceCaptures: SourceCaptureRecord[];
@@ -1181,7 +1181,7 @@ export default class TracekeeperPlugin extends Plugin {
 			this.readRecentMemoryProposals(MAX_ACTIVITY_PROPOSAL_ROWS),
 			this.readRecentAuditEvents(MAX_AUDIT_ROWS),
 		]);
-		const currentTask = this.pickCurrentTask(recentTasks);
+		const latestTask = recentTasks[0] ?? null;
 		const structureStatus = this.getStructureStatus();
 		const taskFolderMissing =
 			this.app.vault.getAbstractFileByPath(AGENT_TASKS_PATH) === null;
@@ -1201,7 +1201,7 @@ export default class TracekeeperPlugin extends Plugin {
 		return {
 			runtimeStatus: this.getRuntimeViewStatus(),
 			structureStatus,
-			currentTask,
+			latestTask,
 			recentTasks,
 			recentContextPacks,
 			recentSourceCaptures,
@@ -2830,13 +2830,6 @@ export default class TracekeeperPlugin extends Plugin {
 		};
 	}
 
-	private pickCurrentTask(tasks: AgentTaskRecord[]): AgentTaskRecord | null {
-		const active = tasks.find((task) =>
-			task.status?.toLowerCase() === 'active'
-		);
-		return active ?? tasks[0] ?? null;
-	}
-
 	private async readAuditLogFile(): Promise<AuditEventRecord[]> {
 		const file = this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditLog);
 		if (!(file instanceof TFile)) {
@@ -3622,7 +3615,6 @@ class TracekeeperActivityView extends ItemView {
 		this.renderStatusItem(statusBar, ui('刷新', 'Refresh'), this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt)));
 
 		const metrics = contentEl.createDiv({ cls: 'tracekeeper-metric-grid' });
-		this.renderMetricCard(metrics, ui('当前任务', 'Active task'), snapshot.currentTask ? snapshot.currentTask.status : ui('无', 'None'), snapshot.currentTask?.taskId || ui('等待 AI 助手开始记录任务', 'Waiting for the AI assistant to start a task'));
 		this.renderMetricCard(metrics, ui('待审核', 'Pending review'), String(snapshot.recentProposals.filter((proposal) => proposal.approvalStatus === 'pending').length), ui('需要你确认的记忆更新', 'Memory updates waiting for your review'));
 		this.renderMetricCard(metrics, ui('来源请求', 'Source requests'), String(snapshot.recentSourceRequests.filter((request) => this.isSourceRequestPending(request.status)).length), ui('待处理资料请求', 'Pending material requests'));
 		this.renderMetricCard(metrics, ui('工具使用', 'Tool usage'), String(snapshot.recentAuditEvents.filter((event) => event.toolName).length), ui('最近连接操作记录', 'Recent connection activity'));
@@ -3642,19 +3634,15 @@ class TracekeeperActivityView extends ItemView {
 		}
 
 		const currentSection = contentEl.createDiv({ cls: 'tracekeeper-card' });
-		currentSection.createEl('h3', { text: ui('当前任务', 'Current task') });
-		if (!snapshot.currentTask) {
+		currentSection.createEl('h3', { text: ui('最后一次执行的任务', 'Last task') });
+		if (!snapshot.latestTask) {
 			this.renderEmptyState(
 				currentSection,
-				snapshot.structureStatus.state !== 'initialized'
-					? ui('还没有任务记录。', 'No task records yet.')
-					: ui('还没有 AI 助手活动。', 'No AI assistant activity yet.'),
-				snapshot.structureStatus.state !== 'initialized'
-					? ui('请先初始化知识库文件结构，之后 AI 助手的任务记录会显示在这里。', 'Initialize the Tracekeeper file structure first; task records will appear here afterward.')
-					: ui('从 AI 助手开始一次任务后，这里会显示目标、来源和最近动作。', 'Start a task from your AI assistant to show goals, sources, and recent actions here.')
+				ui('还没有任务记录。', 'No task records yet.'),
+				ui('AI 助手执行任务后会显示在这里。', 'Tasks appear here after your AI assistant runs.')
 			);
 		} else {
-			this.renderTaskEntry(currentSection, snapshot.currentTask, true);
+			this.renderTaskEntry(currentSection, snapshot.latestTask, true);
 		}
 
 		const timeline = contentEl.createDiv({ cls: 'tracekeeper-card' });
