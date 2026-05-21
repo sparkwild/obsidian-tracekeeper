@@ -759,7 +759,7 @@ export default class TracekeeperPlugin extends Plugin {
 			this.runtimeStatus = runtime.getStatus();
 			const message = error instanceof Error ? error.message : 'Unknown MCP Runtime error.';
 			console.error('tracekeeper failed to start MCP Runtime', error);
-			new Notice(ui(`MCP Runtime 启动失败：${message}`, `MCP Runtime failed to start: ${message}`));
+			new Notice(ui(`MCP 服务启动失败：${message}`, `MCP service failed to start: ${message}`));
 		}
 	}
 
@@ -1999,18 +1999,18 @@ export default class TracekeeperPlugin extends Plugin {
 	private runtimeStateDetail(status: StreamableHttpRuntimeStatus): string {
 		switch (status.state) {
 			case 'running':
-				return ui('Obsidian 已托管本机 MCP Runtime，AI 工具可在 Obsidian 开启时连接。', 'Obsidian is hosting the local MCP Runtime. AI tools can connect while Obsidian is open.');
+				return ui('Obsidian 已托管本机 MCP 服务，AI 工具可在 Obsidian 开启时连接。', 'Obsidian is hosting the local MCP service. AI tools can connect while Obsidian is open.');
 			case 'starting':
-				return ui('MCP Runtime 正在启动。', 'The MCP Runtime is starting.');
+				return ui('MCP 服务正在启动。', 'The MCP service is starting.');
 			case 'port_conflict':
 				return ui(`端口 ${this.settings.mcpPort} 已被占用，请修改端口或关闭占用程序。`, `Port ${this.settings.mcpPort} is already in use. Change the port or close the process using it.`);
 			case 'failed':
 				return status.lastError
-					? ui(`MCP Runtime 启动失败：${status.lastError}`, `MCP Runtime failed to start: ${status.lastError}`)
-					: ui('MCP Runtime 启动失败，请检查 Obsidian 控制台。', 'MCP Runtime failed to start. Check the Obsidian console.');
+					? ui(`MCP 服务启动失败：${status.lastError}`, `MCP service failed to start: ${status.lastError}`)
+					: ui('MCP 服务启动失败，请检查 Obsidian 控制台。', 'MCP service failed to start. Check the Obsidian console.');
 			case 'stopped':
 			default:
-				return ui('MCP Runtime 未运行。插件启用且 Obsidian 打开后会自动启动。', 'The MCP Runtime is not running. It starts automatically when the plugin is enabled and Obsidian is open.');
+				return ui('MCP 服务未运行。插件启用且 Obsidian 打开后会自动启动。', 'The MCP service is not running. It starts automatically when the plugin is enabled and Obsidian is open.');
 		}
 	}
 
@@ -3608,7 +3608,12 @@ class TracekeeperActivityView extends ItemView {
 		});
 
 		const statusBar = contentEl.createDiv({ cls: 'tracekeeper-status-bar' });
-		this.renderStatusItem(statusBar, 'MCP Runtime', snapshot.runtimeStatus.label);
+		this.renderStatusItem(
+			statusBar,
+			ui('MCP 服务', 'MCP service'),
+			snapshot.runtimeStatus.label,
+			this.runtimeStatusClass(snapshot.runtimeStatus.state)
+		);
 		this.renderStatusItem(statusBar, ui('记录', 'Records'), snapshot.structureStatus.state === 'initialized' ? ui('可读取', 'Readable') : snapshot.structureStatus.label);
 		this.renderStatusItem(statusBar, ui('知识库', 'Knowledge base'), snapshot.structureStatus.label);
 		this.renderStatusItem(statusBar, ui('权限', 'Permission'), ui('先审核再写入', 'Review before writing'));
@@ -3669,10 +3674,27 @@ class TracekeeperActivityView extends ItemView {
 		}
 	}
 
-	private renderStatusItem(container: HTMLElement, label: string, value: string): void {
-		const item = container.createDiv({ cls: 'tracekeeper-status-pill' });
+	private renderStatusItem(container: HTMLElement, label: string, value: string, className = ''): void {
+		const item = container.createDiv({
+			cls: ['tracekeeper-status-pill', className].filter(Boolean).join(' '),
+		});
 		item.createEl('span', { text: label });
 		item.createEl('strong', { text: value });
+	}
+
+	private runtimeStatusClass(state: RuntimeState): string {
+		switch (state) {
+			case 'running':
+				return 'tracekeeper-status-pill--runtime tracekeeper-status-pill--success';
+			case 'starting':
+				return 'tracekeeper-status-pill--runtime tracekeeper-status-pill--warning';
+			case 'port_conflict':
+			case 'failed':
+				return 'tracekeeper-status-pill--runtime tracekeeper-status-pill--danger';
+			case 'stopped':
+			default:
+				return 'tracekeeper-status-pill--runtime';
+		}
 	}
 
 	private renderMetricCard(container: HTMLElement, label: string, value: string, detail: string): void {
@@ -4149,7 +4171,7 @@ class TracekeeperGraphHealthView extends ItemView {
 			this.renderEmptyState(
 				contentEl,
 				ui('无法读取图谱健康状态。', 'Graph health is unavailable.'),
-				snapshot.errorMessage || ui('请确认 MCP Runtime 正在运行。', 'Check whether the MCP Runtime is running.')
+				snapshot.errorMessage || ui('请确认 MCP 服务正在运行。', 'Check whether the MCP service is running.')
 			);
 			return;
 		}
@@ -4403,7 +4425,7 @@ class TracekeeperAgentConnectionsView extends ItemView {
 		});
 
 		const statusBar = contentEl.createDiv({ cls: 'tracekeeper-status-bar' });
-		this.renderStatusItem(statusBar, 'MCP Runtime', snapshot.runtimeStatus.label);
+		this.renderStatusItem(statusBar, ui('MCP 服务', 'MCP service'), snapshot.runtimeStatus.label);
 		this.renderStatusItem(statusBar, ui('当前仓库', 'Current repository'), this.formatVaultLabel(snapshot.vaultRoot), snapshot.vaultRoot);
 		this.renderStatusItem(statusBar, ui('最近连接', 'Recent connections'), String(snapshot.recentAgents.length));
 		this.renderStatusItem(statusBar, ui('使用记录', 'Usage records'), String(snapshot.recentToolCalls.length));
@@ -4413,7 +4435,7 @@ class TracekeeperAgentConnectionsView extends ItemView {
 
 		const connectionCheck = connectionPanel.createDiv({ cls: 'tracekeeper-connection-check' });
 		const runtimeHeader = connectionCheck.createDiv({ cls: 'tracekeeper-connection-check__header' });
-		runtimeHeader.createEl('h4', { text: 'MCP Runtime' });
+		runtimeHeader.createEl('h4', { text: ui('MCP 服务', 'MCP service') });
 		const copyUrl = runtimeHeader.createEl('button', {
 			text: ui('复制连接地址', 'Copy connection URL'),
 			cls: 'mod-cta',
@@ -5040,14 +5062,14 @@ class TracekeeperRuntimeStatusView extends ItemView {
 		contentEl.createEl('h2', { text: ui('连接状态', 'Connection status'), cls: 'tracekeeper-view__title' });
 		contentEl.createEl('p', {
 			text: ui(
-				'MCP Runtime 由 Obsidian 桌面端托管，随 Obsidian 启动和关闭。',
-				'The MCP Runtime is hosted by desktop Obsidian and starts and stops with Obsidian.'
+				'MCP 服务由 Obsidian 桌面端托管，随 Obsidian 启动和关闭。',
+				'The MCP service is hosted by desktop Obsidian and starts and stops with Obsidian.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
 
 		const detailGrid = contentEl.createDiv({ cls: 'tracekeeper-detail-grid' });
-		this.renderDetail(detailGrid, 'MCP Runtime', status.label);
+		this.renderDetail(detailGrid, ui('MCP 服务', 'MCP service'), status.label);
 		this.renderDetail(detailGrid, ui('连接地址', 'Connection URL'), this.plugin.getMcpConnectionUrl());
 		this.renderDetail(detailGrid, ui('绑定范围', 'Binding'), ui('仅本机 127.0.0.1', 'Localhost only, 127.0.0.1'));
 		this.renderDetail(detailGrid, ui('生命周期', 'Lifecycle'), ui('随 Obsidian 启动和关闭', 'Starts and stops with Obsidian'));
@@ -5222,10 +5244,10 @@ class TracekeeperSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName(ui('MCP Runtime 端口', 'MCP Runtime port'))
+			.setName(ui('MCP 服务端口', 'MCP service port'))
 			.setDesc(ui(
-				`默认使用本机 ${DEFAULT_MCP_PORT} 端口；修改后 Runtime 会随 Obsidian 自动重启。`,
-				`Uses local port ${DEFAULT_MCP_PORT} by default; the Runtime restarts with Obsidian after changes.`
+				`默认使用本机 ${DEFAULT_MCP_PORT} 端口；修改后服务会随 Obsidian 自动重启。`,
+				`Uses local port ${DEFAULT_MCP_PORT} by default; the service restarts with Obsidian after changes.`
 			))
 			.addText((text) =>
 				text

@@ -82,6 +82,47 @@
 	overflow-wrap: anywhere;
 }
 
+.tracekeeper-status-pill--runtime {
+	border-color: var(--interactive-accent);
+	box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+.tracekeeper-status-pill--runtime span {
+	color: var(--text-normal);
+}
+
+.tracekeeper-status-pill--runtime strong {
+	color: var(--interactive-accent);
+	font-size: 18px;
+}
+
+.tracekeeper-status-pill--success {
+	border-color: var(--text-success);
+	box-shadow: inset 3px 0 0 var(--text-success);
+}
+
+.tracekeeper-status-pill--success strong {
+	color: var(--text-success);
+}
+
+.tracekeeper-status-pill--warning {
+	border-color: var(--text-warning);
+	box-shadow: inset 3px 0 0 var(--text-warning);
+}
+
+.tracekeeper-status-pill--warning strong {
+	color: var(--text-warning);
+}
+
+.tracekeeper-status-pill--danger {
+	border-color: var(--text-error);
+	box-shadow: inset 3px 0 0 var(--text-error);
+}
+
+.tracekeeper-status-pill--danger strong {
+	color: var(--text-error);
+}
+
 .tracekeeper-detail--description strong {
 	color: var(--text-normal);
 	font-size: 13px;
