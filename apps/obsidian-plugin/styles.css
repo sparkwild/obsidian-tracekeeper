@@ -735,6 +735,62 @@
 	margin: 6px 0;
 }
 
+.tracekeeper-capabilities-modal {
+	max-width: 720px;
+}
+
+.tracekeeper-capability-list {
+	display: grid;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+.tracekeeper-capability-row {
+	display: grid;
+	grid-template-columns: 96px minmax(0, 1fr);
+	gap: 10px;
+	align-items: start;
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+}
+
+.tracekeeper-capability-row:focus,
+.tracekeeper-capability-row:hover {
+	border-color: var(--interactive-accent);
+}
+
+.tracekeeper-capability-row__badge {
+	justify-content: center;
+	width: 100%;
+	white-space: nowrap;
+}
+
+.tracekeeper-capability-row__body {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+}
+
+.tracekeeper-capability-row__heading {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 10px;
+	align-items: baseline;
+	min-width: 0;
+}
+
+.tracekeeper-capability-row__heading strong,
+.tracekeeper-capability-row__heading code {
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-capability-row__heading code,
+.tracekeeper-capability-row__body small {
+	color: var(--text-muted);
+}
+
 .tracekeeper-advanced-details {
 	margin-top: 8px;
 }
@@ -836,5 +892,14 @@
 		justify-content: flex-start;
 		text-align: left;
 		white-space: normal;
+	}
+
+	.tracekeeper-capability-row {
+		grid-template-columns: 1fr;
+	}
+
+	.tracekeeper-capability-row__badge {
+		justify-content: flex-start;
+		width: fit-content;
 	}
 }

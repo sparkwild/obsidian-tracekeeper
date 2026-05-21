@@ -20,6 +20,7 @@ import {
 	type StreamableHttpRuntimeStatus,
 	type RuntimeState,
 } from '../../mcp-server/src/http-runtime';
+import { toolDefinitions } from '../../mcp-server/src/tools';
 
 const TRACEKEEPER_ACTIVITY_VIEW = 'tracekeeper-activity';
 const TRACEKEEPER_SOURCE_STATUS_VIEW = 'tracekeeper-source-status';
@@ -81,6 +82,7 @@ const isChineseLanguage = (language: string): boolean => {
 	return normalized === 'zh' || normalized.startsWith('zh-') || normalized.startsWith('zh_');
 };
 const ui = (zh: string, en: string): string => (isChineseLanguage(getLanguage()) ? zh : en);
+const localizedText = (text: LocalizedText): string => ui(text.zh, text.en);
 const pluginDisplayName = (): string => ui(PLUGIN_DISPLAY_NAME_ZH, PLUGIN_DISPLAY_NAME_EN);
 const MEMORY_STRUCTURE: string[] = [
 	'01_inbox/agent_requests',
@@ -103,6 +105,212 @@ const MEMORY_STRUCTURE: string[] = [
 	'06_outputs/summaries',
 	'07_archive',
 ];
+
+interface LocalizedText {
+	zh: string;
+	en: string;
+}
+
+type McpCapabilityRisk = 'read-only' | 'low-risk-write' | 'review-gated-write' | 'optional-write';
+
+interface McpCapabilityLocalization {
+	title: LocalizedText;
+	description: LocalizedText;
+	category: LocalizedText;
+	risk: McpCapabilityRisk;
+}
+
+const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = {
+	'tracekeeper.status': {
+		title: { zh: '查看状态', en: 'Check status' },
+		description: {
+			zh: '扫描当前知识库，返回基础文件数量、待审核项目、任务和最近活动概览。',
+			en: 'Scans the current vault and returns counts for notes, review items, tasks, and recent activity.',
+		},
+		category: { zh: '概览', en: 'Overview' },
+		risk: 'read-only',
+	},
+	'tracekeeper.graph_health': {
+		title: { zh: '检查知识图谱', en: 'Check graph health' },
+		description: {
+			zh: '分析 wikilink、入口页、hub、孤立节点和未解析链接，帮助判断 Obsidian 图谱结构是否健康。',
+			en: 'Analyzes wikilinks, entry notes, hubs, isolated notes, and unresolved links to assess graph health.',
+		},
+		category: { zh: '维护', en: 'Maintenance' },
+		risk: 'read-only',
+	},
+	'tracekeeper.start_task': {
+		title: { zh: '开始任务', en: 'Start task' },
+		description: {
+			zh: '为一次 Agent 工作创建任务记录，并返回可选择加载的上下文摘要。',
+			en: 'Creates a task record for an agent run and returns a selectable context summary.',
+		},
+		category: { zh: '任务', en: 'Task' },
+		risk: 'low-risk-write',
+	},
+	'tracekeeper.recall': {
+		title: { zh: '召回记忆', en: 'Recall memory' },
+		description: {
+			zh: '按查询从本地 Obsidian 知识库检索相关笔记，供 Agent 在任务中参考。',
+			en: 'Searches the local Obsidian vault for notes relevant to a query so agents can use them as context.',
+		},
+		category: { zh: '检索', en: 'Recall' },
+		risk: 'read-only',
+	},
+	'tracekeeper.project_context': {
+		title: { zh: '项目上下文', en: 'Project context' },
+		description: {
+			zh: '按项目、仓库路径或项目 ID 定向检索，避免无差别加载所有项目记忆。',
+			en: 'Retrieves context scoped by project, repository path, or project id instead of loading every project memory.',
+		},
+		category: { zh: '检索', en: 'Recall' },
+		risk: 'read-only',
+	},
+	'tracekeeper.project_history': {
+		title: { zh: '项目历史', en: 'Project history' },
+		description: {
+			zh: '读取指定项目的历史任务、会话和连续性记录，帮助 Agent 接上之前的工作。',
+			en: 'Reads project-scoped task, session, and continuity records so agents can resume prior work.',
+		},
+		category: { zh: '检索', en: 'Recall' },
+		risk: 'read-only',
+	},
+	'tracekeeper.read_note': {
+		title: { zh: '读取笔记', en: 'Read note' },
+		description: {
+			zh: '按知识库内相对路径读取单篇 Markdown 或文本笔记内容。',
+			en: 'Reads one Markdown or text note by vault-relative path.',
+		},
+		category: { zh: '检索', en: 'Recall' },
+		risk: 'read-only',
+	},
+	'tracekeeper.list_review_queue': {
+		title: { zh: '查看审核队列', en: 'List review queue' },
+		description: {
+			zh: '读取等待用户确认的记忆提案，Tracekeeper 不会绕过审核直接写入长期记忆。',
+			en: 'Reads memory proposals waiting for user review; Tracekeeper does not bypass review to write durable memory.',
+		},
+		category: { zh: '审核', en: 'Review' },
+		risk: 'read-only',
+	},
+	'tracekeeper.list_source_requests': {
+		title: { zh: '查看资料请求', en: 'List source requests' },
+		description: {
+			zh: '读取等待 Agent 处理的资料分析请求，用于后续生成来源笔记、分析报告或记忆提案。',
+			en: 'Reads pending source-analysis requests that can later produce source notes, reports, or memory proposals.',
+		},
+		category: { zh: '资料', en: 'Source' },
+		risk: 'read-only',
+	},
+	'tracekeeper.list_approved_writebacks': {
+		title: { zh: '查看已批准写回', en: 'List approved writebacks' },
+		description: {
+			zh: '读取已经通过审核、可以由运行时执行写回的候选提案。',
+			en: 'Reads proposals that have already been approved and are candidates for runtime writeback.',
+		},
+		category: { zh: '审核', en: 'Review' },
+		risk: 'read-only',
+	},
+	'tracekeeper.audit_recent': {
+		title: { zh: '查看审计记录', en: 'Read audit log' },
+		description: {
+			zh: '读取最近的连接、工具调用、配置写入和错误记录，便于排查 Agent 使用情况。',
+			en: 'Reads recent connection, tool-call, config-write, and error records for troubleshooting agent activity.',
+		},
+		category: { zh: '日志', en: 'Log' },
+		risk: 'read-only',
+	},
+	'tracekeeper.analyze_source_request': {
+		title: { zh: '分析资料请求', en: 'Analyze source request' },
+		description: {
+			zh: '处理一条资料请求，生成来源笔记、分析输出、审核提案和审计记录。',
+			en: 'Processes one source request and writes source notes, analysis output, review proposals, and audit entries.',
+		},
+		category: { zh: '资料', en: 'Source' },
+		risk: 'low-risk-write',
+	},
+	'tracekeeper.apply_approved_writeback': {
+		title: { zh: '应用已批准写回', en: 'Apply approved writeback' },
+		description: {
+			zh: '只对已经批准的审核提案执行写回，把明确批准的内容追加到目标笔记。',
+			en: 'Applies only approved review proposals by appending explicitly approved content to the target note.',
+		},
+		category: { zh: '写回', en: 'Writeback' },
+		risk: 'review-gated-write',
+	},
+	'tracekeeper.build_context_pack': {
+		title: { zh: '生成上下文包', en: 'Build context pack' },
+		description: {
+			zh: '根据查询组合相关笔记形成上下文包；默认可只读返回，也可按参数写入输出笔记。',
+			en: 'Builds a context pack from related notes; it can return read-only results or write an output note when requested.',
+		},
+		category: { zh: '上下文', en: 'Context' },
+		risk: 'optional-write',
+	},
+	'tracekeeper.lint': {
+		title: { zh: '检查知识库规范', en: 'Run vault checks' },
+		description: {
+			zh: '检查知识库链接、来源引用和图谱结构问题，帮助维护可检索、可导航的笔记库。',
+			en: 'Checks links, source references, and graph structure issues to keep the vault searchable and navigable.',
+		},
+		category: { zh: '维护', en: 'Maintenance' },
+		risk: 'read-only',
+	},
+	'tracekeeper.finish_task': {
+		title: { zh: '结束任务', en: 'Finish task' },
+		description: {
+			zh: '记录一次任务的总结、结果、决策和后续动作，并可按配置生成待审核记忆提案。',
+			en: 'Records a task summary, outcomes, decisions, and next actions, and can create reviewable memory proposals when configured.',
+		},
+		category: { zh: '任务', en: 'Task' },
+		risk: 'low-risk-write',
+	},
+	'tracekeeper.distill_session': {
+		title: { zh: '提炼会话', en: 'Distill session' },
+		description: {
+			zh: '把一次会话中的决策、偏好和后续动作整理成会话记录与待审核记忆提案。',
+			en: 'Distills decisions, preferences, and next actions from a session into a session note and reviewable memory proposals.',
+		},
+		category: { zh: '记忆', en: 'Memory' },
+		risk: 'low-risk-write',
+	},
+	'tracekeeper.write_context_pack': {
+		title: { zh: '写入上下文包', en: 'Write context pack' },
+		description: {
+			zh: '把已生成的上下文内容写入 06_outputs/context_packs，便于后续复用和审计。',
+			en: 'Writes generated context content under 06_outputs/context_packs for reuse and auditability.',
+		},
+		category: { zh: '上下文', en: 'Context' },
+		risk: 'low-risk-write',
+	},
+	'tracekeeper.write_session_note': {
+		title: { zh: '写入会话记录', en: 'Write session note' },
+		description: {
+			zh: '把会话内容写入 02_timeline/sessions，作为任务过程的本地记录。',
+			en: 'Writes session content under 02_timeline/sessions as a local record of the work.',
+		},
+		category: { zh: '记录', en: 'Record' },
+		risk: 'low-risk-write',
+	},
+	'tracekeeper.capture_source': {
+		title: { zh: '捕获资料来源', en: 'Capture source' },
+		description: {
+			zh: '记录网页、文件或文本来源的元数据和内容快照，保持知识来源可追溯。',
+			en: 'Records metadata and optional content snapshots for web, file, or text sources so knowledge remains traceable.',
+		},
+		category: { zh: '资料', en: 'Source' },
+		risk: 'low-risk-write',
+	},
+	'tracekeeper.propose_memory': {
+		title: { zh: '提交记忆提案', en: 'Propose memory' },
+		description: {
+			zh: '把 Agent 认为值得长期保存的内容放入审核队列，等待用户确认后再写入正式记忆。',
+			en: 'Places agent-suggested durable memory into the review queue so the user can approve it before it becomes formal memory.',
+		},
+		category: { zh: '记忆', en: 'Memory' },
+		risk: 'low-risk-write',
+	},
+};
 
 type ParsedRecordValue = string | string[];
 
@@ -255,6 +463,34 @@ const graphProfileLabel = (profile: GraphProfile): string => {
 	}
 };
 
+const mcpCapabilityRiskLabel = (risk: McpCapabilityRisk): string => {
+	switch (risk) {
+		case 'low-risk-write':
+			return ui('低风险写入', 'Low-risk write');
+		case 'review-gated-write':
+			return ui('审核后写入', 'Review-gated write');
+		case 'optional-write':
+			return ui('可选写入', 'Optional write');
+		case 'read-only':
+		default:
+			return ui('只读', 'Read-only');
+	}
+};
+
+const runtimeLogCleanupScopeLabel = (scope: RuntimeLogCleanupScope): string => {
+	switch (scope) {
+		case 'all':
+			return ui('全部', 'All');
+		case 'older-than-month':
+			return ui('一个月前', 'Older than one month');
+		case 'older-than-three-months':
+			return ui('三个月前', 'Older than three months');
+		case 'older-than-week':
+		default:
+			return ui('一周前', 'Older than one week');
+	}
+};
+
 interface AuditEventRecord {
 	path: string;
 	auditId: string;
@@ -321,6 +557,7 @@ interface ActivityTimelineSnapshot {
 
 type RuntimeLogFilter = 'all' | 'connection' | 'tool' | 'config' | 'error';
 type RuntimeLogCategory = 'connection' | 'tool' | 'config' | 'record';
+type RuntimeLogCleanupScope = 'older-than-week' | 'older-than-month' | 'older-than-three-months' | 'all';
 
 const RUNTIME_LOG_FILTERS: RuntimeLogFilter[] = [
 	'all',
@@ -328,6 +565,13 @@ const RUNTIME_LOG_FILTERS: RuntimeLogFilter[] = [
 	'tool',
 	'config',
 	'error',
+];
+
+const RUNTIME_LOG_CLEANUP_OPTIONS: RuntimeLogCleanupScope[] = [
+	'older-than-week',
+	'older-than-month',
+	'older-than-three-months',
+	'all',
 ];
 
 interface RuntimeLogItem {
@@ -349,6 +593,11 @@ interface RuntimeLogSnapshot {
 	totalItems: number;
 	totalPages: number;
 	updatedAt: string;
+}
+
+interface RuntimeLogCleanupResult {
+	removedSections: number;
+	removedFiles: number;
 }
 
 interface GraphHealthHubCandidate {
@@ -1364,6 +1613,116 @@ export default class TracekeeperPlugin extends Plugin {
 			totalPages,
 			updatedAt: new Date().toISOString(),
 		};
+	}
+
+	async cleanRuntimeLogs(scope: RuntimeLogCleanupScope): Promise<RuntimeLogCleanupResult> {
+		const cutoff = this.runtimeLogCleanupCutoff(scope);
+		const removedSections = await this.cleanAuditLogSections(cutoff);
+		const removedFiles = await this.cleanAuditFolderFiles(cutoff);
+		await this.refreshGovernanceViews();
+		return { removedSections, removedFiles };
+	}
+
+	private runtimeLogCleanupCutoff(scope: RuntimeLogCleanupScope): number | null {
+		const now = Date.now();
+		const dayMs = 24 * 60 * 60 * 1000;
+		switch (scope) {
+			case 'older-than-week':
+				return now - 7 * dayMs;
+			case 'older-than-month':
+				return now - 30 * dayMs;
+			case 'older-than-three-months':
+				return now - 90 * dayMs;
+			case 'all':
+			default:
+				return null;
+		}
+	}
+
+	private async cleanAuditLogSections(cutoff: number | null): Promise<number> {
+		const file = this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditLog);
+		if (!(file instanceof TFile)) {
+			return 0;
+		}
+
+		let removed = 0;
+		await this.app.vault.process(file, (current) => {
+			const parsed = this.splitAuditLogContent(current);
+			const keptSections = parsed.sections.filter((section) => {
+				const shouldRemove = cutoff === null || section.sortTimestamp < cutoff;
+				if (shouldRemove) {
+					removed += 1;
+				}
+				return !shouldRemove;
+			});
+			return this.renderAuditLogContent(parsed.header, keptSections.map((section) => section.content));
+		});
+		return removed;
+	}
+
+	private splitAuditLogContent(content: string): { header: string; sections: Array<{ content: string; sortTimestamp: number }> } {
+		const normalized = content.replace(/\r\n/g, '\n');
+		const lines = normalized.split('\n');
+		const firstSectionIndex = lines.findIndex((line) => line.trim().startsWith('## '));
+		const headerLines = firstSectionIndex >= 0 ? lines.slice(0, firstSectionIndex) : lines;
+		const sections: Array<{ content: string; sortTimestamp: number }> = [];
+		let cursor = firstSectionIndex >= 0 ? firstSectionIndex : lines.length;
+
+		while (cursor < lines.length) {
+			const start = cursor;
+			const header = lines[cursor].trim();
+			cursor += 1;
+			const bodyLines: string[] = [];
+			while (cursor < lines.length && !lines[cursor].trim().startsWith('## ')) {
+				bodyLines.push(lines[cursor]);
+				cursor += 1;
+			}
+			const timestampHeader = header.replace(/^##\s+/, '').trim();
+			const row = this.readKeyValueRows(bodyLines);
+			const timestamp = this.firstString(row, ['timestamp']) || timestampHeader;
+			sections.push({
+				content: lines.slice(start, cursor).join('\n').replace(/\s+$/g, ''),
+				sortTimestamp: this.parseTimestamp(timestamp, 0),
+			});
+		}
+
+		return {
+			header: headerLines.join('\n').trim(),
+			sections,
+		};
+	}
+
+	private renderAuditLogContent(header: string, sections: string[]): string {
+		const normalizedHeader = header.trim() || this.buildAuditLogHeader().trim();
+		if (sections.length === 0) {
+			return `${normalizedHeader}\n\n`;
+		}
+		return `${normalizedHeader}\n\n${sections.join('\n\n')}\n\n`;
+	}
+
+	private async cleanAuditFolderFiles(cutoff: number | null): Promise<number> {
+		const folder = this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditDir);
+		if (!(folder instanceof TFolder)) {
+			return 0;
+		}
+
+		let removed = 0;
+		for (const file of this.collectMarkdownFiles(folder)) {
+			const events = await this.readAuditMarkdownFile(file);
+			const timestamps = events
+				.map((event) => event.sortTimestamp)
+				.filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+			const latestTimestamp = timestamps.length > 0
+				? Math.max(...timestamps)
+				: file.stat?.mtime || 0;
+			const shouldRemove = cutoff === null || latestTimestamp < cutoff;
+			if (!shouldRemove) {
+				continue;
+			}
+			await this.app.vault.delete(file);
+			removed += 1;
+		}
+		return removed;
 	}
 
 	private countRuntimeLogItems(items: RuntimeLogItem[]): Record<RuntimeLogFilter, number> {
@@ -4725,6 +5084,51 @@ class ClientConfigPreviewModal extends Modal {
 	}
 }
 
+class McpCapabilitiesModal extends Modal {
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('tracekeeper-capabilities-modal');
+		this.titleEl.setText(ui('MCP 服务功能', 'MCP service capabilities'));
+
+		contentEl.createEl('p', {
+			text: ui(
+				'AI 工具连接后可以调用以下功能。移动到功能项上可查看说明。',
+				'Connected agents can call the capabilities below. Hover a capability to see its explanation.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+
+		const list = contentEl.createDiv({ cls: 'tracekeeper-capability-list' });
+		for (const definition of toolDefinitions()) {
+			const localization = MCP_CAPABILITY_LOCALIZATIONS[definition.name];
+			const title = localization ? localizedText(localization.title) : definition.title;
+			const description = localization ? localizedText(localization.description) : definition.description;
+			const category = localization ? localizedText(localization.category) : ui('功能', 'Capability');
+			const riskLabel = localization ? mcpCapabilityRiskLabel(localization.risk) : ui('功能说明', 'Capability');
+			const tooltip = `${definition.name}\n${description}`;
+			const row = list.createDiv({ cls: 'tracekeeper-capability-row' });
+			row.tabIndex = 0;
+			row.setAttr('aria-label', tooltip);
+			row.setAttr('data-tooltip-position', 'top');
+			row.setAttr('title', tooltip);
+			row.createEl('span', {
+				text: category,
+				cls: 'tracekeeper-badge tracekeeper-capability-row__badge',
+			});
+			const body = row.createDiv({ cls: 'tracekeeper-capability-row__body' });
+			const heading = body.createDiv({ cls: 'tracekeeper-capability-row__heading' });
+			heading.createEl('strong', { text: title });
+			heading.createEl('code', { text: definition.name });
+			body.createEl('small', { text: riskLabel });
+		}
+
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		const close = actions.createEl('button', { text: ui('关闭', 'Close') });
+		close.addEventListener('click', () => this.close());
+	}
+}
+
 class RuntimeTokenRegenerateConfirmModal extends Modal {
 	constructor(
 		app: App,
@@ -4816,6 +5220,82 @@ class TracekeeperMemoryInspectorView extends ItemView {
 	}
 }
 
+class RuntimeLogCleanupModal extends Modal {
+	private selectedScope: RuntimeLogCleanupScope = 'older-than-week';
+
+	constructor(
+		app: App,
+		private plugin: TracekeeperPlugin,
+		private onCleaned: () => Promise<void>
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		this.titleEl.setText(ui('清理运行日志', 'Clear runtime log'));
+
+		contentEl.createEl('p', {
+			text: ui(
+				'选择要清理的日志范围。该操作只会清理运行日志，不会删除任务、记忆或审核内容。',
+				'Choose which runtime log entries to clear. This only clears runtime logs; tasks, memories, and review items are not deleted.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+
+		new Setting(contentEl)
+			.setName(ui('清理范围', 'Range'))
+			.setDesc(ui('按日志时间清理旧记录。', 'Clear old records by log time.'))
+			.addDropdown((dropdown) => {
+				for (const scope of RUNTIME_LOG_CLEANUP_OPTIONS) {
+					dropdown.addOption(scope, runtimeLogCleanupScopeLabel(scope));
+				}
+				dropdown
+					.setValue(this.selectedScope)
+					.onChange((value: string) => {
+						this.selectedScope = this.normalizeScope(value);
+					});
+			});
+
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
+		cancel.addEventListener('click', () => this.close());
+		const status = actions.createEl('span', { cls: 'tracekeeper-view__description' });
+		const confirm = actions.createEl('button', {
+			text: ui('清理', 'Clear'),
+			cls: 'mod-warning',
+		});
+		confirm.addEventListener('click', () => {
+			void (async () => {
+				confirm.disabled = true;
+				cancel.disabled = true;
+				status.setText(ui('正在清理...', 'Clearing...'));
+				try {
+					const result = await this.plugin.cleanRuntimeLogs(this.selectedScope);
+					new Notice(ui(
+						`已清理 ${result.removedSections + result.removedFiles} 条日志记录。`,
+						`Cleared ${result.removedSections + result.removedFiles} runtime log record(s).`
+					));
+					await this.onCleaned();
+					this.close();
+				} catch (error) {
+					console.error('tracekeeper failed to clear runtime logs', error);
+					status.setText(ui('清理失败，请稍后重试。', 'Clear failed. Try again later.'));
+					confirm.disabled = false;
+					cancel.disabled = false;
+				}
+			})();
+		});
+	}
+
+	private normalizeScope(value: string): RuntimeLogCleanupScope {
+		return RUNTIME_LOG_CLEANUP_OPTIONS.includes(value as RuntimeLogCleanupScope)
+			? value as RuntimeLogCleanupScope
+			: 'older-than-week';
+	}
+}
+
 class TracekeeperRuntimeLogView extends ItemView {
 	private page = 1;
 	private activeFilter: RuntimeLogFilter = 'all';
@@ -4881,6 +5361,15 @@ class TracekeeperRuntimeLogView extends ItemView {
 			cls: 'tracekeeper-view__description',
 		});
 		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
+		const cleanupButton = actions.createEl('button', {
+			text: ui('清理', 'Clear'),
+		});
+		cleanupButton.addEventListener('click', () => {
+			new RuntimeLogCleanupModal(this.app, this.plugin, async () => {
+				this.page = 1;
+				await this.refresh();
+			}).open();
+		});
 		const refreshButton = actions.createEl('button', {
 			text: ui('刷新', 'Refresh'),
 			cls: 'mod-cta',
@@ -5253,6 +5742,7 @@ class TracekeeperSettingTab extends PluginSettingTab {
 			ui('控制本机服务开关、设置端口，并复制 Agent 连接地址。', 'Control the local service, set the port, and copy the agent connection URL.')
 		);
 		this.renderRuntimeEnabledSetting(section);
+		this.renderCapabilitiesSetting(section);
 		this.renderPortSetting(section, snapshot.connectionUrl);
 	}
 
@@ -5272,6 +5762,19 @@ class TracekeeperSettingTab extends PluginSettingTab {
 							.catch((error) => {
 								console.error('tracekeeper failed to toggle MCP service', error);
 							});
+					})
+			);
+	}
+
+	private renderCapabilitiesSetting(container: HTMLElement): void {
+		new Setting(container)
+			.setName(ui('服务功能', 'Capabilities'))
+			.setDesc(ui('查看 AI 工具可以调用的 MCP 服务功能。', 'View the MCP service capabilities available to agents.'))
+			.addButton((button) =>
+				button
+					.setButtonText(ui('查看功能', 'View capabilities'))
+					.onClick(() => {
+						new McpCapabilitiesModal(this.app).open();
 					})
 			);
 	}
@@ -5316,8 +5819,8 @@ class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('知识图谱检查', 'Graph health profile'))
 			.setDesc(ui(
-				'off 仅保留手动查看；advisory 只给建议；strict 会把入口、hub、孤立节点和未解析链接标为阻塞问题。',
-				'off keeps manual inspection only; advisory reports suggestions; strict marks missing entries, hubs, isolated nodes, and unresolved links as blocking issues.'
+				'关闭：仅保留手动查看；建议：只给出优化建议；严格：会把入口、中心节点、孤立节点和未解析链接标为阻塞问题。',
+				'Off: manual inspection only; Advisory: reports suggestions; Strict: marks missing entries, hubs, isolated nodes, and unresolved links as blocking issues.'
 			))
 			.addDropdown((dropdown) =>
 				dropdown
