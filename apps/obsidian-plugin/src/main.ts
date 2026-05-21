@@ -73,15 +73,12 @@ const DEFAULT_MCP_HOST = '127.0.0.1';
 const DEFAULT_MCP_PATH = '/mcp';
 const DEFAULT_MCP_HTTP_ENDPOINT = `http://${DEFAULT_MCP_HOST}:${DEFAULT_MCP_PORT}${DEFAULT_MCP_PATH}`;
 const LEGACY_DEFAULT_MCP_HTTP_ENDPOINTS = ['http://127.0.0.1:37241/mcp'];
-const DEFAULT_STATUS_MESSAGE_ZH = '欢迎使用知识库。';
-const DEFAULT_STATUS_MESSAGE_EN = 'Welcome to Tracekeeper.';
 const isChineseLanguage = (language: string): boolean => {
 	const normalized = language.toLowerCase();
 	return normalized === 'zh' || normalized.startsWith('zh-') || normalized.startsWith('zh_');
 };
 const ui = (zh: string, en: string): string => (isChineseLanguage(getLanguage()) ? zh : en);
 const pluginDisplayName = (): string => ui(PLUGIN_DISPLAY_NAME_ZH, PLUGIN_DISPLAY_NAME_EN);
-const defaultStatusMessage = (): string => ui(DEFAULT_STATUS_MESSAGE_ZH, DEFAULT_STATUS_MESSAGE_EN);
 const MEMORY_STRUCTURE: string[] = [
 	'01_inbox/agent_requests',
 	'01_inbox/review_queue',
@@ -475,18 +472,14 @@ interface AgentConnectionsSnapshot {
 }
 
 interface TracekeeperSettings {
-	showWelcomeMessage: boolean;
 	defaultAgentScope: string;
-	statusMessage: string;
 	mcpPort: number;
 	runtimeToken: string;
 	graphProfile: GraphProfile;
 }
 
 const DEFAULT_SETTINGS: TracekeeperSettings = {
-	showWelcomeMessage: true,
 	defaultAgentScope: 'vault',
-	statusMessage: '',
 	mcpPort: DEFAULT_MCP_PORT,
 	runtimeToken: '',
 	graphProfile: 'advisory',
@@ -510,18 +503,6 @@ export default class TracekeeperPlugin extends Plugin {
 
 	async onload() {
 		this.settings = this.normalizeSettings(await this.loadData());
-		if (typeof this.settings.statusMessage !== 'string') {
-			this.settings.statusMessage = '';
-		}
-		const savedStatusMessage = this.settings.statusMessage.trim();
-		const isSavedDefaultMessage =
-			savedStatusMessage === DEFAULT_STATUS_MESSAGE_ZH ||
-			savedStatusMessage === DEFAULT_STATUS_MESSAGE_EN ||
-			['tracekeeper', 'Agent', 'Activity'].every((part) => savedStatusMessage.includes(part));
-		if (isSavedDefaultMessage) {
-			this.settings.statusMessage = '';
-			await this.saveSettings();
-		}
 		await this.saveSettings();
 		await this.startMcpRuntime();
 
@@ -655,7 +636,7 @@ export default class TracekeeperPlugin extends Plugin {
 
 	private normalizeSettings(raw: unknown): TracekeeperSettings {
 		const saved = raw && typeof raw === 'object' ? raw as Partial<TracekeeperSettings> & Record<string, unknown> : {};
-		const next: TracekeeperSettings = Object.assign({}, DEFAULT_SETTINGS, saved);
+		const next: TracekeeperSettings = { ...DEFAULT_SETTINGS };
 		const legacyEndpoint = typeof saved.mcpHttpEndpoint === 'string' ? saved.mcpHttpEndpoint.trim() : '';
 		if (legacyEndpoint && !LEGACY_DEFAULT_MCP_HTTP_ENDPOINTS.includes(legacyEndpoint)) {
 			const legacyPort = this.portFromEndpoint(legacyEndpoint);
@@ -663,7 +644,10 @@ export default class TracekeeperPlugin extends Plugin {
 				next.mcpPort = legacyPort;
 			}
 		}
-		next.mcpPort = this.normalizePort(next.mcpPort);
+		next.defaultAgentScope = typeof saved.defaultAgentScope === 'string' && saved.defaultAgentScope.trim()
+			? saved.defaultAgentScope.trim()
+			: DEFAULT_SETTINGS.defaultAgentScope;
+		next.mcpPort = this.normalizePort(saved.mcpPort ?? next.mcpPort);
 		next.runtimeToken = typeof saved.runtimeToken === 'string' && saved.runtimeToken.trim()
 			? saved.runtimeToken.trim()
 			: this.generateRuntimeToken();
@@ -3056,11 +3040,6 @@ export default class TracekeeperPlugin extends Plugin {
 		new Notice(successMessage);
 	}
 
-	getStatusMessage(): string {
-		const customStatusMessage = (this.settings.statusMessage || '').trim();
-		return customStatusMessage.length > 0 ? customStatusMessage : defaultStatusMessage();
-	}
-
 	formatToolDisplayName(toolName: string): string {
 		const normalized = toolName.replace(/^tracekeeper[._]/, '').trim();
 		const labels: Record<string, string> = {
@@ -3401,15 +3380,6 @@ class TracekeeperActivityView extends ItemView {
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
 		const heading = header.createDiv();
 		heading.createEl('h2', { text: ui('AI 助手活动', 'AI assistant activity'), cls: 'tracekeeper-view__title' });
-		heading.createEl('p', {
-			text: this.plugin.settings.showWelcomeMessage
-				? this.plugin.getStatusMessage()
-				: ui(
-					'欢迎信息已关闭。活动数据以只读模式显示。',
-					'Welcome message is disabled. Activity data is shown in read-only mode.'
-				),
-			cls: 'tracekeeper-view__description',
-		});
 		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
 		const refreshButton = actions.createEl('button', {
 			text: ui('刷新', 'Refresh'),
@@ -5006,21 +4976,6 @@ class TracekeeperSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName(ui('显示欢迎信息', 'Show welcome message'))
-			.setDesc(ui(
-				'在活动页顶部显示一条说明文字。',
-				'Show a short message at the top of the activity page.'
-			))
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.showWelcomeMessage)
-					.onChange((value: boolean) => {
-						this.plugin.settings.showWelcomeMessage = value;
-						void this.plugin.saveSettings();
-					})
-			);
 
 		new Setting(containerEl)
 			.setName(ui('知识图谱检查', 'Graph health profile'))
