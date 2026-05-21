@@ -4705,6 +4705,51 @@ class ClientConfigPreviewModal extends Modal {
 	}
 }
 
+class RuntimeTokenRegenerateConfirmModal extends Modal {
+	constructor(
+		app: App,
+		private plugin: TracekeeperPlugin,
+		private onRegenerated: () => void
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		void super.onOpen();
+		this.titleEl.setText(ui('重新生成令牌', 'Regenerate token'));
+
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.createEl('p', {
+			text: ui('当前令牌将失效。', 'The current token will expire.'),
+		});
+
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
+		cancel.addEventListener('click', () => this.close());
+		const confirm = actions.createEl('button', {
+			text: ui('重新生成', 'Regenerate'),
+			cls: 'mod-warning',
+		});
+		confirm.addEventListener('click', () => {
+			void (async () => {
+				confirm.disabled = true;
+				cancel.disabled = true;
+				try {
+					await this.plugin.regenerateRuntimeToken();
+					this.onRegenerated();
+					this.close();
+				} catch (error) {
+					console.error('tracekeeper failed to regenerate runtime token', error);
+					new Notice(ui('重新生成令牌失败。', 'Failed to regenerate token.'));
+					confirm.disabled = false;
+					cancel.disabled = false;
+				}
+			})();
+		});
+	}
+}
+
 class TracekeeperMemoryInspectorView extends ItemView {
 	constructor(leaf: WorkspaceLeaf) {
 		super(leaf);
@@ -5090,7 +5135,11 @@ class TracekeeperSettingTab extends PluginSettingTab {
 				button
 					.setButtonText(ui('重新生成', 'Regenerate'))
 					.onClick(() => {
-						void this.plugin.regenerateRuntimeToken().then(() => this.display());
+						new RuntimeTokenRegenerateConfirmModal(
+							this.app,
+							this.plugin,
+							() => this.display()
+						).open();
 					})
 			);
 	}
