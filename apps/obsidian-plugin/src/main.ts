@@ -25,11 +25,11 @@ const TRACEKEEPER_ACTIVITY_VIEW = 'tracekeeper-activity';
 const TRACEKEEPER_SOURCE_STATUS_VIEW = 'tracekeeper-source-status';
 const TRACEKEEPER_REVIEW_QUEUE_VIEW = 'tracekeeper-review-queue';
 const TRACEKEEPER_MEMORY_INSPECTOR_VIEW = 'tracekeeper-memory-inspector';
-const TRACEKEEPER_AUDIT_LOG_VIEW = 'tracekeeper-audit-log';
+const TRACEKEEPER_RUNTIME_LOG_VIEW = 'tracekeeper-runtime-log';
 const TRACEKEEPER_RUNTIME_STATUS_VIEW = 'tracekeeper-runtime-status';
 const TRACEKEEPER_PERMISSION_POLICY_VIEW = 'tracekeeper-permission-policy';
-const TRACEKEEPER_AGENT_CONNECTIONS_VIEW = 'tracekeeper-agent-connections';
 const TRACEKEEPER_GRAPH_HEALTH_VIEW = 'tracekeeper-graph-health';
+const LEGACY_AGENT_CONNECTIONS_VIEW = 'tracekeeper-agent-connections';
 const CONTROL_FILES: Array<{ path: string; content: string }> = [
 	{
 		path: '00_control/system.md',
@@ -62,6 +62,7 @@ const MAX_SOURCE_STATUS_ROWS = 20;
 const MAX_REVIEW_QUEUE_ROWS = 20;
 const ACTIVITY_TIMELINE_PREVIEW_ROWS = 5;
 const ACTIVITY_TIMELINE_PAGE_SIZE = 10;
+const RUNTIME_LOG_PAGE_SIZE = 20;
 const MAX_ACTIVITY_CONTEXT_PACK_ROWS = 5;
 const MAX_ACTIVITY_SOURCE_CAPTURE_ROWS = 5;
 const MAX_ACTIVITY_PROPOSAL_ROWS = 5;
@@ -318,6 +319,38 @@ interface ActivityTimelineSnapshot {
 	updatedAt: string;
 }
 
+type RuntimeLogFilter = 'all' | 'connection' | 'tool' | 'config' | 'error';
+type RuntimeLogCategory = 'connection' | 'tool' | 'config' | 'record';
+
+const RUNTIME_LOG_FILTERS: RuntimeLogFilter[] = [
+	'all',
+	'connection',
+	'tool',
+	'config',
+	'error',
+];
+
+interface RuntimeLogItem {
+	time: number;
+	category: RuntimeLogCategory;
+	title: string;
+	meta: string;
+	body: string;
+	path: string;
+	status: string;
+}
+
+interface RuntimeLogSnapshot {
+	items: RuntimeLogItem[];
+	filter: RuntimeLogFilter;
+	counts: Record<RuntimeLogFilter, number>;
+	page: number;
+	pageSize: number;
+	totalItems: number;
+	totalPages: number;
+	updatedAt: string;
+}
+
 interface GraphHealthHubCandidate {
 	path: string;
 	degree: number;
@@ -367,6 +400,7 @@ interface GraphHealthSnapshot {
 interface AgentActivitySnapshot {
 	runtimeStatus: RuntimeViewStatus;
 	structureStatus: TracekeeperStructureStatus;
+	vaultRoot: string;
 	latestTask: AgentTaskRecord | null;
 	recentTasks: AgentTaskRecord[];
 	recentContextPacks: ContextPackRecord[];
@@ -375,6 +409,8 @@ interface AgentActivitySnapshot {
 	recentProposals: MemoryProposalRecord[];
 	recentAuditEvents: AuditEventRecord[];
 	timelineItems: ActivityTimelineItem[];
+	recentAgentCount: number;
+	recentToolCallCount: number;
 	missingTaskFolder: boolean;
 	missingAuditSources: boolean;
 	updatedAt: string;
@@ -411,6 +447,7 @@ type ConnectionTransport = 'streamable-http';
 type ClientConfigState = 'configured' | 'needs_update' | 'not_configured' | 'unavailable';
 
 interface RuntimeViewStatus {
+	enabled: boolean;
 	state: RuntimeState;
 	label: string;
 	detail: string;
@@ -429,7 +466,7 @@ interface ClientProfile {
 	preferredTransport: ConnectionTransport;
 	supportsAutoConfigure: boolean;
 	restartRequired: boolean;
-	configFormat: 'codex-toml' | 'mcp-json' | 'command' | 'copy-only';
+	configFormat: 'codex-toml' | 'mcp-json' | 'copy-only';
 	targetPath?: string;
 }
 
@@ -494,6 +531,7 @@ interface AgentConnectionsSnapshot {
 
 interface TracekeeperSettings {
 	defaultAgentScope: string;
+	mcpRuntimeEnabled: boolean;
 	mcpPort: number;
 	runtimeToken: string;
 	runtimeTokenCreatedAt: string;
@@ -502,6 +540,7 @@ interface TracekeeperSettings {
 
 const DEFAULT_SETTINGS: TracekeeperSettings = {
 	defaultAgentScope: 'vault',
+	mcpRuntimeEnabled: true,
 	mcpPort: DEFAULT_MCP_PORT,
 	runtimeToken: '',
 	runtimeTokenCreatedAt: '',
@@ -546,8 +585,8 @@ export default class TracekeeperPlugin extends Plugin {
 			(leaf) => new TracekeeperMemoryInspectorView(leaf)
 		);
 		this.registerView(
-			TRACEKEEPER_AUDIT_LOG_VIEW,
-			(leaf) => new TracekeeperAuditLogView(leaf, this)
+			TRACEKEEPER_RUNTIME_LOG_VIEW,
+			(leaf) => new TracekeeperRuntimeLogView(leaf, this)
 		);
 		this.registerView(
 			TRACEKEEPER_RUNTIME_STATUS_VIEW,
@@ -558,13 +597,10 @@ export default class TracekeeperPlugin extends Plugin {
 			(leaf) => new TracekeeperPermissionPolicyView(leaf)
 		);
 		this.registerView(
-			TRACEKEEPER_AGENT_CONNECTIONS_VIEW,
-			(leaf) => new TracekeeperAgentConnectionsView(leaf, this)
-		);
-		this.registerView(
 			TRACEKEEPER_GRAPH_HEALTH_VIEW,
 			(leaf) => new TracekeeperGraphHealthView(leaf, this)
 		);
+		await this.replaceLegacyAgentConnectionLeaves();
 
 		this.addRibbonIcon('brain-circuit', ui(`打开${PLUGIN_DISPLAY_NAME_ZH}面板`, `Open ${PLUGIN_DISPLAY_NAME_EN} panel`), () => {
 			void this.openPluginView(TRACEKEEPER_ACTIVITY_VIEW);
@@ -595,10 +631,10 @@ export default class TracekeeperPlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: 'open-audit-log',
-			name: ui('打开活动时间线', 'Open activity timeline'),
+			id: 'open-runtime-log',
+			name: ui('打开运行日志', 'Open runtime log'),
 			callback: () => {
-				void this.openPluginView(TRACEKEEPER_AUDIT_LOG_VIEW);
+				void this.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);
 			},
 		});
 
@@ -615,14 +651,6 @@ export default class TracekeeperPlugin extends Plugin {
 			name: ui('打开权限说明', 'Open permission guide'),
 			callback: () => {
 				void this.openPluginView(TRACEKEEPER_PERMISSION_POLICY_VIEW);
-			},
-		});
-
-		this.addCommand({
-			id: 'open-agent-connections',
-			name: ui('打开 AI 助手连接', 'Open AI assistant connections'),
-			callback: () => {
-				void this.openPluginView(TRACEKEEPER_AGENT_CONNECTIONS_VIEW);
 			},
 		});
 
@@ -670,6 +698,9 @@ export default class TracekeeperPlugin extends Plugin {
 		next.defaultAgentScope = typeof saved.defaultAgentScope === 'string' && saved.defaultAgentScope.trim()
 			? saved.defaultAgentScope.trim()
 			: DEFAULT_SETTINGS.defaultAgentScope;
+		next.mcpRuntimeEnabled = typeof saved.mcpRuntimeEnabled === 'boolean'
+			? saved.mcpRuntimeEnabled
+			: DEFAULT_SETTINGS.mcpRuntimeEnabled;
 		next.mcpPort = this.normalizePort(saved.mcpPort ?? next.mcpPort);
 		const savedRuntimeToken = typeof saved.runtimeToken === 'string' ? saved.runtimeToken.trim() : '';
 		next.runtimeToken = savedRuntimeToken || this.generateRuntimeToken();
@@ -727,7 +758,27 @@ export default class TracekeeperPlugin extends Plugin {
 
 	async restartMcpRuntime(): Promise<void> {
 		await this.stopMcpRuntime();
-		await this.startMcpRuntime();
+		if (this.settings.mcpRuntimeEnabled) {
+			await this.startMcpRuntime();
+		}
+		await this.refreshGovernanceViews();
+	}
+
+	async setMcpRuntimeEnabled(enabled: boolean): Promise<void> {
+		if (this.settings.mcpRuntimeEnabled === enabled) {
+			return;
+		}
+		this.settings.mcpRuntimeEnabled = enabled;
+		await this.saveSettings();
+		if (enabled) {
+			await this.startMcpRuntime();
+			if (this.getRuntimeViewStatus().state === 'running') {
+				new Notice(ui('MCP 服务已开启。', 'MCP service is on.'));
+			}
+		} else {
+			await this.stopMcpRuntime();
+			new Notice(ui('MCP 服务已关闭。', 'MCP service is off.'));
+		}
 		await this.refreshGovernanceViews();
 	}
 
@@ -741,6 +792,10 @@ export default class TracekeeperPlugin extends Plugin {
 
 	private async startMcpRuntime(): Promise<void> {
 		this.uiMcpSessionId = '';
+		if (!this.settings.mcpRuntimeEnabled) {
+			this.runtimeStatus = this.createStoppedRuntimeStatus();
+			return;
+		}
 		const vaultRoot = this.getVaultRoot();
 		const runtimeOptions: StreamableHttpRuntimeOptionsWithGraphProfile = {
 			host: DEFAULT_MCP_HOST,
@@ -770,7 +825,11 @@ export default class TracekeeperPlugin extends Plugin {
 		if (runtime) {
 			await runtime.stop();
 		}
-		this.runtimeStatus = {
+		this.runtimeStatus = this.createStoppedRuntimeStatus();
+	}
+
+	private createStoppedRuntimeStatus(): StreamableHttpRuntimeStatus {
+		return {
 			state: 'stopped',
 			host: DEFAULT_MCP_HOST,
 			port: this.settings.mcpPort,
@@ -1056,16 +1115,6 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 	}
 
-	private async refreshAgentConnectionViews(): Promise<void> {
-		const connectionLeaves = this.app.workspace.getLeavesOfType(TRACEKEEPER_AGENT_CONNECTIONS_VIEW);
-		for (const leaf of connectionLeaves) {
-			const view = leaf.view;
-			if (view instanceof TracekeeperAgentConnectionsView) {
-				await view.refresh();
-			}
-		}
-	}
-
 	private async refreshGraphHealthViews(): Promise<void> {
 		const graphHealthLeaves = this.app.workspace.getLeavesOfType(TRACEKEEPER_GRAPH_HEALTH_VIEW);
 		for (const leaf of graphHealthLeaves) {
@@ -1073,6 +1122,27 @@ export default class TracekeeperPlugin extends Plugin {
 			if (view instanceof TracekeeperGraphHealthView) {
 				await view.refresh();
 			}
+		}
+	}
+
+	private async refreshRuntimeLogViews(): Promise<void> {
+		const logLeaves = this.app.workspace.getLeavesOfType(TRACEKEEPER_RUNTIME_LOG_VIEW);
+		for (const leaf of logLeaves) {
+			const view = leaf.view;
+			if (view instanceof TracekeeperRuntimeLogView) {
+				await view.refresh();
+			}
+		}
+	}
+
+	private async replaceLegacyAgentConnectionLeaves(): Promise<void> {
+		const legacyLeaves = this.app.workspace.getLeavesOfType(LEGACY_AGENT_CONNECTIONS_VIEW);
+		for (const leaf of legacyLeaves) {
+			await leaf.setViewState({
+				type: TRACEKEEPER_RUNTIME_LOG_VIEW,
+				state: {},
+				active: false,
+			});
 		}
 	}
 
@@ -1089,7 +1159,7 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.refreshActivityViews();
 		await this.refreshReviewQueueViews();
 		await this.refreshSourceStatusViews();
-		await this.refreshAgentConnectionViews();
+		await this.refreshRuntimeLogViews();
 		await this.refreshGraphHealthViews();
 	}
 
@@ -1189,6 +1259,13 @@ export default class TracekeeperPlugin extends Plugin {
 			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditLog) === null;
 		const auditDirMissing =
 			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditDir) === null;
+		const recentToolCallRecords = recentAuditEvents
+			.filter((event) => this.isToolCallAuditEvent(event))
+			.map((event) => this.toAgentToolCallRecord(event));
+		const recentAgentCount = this.buildRecentAgentConnections(
+			recentAuditEvents,
+			recentToolCallRecords
+		).length;
 		const timelineItems = this.buildActivityTimelineItems({
 			tasks: recentTasks,
 			contextPacks: recentContextPacks,
@@ -1201,6 +1278,7 @@ export default class TracekeeperPlugin extends Plugin {
 		return {
 			runtimeStatus: this.getRuntimeViewStatus(),
 			structureStatus,
+			vaultRoot: this.getVaultRoot(),
 			latestTask,
 			recentTasks,
 			recentContextPacks,
@@ -1209,6 +1287,8 @@ export default class TracekeeperPlugin extends Plugin {
 			recentProposals,
 			recentAuditEvents,
 			timelineItems,
+			recentAgentCount,
+			recentToolCallCount: recentToolCallRecords.length,
 			missingTaskFolder: taskFolderMissing,
 			missingAuditSources: auditLogMissing && auditDirMissing,
 			updatedAt: new Date().toISOString(),
@@ -1256,6 +1336,129 @@ export default class TracekeeperPlugin extends Plugin {
 			totalPages,
 			updatedAt: new Date().toISOString(),
 		};
+	}
+
+	async loadRuntimeLogSnapshot(
+		page: number,
+		filter: RuntimeLogFilter = 'all',
+		pageSize = RUNTIME_LOG_PAGE_SIZE
+	): Promise<RuntimeLogSnapshot> {
+		const safePageSize = Math.max(1, Math.floor(pageSize));
+		const safeFilter = RUNTIME_LOG_FILTERS.includes(filter) ? filter : 'all';
+		const auditEvents = await this.readRecentAuditEvents(Number.MAX_SAFE_INTEGER);
+		const allItems = auditEvents.map((event) => this.toRuntimeLogItem(event));
+		const counts = this.countRuntimeLogItems(allItems);
+		const visibleItems = allItems.filter((item) => this.matchesRuntimeLogFilter(item, safeFilter));
+		const totalItems = visibleItems.length;
+		const totalPages = Math.max(1, Math.ceil(totalItems / safePageSize));
+		const safePage = Math.min(Math.max(1, Math.floor(page) || 1), totalPages);
+		const start = (safePage - 1) * safePageSize;
+
+		return {
+			items: visibleItems.slice(start, start + safePageSize),
+			filter: safeFilter,
+			counts,
+			page: safePage,
+			pageSize: safePageSize,
+			totalItems,
+			totalPages,
+			updatedAt: new Date().toISOString(),
+		};
+	}
+
+	private countRuntimeLogItems(items: RuntimeLogItem[]): Record<RuntimeLogFilter, number> {
+		const counts: Record<RuntimeLogFilter, number> = {
+			all: 0,
+			connection: 0,
+			tool: 0,
+			config: 0,
+			error: 0,
+		};
+		for (const item of items) {
+			counts.all += 1;
+			if (item.category === 'connection' || item.category === 'tool' || item.category === 'config') {
+				counts[item.category] += 1;
+			}
+			if (this.isRuntimeLogError(item)) {
+				counts.error += 1;
+			}
+		}
+		return counts;
+	}
+
+	private matchesRuntimeLogFilter(item: RuntimeLogItem, filter: RuntimeLogFilter): boolean {
+		if (filter === 'all') {
+			return true;
+		}
+		if (filter === 'error') {
+			return this.isRuntimeLogError(item);
+		}
+		return item.category === filter;
+	}
+
+	private isRuntimeLogError(item: RuntimeLogItem): boolean {
+		const normalized = item.status.toLowerCase().trim();
+		return normalized === 'failed' || normalized === 'error' || normalized.includes('failed');
+	}
+
+	private toRuntimeLogItem(event: AuditEventRecord): RuntimeLogItem {
+		const category = this.runtimeLogCategory(event);
+		const status = event.resultStatus || (category === 'connection' ? 'connected' : '');
+		const metaParts = [
+			this.formatAgentDisplayName(event.clientName, event.agentId),
+			status ? this.formatResultLabel(status) : '',
+			event.riskLevel ? this.formatRiskLabel(event.riskLevel) : '',
+		].filter(Boolean);
+		const body = event.reason
+			|| event.argsSummary
+			|| event.targetPaths.join(', ')
+			|| event.target
+			|| event.snippet;
+
+		return {
+			time: event.sortTimestamp,
+			category,
+			title: this.runtimeLogTitle(event, category),
+			meta: metaParts.join(' • '),
+			body,
+			path: event.target || event.path,
+			status,
+		};
+	}
+
+	private runtimeLogCategory(event: AuditEventRecord): RuntimeLogCategory {
+		if (this.isConnectionAuditEvent(event)) {
+			return 'connection';
+		}
+		if (event.action.startsWith('client_config_')) {
+			return 'config';
+		}
+		if (this.isToolCallAuditEvent(event)) {
+			return 'tool';
+		}
+		return 'record';
+	}
+
+	private runtimeLogTitle(event: AuditEventRecord, category: RuntimeLogCategory): string {
+		if (category === 'connection') {
+			return ui('建立连接', 'Connected');
+		}
+		if (category === 'tool') {
+			return this.formatToolDisplayName(event.toolName || event.action);
+		}
+		if (category === 'config') {
+			switch (event.action) {
+				case 'client_config_applied':
+					return ui('写入连接配置', 'Connection config written');
+				case 'client_config_removed':
+					return ui('移除连接配置', 'Connection config removed');
+				case 'client_config_failed':
+					return ui('连接配置失败', 'Connection config failed');
+				default:
+					return ui('连接配置变更', 'Connection config change');
+			}
+		}
+		return event.action || ui('运行记录', 'Runtime record');
 	}
 
 	private buildActivityTimelineItems(input: {
@@ -1759,11 +1962,11 @@ export default class TracekeeperPlugin extends Plugin {
 			{
 				id: 'claude-code',
 				displayName: 'Claude Code',
-				description: ui('在终端执行下面命令，为 Claude Code 添加知识库连接。', 'Run this command in a terminal to add the Tracekeeper connection to Claude Code.'),
+				description: ui('将下面内容加入 Claude Code 的 MCP 配置。', 'Add this to your Claude Code MCP configuration.'),
 				preferredTransport: 'streamable-http',
 				supportsAutoConfigure: false,
 				restartRequired: false,
-				configFormat: 'command',
+				configFormat: 'mcp-json',
 			},
 			{
 				id: 'claude-desktop',
@@ -1803,10 +2006,6 @@ export default class TracekeeperPlugin extends Plugin {
 				'[mcp_servers.tracekeeper]',
 				`url = ${JSON.stringify(connectionUrl)}`,
 			].join('\n');
-		}
-
-		if (profile.id === 'claude-code') {
-			return `claude mcp add --transport http tracekeeper ${connectionUrl} --scope user`;
 		}
 
 		const config = {
@@ -1966,11 +2165,15 @@ export default class TracekeeperPlugin extends Plugin {
 
 	getRuntimeViewStatus(): RuntimeViewStatus {
 		const status = this.mcpRuntime?.getStatus() || this.runtimeStatus;
-		const label = this.runtimeStateLabel(status.state);
+		const enabled = this.settings.mcpRuntimeEnabled;
+		const label = enabled ? this.runtimeStateLabel(status.state) : ui('已关闭', 'Off');
 		return {
+			enabled,
 			state: status.state,
 			label,
-			detail: this.runtimeStateDetail(status),
+			detail: enabled
+				? this.runtimeStateDetail(status)
+				: ui('MCP 服务已关闭。需要 AI 工具连接时，可在插件设置中重新开启。', 'MCP service is off. Turn it back on in plugin settings when AI tools need to connect.'),
 			endpoint: this.getMcpHttpEndpoint(),
 			host: DEFAULT_MCP_HOST,
 			port: this.settings.mcpPort || DEFAULT_MCP_PORT,
@@ -2162,6 +2365,9 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	async callLocalMcpTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+		if (!this.settings.mcpRuntimeEnabled) {
+			throw new Error(ui('MCP 服务已关闭，请先在 Tracekeeper 设置中开启。', 'MCP service is off. Turn it on in Tracekeeper settings first.'));
+		}
 		for (let attempt = 0; attempt < 2; attempt += 1) {
 			try {
 				await this.ensureUiMcpSession();
@@ -2235,7 +2441,7 @@ export default class TracekeeperPlugin extends Plugin {
 			const result = this.writeClientConfig(config);
 			this.queueClientConfigAuditEvent('client_config_applied', config, 'success', result.backupPath);
 			new Notice(ui('已写入知识库连接配置，请重启对应 AI 工具。', 'Tracekeeper connection config written. Restart the AI tool.'));
-			this.queueAgentConnectionViewRefresh();
+			this.queueRuntimeLogRefresh();
 		} catch (error) {
 			console.error('tracekeeper failed to apply client config', error);
 			this.queueClientConfigAuditEvent('client_config_failed', config, 'failed');
@@ -2249,7 +2455,7 @@ export default class TracekeeperPlugin extends Plugin {
 			const result = this.deleteClientConfig(config);
 			this.queueClientConfigAuditEvent('client_config_removed', config, 'success', result.backupPath);
 			new Notice(ui('已移除配置，请重启对应 AI 工具。', 'Config removed. Restart the AI tool.'));
-			this.queueAgentConnectionViewRefresh();
+			this.queueRuntimeLogRefresh();
 		} catch (error) {
 			console.error('tracekeeper failed to remove client config', error);
 			this.queueClientConfigAuditEvent('client_config_failed', config, 'failed');
@@ -2417,9 +2623,12 @@ export default class TracekeeperPlugin extends Plugin {
 		});
 	}
 
-	private queueAgentConnectionViewRefresh(): void {
-		void this.refreshAgentConnectionViews().catch((error) => {
-			console.error('tracekeeper failed to refresh agent connection views', error);
+	private queueRuntimeLogRefresh(): void {
+		void Promise.all([
+			this.refreshActivityViews(),
+			this.refreshRuntimeLogViews(),
+		]).catch((error) => {
+			console.error('tracekeeper failed to refresh runtime log views', error);
 		});
 	}
 
@@ -2902,7 +3111,7 @@ export default class TracekeeperPlugin extends Plugin {
 					sessionId: this.firstString(data, ['session_id', 'sessionId']),
 					clientName: this.firstString(data, ['client_name', 'clientName', 'client']),
 					toolName,
-					resultStatus: this.firstString(data, ['result_status', 'resultStatus', 'status']),
+					resultStatus: this.firstString(data, ['result_status', 'resultStatus', 'result', 'status']),
 					targetPaths: this.readStringList(data, ['target_paths', 'targetPaths', 'target_path', 'targetPath', 'target']),
 					durationMs: this.firstString(data, ['duration_ms', 'durationMs']),
 					riskLevel: this.firstString(data, ['risk_level', 'riskLevel']),
@@ -2969,7 +3178,7 @@ export default class TracekeeperPlugin extends Plugin {
 				sessionId: this.firstString(row, ['session_id', 'sessionId']),
 				clientName: this.firstString(row, ['client_name', 'clientName', 'client']),
 				toolName,
-				resultStatus: this.firstString(row, ['result_status', 'resultStatus', 'status']),
+				resultStatus: this.firstString(row, ['result_status', 'resultStatus', 'result', 'status']),
 				targetPaths: this.readStringList(row, ['target_paths', 'targetPaths', 'target_path', 'targetPath', 'target']),
 				durationMs: this.firstString(row, ['duration_ms', 'durationMs']),
 				riskLevel: this.firstString(row, ['risk_level', 'riskLevel']),
@@ -3197,6 +3406,21 @@ export default class TracekeeperPlugin extends Plugin {
 			active: true,
 		});
 		await this.app.workspace.revealLeaf(leaf);
+	}
+
+	openSettingsTab(): void {
+		const appWithSettings = this.app as App & {
+			setting?: {
+				open(): void;
+				openTabById(id: string): void;
+			};
+		};
+		if (!appWithSettings.setting) {
+			new Notice(ui('请在 Obsidian 设置中打开 Tracekeeper。', 'Open Tracekeeper from Obsidian settings.'));
+			return;
+		}
+		appWithSettings.setting.open();
+		appWithSettings.setting.openTabById(this.manifest.id);
 	}
 
 	async saveSettings() {
@@ -3600,11 +3824,17 @@ class TracekeeperActivityView extends ItemView {
 		reviewButton.addEventListener('click', () => {
 			void this.plugin.openPluginView(TRACEKEEPER_REVIEW_QUEUE_VIEW);
 		});
-		const connectionsButton = actions.createEl('button', {
-			text: ui('打开 AI 助手连接', 'Open AI assistant connections'),
+		const settingsButton = actions.createEl('button', {
+			text: ui('打开插件设置', 'Open plugin settings'),
 		});
-		connectionsButton.addEventListener('click', () => {
-			void this.plugin.openPluginView(TRACEKEEPER_AGENT_CONNECTIONS_VIEW);
+		settingsButton.addEventListener('click', () => {
+			this.plugin.openSettingsTab();
+		});
+		const logButton = actions.createEl('button', {
+			text: ui('查看运行日志', 'View runtime log'),
+		});
+		logButton.addEventListener('click', () => {
+			void this.plugin.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);
 		});
 
 		const statusBar = contentEl.createDiv({ cls: 'tracekeeper-status-bar' });
@@ -3612,8 +3842,9 @@ class TracekeeperActivityView extends ItemView {
 			statusBar,
 			ui('MCP 服务', 'MCP service'),
 			snapshot.runtimeStatus.label,
-			this.runtimeStatusClass(snapshot.runtimeStatus.state)
+			this.runtimeStatusClass(snapshot.runtimeStatus)
 		);
+		this.renderStatusItem(statusBar, ui('当前仓库', 'Current repository'), this.formatVaultLabel(snapshot.vaultRoot));
 		this.renderStatusItem(statusBar, ui('记录', 'Records'), snapshot.structureStatus.state === 'initialized' ? ui('可读取', 'Readable') : snapshot.structureStatus.label);
 		this.renderStatusItem(statusBar, ui('知识库', 'Knowledge base'), snapshot.structureStatus.label);
 		this.renderStatusItem(statusBar, ui('权限', 'Permission'), ui('先审核再写入', 'Review before writing'));
@@ -3622,7 +3853,8 @@ class TracekeeperActivityView extends ItemView {
 		const metrics = contentEl.createDiv({ cls: 'tracekeeper-metric-grid' });
 		this.renderMetricCard(metrics, ui('待审核', 'Pending review'), String(snapshot.recentProposals.filter((proposal) => proposal.approvalStatus === 'pending').length), ui('需要你确认的记忆更新', 'Memory updates waiting for your review'));
 		this.renderMetricCard(metrics, ui('来源请求', 'Source requests'), String(snapshot.recentSourceRequests.filter((request) => this.isSourceRequestPending(request.status)).length), ui('待处理资料请求', 'Pending material requests'));
-		this.renderMetricCard(metrics, ui('工具使用', 'Tool usage'), String(snapshot.recentAuditEvents.filter((event) => event.toolName).length), ui('最近连接操作记录', 'Recent connection activity'));
+		this.renderMetricCard(metrics, ui('最近连接', 'Recent connections'), String(snapshot.recentAgentCount), ui('最近出现的 AI 工具', 'Recently seen AI tools'));
+		this.renderMetricCard(metrics, ui('工具使用', 'Tool usage'), String(snapshot.recentToolCallCount), ui('最近连接操作记录', 'Recent connection activity'));
 
 		if (snapshot.structureStatus.state !== 'initialized') {
 			const structurePanel = contentEl.createDiv({ cls: 'tracekeeper-card' });
@@ -3654,10 +3886,10 @@ class TracekeeperActivityView extends ItemView {
 		const timelineHeader = timeline.createDiv({ cls: 'tracekeeper-card__header' });
 		timelineHeader.createEl('h3', { text: ui('活动时间线', 'Activity timeline') });
 		const viewAllButton = timelineHeader.createEl('button', {
-			text: ui('查看全部', 'View all'),
+			text: ui('查看运行日志', 'View runtime log'),
 		});
 		viewAllButton.addEventListener('click', () => {
-			void this.plugin.openPluginView(TRACEKEEPER_AUDIT_LOG_VIEW);
+			void this.plugin.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);
 		});
 		const timelineItems = snapshot.timelineItems;
 		if (timelineItems.length === 0) {
@@ -3682,8 +3914,11 @@ class TracekeeperActivityView extends ItemView {
 		item.createEl('strong', { text: value });
 	}
 
-	private runtimeStatusClass(state: RuntimeState): string {
-		switch (state) {
+	private runtimeStatusClass(status: RuntimeViewStatus): string {
+		if (!status.enabled) {
+			return 'tracekeeper-status-pill--runtime tracekeeper-status-pill--disabled';
+		}
+		switch (status.state) {
 			case 'running':
 				return 'tracekeeper-status-pill--runtime tracekeeper-status-pill--success';
 			case 'starting':
@@ -3704,6 +3939,11 @@ class TracekeeperActivityView extends ItemView {
 		card.createEl('div', { text: detail, cls: 'tracekeeper-view__description' });
 	}
 
+	private formatVaultLabel(vaultRoot: string): string {
+		const normalized = vaultRoot.replace(/\\/g, '/').replace(/\/+$/g, '');
+		return normalized.split('/').pop() || vaultRoot || ui('未知', 'Unknown');
+	}
+
 	private renderEmptyState(container: HTMLElement, title: string, detail: string): void {
 		const empty = container.createDiv({ cls: 'tracekeeper-empty-state' });
 		empty.createEl('strong', { text: title });
@@ -3711,35 +3951,74 @@ class TracekeeperActivityView extends ItemView {
 	}
 
 	private renderTaskEntry(container: HTMLElement, task: AgentTaskRecord, expanded: boolean): void {
-		const item = container.createDiv({ cls: 'tracekeeper-view__item' });
-		item.createEl('div', {
-			text: `${this.plugin.formatDisplayTime(task.sortTimestamp)} • ${task.taskId} • ${task.agent} • ${task.status}`,
-		});
-		if (task.objective) {
-			item.createEl('div', { text: `${ui('目标', 'Objective')}: ${task.objective}` });
-		}
-		if (task.contextPack || task.relatedProject) {
-			const extra: string[] = [];
-			if (task.contextPack) extra.push(`${ui('上下文', 'Context')}: ${task.contextPack}`);
-			if (task.relatedProject) extra.push(`${ui('项目', 'Project')}: ${task.relatedProject}`);
-			item.createEl('div', { text: extra.join(' • ') });
-		}
+		const item = container.createDiv({ cls: 'tracekeeper-task-card' });
+		const header = item.createDiv({ cls: 'tracekeeper-task-card__header' });
+		const title = header.createDiv({ cls: 'tracekeeper-task-card__title' });
+		title.createEl('h4', { text: task.objective || task.taskId || ui('未命名任务', 'Untitled task') });
+		title.createEl('small', { text: `${ui('任务 ID', 'Task ID')}: ${task.taskId || ui('未知', 'Unknown')}` });
+		const badges = header.createDiv({ cls: 'tracekeeper-badge-row tracekeeper-task-card__badges' });
+		badges.createEl('span', { text: task.status || ui('未知', 'Unknown'), cls: `tracekeeper-badge ${this.taskStatusClass(task.status)}` });
+		badges.createEl('span', { text: task.agent || ui('未知 Agent', 'Unknown agent'), cls: 'tracekeeper-badge tracekeeper-badge--muted' });
+
+		const meta = item.createDiv({ cls: 'tracekeeper-task-card__meta' });
+		this.renderTaskField(meta, ui('执行时间', 'Run time'), this.plugin.formatDisplayTime(task.sortTimestamp));
+		this.renderTaskField(meta, ui('项目', 'Project'), task.relatedProject || ui('未关联', 'Not linked'));
+		this.renderTaskField(meta, ui('上下文', 'Context'), task.contextPack || ui('未生成', 'None'));
 		if (expanded) {
-			const summary: string[] = [];
-			if (task.startedAt) summary.push(`${ui('开始', 'Started')} ${task.startedAt}`);
-			if (task.finishedAt) summary.push(`${ui('完成', 'Finished')} ${task.finishedAt}`);
-			summary.push(`${ui('读取', 'Reads')} ${task.memoryReads.length}`);
-			summary.push(`${ui('写入', 'Writes')} ${task.memoryWrites.length}`);
-			summary.push(`${ui('捕获', 'Captures')} ${task.sourceCaptures.length}`);
-			summary.push(`${ui('记忆更新', 'Memory updates')} ${task.proposals.length}`);
-			item.createEl('div', { text: summary.join(' • ') });
+			this.renderTaskField(meta, ui('开始时间', 'Started'), this.formatTaskTime(task.startedAt));
+			this.renderTaskField(meta, ui('完成时间', 'Finished'), this.formatTaskTime(task.finishedAt));
+
+			const metrics = item.createDiv({ cls: 'tracekeeper-task-card__metrics' });
+			this.renderTaskMetric(metrics, ui('读取', 'Reads'), task.memoryReads.length);
+			this.renderTaskMetric(metrics, ui('写入', 'Writes'), task.memoryWrites.length);
+			this.renderTaskMetric(metrics, ui('捕获', 'Captures'), task.sourceCaptures.length);
+			this.renderTaskMetric(metrics, ui('记忆更新', 'Memory updates'), task.proposals.length);
 		}
-		item.createEl('small', { text: `${ui('文件', 'File')}: ${task.path}` });
-		if (task.snippet) {
-			item.createEl('div', {
-				text: this.plugin.trimText(task.snippet, 140),
-			});
+
+		const path = item.createDiv({ cls: 'tracekeeper-task-card__path' });
+		path.createEl('span', { text: ui('文件', 'File') });
+		path.createEl('code', { text: task.path || ui('未知', 'Unknown') });
+
+		const normalizedSnippet = task.snippet.trim();
+		if (normalizedSnippet && normalizedSnippet !== task.objective.trim()) {
+			const summary = item.createDiv({ cls: 'tracekeeper-task-card__summary' });
+			summary.createEl('span', { text: ui('摘要', 'Summary') });
+			summary.createEl('p', { text: this.plugin.trimText(normalizedSnippet, 180) });
 		}
+	}
+
+	private renderTaskField(container: HTMLElement, label: string, value: string): void {
+		const field = container.createDiv({ cls: 'tracekeeper-task-card__field' });
+		field.createEl('span', { text: label });
+		field.createEl('strong', { text: value || ui('未知', 'Unknown') });
+	}
+
+	private renderTaskMetric(container: HTMLElement, label: string, value: number): void {
+		const metric = container.createDiv({ cls: 'tracekeeper-task-card__metric' });
+		metric.createEl('span', { text: label });
+		metric.createEl('strong', { text: String(value) });
+	}
+
+	private formatTaskTime(value: string): string {
+		if (!value) {
+			return ui('未记录', 'Not recorded');
+		}
+		const timestamp = Date.parse(value);
+		return Number.isFinite(timestamp) ? this.plugin.formatDisplayTime(timestamp) : value;
+	}
+
+	private taskStatusClass(status: string): string {
+		const normalized = status.toLowerCase().trim();
+		if (normalized === 'active' || normalized === 'running') {
+			return 'tracekeeper-badge--warning';
+		}
+		if (normalized === 'completed' || normalized === 'done' || normalized === 'success') {
+			return 'tracekeeper-badge--success';
+		}
+		if (normalized === 'failed' || normalized === 'error') {
+			return 'tracekeeper-badge--error';
+		}
+		return 'tracekeeper-badge--muted';
 	}
 
 	private isSourceRequestPending(status: string): boolean {
@@ -4365,381 +4644,13 @@ class TracekeeperGraphHealthView extends ItemView {
 	}
 }
 
-class TracekeeperAgentConnectionsView extends ItemView {
-	constructor(
-		leaf: WorkspaceLeaf,
-		private plugin: TracekeeperPlugin
-	) {
-		super(leaf);
-	}
-
-	getViewType() {
-		return TRACEKEEPER_AGENT_CONNECTIONS_VIEW;
-	}
-
-	getDisplayText() {
-		return ui('AI 助手连接', 'AI assistant connections');
-	}
-
-	getViewData() {
-		return '';
-	}
-
-	setViewData(_data: string, _clear: boolean): void {
-		return;
-	}
-
-	clear(): void {
-		this.contentEl.empty();
-	}
-
-	async onOpen() {
-		await super.onOpen();
-		await this.refresh();
-	}
-
-	async refresh(): Promise<void> {
-		const snapshot = await this.plugin.loadAgentConnectionsSnapshot();
-		await this.render(snapshot);
-	}
-
-	private async render(snapshot: AgentConnectionsSnapshot): Promise<void> {
-		const { contentEl } = this;
-		contentEl.empty();
-		contentEl.addClass('tracekeeper-view-root');
-
-		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
-		const heading = header.createDiv();
-		heading.createEl('h2', { text: ui('AI 助手连接', 'AI Assistant Connections'), cls: 'tracekeeper-view__title' });
-		heading.createEl('p', {
-			text: ui(
-				'复制常用 AI 工具的连接信息，并查看最近的连接和使用记录。',
-				'Copy connection details for common AI tools and review recent connection activity.'
-			),
-			cls: 'tracekeeper-view__description',
-		});
-		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
-		const refreshButton = actions.createEl('button', { text: ui('刷新', 'Refresh'), cls: 'mod-cta' });
-		refreshButton.addEventListener('click', () => {
-			void this.handleRefreshClick(refreshButton);
-		});
-
-		const statusBar = contentEl.createDiv({ cls: 'tracekeeper-status-bar' });
-		this.renderStatusItem(statusBar, ui('MCP 服务', 'MCP service'), snapshot.runtimeStatus.label);
-		this.renderStatusItem(statusBar, ui('当前仓库', 'Current repository'), this.formatVaultLabel(snapshot.vaultRoot), snapshot.vaultRoot);
-		this.renderStatusItem(statusBar, ui('最近连接', 'Recent connections'), String(snapshot.recentAgents.length));
-		this.renderStatusItem(statusBar, ui('使用记录', 'Usage records'), String(snapshot.recentToolCalls.length));
-
-		const connectionPanel = contentEl.createDiv({ cls: 'tracekeeper-card tracekeeper-connection-panel' });
-		connectionPanel.createEl('h3', { text: ui('连接配置', 'Connection setup') });
-
-		const connectionCheck = connectionPanel.createDiv({ cls: 'tracekeeper-connection-check' });
-		const runtimeHeader = connectionCheck.createDiv({ cls: 'tracekeeper-connection-check__header' });
-		runtimeHeader.createEl('h4', { text: ui('MCP 服务', 'MCP service') });
-		const copyUrl = runtimeHeader.createEl('button', {
-			text: ui('复制连接地址', 'Copy connection URL'),
-			cls: 'mod-cta',
-		});
-		copyUrl.disabled = !snapshot.connectionUrl;
-		copyUrl.addEventListener('click', () => {
-			void this.plugin.copyToClipboard(
-				snapshot.connectionUrl,
-				ui('已复制 AI 工具连接地址。', 'AI tool URL copied.')
-			);
-		});
-		connectionCheck.createEl('p', {
-			text: ui(
-				'保持 Obsidian 开启后，AI 工具即可通过本机 Runtime 访问当前知识库。',
-				'Keep Obsidian open so AI tools can reach this knowledge base through the local Runtime.'
-			),
-			cls: 'tracekeeper-view__description',
-		});
-		const endpointGrid = connectionCheck.createDiv({ cls: 'tracekeeper-detail-grid tracekeeper-connection-detail-grid' });
-		this.renderDetail(endpointGrid, ui('运行状态', 'Runtime status'), snapshot.runtimeStatus.label);
-		if (snapshot.runtimeStatus.startedAt) {
-			this.renderDetail(
-				endpointGrid,
-				ui('启动时间', 'Started at'),
-				this.plugin.formatDisplayTime(Date.parse(snapshot.runtimeStatus.startedAt))
-			);
-		}
-		this.renderDetail(endpointGrid, ui('活跃会话', 'Active sessions'), String(snapshot.runtimeStatus.activeSessions));
-		if (snapshot.runtimeStatus.lastError) {
-			this.renderDetail(endpointGrid, ui('最近错误', 'Last error'), snapshot.runtimeStatus.lastError, 'description');
-		}
-
-		const coreClientIds = new Set(['codex', 'claude-code', 'claude-desktop', 'cursor']);
-		const coreClientConfigs = snapshot.clientConfigs.filter((config) => coreClientIds.has(config.clientId));
-		const advancedClientConfigs = snapshot.clientConfigs.filter((config) => !coreClientIds.has(config.clientId));
-
-		const commonConnections = connectionPanel.createDiv({ cls: 'tracekeeper-connection-section' });
-		commonConnections.createEl('h4', { text: ui('客户端配置', 'Client configuration') });
-		const configGrid = commonConnections.createDiv({ cls: 'tracekeeper-config-grid' });
-		for (const clientConfig of coreClientConfigs) {
-			this.renderConfigCard(configGrid, clientConfig);
-		}
-		if (advancedClientConfigs.length > 0) {
-			const advanced = connectionPanel.createDiv({ cls: 'tracekeeper-connection-section tracekeeper-advanced-config' });
-			advanced.createEl('h4', { text: ui('更多连接方式', 'More connection methods') });
-			advanced.createEl('p', {
-				text: ui(
-					'上方列表没有你的 AI 工具时再使用；当前只提供 Streamable HTTP 连接地址。',
-					'Use this only when your AI tool is not listed above; Tracekeeper now exposes only a Streamable HTTP URL.'
-				),
-				cls: 'tracekeeper-view__description',
-			});
-			const advancedDetails = advanced.createEl('details', { cls: 'tracekeeper-advanced-details' });
-			const summary = advancedDetails.createEl('summary', { text: ui('查看手动方式', 'Show manual methods') });
-			const advancedList = advancedDetails.createDiv({ cls: 'tracekeeper-advanced-list' });
-			for (const clientConfig of advancedClientConfigs) {
-				this.renderAdvancedConfigRow(advancedList, clientConfig);
-			}
-			summary.addClass('tracekeeper-advanced-summary');
-		}
-
-		const exposedTools = contentEl.createDiv({ cls: 'tracekeeper-card' });
-		exposedTools.createEl('h3', { text: ui('可用能力', 'Available capabilities') });
-		exposedTools.createEl('p', {
-			text: ui(
-				'连接成功后，AI 助手可以使用这些能力。需要写入长期记忆的内容仍会先进入审核。',
-				'After connecting, your AI assistant can use these capabilities. Anything that updates long-term memory still goes through review first.'
-			),
-			cls: 'tracekeeper-view__description',
-		});
-		const toolGrid = exposedTools.createDiv({ cls: 'tracekeeper-detail-grid' });
-		this.renderToolset(toolGrid, ui('只读', 'Read-only'), [
-			ui('查看连接和资料状态', 'Check connection and knowledge base status'),
-			ui('查找相关笔记', 'Find related notes'),
-			ui('读取指定笔记', 'Read a selected note'),
-			ui('查看待审核内容', 'Review pending items'),
-			ui('查看最近记录', 'Review recent activity'),
-			ui('检查笔记结构', 'Check note structure'),
-		]);
-		this.renderToolset(toolGrid, ui('保存工作记录', 'Save work records'), [
-			ui('整理上下文材料', 'Prepare context material'),
-			ui('记录任务结果', 'Record task results'),
-			ui('沉淀会话摘要', 'Summarize a session'),
-			ui('保存来源资料', 'Save source material'),
-			ui('提出记忆更新', 'Propose memory updates'),
-		]);
-		this.renderToolset(toolGrid, ui('需要审核', 'Needs review'), [
-			ui('应用已批准的写回', 'Apply approved writebacks'),
-		]);
-		this.renderToolset(toolGrid, ui('不会执行', 'Never allowed'), [
-			ui('运行系统命令', 'Run system commands'),
-			ui('访问当前知识库以外的文件', 'Access files outside the current knowledge base'),
-			ui('修改 Obsidian 配置目录', 'Modify Obsidian settings folders'),
-			ui('批量删除或重写内容', 'Delete or rewrite content in bulk'),
-		]);
-
-		const agents = contentEl.createDiv({ cls: 'tracekeeper-card' });
-		agents.createEl('h3', { text: ui('最近连接的 AI 工具', 'Recently connected AI tools') });
-		if (snapshot.recentAgents.length === 0) {
-			this.renderEmptyState(
-				agents,
-				ui('还没有连接记录。', 'No connection records yet.'),
-				snapshot.missingAuditSources
-					? ui('还没有记录文件。初始化知识库后，连接和操作记录会显示在这里。', 'No activity file yet. After Tracekeeper is initialized, connection and usage records will appear here.')
-					: ui('启动知识库服务后，把上方配置复制到你的 AI 工具。', 'Start Tracekeeper, then copy one of the configs above into your AI tool.')
-			);
-		} else {
-			const list = agents.createDiv({ cls: 'tracekeeper-table-list' });
-			for (const agent of snapshot.recentAgents) {
-				const row = list.createDiv({ cls: 'tracekeeper-table-row' });
-				row.createEl('strong', { text: agent.clientName || agent.agentId });
-				row.createEl('span', { text: this.plugin.formatResultLabel(agent.status) });
-				row.createEl('span', { text: `${ui('最后出现', 'Last seen')}: ${this.plugin.formatDisplayTime(agent.sortTimestamp)}` });
-				row.createEl('span', { text: `${ui('最近使用', 'Last used')}: ${agent.lastToolCall ? this.plugin.formatToolDisplayName(agent.lastToolCall) : ui('无', 'None')}` });
-				row.createEl('small', { text: ui('本机连接；重要写入需要先审核。', 'Local connection; important writes require review first.') });
-			}
-		}
-
-		const calls = contentEl.createDiv({ cls: 'tracekeeper-card' });
-		calls.createEl('h3', { text: ui('最近使用记录', 'Recent usage') });
-		if (snapshot.recentToolCalls.length === 0) {
-			this.renderEmptyState(
-				calls,
-				ui('还没有使用记录。', 'No usage records yet.'),
-				ui('AI 助手使用知识库后，这里会显示使用时间、结果和相关笔记。', 'After your AI assistant uses Tracekeeper, this panel shows time, result, and related notes.')
-			);
-		} else {
-			const timeline = calls.createDiv({ cls: 'tracekeeper-timeline' });
-			for (const call of snapshot.recentToolCalls) {
-				const row = timeline.createDiv({ cls: 'tracekeeper-timeline__item' });
-				row.createEl('div', { text: this.plugin.formatResultLabel(call.resultStatus), cls: 'tracekeeper-badge' });
-				const body = row.createDiv({ cls: 'tracekeeper-timeline__body' });
-				body.createEl('strong', { text: `${this.plugin.formatToolDisplayName(call.toolName)} • ${this.plugin.formatDisplayTime(call.sortTimestamp)}` });
-				body.createEl('div', {
-					text: `${call.clientName || call.agentId} • ${ui('权限', 'Permission')}: ${this.plugin.formatRiskLabel(call.riskLevel)}`,
-					cls: 'tracekeeper-view__description',
-				});
-				if (call.targetPaths.length > 0) {
-					body.createEl('small', { text: call.targetPaths.join(', ') });
-				}
-				if (call.argsSummary) {
-					body.createEl('div', {
-						text: ui('本次使用包含输入参数，详细内容已按安全规则记录。', 'This use included input details, recorded under the safety rules.'),
-						cls: 'tracekeeper-view__description',
-					});
-				}
-			}
-		}
-
-		const policy = contentEl.createDiv({ cls: 'tracekeeper-card' });
-		policy.createEl('h3', { text: ui('权限说明', 'Permission guide') });
-		const matrix = policy.createDiv({ cls: 'tracekeeper-detail-grid' });
-		this.renderDetail(matrix, ui('默认', 'Default'), ui('只读', 'Read-only'));
-		this.renderDetail(matrix, ui('工作记录', 'Working records'), ui('保存前检查', 'Checked before saving'));
-		this.renderDetail(matrix, ui('长期记忆', 'Long-term memory'), ui('先审核再写入', 'Review before writing'));
-		this.renderDetail(matrix, ui('不会执行', 'Never allowed'), ui('系统命令、知识库外文件、Obsidian 配置目录、删除或批量重写', 'System commands, files outside the knowledge base, Obsidian settings folders, delete or bulk rewrite'));
-	}
-
-	private renderConfigCard(container: HTMLElement, config: GeneratedClientConfig): void {
-		const row = container.createDiv({ cls: 'tracekeeper-config-row' });
-		const client = row.createDiv({ cls: 'tracekeeper-config-row__client' });
-		const title = client.createDiv({ cls: 'tracekeeper-config-row__title' });
-		title.createEl('strong', { text: config.displayName });
-		title.createEl('span', {
-			text: config.configStatusLabel,
-			cls: `tracekeeper-badge ${this.configStatusClass(config.configState)}`,
-		});
-		client.createEl('small', { text: config.configStatusDetail });
-		const actions = row.createDiv({ cls: 'tracekeeper-config-row__actions tracekeeper-action-row' });
-
-		if (config.configState !== 'configured') {
-			const copy = actions.createEl('button', { text: ui('复制配置', 'Copy config') });
-			copy.addEventListener('click', () => {
-				void this.plugin.copyToClipboard(config.configText, ui('已复制连接配置。', 'Connection config copied.'));
-			});
-		}
-
-		if (config.supportsAutoConfigure && config.targetPath && config.configState !== 'configured') {
-			const autoConfigure = actions.createEl('button', {
-				text: config.configState === 'needs_update' ? ui('更新配置', 'Update config') : ui('自动配置', 'Auto setup'),
-				cls: 'mod-cta',
-			});
-			autoConfigure.addEventListener('click', () => {
-				new ClientConfigPreviewModal(this.app, this.plugin, config, 'apply').open();
-			});
-		}
-
-		if (
-			config.supportsAutoConfigure
-			&& config.targetPath
-			&& (config.configState === 'configured' || config.configState === 'needs_update')
-		) {
-			const openFile = actions.createEl('button', { text: ui('打开配置文件', 'Open config file') });
-			openFile.addEventListener('click', () => {
-				void this.plugin.openClientConfigFile(config);
-			});
-		}
-
-		if (
-			config.supportsAutoConfigure
-			&& config.targetPath
-			&& (config.configState === 'configured' || config.configState === 'needs_update')
-		) {
-			const remove = actions.createEl('button', { text: ui('移除配置', 'Remove config') });
-			remove.addEventListener('click', () => {
-				new ClientConfigPreviewModal(this.app, this.plugin, config, 'remove').open();
-			});
-		}
-	}
-
-	private async handleRefreshClick(refreshButton: HTMLButtonElement): Promise<void> {
-		refreshButton.disabled = true;
-		refreshButton.setText(ui('刷新中...', 'Refreshing...'));
-		try {
-			await this.refresh();
-			new Notice(ui('连接状态已刷新。', 'Connection status refreshed.'));
-		} catch (error) {
-			console.error('tracekeeper failed to refresh agent connections view', error);
-			refreshButton.disabled = false;
-			refreshButton.setText(ui('刷新', 'Refresh'));
-			new Notice(ui('刷新连接状态失败。', 'Failed to refresh connection status.'));
-		}
-	}
-
-	private configStatusClass(state: ClientConfigState): string {
-		switch (state) {
-			case 'configured':
-				return 'tracekeeper-badge--success';
-			case 'needs_update':
-				return 'tracekeeper-badge--warning';
-			case 'not_configured':
-			case 'unavailable':
-			default:
-				return 'tracekeeper-badge--muted';
-		}
-	}
-
-	private renderAdvancedConfigRow(container: HTMLElement, config: GeneratedClientConfig): void {
-		const row = container.createDiv({ cls: 'tracekeeper-advanced-config-row' });
-		const info = row.createDiv({ cls: 'tracekeeper-advanced-config-row__info' });
-		info.createEl('strong', { text: config.displayName });
-		info.createEl('small', { text: config.description });
-		const actions = row.createDiv({ cls: 'tracekeeper-action-row' });
-		const copy = actions.createEl('button', {
-			text: ui('复制地址配置', 'Copy URL config'),
-		});
-		copy.addEventListener('click', () => {
-			void this.plugin.copyToClipboard(config.configText, ui('已复制连接配置。', 'Connection config copied.'));
-		});
-	}
-
-	private transportLabel(transport: ConnectionTransport): string {
-		switch (transport) {
-			case 'streamable-http':
-				return ui('连接地址', 'Connection URL');
-			default:
-				return transport;
-		}
-	}
-
-	private formatVaultLabel(vaultRoot: string): string {
-		const normalized = vaultRoot.replace(/\\/g, '/').replace(/\/+$/g, '');
-		return normalized.split('/').pop() || vaultRoot;
-	}
-
-	private renderStatusItem(container: HTMLElement, label: string, value: string, title?: string): void {
-		const item = container.createDiv({ cls: 'tracekeeper-status-pill' });
-		if (title) {
-			item.setAttr('title', title);
-		}
-		item.createEl('span', { text: label });
-		item.createEl('strong', { text: value });
-	}
-
-	private renderDetail(container: HTMLElement, label: string, value: string, variant?: 'description'): void {
-		const item = container.createDiv({
-			cls: variant === 'description' ? 'tracekeeper-detail tracekeeper-detail--description' : 'tracekeeper-detail',
-		});
-		item.createEl('span', { text: label });
-		item.createEl('strong', { text: value });
-	}
-
-	private renderToolset(container: HTMLElement, title: string, tools: string[]): void {
-		const item = container.createDiv({ cls: 'tracekeeper-detail-panel' });
-		item.createEl('strong', { text: title });
-		const list = item.createEl('ul');
-		for (const tool of tools) {
-			list.createEl('li', { text: tool });
-		}
-	}
-
-	private renderEmptyState(container: HTMLElement, title: string, detail: string): void {
-		const empty = container.createDiv({ cls: 'tracekeeper-empty-state' });
-		empty.createEl('strong', { text: title });
-		empty.createEl('p', { text: detail });
-	}
-}
-
 class ClientConfigPreviewModal extends Modal {
 	constructor(
 		app: App,
 		private plugin: TracekeeperPlugin,
 		private config: GeneratedClientConfig,
-		private mode: 'apply' | 'remove'
+		private mode: 'apply' | 'remove',
+		private onChanged?: () => void
 	) {
 		super(app);
 	}
@@ -4786,6 +4697,7 @@ class ClientConfigPreviewModal extends Modal {
 					} else {
 						await this.plugin.removeClientConfig(this.config);
 					}
+					this.onChanged?.();
 					this.close();
 				} catch {
 					status.setText(this.mode === 'apply' ? ui('写入失败，请检查配置文件权限后重试。', 'Write failed. Check config file permissions and try again.') : ui('移除失败，请检查配置文件权限后重试。', 'Removal failed. Check config file permissions and try again.'));
@@ -4904,8 +4816,9 @@ class TracekeeperMemoryInspectorView extends ItemView {
 	}
 }
 
-class TracekeeperAuditLogView extends ItemView {
+class TracekeeperRuntimeLogView extends ItemView {
 	private page = 1;
+	private activeFilter: RuntimeLogFilter = 'all';
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -4915,11 +4828,11 @@ class TracekeeperAuditLogView extends ItemView {
 	}
 
 	getViewType() {
-		return TRACEKEEPER_AUDIT_LOG_VIEW;
+		return TRACEKEEPER_RUNTIME_LOG_VIEW;
 	}
 
 	getDisplayText() {
-		return ui('活动时间线', 'Activity timeline');
+		return ui('运行日志', 'Runtime log');
 	}
 
 	getViewData() {
@@ -4939,24 +4852,33 @@ class TracekeeperAuditLogView extends ItemView {
 		await this.refresh();
 	}
 
-	private async refresh(): Promise<void> {
-		const snapshot = await this.plugin.loadActivityTimelineSnapshot(
+	async refresh(): Promise<void> {
+		const snapshot = await this.plugin.loadRuntimeLogSnapshot(
 			this.page,
-			ACTIVITY_TIMELINE_PAGE_SIZE
+			this.activeFilter,
+			RUNTIME_LOG_PAGE_SIZE
 		);
 		this.page = snapshot.page;
 		this.render(snapshot);
 	}
 
-	private render(snapshot: ActivityTimelineSnapshot): void {
+	private render(snapshot: RuntimeLogSnapshot): void {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass('tracekeeper-view-root');
 
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
-		header.createDiv().createEl('h2', {
-			text: ui('活动时间线', 'Activity timeline'),
+		const heading = header.createDiv();
+		heading.createEl('h2', {
+			text: ui('运行日志', 'Runtime log'),
 			cls: 'tracekeeper-view__title',
+		});
+		heading.createEl('p', {
+			text: ui(
+				'查看连接、工具调用、配置写入和错误记录。',
+				'Review connection, tool call, config, and error records.'
+			),
+			cls: 'tracekeeper-view__description',
 		});
 		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
 		const refreshButton = actions.createEl('button', {
@@ -4967,6 +4889,8 @@ class TracekeeperAuditLogView extends ItemView {
 			void this.refresh();
 		});
 
+		this.renderFilterToolbar(contentEl, snapshot);
+
 		const summary = contentEl.createDiv({ cls: 'tracekeeper-view__description' });
 		summary.setText(ui(
 			`共 ${snapshot.totalItems} 条 · 第 ${snapshot.page} / ${snapshot.totalPages} 页`,
@@ -4976,21 +4900,57 @@ class TracekeeperAuditLogView extends ItemView {
 		if (snapshot.items.length === 0) {
 			this.renderEmptyState(
 				contentEl,
-				ui('还没有可展示的活动。', 'No activity to display yet.'),
-				ui('开始使用 AI 助手后，这里会显示活动记录。', 'Activity records appear here after your AI assistant starts using Tracekeeper.')
+				ui('还没有可展示的运行记录。', 'No runtime records yet.'),
+				ui('AI 工具连接或使用 Tracekeeper 后，这里会显示记录。', 'Runtime records appear after an AI tool connects to or uses Tracekeeper.')
 			);
 			return;
 		}
 
-		const list = contentEl.createDiv({ cls: 'tracekeeper-card tracekeeper-timeline-page' });
-		const timeline = list.createDiv({ cls: 'tracekeeper-timeline' });
+		const list = contentEl.createDiv({ cls: 'tracekeeper-runtime-log-list' });
 		for (const item of snapshot.items) {
-			this.plugin.renderTimelineItem(timeline, item);
+			this.renderLogItem(list, item);
 		}
 		this.renderPagination(contentEl, snapshot);
 	}
 
-	private renderPagination(container: HTMLElement, snapshot: ActivityTimelineSnapshot): void {
+	private renderFilterToolbar(container: HTMLElement, snapshot: RuntimeLogSnapshot): void {
+		const toolbar = container.createDiv({ cls: 'tracekeeper-runtime-log-toolbar' });
+		for (const filter of RUNTIME_LOG_FILTERS) {
+			const count = snapshot.counts[filter] || 0;
+			const button = toolbar.createEl('button', {
+				text: `${this.filterLabel(filter)} (${count})`,
+				cls: snapshot.filter === filter ? 'is-active' : '',
+			});
+			button.addEventListener('click', () => {
+				this.activeFilter = filter;
+				this.page = 1;
+				void this.refresh();
+			});
+		}
+	}
+
+	private renderLogItem(container: HTMLElement, item: RuntimeLogItem): void {
+		const row = container.createDiv({ cls: 'tracekeeper-runtime-log-row' });
+		row.createEl('div', {
+			text: this.categoryLabel(item.category),
+			cls: 'tracekeeper-runtime-log-row__badge tracekeeper-badge',
+		});
+		const body = row.createDiv({ cls: 'tracekeeper-runtime-log-row__body' });
+		body.createEl('strong', {
+			text: `${item.title || ui('运行记录', 'Runtime record')} • ${this.plugin.formatDisplayTime(item.time)}`,
+		});
+		if (item.meta) {
+			body.createEl('div', { text: item.meta, cls: 'tracekeeper-view__description' });
+		}
+		if (item.body) {
+			body.createEl('div', { text: this.plugin.trimText(item.body, 180) });
+		}
+		if (item.path) {
+			body.createEl('small', { text: item.path });
+		}
+	}
+
+	private renderPagination(container: HTMLElement, snapshot: RuntimeLogSnapshot): void {
 		const pager = container.createDiv({ cls: 'tracekeeper-pagination' });
 		const previous = pager.createEl('button', { text: ui('上一页', 'Previous') });
 		previous.disabled = snapshot.page <= 1;
@@ -5011,6 +4971,36 @@ class TracekeeperAuditLogView extends ItemView {
 			this.page = Math.min(snapshot.totalPages, snapshot.page + 1);
 			void this.refresh();
 		});
+	}
+
+	private filterLabel(filter: RuntimeLogFilter): string {
+		switch (filter) {
+			case 'connection':
+				return ui('连接', 'Connections');
+			case 'tool':
+				return ui('工具调用', 'Tool calls');
+			case 'config':
+				return ui('配置', 'Config');
+			case 'error':
+				return ui('错误', 'Errors');
+			case 'all':
+			default:
+				return ui('全部', 'All');
+		}
+	}
+
+	private categoryLabel(category: RuntimeLogCategory): string {
+		switch (category) {
+			case 'connection':
+				return ui('连接', 'Connection');
+			case 'tool':
+				return ui('工具调用', 'Tool call');
+			case 'config':
+				return ui('配置', 'Config');
+			case 'record':
+			default:
+				return ui('记录', 'Record');
+		}
 	}
 
 	private renderEmptyState(container: HTMLElement, title: string, detail: string): void {
@@ -5061,10 +5051,15 @@ class TracekeeperRuntimeStatusView extends ItemView {
 
 		contentEl.createEl('h2', { text: ui('连接状态', 'Connection status'), cls: 'tracekeeper-view__title' });
 		contentEl.createEl('p', {
-			text: ui(
-				'MCP 服务由 Obsidian 桌面端托管，随 Obsidian 启动和关闭。',
-				'The MCP service is hosted by desktop Obsidian and starts and stops with Obsidian.'
-			),
+			text: status.enabled
+				? ui(
+					'MCP 服务由 Obsidian 桌面端托管，开启后随 Obsidian 运行。',
+					'The MCP service is hosted by desktop Obsidian and runs while Obsidian is open.'
+				)
+				: ui(
+					'MCP 服务已在设置中关闭，需要连接 AI 工具时可重新开启。',
+					'MCP service is off in settings. Turn it back on when AI tools need to connect.'
+				),
 			cls: 'tracekeeper-view__description',
 		});
 
@@ -5072,7 +5067,9 @@ class TracekeeperRuntimeStatusView extends ItemView {
 		this.renderDetail(detailGrid, ui('MCP 服务', 'MCP service'), status.label);
 		this.renderDetail(detailGrid, ui('连接地址', 'Connection URL'), this.plugin.getMcpConnectionUrl());
 		this.renderDetail(detailGrid, ui('绑定范围', 'Binding'), ui('仅本机 127.0.0.1', 'Localhost only, 127.0.0.1'));
-		this.renderDetail(detailGrid, ui('生命周期', 'Lifecycle'), ui('随 Obsidian 启动和关闭', 'Starts and stops with Obsidian'));
+		this.renderDetail(detailGrid, ui('生命周期', 'Lifecycle'), status.enabled
+			? ui('开启后随 Obsidian 运行', 'Runs while Obsidian is open')
+			: ui('由用户手动关闭', 'Turned off by user'));
 		this.renderDetail(detailGrid, ui('活跃会话', 'Active sessions'), String(status.activeSessions));
 		if (status.startedAt) {
 			this.renderDetail(detailGrid, ui('启动时间', 'Started at'), this.plugin.formatDisplayTime(Date.parse(status.startedAt)));
@@ -5220,8 +5217,103 @@ class TracekeeperSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		containerEl.addClass('tracekeeper-settings-root');
+		const loading = containerEl.createDiv({ cls: 'tracekeeper-view__description' });
+		loading.setText(ui('正在读取连接配置...', 'Reading connection settings...'));
+		void this.renderSettings();
+	}
 
-		new Setting(containerEl)
+	private async renderSettings(): Promise<void> {
+		const snapshot = await this.plugin.loadAgentConnectionsSnapshot();
+		const { containerEl } = this;
+		containerEl.empty();
+		containerEl.addClass('tracekeeper-settings-root');
+		this.renderConnectionInfoSection(containerEl, snapshot);
+		this.renderAgentClientConfigSection(containerEl, snapshot);
+		this.renderTokenSection(containerEl);
+		this.renderKnowledgeRulesSection(containerEl);
+	}
+
+	private renderAgentClientConfigSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
+		const section = this.createSection(
+			container,
+			ui('Agent 配置', 'Agent configuration'),
+			ui('为常用 Agent 配置 Tracekeeper 连接，保持 Obsidian 开启后即可使用。', 'Configure Tracekeeper for your agents. Keep Obsidian open to use it.')
+		);
+		const grid = section.createDiv({ cls: 'tracekeeper-settings-grid' });
+		for (const config of snapshot.clientConfigs) {
+			this.renderClientConfigRow(grid, config);
+		}
+	}
+
+	private renderConnectionInfoSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
+		const section = this.createSection(
+			container,
+			ui('MCP 服务', 'MCP service'),
+			ui('控制本机服务开关、设置端口，并复制 Agent 连接地址。', 'Control the local service, set the port, and copy the agent connection URL.')
+		);
+		this.renderRuntimeEnabledSetting(section);
+		this.renderPortSetting(section, snapshot.connectionUrl);
+	}
+
+	private renderRuntimeEnabledSetting(container: HTMLElement): void {
+		const enabled = this.plugin.settings.mcpRuntimeEnabled;
+		new Setting(container)
+			.setName(ui('服务开关', 'Service'))
+			.setDesc(enabled
+				? ui('已开启，AI 工具可以通过本机地址连接。', 'On. AI tools can connect through the local address.')
+				: ui('已关闭，AI 工具暂时无法连接。', 'Off. AI tools cannot connect right now.'))
+			.addToggle((toggle) =>
+				toggle
+					.setValue(enabled)
+					.onChange((value: boolean) => {
+						void this.plugin.setMcpRuntimeEnabled(value)
+							.then(() => this.renderSettings())
+							.catch((error) => {
+								console.error('tracekeeper failed to toggle MCP service', error);
+							});
+					})
+			);
+	}
+
+	private renderTokenSection(container: HTMLElement): void {
+		const section = this.createSection(
+			container,
+			ui('本地连接令牌', 'Local connection token'),
+			ui('令牌只脱敏展示，复制时会复制完整值。', 'The token is masked here; copying uses the full value.')
+		);
+		const runtimeToken = this.plugin.settings.runtimeToken;
+		const runtimeTokenCreatedAt = this.plugin.formatDisplayTime(Date.parse(this.plugin.settings.runtimeTokenCreatedAt));
+		const row = section.createDiv({ cls: 'tracekeeper-settings-token-row' });
+		const info = row.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderDetail(info, ui('令牌', 'Token'), this.plugin.formatRuntimeToken(runtimeToken));
+		this.renderDetail(info, ui('创建时间', 'Created'), runtimeTokenCreatedAt);
+		const actions = row.createDiv({ cls: 'tracekeeper-action-row' });
+		const copy = actions.createEl('button', { text: ui('复制令牌', 'Copy token') });
+		copy.disabled = !runtimeToken;
+		copy.addEventListener('click', () => {
+			void this.plugin.copyToClipboard(
+				runtimeToken,
+				ui('已复制本地连接令牌。', 'Local connection token copied.')
+			);
+		});
+		const regenerate = actions.createEl('button', { text: ui('重置令牌', 'Reset token') });
+		regenerate.addEventListener('click', () => {
+			new RuntimeTokenRegenerateConfirmModal(
+				this.app,
+				this.plugin,
+				() => this.display()
+			).open();
+		});
+	}
+
+	private renderKnowledgeRulesSection(container: HTMLElement): void {
+		const section = this.createSection(
+			container,
+			ui('知识库规则', 'Knowledge base rules'),
+			ui('调整图谱结构检查策略。', 'Adjust the graph structure check profile.')
+		);
+		new Setting(section)
 			.setName(ui('知识图谱检查', 'Graph health profile'))
 			.setDesc(ui(
 				'off 仅保留手动查看；advisory 只给建议；strict 会把入口、hub、孤立节点和未解析链接标为阻塞问题。',
@@ -5242,12 +5334,14 @@ class TracekeeperSettingTab extends PluginSettingTab {
 							});
 					})
 			);
+	}
 
-		new Setting(containerEl)
-			.setName(ui('MCP 服务端口', 'MCP service port'))
+	private renderPortSetting(container: HTMLElement, connectionUrl: string): void {
+		new Setting(container)
+			.setName(ui('连接地址', 'Connection URL'))
 			.setDesc(ui(
-				`默认使用本机 ${DEFAULT_MCP_PORT} 端口；修改后服务会随 Obsidian 自动重启。`,
-				`Uses local port ${DEFAULT_MCP_PORT} by default; the service restarts with Obsidian after changes.`
+				`http://${DEFAULT_MCP_HOST}:${this.plugin.settings.mcpPort || DEFAULT_MCP_PORT}`,
+				`http://${DEFAULT_MCP_HOST}:${this.plugin.settings.mcpPort || DEFAULT_MCP_PORT}`
 			))
 			.addText((text) =>
 				text
@@ -5261,6 +5355,7 @@ class TracekeeperSettingTab extends PluginSettingTab {
 						this.plugin.settings.mcpPort = parsed;
 						void this.plugin.saveSettings()
 							.then(() => this.plugin.restartMcpRuntime())
+							.then(() => this.renderSettings())
 							.catch((error) => {
 								console.error('tracekeeper failed to update MCP port', error);
 							});
@@ -5274,48 +5369,102 @@ class TracekeeperSettingTab extends PluginSettingTab {
 						this.plugin.settings.mcpPort = DEFAULT_MCP_PORT;
 						void this.plugin.saveSettings()
 							.then(() => this.plugin.restartMcpRuntime())
-							.then(() => this.display())
+							.then(() => this.renderSettings())
 							.catch((error) => {
 								console.error('tracekeeper failed to restore default MCP port', error);
 							});
 					})
-			);
-
-		const runtimeToken = this.plugin.settings.runtimeToken;
-		const runtimeTokenSummary = this.plugin.formatRuntimeToken(runtimeToken);
-		const runtimeTokenCreatedAt = this.plugin.formatDisplayTime(Date.parse(this.plugin.settings.runtimeTokenCreatedAt));
-
-		new Setting(containerEl)
-			.setName(ui('本地连接令牌', 'Local connection token'))
-			.setDesc(
-				runtimeToken
-					? ui(
-						`${runtimeTokenSummary}；创建时间：${runtimeTokenCreatedAt}`,
-						`${runtimeTokenSummary}; created at: ${runtimeTokenCreatedAt}`
-					)
-					: ui('未生成', 'Not generated')
 			)
-			.addButton((button) =>
+			.addExtraButton((button) =>
 				button
-					.setButtonText(ui('复制令牌', 'Copy token'))
-					.setDisabled(!runtimeToken)
+					.setIcon('copy')
+					.setTooltip(ui('复制连接地址', 'Copy connection URL'))
 					.onClick(() => {
 						void this.plugin.copyToClipboard(
-							runtimeToken,
-							ui('已复制本地连接令牌。', 'Local connection token copied.')
+							connectionUrl,
+							ui('已复制连接地址。', 'Connection URL copied.')
 						);
-					})
-			)
-			.addButton((button) =>
-				button
-					.setButtonText(ui('重新生成', 'Regenerate'))
-					.onClick(() => {
-						new RuntimeTokenRegenerateConfirmModal(
-							this.app,
-							this.plugin,
-							() => this.display()
-						).open();
 					})
 			);
 	}
+
+	private renderClientConfigRow(container: HTMLElement, config: GeneratedClientConfig): void {
+		const row = container.createDiv({ cls: 'tracekeeper-settings-client-row' });
+		const info = row.createDiv({ cls: 'tracekeeper-settings-client-row__info' });
+		const title = info.createDiv({ cls: 'tracekeeper-config-row__title' });
+		title.createEl('strong', { text: config.displayName });
+		title.createEl('span', {
+			text: config.configStatusLabel,
+			cls: `tracekeeper-badge ${this.configStatusClass(config.configState)}`,
+		});
+		info.createEl('small', { text: config.configStatusDetail || config.description });
+		const actions = row.createDiv({ cls: 'tracekeeper-settings-client-row__actions tracekeeper-action-row' });
+
+		if (config.configState !== 'configured') {
+			const copy = actions.createEl('button', { text: ui('复制配置', 'Copy config') });
+			copy.addEventListener('click', () => {
+				void this.plugin.copyToClipboard(config.configText, ui('已复制连接配置。', 'Connection config copied.'));
+			});
+		}
+
+		if (config.supportsAutoConfigure && config.targetPath && config.configState !== 'configured') {
+			const autoConfigure = actions.createEl('button', {
+				text: config.configState === 'needs_update' ? ui('更新配置', 'Update config') : ui('自动配置', 'Auto setup'),
+				cls: 'mod-cta',
+			});
+			autoConfigure.addEventListener('click', () => {
+				new ClientConfigPreviewModal(this.app, this.plugin, config, 'apply', () => this.display()).open();
+			});
+		}
+
+		if (
+			config.supportsAutoConfigure
+			&& config.targetPath
+			&& (config.configState === 'configured' || config.configState === 'needs_update')
+		) {
+			const openFile = actions.createEl('button', { text: ui('打开配置文件', 'Open config file') });
+			openFile.addEventListener('click', () => {
+				void this.plugin.openClientConfigFile(config);
+			});
+		}
+
+		if (
+			config.supportsAutoConfigure
+			&& config.targetPath
+			&& (config.configState === 'configured' || config.configState === 'needs_update')
+		) {
+			const remove = actions.createEl('button', { text: ui('移除配置', 'Remove config') });
+			remove.addEventListener('click', () => {
+				new ClientConfigPreviewModal(this.app, this.plugin, config, 'remove', () => this.display()).open();
+			});
+		}
+	}
+
+	private createSection(container: HTMLElement, title: string, description: string): HTMLElement {
+		const section = container.createDiv({ cls: 'tracekeeper-settings-section' });
+		const header = section.createDiv({ cls: 'tracekeeper-settings-section__header' });
+		header.createEl('h3', { text: title, cls: 'tracekeeper-settings-section__title' });
+		header.createEl('p', { text: description, cls: 'tracekeeper-settings-section__description' });
+		return section;
+	}
+
+	private renderDetail(container: HTMLElement, label: string, value: string): void {
+		const item = container.createDiv({ cls: 'tracekeeper-detail' });
+		item.createEl('span', { text: label });
+		item.createEl('strong', { text: value || ui('未知', 'Unknown') });
+	}
+
+	private configStatusClass(state: ClientConfigState): string {
+		switch (state) {
+			case 'configured':
+				return 'tracekeeper-badge--success';
+			case 'needs_update':
+				return 'tracekeeper-badge--warning';
+			case 'not_configured':
+			case 'unavailable':
+			default:
+				return 'tracekeeper-badge--muted';
+		}
+	}
+
 }

@@ -123,6 +123,15 @@
 	color: var(--text-error);
 }
 
+.tracekeeper-status-pill--disabled {
+	border-color: var(--background-modifier-border);
+	box-shadow: none;
+}
+
+.tracekeeper-status-pill--disabled strong {
+	color: var(--text-muted);
+}
+
 .tracekeeper-detail--description strong {
 	color: var(--text-normal);
 	font-size: 13px;
@@ -226,6 +235,144 @@
 	min-width: fit-content;
 }
 
+.tracekeeper-settings-root {
+	display: grid;
+	gap: 12px;
+}
+
+.tracekeeper-settings-section {
+	padding: 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+}
+
+.tracekeeper-settings-section__header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.tracekeeper-settings-section__title {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.4;
+}
+
+.tracekeeper-settings-section__description {
+	margin: 4px 0 0;
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.tracekeeper-settings-grid {
+	display: grid;
+	gap: 8px;
+}
+
+.tracekeeper-settings-client-row {
+	display: grid;
+	grid-template-columns: minmax(120px, 1fr) auto;
+	gap: 10px;
+	align-items: start;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+}
+
+.tracekeeper-settings-client-row__info {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	gap: 3px;
+}
+
+.tracekeeper-settings-client-row__info strong,
+.tracekeeper-settings-client-row__info span {
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-settings-client-row__actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+	min-width: fit-content;
+}
+
+.tracekeeper-settings-token-row {
+	display: grid;
+	grid-template-columns: minmax(140px, 1fr) auto;
+	gap: 10px;
+	align-items: center;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+}
+
+.tracekeeper-runtime-log-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+
+.tracekeeper-runtime-log-list {
+	display: grid;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.tracekeeper-runtime-log-row {
+	display: grid;
+	grid-template-columns: 132px minmax(0, 1fr);
+	gap: 10px;
+	align-items: start;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+}
+
+.tracekeeper-runtime-log-row__badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 132px;
+	min-width: 132px;
+	box-sizing: border-box;
+	padding: 2px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	background: var(--background-primary);
+	color: var(--text-muted);
+	font-size: 12px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.tracekeeper-runtime-log-row__body {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+}
+
+.tracekeeper-runtime-log-row__body strong,
+.tracekeeper-runtime-log-row__body span,
+.tracekeeper-runtime-log-row__body small,
+.tracekeeper-runtime-log-row__body p {
+	overflow-wrap: anywhere;
+	min-width: 0;
+}
+
 .tracekeeper-card__header {
 	display: flex;
 	align-items: flex-start;
@@ -236,6 +383,112 @@
 
 .tracekeeper-card__header h3 {
 	margin: 0;
+}
+
+.tracekeeper-task-card {
+	display: grid;
+	gap: 10px;
+	margin-top: 10px;
+	padding: 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+}
+
+.tracekeeper-task-card__header {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 10px;
+	align-items: start;
+}
+
+.tracekeeper-task-card__title {
+	min-width: 0;
+}
+
+.tracekeeper-task-card__title h4 {
+	margin: 0 0 4px;
+	font-size: 15px;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-task-card__title small,
+.tracekeeper-task-card__field span,
+.tracekeeper-task-card__path span,
+.tracekeeper-task-card__summary span,
+.tracekeeper-task-card__metric span {
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.tracekeeper-task-card__badges {
+	justify-content: flex-end;
+	min-width: fit-content;
+}
+
+.tracekeeper-task-card__meta {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	gap: 8px;
+}
+
+.tracekeeper-task-card__field {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+}
+
+.tracekeeper-task-card__field strong,
+.tracekeeper-task-card__path code,
+.tracekeeper-task-card__summary p {
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-task-card__metrics {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 8px;
+}
+
+.tracekeeper-task-card__metric {
+	display: grid;
+	gap: 2px;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+}
+
+.tracekeeper-task-card__metric strong {
+	font-size: 18px;
+	line-height: 1.2;
+}
+
+.tracekeeper-task-card__path,
+.tracekeeper-task-card__summary {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+}
+
+.tracekeeper-task-card__path code {
+	display: block;
+	padding: 6px 8px;
+	border-radius: 6px;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: 12px;
+	white-space: normal;
+}
+
+.tracekeeper-task-card__summary p {
+	margin: 0;
+	color: var(--text-normal);
 }
 
 .tracekeeper-badge-row,
@@ -258,6 +511,17 @@
 	color: var(--text-muted);
 	font-size: 12px;
 	overflow-wrap: anywhere;
+}
+
+.tracekeeper-runtime-log-row > .tracekeeper-runtime-log-row__badge {
+	box-sizing: border-box;
+	width: 132px;
+	min-width: 132px;
+	justify-content: center;
+	overflow: hidden;
+	text-align: center;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .tracekeeper-badge--risk-high,
@@ -543,8 +807,34 @@
 		min-width: 0;
 	}
 
+	.tracekeeper-settings-client-row,
+	.tracekeeper-runtime-log-row {
+		grid-template-columns: 1fr;
+	}
+
+	.tracekeeper-task-card__header,
+	.tracekeeper-task-card__metrics {
+		grid-template-columns: 1fr;
+	}
+
+	.tracekeeper-task-card__badges {
+		justify-content: flex-start;
+	}
+
+	.tracekeeper-settings-client-row__actions {
+		justify-content: flex-start;
+	}
+
 	.tracekeeper-issue-row,
 	.tracekeeper-graph-candidate-row {
 		grid-template-columns: 1fr;
+	}
+
+	.tracekeeper-runtime-log-row > .tracekeeper-runtime-log-row__badge {
+		width: 100%;
+		min-width: 0;
+		justify-content: flex-start;
+		text-align: left;
+		white-space: normal;
 	}
 }
