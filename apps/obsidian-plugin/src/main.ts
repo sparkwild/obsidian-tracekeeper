@@ -2044,9 +2044,9 @@ export default class TracekeeperPlugin extends Plugin {
 		return {
 			time: event.sortTimestamp,
 			type: event.toolName
-				? ui(`${agentLabel} 操作`, `${agentLabel} action`)
+				? agentLabel
 				: isConnection
-					? ui(`${agentLabel} 连接`, `${agentLabel} connection`)
+					? agentLabel
 					: isStructureRepair
 						? ui('结构', 'Structure')
 						: ui('记录', 'Record'),
