@@ -22,6 +22,7 @@ import {
 } from '../../mcp-server/src/http-runtime';
 import { toolDefinitions } from '../../mcp-server/src/tools';
 import {
+	ARCHIVE_ROOT,
 	ARCHIVE_REVIEW_QUEUE_DIR,
 	KNOWLEDGE_INDEX_PATH,
 	KNOWLEDGE_MEMORY_INDEX_PATH,
@@ -30,18 +31,17 @@ import {
 	KNOWLEDGE_SOURCES_INDEX_PATH,
 	KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
 	KNOWLEDGE_WIKI_INDEX_PATH,
-	REQUIRED_KNOWLEDGE_DIRECTORIES,
 	TRACEKEEPER_AGENT_REQUESTS_DIR,
 	TRACEKEEPER_AUDIT_DIR,
 	TRACEKEEPER_AUDIT_LOG_PATH,
 	TRACEKEEPER_CONTEXT_PACKS_DIR,
 	TRACEKEEPER_CONTROL_DIR,
-	TRACEKEEPER_DASHBOARDS_DIR,
 	TRACEKEEPER_MEMORY_POLICY_PATH,
 	TRACEKEEPER_PERMISSIONS_PATH,
 	TRACEKEEPER_REVIEW_QUEUE_DIR,
 	TRACEKEEPER_SYSTEM_PATH,
 	TRACEKEEPER_TASKS_DIR,
+	TRACEKEEPER_WORK_DIR,
 } from '../../../packages/core/dist/index';
 
 const TRACEKEEPER_ACTIVITY_VIEW = 'tracekeeper-activity';
@@ -97,13 +97,20 @@ const CONTROL_PATHS = {
 	root: TRACEKEEPER_CONTROL_DIR,
 	auditLog: TRACEKEEPER_AUDIT_LOG_PATH,
 	auditDir: TRACEKEEPER_AUDIT_DIR,
-	dashboards: TRACEKEEPER_DASHBOARDS_DIR,
 };
 const SOURCE_REQUESTS_PATH = TRACEKEEPER_AGENT_REQUESTS_DIR;
 const REVIEW_QUEUE_PATH = TRACEKEEPER_REVIEW_QUEUE_DIR;
 const AGENT_TASKS_PATH = TRACEKEEPER_TASKS_DIR;
 const CONTEXT_PACKS_PATH = TRACEKEEPER_CONTEXT_PACKS_DIR;
 const SOURCES_PATH = KNOWLEDGE_SOURCES_DIR;
+const vaultParentFolder = (path: string): string => path.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+const BASE_STRUCTURE_FOLDERS: string[] = [
+	CONTROL_PATHS.root,
+	REVIEW_QUEUE_PATH,
+	TRACEKEEPER_WORK_DIR,
+	ARCHIVE_ROOT,
+	...KNOWLEDGE_ENTRY_FILES.map((file) => vaultParentFolder(file.path)).filter(Boolean),
+];
 const MAX_TASK_SNIPPET_LENGTH = 160;
 const MAX_TASK_ROWS = 6;
 const MAX_AUDIT_ROWS = 12;
@@ -136,7 +143,6 @@ const isChineseLanguage = (language: string): boolean => {
 const ui = (zh: string, en: string): string => (isChineseLanguage(getLanguage()) ? zh : en);
 const localizedText = (text: LocalizedText): string => ui(text.zh, text.en);
 const pluginDisplayName = (): string => ui(PLUGIN_DISPLAY_NAME_ZH, PLUGIN_DISPLAY_NAME_EN);
-const MEMORY_STRUCTURE: string[] = [...REQUIRED_KNOWLEDGE_DIRECTORIES];
 
 interface LocalizedText {
 	zh: string;
@@ -174,8 +180,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.start_task': {
 		title: { zh: '开始任务', en: 'Start task' },
 		description: {
-			zh: '为一次 Agent 工作创建任务记录，并返回可选择加载的上下文摘要。',
-			en: 'Creates a task record for an agent run and returns a selectable context summary.',
+			zh: '开始一次 Agent 工作，记录任务并返回下一步建议召回方式。',
+			en: 'Starts an agent task, records it, and returns the recommended recall step.',
 		},
 		category: { zh: '任务', en: 'Task' },
 		risk: 'low-risk-write',
@@ -183,8 +189,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.recall': {
 		title: { zh: '召回记忆', en: 'Recall memory' },
 		description: {
-			zh: '按查询检索全局或项目范围内的相关笔记，也可读取项目历史记录。',
-			en: 'Searches global or project-scoped notes for a query, and can also return project history.',
+			zh: '优先用它查找相关记忆、Wiki 和来源；结果包含摘要、命中原因和图谱链接。',
+			en: 'Use first to find related memory, wiki, and sources; results include excerpts, match reasons, and graph links.',
 		},
 		category: { zh: '检索', en: 'Recall' },
 		risk: 'read-only',
@@ -210,8 +216,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.read_note': {
 		title: { zh: '读取笔记', en: 'Read note' },
 		description: {
-			zh: '按知识库内相对路径读取单篇 Markdown 或文本笔记内容。',
-			en: 'Reads one Markdown or text note by vault-relative path.',
+			zh: '在召回摘要不够时，按知识库相对路径读取单篇完整笔记。',
+			en: 'Reads one full note by vault-relative path when recall excerpts are not enough.',
 		},
 		category: { zh: '检索', en: 'Recall' },
 		risk: 'read-only',
@@ -273,8 +279,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.source_request': {
 		title: { zh: '处理资料请求', en: 'Source requests' },
 		description: {
-			zh: '查看待处理资料请求，或处理指定请求并生成来源记录、分析输出和审核提案。',
-			en: 'Lists pending source requests, or processes a selected request into source records, analysis output, and review proposals.',
+			zh: '查看资料请求，或处理一条已有请求；不会主动抓取外部网络内容。',
+			en: 'Lists source requests or analyzes one existing request; it does not fetch external network content.',
 		},
 		category: { zh: '资料', en: 'Source' },
 		risk: 'optional-write',
@@ -291,8 +297,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.build_context_pack': {
 		title: { zh: '生成上下文包', en: 'Build context pack' },
 		description: {
-			zh: '根据查询组合相关笔记形成上下文包；默认可只读返回，也可按参数写入输出笔记。',
-			en: 'Builds a context pack from related notes; it can return read-only results or write an output note when requested.',
+			zh: '根据查询生成精简上下文；默认只返回结果，只有指定写入时才创建笔记。',
+			en: 'Builds compact context from a query; returns results by default and writes only when requested.',
 		},
 		category: { zh: '上下文', en: 'Context' },
 		risk: 'optional-write',
@@ -300,8 +306,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.lint': {
 		title: { zh: '检查知识库规范', en: 'Run vault checks' },
 		description: {
-			zh: '检查知识库链接、来源引用和图谱结构问题，帮助维护可检索、可导航的笔记库。',
-			en: 'Checks links, source references, and graph structure issues to keep the vault searchable and navigable.',
+			zh: '统一检查目录结构、链接、来源引用、声明来源和知识图谱问题。',
+			en: 'Checks structure, links, source references, claim sources, and graph health in one entry.',
 		},
 		category: { zh: '维护', en: 'Maintenance' },
 		risk: 'read-only',
@@ -309,8 +315,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.finish_task': {
 		title: { zh: '结束任务', en: 'Finish task' },
 		description: {
-			zh: '记录一次任务的总结、结果、决策和后续动作，并可按配置生成待审核记忆提案。',
-			en: 'Records a task summary, outcomes, decisions, and next actions, and can create reviewable memory proposals when configured.',
+			zh: '任务结束时记录总结，并按记忆规则忽略、建议、加入审核或保存项目记忆。',
+			en: 'Records task closeout and handles memory candidates by rule: ignore, suggest, review, or project save.',
 		},
 		category: { zh: '任务', en: 'Task' },
 		risk: 'low-risk-write',
@@ -1056,7 +1062,7 @@ export default class TracekeeperPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'initialize-memory-structure',
-			name: ui('初始化记忆结构', 'Initialize memory structure'),
+			name: ui('校验知识库结构', 'Check knowledge structure'),
 			callback: () => {
 				void this.openInitializeMemoryStructureModal();
 			},
@@ -1291,8 +1297,11 @@ export default class TracekeeperPlugin extends Plugin {
 		if (state === 'initialized') {
 			return {
 				state,
-				label: ui('已初始化', 'Initialized'),
-				detail: ui('Tracekeeper 管理结构完整。', 'The Tracekeeper management structure is complete.'),
+				label: ui('基础结构完整', 'Base structure ready'),
+				detail: ui(
+					'Tracekeeper 基础入口完整；项目、来源和 Wiki 子目录会在使用时按需创建。',
+					'Tracekeeper base entries are ready; project, source, and Wiki subfolders are created as needed.'
+				),
 				missingFolders: [],
 				missingFiles: [],
 				missingCount,
@@ -1302,10 +1311,10 @@ export default class TracekeeperPlugin extends Plugin {
 
 		return {
 			state,
-			label: state === 'partial' ? ui('部分缺失', 'Partially missing') : ui('未初始化', 'Not initialized'),
+			label: state === 'partial' ? ui('需要补齐', 'Needs repair') : ui('需要校验', 'Needs check'),
 			detail: ui(
-				`缺少 ${missingCount} 个管理结构项，需要显式初始化后才能形成完整业务闭环。`,
-				`${missingCount} management structure items are missing. Initialize explicitly to complete the workflow.`
+				`缺少 ${missingCount} 个基础结构项。可补齐必要入口，不会移动或删除已有内容。`,
+				`${missingCount} base structure items are missing. Repair creates required entries only and will not move or delete existing content.`
 			),
 			missingFolders: plan.foldersToCreate,
 			missingFiles: plan.filesToCreate,
@@ -1318,7 +1327,7 @@ export default class TracekeeperPlugin extends Plugin {
 		const foldersToCreate: string[] = [];
 		const seen = new Set<string>();
 
-		for (const path of [CONTROL_PATHS.root, CONTROL_PATHS.dashboards, ...MEMORY_STRUCTURE]) {
+		for (const path of BASE_STRUCTURE_FOLDERS) {
 			for (const folder of this.expandFolderHierarchy(path)) {
 				if (!seen.has(folder)) {
 					seen.add(folder);
@@ -1408,11 +1417,11 @@ export default class TracekeeperPlugin extends Plugin {
 			}
 
 			await this.appendAuditEvent(plan);
-			new Notice(ui('知识库结构已初始化。', 'Tracekeeper memory structure initialized.'));
+			new Notice(ui('知识库基础结构已补齐。', 'Tracekeeper base structure repaired.'));
 			await this.refreshGovernanceViews();
 		} catch (error) {
 			console.error('tracekeeper failed to initialize memory structure', error);
-			new Notice(ui('知识库结构初始化失败。', 'Tracekeeper failed to initialize memory structure.'));
+			new Notice(ui('知识库基础结构补齐失败。', 'Tracekeeper failed to repair the base structure.'));
 		}
 	}
 
@@ -1427,7 +1436,7 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private renderAuditEvent(timestamp: string, folderCount: number, fileCount: number): string {
-		return `## ${timestamp}\naction: memory.initialize\nactor: user\nfolders_created: ${folderCount}\nfiles_created: ${fileCount}\nresult: success\n\n`;
+		return `## ${timestamp}\naction: structure.repair\nactor: user\nfolders_created: ${folderCount}\nfiles_created: ${fileCount}\nresult: success\n\n`;
 	}
 
 	private async appendProposalStatusAuditEvent(
@@ -1965,6 +1974,9 @@ export default class TracekeeperPlugin extends Plugin {
 					return ui('连接配置变更', 'Connection config change');
 			}
 		}
+		if (event.action === 'structure.repair') {
+			return ui('补齐基础结构', 'Repair base structure');
+		}
 		return event.action || ui('运行记录', 'Runtime record');
 	}
 
@@ -1996,8 +2008,8 @@ export default class TracekeeperPlugin extends Plugin {
 			...input.sourceCaptures.map((source) => ({
 				time: source.sortTimestamp,
 				type: ui('来源', 'Source'),
-				title: source.sourceKind,
-				meta: source.mode || source.type,
+				title: source.title || source.source || ui('来源记录', 'Source capture'),
+				meta: [source.sourceKind, source.mode || source.type].filter(Boolean).join(' • '),
 				body: source.source || source.snippet,
 				path: source.path,
 			})),
@@ -2027,6 +2039,7 @@ export default class TracekeeperPlugin extends Plugin {
 			event.eventType === 'agent-connection-event' ||
 			event.action === 'connection' ||
 			event.action === 'mcp.initialize';
+		const isStructureRepair = event.action === 'structure.repair';
 		const agentLabel = this.formatAgentDisplayName(event.clientName, event.agentId);
 		return {
 			time: event.sortTimestamp,
@@ -2034,12 +2047,14 @@ export default class TracekeeperPlugin extends Plugin {
 				? ui(`${agentLabel} 操作`, `${agentLabel} action`)
 				: isConnection
 					? ui(`${agentLabel} 连接`, `${agentLabel} connection`)
-					: ui('记录', 'Record'),
+					: isStructureRepair
+						? ui('结构', 'Structure')
+						: ui('记录', 'Record'),
 			title: event.toolName
 				? this.formatToolDisplayName(event.toolName)
 				: isConnection
 					? ui('建立连接', 'Connected')
-					: event.action,
+					: this.runtimeLogTitle(event, 'record'),
 			meta: event.resultStatus ? this.formatResultLabel(event.resultStatus) : event.actor,
 			body: event.reason || event.snippet,
 			path: event.target || event.path,
@@ -3616,21 +3631,29 @@ export default class TracekeeperPlugin extends Plugin {
 
 		const parsed = this.readFrontmatter(content);
 		const data = parsed.fields;
-		const type = this.firstString(data, ['type']) || 'source';
+		if (Object.keys(data).length === 0) {
+			return null;
+		}
+
+		const type = this.firstString(data, ['type']);
+		const source = this.firstString(data, ['source']);
+		if (!source && !type.toLowerCase().includes('source')) {
+			return null;
+		}
 		const createdAt = this.firstString(data, ['created_at', 'createdAt', 'created']);
-		const source = this.firstString(data, ['source']) || file.basename;
-		const title = this.firstString(data, ['title']) || source;
+		const sourceLabel = source || file.basename;
+		const title = this.firstString(data, ['title']) || sourceLabel;
 
 		return {
 			path: file.path,
-			type,
+			type: type || 'source_capture',
 			title,
-			source,
-			sourceKind: this.firstString(data, ['source_kind', 'sourceKind']) || 'unknown',
+			source: sourceLabel,
+			sourceKind: this.firstString(data, ['source_kind', 'sourceKind']),
 			mode: this.firstString(data, ['mode']) || '',
 			taskId: this.firstString(data, ['task_id', 'taskId']),
 			createdAt,
-			snippet: this.snippetFromText(parsed.body, source),
+			snippet: this.snippetFromText(parsed.body, sourceLabel),
 			sortTimestamp: this.parseTimestamp(createdAt, file.stat?.mtime),
 		};
 	}
@@ -4219,7 +4242,7 @@ class InitializeMemoryStructureModal extends Modal {
 
 	onOpen(): void {
 		void super.onOpen();
-		this.titleEl.setText(ui('初始化记忆结构', 'Initialize memory structure'));
+		this.titleEl.setText(ui('知识库结构校验', 'Knowledge structure check'));
 
 		const { contentEl } = this;
 		contentEl.empty();
@@ -4227,38 +4250,46 @@ class InitializeMemoryStructureModal extends Modal {
 		const { foldersToCreate, filesToCreate } = this.options.plan;
 		contentEl.createEl('p', {
 			text: ui(
-				'将为当前知识库创建以下缺失的文件结构。',
-				'The following Tracekeeper structure will be created if missing in this vault.'
+				'Tracekeeper 只检查基础入口。项目、来源、Wiki 主题等子结构会在 Agent 使用时按需创建。',
+				'Tracekeeper checks only base entries. Project, source, and Wiki topic substructures are created as agents use them.'
 			),
 		});
 
 		if (foldersToCreate.length === 0 && filesToCreate.length === 0) {
 			contentEl.createEl('p', {
 				text: ui(
-					'没有缺失项，不会创建新的文件或文件夹。',
-					'Nothing is missing. No files or folders will be created.'
+					'基础结构完整，不需要创建新的文件或文件夹。',
+					'The base structure is complete. No files or folders will be created.'
 				),
 			});
 		} else {
-			const section = contentEl.createDiv();
-			section.createEl('h3', { text: ui('文件夹', 'Folders') });
-			const folderList = section.createEl('ul');
-			for (const folder of foldersToCreate) {
-				folderList.createEl('li', { text: folder });
-			}
-
-			section.createEl('h3', { text: ui('文件', 'Files') });
-			const fileList = section.createEl('ul');
-			for (const file of filesToCreate) {
-				fileList.createEl('li', { text: file });
-			}
+			const summary = contentEl.createDiv({ cls: 'tracekeeper-structure-check-summary' });
+			summary.createEl('strong', {
+				text: ui(
+					`发现 ${foldersToCreate.length + filesToCreate.length} 个基础结构缺失项。`,
+					`${foldersToCreate.length + filesToCreate.length} base structure item(s) are missing.`
+				),
+			});
+			summary.createEl('p', {
+				text: ui(
+					`将补齐必要目录 ${foldersToCreate.length} 个、入口文件 ${filesToCreate.length} 个；不会移动、删除或重写你已有的笔记。`,
+					`This will create ${foldersToCreate.length} required folder(s) and ${filesToCreate.length} entry file(s). Existing notes will not be moved, deleted, or rewritten.`
+				),
+			});
+			summary.createEl('p', {
+				text: ui(
+					'扩展目录会在实际产生任务、审核、来源或项目记忆时再创建。',
+					'Extended folders are created later when tasks, review items, sources, or project memories are actually written.'
+				),
+			});
 		}
 
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel'), cls: 'mod-warning' });
 		cancel.addEventListener('click', () => this.close());
 
-		const confirm = actions.createEl('button', { text: ui('初始化', 'Initialize'), cls: 'mod-cta' });
+		const confirm = actions.createEl('button', { text: ui('补齐基础结构', 'Repair base structure'), cls: 'mod-cta' });
+		confirm.disabled = foldersToCreate.length === 0 && filesToCreate.length === 0;
 		confirm.addEventListener('click', () => {
 			void (async () => {
 				await this.options.onConfirm();
@@ -4485,7 +4516,7 @@ class TracekeeperActivityView extends ItemView {
 		});
 		if (snapshot.structureStatus.state !== 'initialized') {
 			const initializeButton = actions.createEl('button', {
-				text: ui('初始化知识库结构', 'Initialize structure'),
+				text: ui('校验知识库结构', 'Check structure'),
 			});
 			initializeButton.addEventListener('click', () => {
 				void this.plugin.openInitializeMemoryStructureModal();
@@ -4497,25 +4528,6 @@ class TracekeeperActivityView extends ItemView {
 		reviewButton.addEventListener('click', () => {
 			void this.plugin.openPluginView(TRACEKEEPER_REVIEW_QUEUE_VIEW);
 		});
-		const settingsButton = actions.createEl('button', {
-			text: ui('打开插件设置', 'Open plugin settings'),
-		});
-		settingsButton.addEventListener('click', () => {
-			this.plugin.openSettingsTab();
-		});
-		const logButton = actions.createEl('button', {
-			text: ui('查看运行日志', 'View runtime log'),
-		});
-		logButton.addEventListener('click', () => {
-			void this.plugin.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);
-		});
-		const recallButton = actions.createEl('button', {
-			text: ui('测试召回', 'Test recall'),
-		});
-		recallButton.addEventListener('click', () => {
-			new MemoryRecallPreviewModal(this.app, this.plugin).open();
-		});
-
 		const statusBar = contentEl.createDiv({ cls: 'tracekeeper-status-bar' });
 		this.renderStatusItem(
 			statusBar,
@@ -4524,7 +4536,7 @@ class TracekeeperActivityView extends ItemView {
 			this.runtimeStatusClass(snapshot.runtimeStatus)
 		);
 		this.renderStatusItem(statusBar, ui('当前仓库', 'Current repository'), this.formatVaultLabel(snapshot.vaultRoot));
-		this.renderStatusItem(statusBar, ui('刷新', 'Refresh'), this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt)));
+		this.renderStatusItem(statusBar, ui('刷新时间', 'Last refreshed'), this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt)));
 
 		const metrics = contentEl.createDiv({ cls: 'tracekeeper-metric-grid' });
 		this.renderMetricCard(metrics, ui('待审核', 'Pending review'), String(snapshot.recentProposals.filter((proposal) => proposal.approvalStatus === 'pending').length), ui('需要你确认的记忆更新', 'Memory updates waiting for your review'));
@@ -4547,9 +4559,9 @@ class TracekeeperActivityView extends ItemView {
 
 		const timeline = contentEl.createDiv({ cls: 'tracekeeper-card' });
 		const timelineHeader = timeline.createDiv({ cls: 'tracekeeper-card__header' });
-		timelineHeader.createEl('h3', { text: ui('活动时间线', 'Activity timeline') });
+		timelineHeader.createEl('h3', { text: ui('运行日志', 'Runtime log') });
 		const viewAllButton = timelineHeader.createEl('button', {
-			text: ui('查看运行日志', 'View runtime log'),
+			text: ui('更多', 'More'),
 		});
 		viewAllButton.addEventListener('click', () => {
 			void this.plugin.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);

@@ -474,7 +474,7 @@ async function main() {
 		);
 
 		const sensitiveText = 'SENSITIVE_TOKEN_123ABC456DEF';
-		const startTask = buildStructured(await client.call('tools/call', {
+		const startTaskCall = await client.call('tools/call', {
 			name: 'tracekeeper.start_task',
 			arguments: {
 				goal: 'Smoke sensitive summary',
@@ -487,11 +487,24 @@ async function main() {
 				token: `token_${sensitiveText}`,
 				project_hint: 'demo',
 			},
-		}));
+		});
+		const startTask = buildStructured(startTaskCall);
 		assert.equal(startTask.ok, true);
 		assert.equal(startTask.read_only, false);
 		assert.ok(startTask.task_id, 'start_task should return task_id');
 		assert.ok(startTask.path, 'start_task should return task path');
+		assert.ok(Array.isArray(startTask.next_actions_for_agent), 'start_task should return next actions for agents');
+		assert.ok(startTask.next_actions_for_agent.some((entry) => entry.includes('scope="project"')));
+		assert.equal(startTask.recommended_recall?.tool, 'tracekeeper.recall');
+		assert.equal(startTask.recommended_recall?.arguments?.scope, 'project');
+		assert.equal(startTask.recommended_recall?.arguments?.project_hint, 'demo');
+		assert.ok(startTaskCall.structuredContent, 'tools/call should retain full structured content');
+		assert.ok(Array.isArray(startTaskCall.content), 'tools/call should return compact text content');
+		assert.notEqual(
+			startTaskCall.content[0]?.text,
+			JSON.stringify(startTask, null, 2),
+			'content.text should be compact and not duplicate full structuredContent'
+		);
 		assert.ok(fs.existsSync(path.join(vaultRoot, startTask.path)));
 		const taskId = startTask.task_id;
 		const activeTaskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
@@ -520,6 +533,25 @@ async function main() {
 			hasToolCallSection(afterSensitiveAudit, 'tracekeeper.start_task', 'success', ['- args_summary:']),
 			'tool-call should include args summary field'
 		);
+
+		const globalRecall = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.recall',
+			arguments: {
+				query: 'Smoke Graph Hub',
+				max_items: 3,
+			},
+		}));
+		assert.equal(globalRecall.ok, true);
+		assert.equal(globalRecall.scope_mode, 'global');
+		assert.ok(Array.isArray(globalRecall.matches));
+		assert.ok(globalRecall.matches.length >= 1);
+		assert.equal(globalRecall.matches[0].scope, 'global');
+		assert.equal(typeof globalRecall.matches[0].excerpt, 'string');
+		assert.ok(globalRecall.matches[0].excerpt.length > 0);
+		assert.ok(!globalRecall.matches[0].excerpt.includes(vaultRoot), 'recall excerpt should not add absolute vault paths');
+		assert.equal(typeof globalRecall.matches[0].why_matched, 'string');
+		assert.ok(globalRecall.matches[0].why_matched.length > 0);
+		assert.ok(Array.isArray(globalRecall.matches[0].graph_links));
 
 		const writeContext = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.write_context_pack',
@@ -634,6 +666,8 @@ async function main() {
 		assert.equal(finishTask.proposals, undefined);
 		assert.equal(finishTask.suggestion_count, undefined);
 		assert.equal(finishTask.suggested_memory_updates, undefined);
+		assert.ok(Array.isArray(finishTask.next_actions_for_agent));
+		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('no memory suggestions')));
 		assert.ok(fs.existsSync(path.join(vaultRoot, finishTask.path)));
 		taskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
 		assert.ok(taskText.includes('status: completed') || taskText.includes('status: "completed"'));
@@ -654,8 +688,24 @@ async function main() {
 		const projectContextEntries = projectContext.entries || projectContext.matches || [];
 		assert.ok(Array.isArray(projectContextEntries));
 		assert.ok(projectContextEntries.length >= 1);
+		assert.equal(projectContextEntries[0].scope, 'project');
+		assert.equal(typeof projectContextEntries[0].excerpt, 'string');
+		assert.equal(typeof projectContextEntries[0].why_matched, 'string');
+		assert.ok(Array.isArray(projectContextEntries[0].graph_links));
 		assert.ok(projectContext.scope === 'project' || (projectContext.scope && projectContext.scope.scope === 'project'));
 		assert.equal(projectContext.scope?.project_hint || projectContext.project_hint || null, 'demo');
+
+		const deprecatedProjectContext = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.project_context',
+			arguments: {
+				query: 'project_overview',
+				project_hint: 'demo',
+				max_items: 1,
+			},
+		}));
+		assert.equal(deprecatedProjectContext.ok, true);
+		assert.equal(deprecatedProjectContext.deprecated, true);
+		assert.equal(deprecatedProjectContext.replacement_tool, 'tracekeeper.recall with scope="project"');
 
 		const projectHistory = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.recall',
@@ -671,6 +721,10 @@ async function main() {
 		const projectHistoryEntries = projectHistory.entries || projectHistory.matches || [];
 		assert.ok(Array.isArray(projectHistoryEntries));
 		assert.ok(projectHistoryEntries.length >= 1);
+		assert.equal(projectHistoryEntries[0].scope, 'project_history');
+		assert.equal(typeof projectHistoryEntries[0].excerpt, 'string');
+		assert.equal(typeof projectHistoryEntries[0].why_matched, 'string');
+		assert.ok(Array.isArray(projectHistoryEntries[0].graph_links));
 		assert.ok(
 			projectHistoryEntries.some((entry) => entry.path === finishTask.path),
 			'project_history should include prior session notes linked through the project task'

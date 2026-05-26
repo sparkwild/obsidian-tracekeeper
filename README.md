@@ -57,7 +57,7 @@ Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian i
 
 AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and submit memory updates according to your memory rules. Global memory goes to review by default; project memory can auto-save as an append-only project note when you enable that rule.
 
-For shared use across Codex, Claude, OpenClaw, and other MCP clients, use the same pattern: start a task, recall only project-scoped context, finish the task, and decide whether closeout memories should be handled automatically, reviewed, or ignored. Tracekeeper keeps the public MCP surface small so agents can choose the right action quickly. See [Agent MCP usage](./docs/AGENT_MCP_USAGE.md).
+For shared use across Codex, Claude, OpenClaw, and other MCP clients, use the same pattern: start a task, recall only project-scoped context, finish the task, and decide whether closeout memories should be handled automatically, reviewed, or ignored. Tracekeeper keeps the public MCP surface small so agents can choose the right action quickly. Recall results include compact excerpts, match reasons, and graph links so agents only read full notes when needed. See [Agent MCP usage](./docs/AGENT_MCP_USAGE.md).
 
 The connection is local-first:
 

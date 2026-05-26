@@ -57,7 +57,7 @@ Tracekeeper 在桌面端 Obsidian 开启时提供本机 Streamable HTTP MCP Runt
 
 AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 vault 上下文、构建 context pack、记录有限范围内的工作笔记，并按你的记忆规则提交更新。全局记忆默认进入审核队列；项目记忆可以按规则自动追加保存到项目记忆笔记。
 
-Codex、Claude、OpenClaw 等 MCP 客户端应使用同一套流程：开始任务、只读取项目范围内的上下文、结束任务，并决定任务收尾记忆自动处理、进入审核，还是忽略。参见 [Agent MCP usage](./docs/AGENT_MCP_USAGE.md)。
+Codex、Claude、OpenClaw 等 MCP 客户端应使用同一套流程：开始任务、只读取项目范围内的上下文、结束任务，并决定任务收尾记忆自动处理、进入审核，还是忽略。召回结果会包含精简摘要、命中原因和图谱链接，Agent 只有在摘要不够时才需要读取完整笔记。参见 [Agent MCP usage](./docs/AGENT_MCP_USAGE.md)。
 
 连接是 local-first 的：
 
@@ -88,7 +88,7 @@ Codex、Claude、OpenClaw 等 MCP 客户端应使用同一套流程：开始任�
 
 ## 知识图谱健康
 
-Tracekeeper 可以通过只读的 `tracekeeper.graph_health` 工具检查 Obsidian wikilink 图谱。它会统计孤立节点、只有入链或出链的节点、连通分量、hub 候选、未解析 wikilink，以及推荐图谱入口是否缺失。
+Tracekeeper 通过只读的 `tracekeeper.lint` 统一检查 Obsidian wikilink 图谱和知识库结构。它会统计孤立节点、只有入链或出链的节点、连通分量、hub 候选、未解析 wikilink，以及推荐图谱入口是否缺失。
 
 图谱检查策略可以在 Tracekeeper 设置中配置：
 

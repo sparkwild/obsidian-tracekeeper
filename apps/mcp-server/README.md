@@ -97,6 +97,7 @@ npm run smoke
 - initialize/tools/list/resources/list/prompts/list
 - read_note and status paths
 - recall global/project/project-history scopes
+- compact tool text with full `structuredContent`
 - controlled write tools
 - finish_task closeout proposal creation
 - source_request source-analysis flow
@@ -105,7 +106,7 @@ npm run smoke
 ## Notes
 
 - `read_note` accepts `{ vaultRoot, path }` and validates vault scope + path traversal.
-- `start_task` returns `task_id` plus a context pack summary and writes a bounded active task record.
+- `start_task` returns `task_id`, `recommended_recall`, and `next_actions_for_agent` plus a context pack summary, and writes a bounded active task record.
 - `propose_memory` and `finish_task` support:
   - `memory_scope` (`global` / `project`)
   - `project_hint`
@@ -113,7 +114,8 @@ npm run smoke
   - `related_sources`
 - project-scoped auto memory writes require valid wiki bridge references; when `related_wiki` cannot be resolved, behavior downgrades to `Review Queue` and outputs `missing_wiki_bridge: true`.
 - `architecture_status` and `missing_graph_bridges` are returned for traceability in memory-write related operations.
-- `recall` accepts `scope: "project"` and `scope: "project_history"` plus project, repo, or path hints so agents do not load all project memory indiscriminately.
+- `recall` accepts `scope: "project"` and `scope: "project_history"` plus project, repo, or path hints so agents do not load all project memory indiscriminately. Recall entries include `excerpt`, `why_matched`, `matched_tokens`, score details, and `graph_links`; use `read_note` only when full content is needed.
 - `scope: "project_history"` includes matching project notes, agent task records, and session notes linked to those task records for cross-session continuity.
-- `finish_task` records a session note. `review_proposal_mode: "auto_propose"` follows configured memory rules, so global memory queues by default while project memory can auto-save as append-only project memory. `review_proposal_mode: "review_queue"` sends closeout memory candidates to Review Queue. `suggest` remains accepted for compatibility and only returns `suggested_memory_updates`.
+- `finish_task` records a session note and returns `next_actions_for_agent`. `review_proposal_mode: "auto_propose"` follows configured memory rules, so global memory queues by default while project memory can auto-save as append-only project memory. `review_proposal_mode: "review_queue"` sends closeout memory candidates to Review Queue. `suggest` remains accepted for compatibility and only returns `suggested_memory_updates`.
 - `lint` is the single check entry and includes graph health findings according to the configured graph profile.
+- Compatibility tools such as `project_context`, `project_history`, and `list_review_queue` are not returned by `tools/list`; use the public tools above instead.

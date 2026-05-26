@@ -62,6 +62,8 @@ const SOURCES_DIR = index_1.KNOWLEDGE_SOURCES_DIR;
 const SOURCE_ANALYSIS_REPORT_DIR = index_1.TRACEKEEPER_SOURCE_ANALYSIS_DIR;
 const MEMORY_PROPOSAL_DIR = index_1.TRACEKEEPER_REVIEW_QUEUE_DIR;
 const MAX_SOURCE_EXCERPT_LENGTH = 1000;
+const MAX_RECALL_EXCERPT_LENGTH = 480;
+const MAX_RECALL_GRAPH_LINKS = 8;
 const DEFAULT_FINISH_TASK_REVIEW_MODE = 'off';
 const READ_ONLY_TOOL_NAMES = new Set([
     'tracekeeper.status',
@@ -126,6 +128,18 @@ const TOOL_NAME_SET = new Set([
     'tracekeeper.capture_source',
     'tracekeeper.propose_memory',
 ]);
+const DEPRECATED_TOOL_REPLACEMENTS = {
+    'tracekeeper.project_context': 'tracekeeper.recall with scope="project"',
+    'tracekeeper.project_history': 'tracekeeper.recall with scope="project_history"',
+    'tracekeeper.list_review_queue': 'tracekeeper.review_queue with action="list_pending"',
+    'tracekeeper.list_source_requests': 'tracekeeper.source_request with action="list"',
+    'tracekeeper.list_approved_writebacks': 'tracekeeper.review_queue with action="list_approved"',
+    'tracekeeper.audit_recent': 'Obsidian runtime log view',
+    'tracekeeper.analyze_source_request': 'tracekeeper.source_request with action="analyze"',
+    'tracekeeper.write_context_pack': 'tracekeeper.build_context_pack with write=true',
+    'tracekeeper.write_session_note': 'tracekeeper.finish_task',
+    'tracekeeper.distill_session': 'tracekeeper.finish_task',
+};
 const PUBLIC_TOOL_NAME_ORDER = [
     'tracekeeper.status',
     'tracekeeper.lint',
@@ -154,12 +168,59 @@ function addTrimmedTarget(targets, value) {
         }
     }
 }
+function truncateSummaryText(value, maxLength = 900) {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    if (normalized.length <= maxLength) {
+        return normalized;
+    }
+    return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+function summarizeToolPayload(payload, isError) {
+    if (isError) {
+        return typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+    }
+    if (!(0, protocol_1.isRecord)(payload)) {
+        return truncateSummaryText(typeof payload === 'string' ? payload : 'Tracekeeper MCP tool completed.');
+    }
+    const summaryParts = [];
+    const keys = [
+        'ok',
+        'read_only',
+        'tool',
+        'action',
+        'scope_mode',
+        'review_proposal_mode',
+        'task_id',
+        'path',
+        'matched_count',
+        'total_matches',
+        'count',
+        'issue_count',
+        'proposal_count',
+        'suggestion_count',
+        'auto_applied_count',
+    ];
+    for (const key of keys) {
+        const value = payload[key];
+        if (value === undefined || value === null || Array.isArray(value) || (0, protocol_1.isRecord)(value)) {
+            continue;
+        }
+        summaryParts.push(`${key}=${String(value)}`);
+    }
+    const nextActions = Array.isArray(payload.next_actions_for_agent)
+        ? payload.next_actions_for_agent
+            .filter((item) => typeof item === 'string' && item.trim().length > 0)
+            .slice(0, 2)
+        : [];
+    const base = summaryParts.length > 0 ? summaryParts.join(' | ') : 'Tracekeeper MCP tool completed.';
+    return truncateSummaryText([base, ...nextActions].join('\n'));
+}
 function toolResult(payload, isError = false) {
     return {
         content: [
             {
                 type: 'text',
-                text: JSON.stringify(payload, null, 2),
+                text: summarizeToolPayload(payload, isError),
             },
         ],
         structuredContent: payload,
@@ -788,14 +849,18 @@ function collectProjectCandidates(notes, scope, maxItems) {
     }
     return candidates.slice(0, maxItems);
 }
-function buildProjectHistoryEntries(matches) {
+function buildProjectHistoryEntries(matches, query = '') {
     return matches.map((note) => ({
         path: note.relativePath,
         title: note.title,
         type: note.type,
+        scope: 'project_history',
         modifiedAt: note.modifiedAt,
         task_id: readFrontmatterString(note.frontmatter, ['task_id', 'taskId']),
         project_hint: readFrontmatterString(note.frontmatter, ['project_hint', 'related_project', 'project']),
+        why_matched: buildProjectHistoryWhy(note, query),
+        excerpt: compactNoteText(note.content),
+        graph_links: buildRecallGraphLinks(note),
     }));
 }
 function matchesProjectQuery(note, query) {
@@ -895,6 +960,66 @@ function rankRecallMatches(matches, query, scope) {
         };
     });
     return ranked.sort((a, b) => b.score - a.score || a.note.relativePath.localeCompare(b.note.relativePath));
+}
+function compactNoteText(text, maxLength = MAX_RECALL_EXCERPT_LENGTH) {
+    const compact = text
+        .replace(/```[\s\S]*?```/g, ' ')
+        .replace(/^#{1,6}\s+/gm, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (compact.length <= maxLength) {
+        return compact;
+    }
+    return `${compact.slice(0, maxLength - 1).trimEnd()}…`;
+}
+function buildRecallGraphLinks(note) {
+    const links = new Set();
+    for (const link of note.wikilinks) {
+        const target = link.heading ? `${link.target}#${link.heading}` : link.target;
+        if (target.trim()) {
+            links.add(target.trim());
+        }
+        if (links.size >= MAX_RECALL_GRAPH_LINKS) {
+            break;
+        }
+    }
+    return Array.from(links);
+}
+function buildRecallWhyMatched(match, scope) {
+    const scopeLabel = scope === 'project_history'
+        ? 'Project-history recall'
+        : scope === 'project'
+            ? 'Project recall'
+            : 'Global recall';
+    const tokenText = match.matchedTokens.slice(0, 6).join(', ');
+    const reasonText = match.score_reason.slice(0, 2).join('; ');
+    return [scopeLabel, tokenText ? `matched tokens: ${tokenText}` : '', reasonText].filter(Boolean).join(' - ');
+}
+function buildRecallEntry(match, scope) {
+    return {
+        path: match.note.relativePath,
+        title: match.note.title,
+        type: match.note.type,
+        scope,
+        score: match.score,
+        raw_score: match.raw_score,
+        matched_tokens: match.matchedTokens,
+        score_reason: match.score_reason,
+        why_matched: buildRecallWhyMatched(match, scope),
+        excerpt: compactNoteText(match.note.content),
+        graph_links: buildRecallGraphLinks(match.note),
+    };
+}
+function buildProjectHistoryWhy(note, query) {
+    const parts = ['Project-history recall'];
+    const taskId = readFrontmatterString(note.frontmatter, ['task_id', 'taskId']);
+    if (taskId) {
+        parts.push(`linked task: ${taskId}`);
+    }
+    if (query) {
+        parts.push(`matched query: ${query}`);
+    }
+    return parts.join(' - ');
 }
 function buildFinishTaskProposalEvidence(taskId, sessionNotePath, projectHint, proposalKind, mode) {
     const parts = [
@@ -2333,7 +2458,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.status',
             title: 'tracekeeper.status',
-            description: '[read-only] Scan vault and return summary counts.',
+            description: '[read-only] Use for a quick vault and service summary. Does not read full note content or write files.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2348,7 +2473,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.graph_health',
             title: 'tracekeeper.graph_health',
-            description: '[read-only] Analyze wikilinks and return graph health metrics.',
+            description: '[deprecated] Use tracekeeper.lint for graph checks. This compatibility tool is read-only.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2375,7 +2500,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.start_task',
             title: 'tracekeeper.start_task',
-            description: '[low-risk write] Create an active task record and return a context summary.',
+            description: '[low-risk write] Call once when starting meaningful work. Records a bounded task and returns the recommended recall step.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2400,7 +2525,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.recall',
             title: 'tracekeeper.recall',
-            description: '[read-only] Scan vault and return matching notes for global, project, or project-history recall.',
+            description: '[read-only] Use before read_note to find relevant memory, wiki, and source notes. Supports global, project, and project_history scopes.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2451,7 +2576,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.project_context',
             title: 'tracekeeper.project_context',
-            description: '[read-only] Project-scoped recall using project_hint/project_id/repo_path filters.',
+            description: '[deprecated] Use tracekeeper.recall with scope="project". Compatibility tool, read-only.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2498,7 +2623,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.project_history',
             title: 'tracekeeper.project_history',
-            description: '[read-only] Project-scoped note history for continuity and context.',
+            description: '[deprecated] Use tracekeeper.recall with scope="project_history". Compatibility tool, read-only.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2545,7 +2670,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.read_note',
             title: 'tracekeeper.read_note',
-            description: '[read-only] Read markdown/text content of one note in vault.',
+            description: '[read-only] Read one vault note only after recall excerpts are not enough. Does not write files.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2568,7 +2693,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.review_queue',
             title: 'tracekeeper.review_queue',
-            description: '[read-only] List pending or approved Review Queue proposals.',
+            description: '[read-only] Inspect pending proposals or approved writeback candidates. Does not approve or apply changes.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2603,7 +2728,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.list_review_queue',
             title: 'tracekeeper.list_review_queue',
-            description: '[read-only] Read pending memory proposal notes under 00_tracekeeper/inbox/review_queue.',
+            description: '[deprecated] Use tracekeeper.review_queue with action="list_pending". Compatibility tool, read-only.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2622,7 +2747,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.list_source_requests',
             title: 'tracekeeper.list_source_requests',
-            description: '[read-only] Read pending source-analysis agent requests under 00_tracekeeper/inbox/agent_requests.',
+            description: '[deprecated] Use tracekeeper.source_request with action="list". Compatibility tool, read-only.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2649,7 +2774,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.list_approved_writebacks',
             title: 'tracekeeper.list_approved_writebacks',
-            description: '[read-only] Read approved Review Queue proposals that are candidates for runtime writeback.',
+            description: '[deprecated] Use tracekeeper.review_queue with action="list_approved". Compatibility tool, read-only.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2679,7 +2804,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.audit_recent',
             title: 'tracekeeper.audit_recent',
-            description: '[read-only] Read parsed sections from 00_tracekeeper/control/audit_log.md.',
+            description: '[deprecated] Prefer the Obsidian runtime log view. Compatibility tool, read-only.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2701,7 +2826,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.source_request',
             title: 'tracekeeper.source_request',
-            description: '[read-only | low-risk write] List or analyze source-analysis requests.',
+            description: '[read-only | low-risk write] List source requests or analyze one existing request. Does not fetch network content.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2753,7 +2878,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.analyze_source_request',
             title: 'tracekeeper.analyze_source_request',
-            description: '[low-risk write] Analyze one pending source request and write source note, report, review proposals, request status, and audit entry.',
+            description: '[deprecated] Use tracekeeper.source_request with action="analyze". Compatibility tool, low-risk write.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2791,7 +2916,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.apply_approved_writeback',
             title: 'tracekeeper.apply_approved_writeback',
-            description: '[review-gated apply] Apply an approved Review Queue proposal by appending explicit writeback content to its target note.',
+            description: '[review-gated apply] Use only after the user approves a Review Queue proposal. Appends approved content to the target note.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2829,7 +2954,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.build_context_pack',
             title: 'tracekeeper.build_context_pack',
-            description: '[read-only | optional write] Build context pack from vault and optionally write a markdown artifact.',
+            description: '[read-only | optional write] Build a compact context pack from recall results. Writes an artifact only when write=true.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2873,7 +2998,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.lint',
             title: 'tracekeeper.lint',
-            description: '[read-only] Run lint checks across vault notes.',
+            description: '[read-only] Run the single vault check entry for structure, links, sources, claims, and graph health.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2900,7 +3025,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.finish_task',
             title: 'tracekeeper.finish_task',
-            description: '[low-risk write] Create a task session summary note under 00_tracekeeper/work/sessions.',
+            description: '[low-risk write] Call once at task closeout. Records the session and handles memory candidates according to memory rules.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -2985,7 +3110,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.distill_session',
             title: 'tracekeeper.distill_session',
-            description: '[low-risk write] Create a task session note and memory proposals from decisions/preferences.',
+            description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool for older session distillation flows.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -3036,7 +3161,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.write_context_pack',
             title: 'tracekeeper.write_context_pack',
-            description: '[low-risk write] Create a new context-pack note under 00_tracekeeper/work/context_packs.',
+            description: '[deprecated] Use tracekeeper.build_context_pack with write=true. Compatibility tool, low-risk write.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -3059,7 +3184,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.write_session_note',
             title: 'tracekeeper.write_session_note',
-            description: '[low-risk write] Create a new session note under 00_tracekeeper/work/sessions.',
+            description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool, low-risk write.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -3081,7 +3206,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.capture_source',
             title: 'tracekeeper.capture_source',
-            description: '[low-risk write] Capture source metadata/content under 01_knowledge/sources with mode control.',
+            description: '[low-risk write] Save user-provided source metadata or content under sources. Does not fetch external content.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -3114,7 +3239,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.propose_memory',
             title: 'tracekeeper.propose_memory',
-            description: '[low-risk write] Create a memory update according to Tracekeeper memory rules.',
+            description: '[low-risk write] Submit a memory update through Tracekeeper rules. Global memory stays review-gated by default.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -3257,6 +3382,7 @@ function callTool(name, rawParams, context = {}) {
             default:
                 assertUnreachable(requestName);
         }
+        toolResult = markDeprecatedToolResult(requestName, toolResult);
         status = isToolResultFailure(toolResult) ? 'failed' : 'success';
     }
     catch (error) {
@@ -3297,6 +3423,47 @@ function callTool(name, rawParams, context = {}) {
 }
 function toolResultWithError(value) {
     return toolResult(value);
+}
+function markDeprecatedToolResult(toolName, result) {
+    const replacement = DEPRECATED_TOOL_REPLACEMENTS[toolName];
+    if (!replacement || result.isError || !(0, protocol_1.isRecord)(result.structuredContent)) {
+        return result;
+    }
+    return toolResult({
+        ...result.structuredContent,
+        deprecated: true,
+        replacement_tool: replacement,
+    });
+}
+function buildRecommendedRecall(goal, projectHint) {
+    const scope = projectHint ? 'project' : 'global';
+    const args = {
+        query: goal,
+        scope,
+        max_items: 6,
+    };
+    if (projectHint) {
+        args.project_hint = projectHint;
+    }
+    return {
+        tool: 'tracekeeper.recall',
+        arguments: args,
+        reason: projectHint
+            ? 'Use project-scoped recall before reading individual notes.'
+            : 'Use global recall first, then narrow with project_hint when a project is known.',
+    };
+}
+function buildStartTaskNextActions(projectHint) {
+    const actions = [
+        'Call tracekeeper.recall before reading individual notes.',
+        'Use tracekeeper.read_note only when a recall excerpt is not enough.',
+        'Call tracekeeper.finish_task once at the end with decisions, lessons, and memory candidates.',
+    ];
+    if (projectHint) {
+        actions.unshift('Use scope="project" with the same project_hint for targeted recall.');
+        actions.splice(2, 0, 'Use scope="project_history" when continuity from earlier sessions is needed.');
+    }
+    return actions;
 }
 function handleStatus(rawArgs, context) {
     const vaultRoot = vaultRootFromArgs(rawArgs, context);
@@ -3388,6 +3555,8 @@ function handleStartTask(rawArgs, context) {
         recent_sessions: buildRecentSessions(scan.notes),
         user_preferences: buildUserPreferences(scan),
         recommended_next_tool: 'tracekeeper.recall',
+        recommended_recall: buildRecommendedRecall(goal, projectHint),
+        next_actions_for_agent: buildStartTaskNextActions(projectHint),
     };
 }
 function handleRecall(rawArgs, context) {
@@ -3432,15 +3601,7 @@ function handleRecall(rawArgs, context) {
         vault_root: vaultRoot,
         max_items: maxItems,
         matched_count: matches.length,
-        matches: matches.map((match) => ({
-            path: match.note.relativePath,
-            title: match.note.title,
-            type: match.note.type,
-            score: match.score,
-            raw_score: match.raw_score,
-            matched_tokens: match.matchedTokens,
-            score_reason: match.score_reason,
-        })),
+        matches: matches.map((match) => buildRecallEntry(match, scope)),
     };
 }
 function handleReadNote(rawArgs, context) {
@@ -3480,15 +3641,7 @@ function handleProjectContext(rawArgs, context) {
         max_items: maxItems,
         matched_count: matches.length,
         candidates: candidates,
-        entries: matches.map((match) => ({
-            path: match.note.relativePath,
-            title: match.note.title,
-            type: match.note.type,
-            score: match.score,
-            raw_score: match.raw_score,
-            matched_tokens: match.matchedTokens,
-            score_reason: match.score_reason,
-        })),
+        entries: matches.map((match) => buildRecallEntry(match, 'project')),
     };
 }
 function handleProjectHistory(rawArgs, context) {
@@ -3516,7 +3669,7 @@ function handleProjectHistory(rawArgs, context) {
         matched_count: matches.length,
         total_matches: sortedMatches.length,
         candidates,
-        entries: buildProjectHistoryEntries(matches),
+        entries: buildProjectHistoryEntries(matches, query),
     };
 }
 function handleListSourceRequests(rawArgs, context) {
@@ -4475,6 +4628,33 @@ function buildSessionNoteBodyWithCloseout(summary, outcomes, nextActions, decisi
     ].join('\n');
     return lines.trim();
 }
+function buildFinishTaskNextActions(reviewProposalMode, proposalResult, projectHint) {
+    const actions = [];
+    if (reviewProposalMode === 'off') {
+        actions.push('Task session was recorded; no memory suggestions or Review Queue proposals were created.');
+    }
+    if (reviewProposalMode === 'suggest') {
+        actions.push('Review suggested_memory_updates in this response; nothing was written to the Review Queue.');
+    }
+    if (reviewProposalMode === 'review_queue' || reviewProposalMode === 'auto_propose') {
+        if (proposalResult.proposals.length > 0) {
+            actions.push('Review queued proposals in Obsidian before durable memory writeback.');
+        }
+        if (proposalResult.autoAppliedMemoryUpdates.length > 0) {
+            actions.push('Project memory was auto-saved as append-only project memory according to the user rule.');
+        }
+        if (proposalResult.hasMissingWikiBridge) {
+            actions.push('Some project memory candidates need a related_wiki bridge before automatic project memory save.');
+        }
+        if (actions.length === 0) {
+            actions.push('Task session was recorded; no closeout memory candidates were produced.');
+        }
+    }
+    if (projectHint) {
+        actions.push('For the next related session, call tracekeeper.recall with scope="project_history" and the same project_hint.');
+    }
+    return actions;
+}
 function buildSessionNoteBodyWithDistill(summary, outcomes, nextActions, decisions, possiblePreferences) {
     const lines = [
         '# Distilled Session Note',
@@ -4647,6 +4827,7 @@ function handleFinishTask(rawArgs, context) {
         architecture_status: architectureStatus.architecture_status,
         missing_graph_bridges: architectureStatus.missing_graph_bridges,
         missing_wiki_bridge: proposalResult.hasMissingWikiBridge,
+        next_actions_for_agent: buildFinishTaskNextActions(reviewProposalMode, proposalResult, projectHint),
     };
     if (reviewProposalMode === 'auto_propose' || reviewProposalMode === 'review_queue') {
         response.proposal_count = proposalResult.proposals.length;

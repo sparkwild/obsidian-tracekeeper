@@ -9,6 +9,7 @@ Tracekeeper is local-vault first. Agents may read scoped context, record bounded
 1. Call `tracekeeper.start_task` with the current goal.
 2. Include `project_hint` when the project is known.
 3. Keep the returned `task_id` and reuse it for later context, closeout, and proposal calls.
+4. Follow `recommended_recall` / `next_actions_for_agent` when present instead of guessing the next tool.
 
 ## Project-Scoped Recall
 
@@ -27,6 +28,8 @@ Pass one or more scope hints when available:
 - `project_path`
 
 If the tool returns `uncertain: true`, inspect the returned candidates and narrow the next call. Do not load every project memory into a new task by default.
+
+Recall entries include a compact `excerpt`, `why_matched`, `matched_tokens`, score details, and `graph_links`. Use those fields first; call `tracekeeper.read_note` only when the excerpt is not enough.
 
 For cross-session continuity, pass the same project hint or repository path when starting and finishing related tasks. Project-history recall includes matching project notes, agent task records, and session notes linked to those tasks, so a new conversation can recover what happened in earlier sessions for the same project.
 
@@ -57,6 +60,8 @@ Set `review_proposal_mode` intentionally:
 
 `suggest` remains accepted for compatibility and returns `suggested_memory_updates` without creating Review Queue files.
 
+`finish_task` returns `next_actions_for_agent` so agents can tell whether closeout memory was ignored, suggested only, queued for review, or auto-saved as project memory.
+
 ## Review Boundary
 
 Review Queue proposals are candidates only. Approved proposal writeback still requires user review in Obsidian and then `tracekeeper.apply_approved_writeback`.
@@ -66,6 +71,8 @@ Agents should not bypass this flow, edit protected long-term memory directly, or
 Project auto-save targets `01_knowledge/memory/projects/<project>/memory.md` and adds graph links to related Wiki and source notes. Agents should not supply arbitrary durable memory paths.
 
 Use `tracekeeper.review_queue` to inspect pending or approved proposals. It is read-only. Only `tracekeeper.apply_approved_writeback` can apply approved content to target notes.
+
+Compatibility tools such as `project_context`, `project_history`, and `list_review_queue` are not public tools. Use `recall`, `review_queue`, `source_request`, and `build_context_pack` instead.
 
 ## Vault Checks
 

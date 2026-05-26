@@ -121,18 +121,20 @@ Current MCP tools:
 
 | Tool | Permission | Notes |
 | --- | --- | --- |
-| `tracekeeper.status` | `read-only` | Scans vault summary counts. |
-| `tracekeeper.lint` | `read-only` | Runs vault checks, including note structure, links, source references, and graph health. |
-| `tracekeeper.recall` | `read-only` | Returns global, project-scoped, or project-history recall results. |
-| `tracekeeper.read_note` | `read-only` | Reads one vault-relative note. |
-| `tracekeeper.start_task` | `low-risk write` | Creates an active task record and returns a deterministic context summary. |
-| `tracekeeper.finish_task` | `low-risk write` | Writes a task session summary; `auto_propose` follows configured memory rules, while `review_queue` sends closeout memory candidates to Review Queue. |
-| `tracekeeper.build_context_pack` | `read-only` / `optional write` | Builds context and optionally writes a context-pack artifact. |
+| `tracekeeper.status` | `read-only` | Quick vault and service summary. |
+| `tracekeeper.lint` | `read-only` | Single check entry for structure, links, sources, claims, and graph health. |
+| `tracekeeper.recall` | `read-only` | First lookup tool for global, project, or project-history recall; returns excerpts and match reasons. |
+| `tracekeeper.read_note` | `read-only` | Reads one full note after recall excerpts are not enough. |
+| `tracekeeper.start_task` | `low-risk write` | Starts a bounded task record and returns the recommended recall step. |
+| `tracekeeper.finish_task` | `low-risk write` | Records task closeout and handles memory candidates according to memory rules. |
+| `tracekeeper.build_context_pack` | `read-only` / `optional write` | Builds compact context; writes an artifact only when requested. |
 | `tracekeeper.review_queue` | `read-only` | Lists pending proposals or approved writeback candidates. |
-| `tracekeeper.apply_approved_writeback` | `review-gated apply` | Applies only approved proposals. |
-| `tracekeeper.source_request` | `read-only` / `low-risk write` | Lists source-analysis requests or processes one existing request into records and proposals. |
-| `tracekeeper.capture_source` | `low-risk write` | Writes source metadata/content under source records. |
-| `tracekeeper.propose_memory` | `low-risk write` | Writes a memory update according to configured memory rules. |
+| `tracekeeper.apply_approved_writeback` | `review-gated apply` | Applies only user-approved proposals. |
+| `tracekeeper.source_request` | `read-only` / `low-risk write` | Lists source requests or analyzes one existing request. |
+| `tracekeeper.capture_source` | `low-risk write` | Saves user-provided source metadata/content; does not fetch external content. |
+| `tracekeeper.propose_memory` | `low-risk write` | Submits a memory update through memory rules. |
+
+`tools/list` exposes only the tools above. Compatibility tools remain callable for older clients but are marked deprecated and should not be selected by agents.
 
 ## Cross-agent MCP Workflow (Practical)
 
@@ -146,6 +148,7 @@ Use this flow for multi-agent safety:
 	- Start from `related_projects` returned by `start_task`.
 	- Prefer `tracekeeper.recall` with `scope: "project"` for targeted recall and `scope: "project_history"` for recent project continuity.
 	- Pass `project_hint`, `project_id`, `repo_path`, `repo`, or `project_path` when the agent knows the current project.
+	- Use recall `excerpt`, `why_matched`, `matched_tokens`, and `graph_links` before calling `tracekeeper.read_note`.
 	- If the project scope is uncertain, inspect the returned candidates instead of loading unrelated project memory.
 	- Use `project_hint` on closeout/proposal calls to keep generated notes and proposals linked to the project.
 	- Project-history recall includes project notes, matching agent task records, and session notes linked through those task records, which supports multiple conversations under the same project.
