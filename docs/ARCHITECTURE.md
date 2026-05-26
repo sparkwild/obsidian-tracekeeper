@@ -21,6 +21,59 @@ AI assistant
 | Obsidian plugin | Shows activity, review queue, audit, permission policy, runtime status, and AI tool connection setup. |
 | Obsidian vault | Stores durable notes, review queue items, source records, session notes, context packs, and audit logs. |
 
+## Unified Knowledge Architecture
+
+Tracekeeper treats memory and wiki as one Agent Knowledge System. Memory captures what happened and what should be remembered; wiki pages organize reusable topics. Durable memory must link into wiki topics with body wikilinks, and wiki hubs should link back to related memory so Obsidian graph and agent recall see the same knowledge shape.
+
+New vault initialization creates only this top-level layout:
+
+```text
+00_tracekeeper/
+  control/
+  inbox/
+    agent_requests/
+    review_queue/
+  work/
+    tasks/
+    sessions/
+    context_packs/
+    source_analysis/
+01_knowledge/
+  index.md
+  memory/
+    index.md
+    global/
+    projects/
+      index.md
+  wiki/
+    index.md
+    hubs/
+      index.md
+    concepts/
+    claims/
+    guides/
+    references/
+  sources/
+    index.md
+    web/
+    files/
+    transcripts/
+    attachments/
+02_archive/
+  review_queue/
+```
+
+Legacy folders such as `00_control`, `01_inbox`, `02_timeline`, `03_sources`, `04_memory`, `05_projects`, `06_outputs`, and `07_archive` are read for compatibility and reported by lint. New writes should not target them.
+
+Stable write rules:
+
+- Project memory writes target `01_knowledge/memory/projects/<project>/memory.md`.
+- Global memory remains review-gated by default.
+- Project auto-save is append-only and requires at least one valid `01_knowledge/wiki/...` bridge.
+- Durable memory sections include `Graph links` with explicit wikilinks.
+- Wiki proposals should include `Related memory` so topic pages connect back to memory lines.
+- YAML `related`, `sources`, `related_wiki`, and `related_memory` entries should be mirrored by body wikilinks instead of staying metadata-only.
+
 ## Obsidian Plugin Surface
 
 The Obsidian plugin is the human review and governance surface. It provides these user-facing views:
@@ -31,7 +84,7 @@ The Obsidian plugin is the human review and governance surface. It provides thes
 - Audit Log
 - Runtime Status
 - Permission Policy
-- Agent Connections
+- Agent configuration in settings
 - Graph Health
 
 The plugin may provide review actions:
@@ -48,13 +101,13 @@ The plugin settings are intentionally user-controlled:
 - MCP Runtime port
 - local connection token rotation
 - graph health profile (`off`, `advisory`, or `strict`)
-- agent scope label
+- memory rules for global, project, and task-closeout updates
 
 The plugin is desktop-only because it hosts a local Streamable HTTP Runtime on `127.0.0.1`. The default endpoint is `http://127.0.0.1:58437/mcp`, and generated client configuration includes a local token. The Runtime starts with Obsidian and stops when Obsidian or the plugin closes.
 
 ## Runtime And Permissions
 
-Tracekeeper MCP is read-only by default and exposes controlled writes only for bounded working records. Long-term memory writeback is review-gated.
+Tracekeeper MCP is read-only by default and exposes controlled writes only for bounded working records. Global long-term memory writeback is review-gated by default; project memory may use the user-controlled append-only auto-save rule.
 
 | Level | Meaning |
 | --- | --- |
@@ -69,26 +122,17 @@ Current MCP tools:
 | Tool | Permission | Notes |
 | --- | --- | --- |
 | `tracekeeper.status` | `read-only` | Scans vault summary counts. |
-| `tracekeeper.graph_health` | `read-only` | Reports wikilink graph metrics, graph profile issues, and hub recommendations. |
-| `tracekeeper.start_task` | `low-risk write` | Creates an active task record and returns a deterministic context summary. |
-| `tracekeeper.recall` | `read-only` | Returns matching vault notes for a query. |
-| `tracekeeper.project_context` | `read-only` | Returns project-scoped recall results using project, repo, or path hints. |
-| `tracekeeper.project_history` | `read-only` | Returns recent project-scoped notes, sessions, and task records. |
+| `tracekeeper.lint` | `read-only` | Runs vault checks, including note structure, links, source references, and graph health. |
+| `tracekeeper.recall` | `read-only` | Returns global, project-scoped, or project-history recall results. |
 | `tracekeeper.read_note` | `read-only` | Reads one vault-relative note. |
-| `tracekeeper.list_review_queue` | `read-only` | Reads pending proposals. |
-| `tracekeeper.list_source_requests` | `read-only` | Reads pending source-analysis requests. |
-| `tracekeeper.list_approved_writebacks` | `read-only` | Lists approved proposals eligible for writeback. |
-| `tracekeeper.audit_recent` | `read-only` | Reads recent audit entries. |
-| `tracekeeper.lint` | `read-only` | Runs vault checks and returns issues. |
+| `tracekeeper.start_task` | `low-risk write` | Creates an active task record and returns a deterministic context summary. |
+| `tracekeeper.finish_task` | `low-risk write` | Writes a task session summary; `auto_propose` follows configured memory rules, while `review_queue` sends closeout memory candidates to Review Queue. |
 | `tracekeeper.build_context_pack` | `read-only` / `optional write` | Builds context and optionally writes a context-pack artifact. |
-| `tracekeeper.finish_task` | `low-risk write` | Writes a task session summary and can create Review Queue proposals when `review_proposal_mode` is enabled. |
-| `tracekeeper.distill_session` | `low-risk write` | Writes a session note and review proposals. |
-| `tracekeeper.write_context_pack` | `low-risk write` | Writes under context pack outputs only. |
-| `tracekeeper.write_session_note` | `low-risk write` | Writes under session notes only. |
-| `tracekeeper.capture_source` | `low-risk write` | Writes source metadata/content under source records. |
-| `tracekeeper.propose_memory` | `low-risk write` | Writes a Review Queue proposal, not durable memory directly. |
-| `tracekeeper.analyze_source_request` | `low-risk write` | Processes an existing source request into records and proposals. |
+| `tracekeeper.review_queue` | `read-only` | Lists pending proposals or approved writeback candidates. |
 | `tracekeeper.apply_approved_writeback` | `review-gated apply` | Applies only approved proposals. |
+| `tracekeeper.source_request` | `read-only` / `low-risk write` | Lists source-analysis requests or processes one existing request into records and proposals. |
+| `tracekeeper.capture_source` | `low-risk write` | Writes source metadata/content under source records. |
+| `tracekeeper.propose_memory` | `low-risk write` | Writes a memory update according to configured memory rules. |
 
 ## Cross-agent MCP Workflow (Practical)
 
@@ -99,21 +143,26 @@ Use this flow for multi-agent safety:
    - Save the returned `task_id`.
    - Use the same `task_id` for later closeout and proposal calls.
 2. Project-scoped recall
-   - Start from `related_projects` returned by `start_task`.
-   - Prefer `tracekeeper.project_context` for targeted recall and `tracekeeper.project_history` for recent project continuity.
-   - Pass `project_hint`, `project_id`, `repo_path`, `repo`, or `project_path` when the agent knows the current project.
-   - If the project scope is uncertain, inspect the returned candidates instead of loading unrelated project memory.
-   - Use `project_hint` on closeout/proposal calls to keep generated notes and proposals linked to the project.
+	- Start from `related_projects` returned by `start_task`.
+	- Prefer `tracekeeper.recall` with `scope: "project"` for targeted recall and `scope: "project_history"` for recent project continuity.
+	- Pass `project_hint`, `project_id`, `repo_path`, `repo`, or `project_path` when the agent knows the current project.
+	- If the project scope is uncertain, inspect the returned candidates instead of loading unrelated project memory.
+	- Use `project_hint` on closeout/proposal calls to keep generated notes and proposals linked to the project.
+	- Project-history recall includes project notes, matching agent task records, and session notes linked through those task records, which supports multiple conversations under the same project.
 3. Task closeout
    - Use `tracekeeper.finish_task` for closure summary.
    - Add `decisions`, `solution_changes`, `lessons`, `preferences`, `next_actions`, or `memory_candidates` when the task produced durable knowledge.
-   - Set `review_proposal_mode` to `suggest` or `auto_propose` when those closeout fields should create Review Queue proposals.
+   - Set `review_proposal_mode` to `auto_propose`, `review_queue`, or `off` intentionally.
+   - `auto_propose` follows the configured memory rules; `review_queue` sends closeout memory candidates to Review Queue; `off` ignores closeout memory candidates.
 4. Review Queue proposals
-   - Proposals enter Review Queue when an agent calls `tracekeeper.propose_memory`, `tracekeeper.distill_session`, or `tracekeeper.finish_task` with proposal mode enabled.
-   - In Obsidian, review proposals and approve, reject, defer, or request revisions.
+	- Global memory enters Review Queue by default when an agent calls `tracekeeper.propose_memory` or `tracekeeper.finish_task` with `review_proposal_mode: "auto_propose"`.
+	- Closeout memory enters Review Queue when an agent calls `tracekeeper.finish_task` with `review_proposal_mode: "review_queue"`.
+	- Project memory can auto-save as append-only project memory when the user sets the project memory rule to automatic.
+	- Use `tracekeeper.review_queue` to inspect pending or approved proposals.
+	- In Obsidian, review proposals and approve, reject, defer, or request revisions.
 5. Durability rule
-   - Tracekeeper never writes durable memory automatically.
-   - Durable writeback only runs through `tracekeeper.apply_approved_writeback` after Review Queue approval.
+   - Global durable writeback runs through `tracekeeper.apply_approved_writeback` after Review Queue approval by default.
+   - Project memory auto-save is user-controlled, append-only, and limited to project memory targets.
 
 The MCP server must not expose tools that:
 
@@ -122,8 +171,8 @@ The MCP server must not expose tools that:
 - modify Obsidian configuration folders
 - delete notes
 - bulk rewrite the vault
-- silently write protected long-term memory
-- bypass Review Queue approval
+- silently write protected long-term memory outside the configured project auto-save rule
+- bypass Review Queue approval for queued global memory
 
 The Runtime refuses to start without a token by default. The only exception is the explicit development-only flag used by standalone local checks. Production Obsidian-hosted Runtime instances must use the generated local token.
 
@@ -143,7 +192,7 @@ When users want Tracekeeper to help improve graph structure, the Obsidian Graph 
 
 ## Agent Client Configuration
 
-The Agent Connections view helps users connect AI tools to Tracekeeper without exposing repository checkout paths or developer machine details.
+The Tracekeeper settings tab helps users connect AI tools to Tracekeeper without exposing repository checkout paths or developer machine details.
 
 Principles:
 

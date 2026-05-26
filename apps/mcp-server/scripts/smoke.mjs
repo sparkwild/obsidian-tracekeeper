@@ -24,7 +24,15 @@ function decodeResponse(line) {
 }
 
 function readAuditLog(vaultRoot) {
-	return fs.readFileSync(path.join(vaultRoot, '00_control/audit_log.md'), 'utf8');
+	return fs.readFileSync(path.join(vaultRoot, '00_tracekeeper/control/audit_log.md'), 'utf8');
+}
+
+function countReviewQueueFiles(vaultRoot) {
+	const queuePath = path.join(vaultRoot, '00_tracekeeper', 'inbox', 'review_queue');
+	if (!fs.existsSync(queuePath)) {
+		return 0;
+	}
+	return fs.readdirSync(queuePath).filter((entry) => entry.endsWith('.md')).length;
 }
 
 function hasSectionWithValues(log, linesToMatch) {
@@ -64,12 +72,13 @@ function assertContainsNoSensitiveText(log, values) {
 }
 
 class McpTestClient {
-	constructor(vaultRoot, vaultConfigDir) {
+	constructor(vaultRoot, vaultConfigDir, options = {}) {
 		this.vaultRoot = vaultRoot;
 		this.vaultConfigDir = vaultConfigDir;
 		this.token = 'tracekeeper-smoke-token';
 		this.nextId = 1;
 		this.sessionId = '';
+		this.options = options;
 	}
 
 	async start() {
@@ -79,6 +88,7 @@ class McpTestClient {
 			token: this.token,
 			defaultVaultRoot: this.vaultRoot,
 			vaultConfigDir: this.vaultConfigDir,
+			memoryRules: this.options.memoryRules,
 		});
 		const status = await this.runtime.start();
 		this.endpoint = `${status.endpoint}?token=${encodeURIComponent(this.token)}`;
@@ -193,14 +203,15 @@ function ensureToolNames(result, names) {
 	for (const expected of names) {
 		assert.ok(toolList.includes(expected), `Missing MCP tool: ${expected}`);
 	}
+	return toolList;
 }
 
 async function main() {
 	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-mcp-smoke-'));
 	const vaultRoot = path.join(tempRoot, 'vault');
 	const vaultConfigDir = 'vault-config';
-	const fixturePath = path.join(vaultRoot, '01_inbox', 'agent_requests', 'local-source-request.md');
-	const lintFixturePath = path.join(vaultRoot, '04_projects', 'demo', 'smoke-lint-fixture.md');
+	const fixturePath = path.join(vaultRoot, '00_tracekeeper', 'inbox', 'agent_requests', 'local-source-request.md');
+	const lintFixturePath = path.join(vaultRoot, '01_knowledge', 'wiki', 'concepts', 'smoke-lint-fixture.md');
 	const client = new McpTestClient(vaultRoot, vaultConfigDir);
 
 	try {
@@ -224,13 +235,42 @@ async function main() {
 
 		fs.mkdirSync(vaultRoot, { recursive: true });
 		writeNote(vaultRoot, `${vaultConfigDir}/config.md`, '# Config\n');
-		writeNote(vaultRoot, '00_control/system.md', '# System\n');
-		writeNote(vaultRoot, '00_control/audit_log.md', '# Audit Log\n');
-		writeNote(vaultRoot, '04_projects/demo/project_overview.md', '# Demo Project\n\nInitial project memory.');
-		writeNote(vaultRoot, '01_inbox/agent_requests/local-source-request.md', [
+		writeNote(vaultRoot, '00_tracekeeper/control/system.md', '# System\n');
+		writeNote(vaultRoot, '00_tracekeeper/control/audit_log.md', '# Audit Log\n');
+		writeNote(vaultRoot, '01_knowledge/index.md', '# Knowledge Index\n\n- [[memory/index]]\n- [[wiki/index]]\n- [[sources/index]]\n');
+		writeNote(vaultRoot, '01_knowledge/memory/index.md', '# Memory Index\n\n- [[projects/index]]\n');
+		writeNote(vaultRoot, '01_knowledge/memory/projects/index.md', '# Project Memory Index\n\n- [[demo/index]]\n');
+		writeNote(vaultRoot, '01_knowledge/wiki/index.md', '# Wiki Index\n\n- [[hubs/index]]\n- [[concepts/smoke-lint-fixture]]\n');
+		writeNote(vaultRoot, '01_knowledge/wiki/hubs/index.md', '# Wiki Hubs\n\n- [[smoke-hub]]\n');
+		writeNote(vaultRoot, '01_knowledge/sources/index.md', '# Sources Index\n\n- [[local-source]]\n');
+		writeNote(vaultRoot, '01_knowledge/memory/projects/demo/index.md', [
+			'---',
+			'type: project_memory_index',
+			'project_hint: demo',
+			'related_wiki: [01_knowledge/wiki/hubs/smoke-hub.md]',
+			'---',
+			'# Demo Project Memory',
+			'',
+			'## Related wiki',
+			'- [[01_knowledge/wiki/hubs/smoke-hub|Smoke Graph Hub]]',
+		].join('\n'));
+		writeNote(vaultRoot, '01_knowledge/memory/projects/demo/memory.md', [
+			'---',
+			'type: memory',
+			'project_hint: demo',
+			'related_wiki: [01_knowledge/wiki/hubs/smoke-hub.md]',
+			'---',
+			'# Demo Project Memory Log',
+			'',
+			'## Graph links',
+			'- [[01_knowledge/wiki/hubs/smoke-hub|Smoke Graph Hub]]',
+			'',
+			'Initial project memory.',
+		].join('\n'));
+		writeNote(vaultRoot, '00_tracekeeper/inbox/agent_requests/local-source-request.md', [
 			'---',
 			'type: agent-request',
-			'source: 03_sources/local-source.md',
+			'source: 01_knowledge/sources/local-source.md',
 			'sourceKind: local_file',
 			'status: pending',
 			'purpose: smoke test',
@@ -241,13 +281,13 @@ async function main() {
 			'Source request body used for deterministic smoke flow.',
 			'',
 		].join('\n'));
-		writeNote(vaultRoot, '01_inbox/review_queue/approved-writeback.md', [
+		writeNote(vaultRoot, '00_tracekeeper/inbox/review_queue/approved-writeback.md', [
 			'---',
 			'type: memory-proposal',
 			'proposal_id: prop_smoke_apply',
 			'proposal_kind: project_update',
 			'approval_status: approved',
-			'target_note: 04_projects/demo/project_overview.md',
+			'target_note: 01_knowledge/memory/projects/demo/memory.md',
 			'risk_level: medium',
 			'---',
 			'',
@@ -258,16 +298,19 @@ async function main() {
 			'- Runtime-approved memory from smoke test.',
 			'',
 		].join('\n'));
-		writeNote(vaultRoot, '03_sources/local-source.md', '# Source\n\nThis is source content for mcp smoke source-analysis test.');
-		writeNote(vaultRoot, '04_projects/demo/smoke-hub.md', [
+		writeNote(vaultRoot, '01_knowledge/sources/local-source.md', '# Source\n\nThis is source content for mcp smoke source-analysis test.');
+		writeNote(vaultRoot, '01_knowledge/wiki/hubs/smoke-hub.md', [
 			'# Smoke Graph Hub',
-			'[[project_overview]]',
-			'[[smoke-lint-fixture]]',
+			'',
+			'## Related memory',
+			'- [[01_knowledge/memory/projects/demo/memory|Demo memory]]',
+			'',
+			'[[01_knowledge/wiki/concepts/smoke-lint-fixture|Smoke Lint Fixture]]',
 			'',
 		].join('\n'));
-		writeNote(vaultRoot, '04_projects/demo/smoke-lint-fixture.md', [
+		writeNote(vaultRoot, '01_knowledge/wiki/concepts/smoke-lint-fixture.md', [
 			'# Smoke Lint Fixture',
-			'This note references [[smoke_missing_page]] and [[project_overview]] for basename resolution.',
+			'This note references [[smoke_missing_page]] and [[01_knowledge/memory/projects/demo/memory|demo memory]] for path resolution.',
 			'',
 			'',
 			'> [!claim]',
@@ -301,28 +344,36 @@ async function main() {
 		assert.ok(hasSectionWithValues(initAudit, ['- transport: "streamable-http"']));
 
 		const tools = await client.call('tools/list');
-		ensureToolNames(tools, [
+		const listedTools = ensureToolNames(tools, [
 			'tracekeeper.status',
-			'tracekeeper.graph_health',
-			'tracekeeper.start_task',
-			'tracekeeper.recall',
-			'tracekeeper.project_context',
-			'tracekeeper.project_history',
-			'tracekeeper.read_note',
-			'tracekeeper.list_review_queue',
-			'tracekeeper.list_approved_writebacks',
-			'tracekeeper.audit_recent',
-			'tracekeeper.write_context_pack',
-			'tracekeeper.build_context_pack',
 			'tracekeeper.lint',
+			'tracekeeper.recall',
+			'tracekeeper.read_note',
+			'tracekeeper.start_task',
 			'tracekeeper.finish_task',
-			'tracekeeper.distill_session',
-			'tracekeeper.write_session_note',
+			'tracekeeper.build_context_pack',
+			'tracekeeper.review_queue',
+			'tracekeeper.apply_approved_writeback',
+			'tracekeeper.source_request',
 			'tracekeeper.capture_source',
 			'tracekeeper.propose_memory',
-			'tracekeeper.analyze_source_request',
-			'tracekeeper.apply_approved_writeback',
 		]);
+		assert.equal(listedTools.length, 12, 'tools/list should expose only the reduced public toolset');
+		for (const hiddenTool of [
+			'tracekeeper.graph_health',
+			'tracekeeper.project_context',
+			'tracekeeper.project_history',
+			'tracekeeper.list_review_queue',
+			'tracekeeper.list_source_requests',
+			'tracekeeper.list_approved_writebacks',
+			'tracekeeper.audit_recent',
+			'tracekeeper.distill_session',
+			'tracekeeper.write_context_pack',
+			'tracekeeper.write_session_note',
+			'tracekeeper.analyze_source_request',
+		]) {
+			assert.equal(listedTools.includes(hiddenTool), false, `Deprecated MCP tool should not be public: ${hiddenTool}`);
+		}
 
 		const resources = await client.call('resources/list');
 		assert.ok((buildStructured(resources).resources || []).length > 0, 'resources/list should return resources');
@@ -405,10 +456,10 @@ async function main() {
 
 		const readNote = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.read_note',
-			arguments: { path: '00_control/system.md' },
+			arguments: { path: '00_tracekeeper/control/system.md' },
 		}));
 		assert.equal(readNote.ok, true);
-		assert.equal(readNote.path, '00_control/system.md');
+		assert.equal(readNote.path, '00_tracekeeper/control/system.md');
 		const afterReadAudit = readAuditLog(vaultRoot);
 		assertToolCallEvent(afterReadAudit, 'tracekeeper.read_note', 'success');
 
@@ -434,6 +485,7 @@ async function main() {
 				password: `pwd_${sensitiveText}`,
 				cookie: `cookie=${sensitiveText}`,
 				token: `token_${sensitiveText}`,
+				project_hint: 'demo',
 			},
 		}));
 		assert.equal(startTask.ok, true);
@@ -445,6 +497,7 @@ async function main() {
 		const activeTaskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
 		assert.ok(activeTaskText.includes('status: "active"'));
 		assert.ok(activeTaskText.includes(`task_id: "${taskId}"`));
+		assert.ok(activeTaskText.includes('project_hint: "demo"'));
 
 		const afterSensitiveAudit = readAuditLog(vaultRoot);
 		assertToolCallEvent(afterSensitiveAudit, 'tracekeeper.start_task', 'success');
@@ -507,7 +560,7 @@ async function main() {
 		assert.equal(buildContextWrite.ok, true);
 		assert.equal(buildContextWrite.read_only, false);
 		assert.ok(fs.existsSync(path.join(vaultRoot, buildContextWrite.artifact.path)));
-		assert.ok(buildContextWrite.artifact.path.startsWith('06_outputs/context_packs/'));
+		assert.ok(buildContextWrite.artifact.path.startsWith('00_tracekeeper/work/context_packs/'));
 		assert.ok(buildContextWrite.artifact.path.endsWith('.md'));
 		let taskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
 		assert.ok(taskText.includes(writeContext.path), 'task should reference written context pack');
@@ -520,6 +573,19 @@ async function main() {
 			},
 		}));
 		assert.equal(lintResult.ok, true);
+		const lintGraphHealth = lintResult.graph_health || lintResult.graph_health_summary;
+		assert.ok(lintGraphHealth, 'tracekeeper.lint should include graph health summary fields');
+		assert.equal(lintGraphHealth.profile, 'advisory');
+		assert.equal(lintGraphHealth.disabled, false);
+		assert.ok(Array.isArray(lintGraphHealth.profile_issues));
+		assert.equal(typeof lintGraphHealth.note_count, 'number');
+		assert.equal(typeof lintGraphHealth.wikilink_edge_count, 'number');
+		assert.equal(typeof lintGraphHealth.resolved_edge_count, 'number');
+		assert.equal(typeof lintGraphHealth.unresolved_edge_count, 'number');
+		assert.ok(Array.isArray(lintGraphHealth.hub_candidates));
+		assert.ok(Array.isArray(lintGraphHealth.only_inbound_nodes));
+		assert.ok(Array.isArray(lintGraphHealth.only_outbound_nodes));
+		assert.ok(Array.isArray(lintGraphHealth.isolated_nodes));
 		assert.equal(lintResult.profile, 'advisory');
 		assert.equal(lintResult.graph_profile_disabled, false);
 		assert.equal(Array.isArray(lintResult.profile_issues), true);
@@ -563,15 +629,21 @@ async function main() {
 		}));
 		assert.equal(finishTask.ok, true);
 		assert.equal(finishTask.read_only, false);
+		assert.equal(finishTask.review_proposal_mode, 'off');
+		assert.equal(finishTask.proposal_count, undefined);
+		assert.equal(finishTask.proposals, undefined);
+		assert.equal(finishTask.suggestion_count, undefined);
+		assert.equal(finishTask.suggested_memory_updates, undefined);
 		assert.ok(fs.existsSync(path.join(vaultRoot, finishTask.path)));
 		taskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
 		assert.ok(taskText.includes('status: completed') || taskText.includes('status: "completed"'));
 		assert.ok(taskText.includes(finishTask.path));
 
 		const projectContext = buildStructured(await client.call('tools/call', {
-			name: 'tracekeeper.project_context',
+			name: 'tracekeeper.recall',
 			arguments: {
 				query: 'project_overview',
+				scope: 'project',
 				project_hint: 'demo',
 				max_items: 5,
 			},
@@ -579,13 +651,16 @@ async function main() {
 		assert.equal(projectContext.ok, true);
 		assert.equal(projectContext.read_only, true);
 		assert.equal(projectContext.uncertain, false);
-		assert.ok(projectContext.entries.length >= 1);
-		assert.equal(projectContext.scope.project_hint, 'demo');
-		assert.ok(Array.isArray(projectContext.entries));
+		const projectContextEntries = projectContext.entries || projectContext.matches || [];
+		assert.ok(Array.isArray(projectContextEntries));
+		assert.ok(projectContextEntries.length >= 1);
+		assert.ok(projectContext.scope === 'project' || (projectContext.scope && projectContext.scope.scope === 'project'));
+		assert.equal(projectContext.scope?.project_hint || projectContext.project_hint || null, 'demo');
 
 		const projectHistory = buildStructured(await client.call('tools/call', {
-			name: 'tracekeeper.project_history',
+			name: 'tracekeeper.recall',
 			arguments: {
+				scope: 'project_history',
 				project_hint: 'demo',
 				max_items: 5,
 			},
@@ -593,28 +668,94 @@ async function main() {
 		assert.equal(projectHistory.ok, true);
 		assert.equal(projectHistory.read_only, true);
 		assert.equal(projectHistory.uncertain, false);
-		assert.ok(Array.isArray(projectHistory.entries));
-		assert.ok(projectHistory.entries.length >= 1);
+		const projectHistoryEntries = projectHistory.entries || projectHistory.matches || [];
+		assert.ok(Array.isArray(projectHistoryEntries));
+		assert.ok(projectHistoryEntries.length >= 1);
+		assert.ok(
+			projectHistoryEntries.some((entry) => entry.path === finishTask.path),
+			'project_history should include prior session notes linked through the project task'
+		);
+		assert.ok(projectHistory.scope === 'project_history' || (projectHistory.scope && projectHistory.scope.scope === 'project_history'));
 
-		const finishWithProposals = buildStructured(await client.call('tools/call', {
+		const queueCountBeforeSuggest = countReviewQueueFiles(vaultRoot);
+		const finishWithSuggestions = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.finish_task',
 			arguments: {
 				task_id: taskId,
-				summary: 'Smoke finish task with proposal modes.',
+				summary: 'Smoke finish task with suggestion mode.',
 				outcomes: ['Closeout proposal capture'],
 				next_actions: ['Verify memory proposals'],
 				decisions: ['Use project-scoped recall for context'],
 				solution_changes: ['Added finish_task closeout proposal flow'],
 				lessons: ['Prefer explicit session scope filtering'],
 				preferences: ['Favor local vault-first memory'],
-				memory_candidates: ['04_projects/demo/project_overview.md'],
+				memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
 				review_proposal_mode: 'suggest',
+			},
+		}));
+		assert.equal(finishWithSuggestions.ok, true);
+		assert.equal(finishWithSuggestions.read_only, false);
+		assert.equal(finishWithSuggestions.review_proposal_mode, 'suggest');
+		assert.equal(finishWithSuggestions.proposal_count, undefined);
+		assert.equal(finishWithSuggestions.proposals, undefined);
+		assert.equal(finishWithSuggestions.suggestion_count, 6);
+		assert.ok(Array.isArray(finishWithSuggestions.suggested_memory_updates));
+		assert.equal(finishWithSuggestions.suggested_memory_updates.length, 6);
+		assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeSuggest, 'suggest mode should not create Review Queue files');
+		const suggestionKinds = finishWithSuggestions.suggested_memory_updates.map((proposal) => proposal.kind).sort();
+		assert.ok(suggestionKinds.includes('task_decision'));
+		assert.ok(suggestionKinds.includes('solution_change'));
+		assert.ok(suggestionKinds.includes('lesson_learned'));
+		assert.ok(suggestionKinds.includes('user_preference'));
+		assert.ok(suggestionKinds.includes('project_next_action'));
+		assert.ok(suggestionKinds.includes('memory_candidate'));
+
+		const finishWithReviewQueue = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: {
+				task_id: `${taskId}-review`,
+				summary: 'Smoke finish task with review queue mode.',
+				outcomes: ['Closeout proposal review'],
+				next_actions: ['Review memory proposals'],
+				decisions: ['Use explicit review queue mode for closeout'],
+				solution_changes: ['Added review_queue closeout mode'],
+				lessons: ['Review mode should queue candidates'],
+				preferences: ['Keep review option user-visible'],
+				memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
+				review_proposal_mode: 'review_queue',
+			},
+		}));
+		assert.equal(finishWithReviewQueue.ok, true);
+		assert.equal(finishWithReviewQueue.read_only, false);
+		assert.equal(finishWithReviewQueue.review_proposal_mode, 'review_queue');
+		assert.equal(finishWithReviewQueue.suggestion_count, undefined);
+		assert.equal(finishWithReviewQueue.suggested_memory_updates, undefined);
+		assert.equal(finishWithReviewQueue.proposal_count, 6);
+		assert.equal(finishWithReviewQueue.auto_applied_count, 0);
+		for (const proposal of finishWithReviewQueue.proposals) {
+			assert.ok(fs.existsSync(path.join(vaultRoot, proposal.path)));
+		}
+
+		const finishWithProposals = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: {
+				task_id: taskId,
+				summary: 'Smoke finish task with auto proposal mode.',
+				outcomes: ['Closeout proposal capture'],
+				next_actions: ['Verify memory proposals'],
+				decisions: ['Use project-scoped recall for context'],
+				solution_changes: ['Added finish_task closeout proposal flow'],
+				lessons: ['Prefer explicit session scope filtering'],
+				preferences: ['Favor local vault-first memory'],
+				memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
+				review_proposal_mode: 'auto_propose',
 			},
 		}));
 		assert.equal(finishWithProposals.ok, true);
 		assert.equal(finishWithProposals.read_only, false);
-		assert.equal(finishWithProposals.review_proposal_mode, 'suggest');
-		assert.equal(typeof finishWithProposals.proposal_count, 'number');
+		assert.equal(finishWithProposals.review_proposal_mode, 'auto_propose');
+		assert.equal(finishWithProposals.suggestion_count, undefined);
+		assert.equal(finishWithProposals.suggested_memory_updates, undefined);
 		assert.equal(finishWithProposals.proposal_count, 6);
 		assert.ok(Array.isArray(finishWithProposals.proposals));
 		assert.equal(finishWithProposals.proposals.length, 6);
@@ -628,6 +769,29 @@ async function main() {
 		assert.ok(kinds.includes('user_preference'));
 		assert.ok(kinds.includes('project_next_action'));
 		assert.ok(kinds.includes('memory_candidate'));
+		const queueCountAfterAutoPropose = countReviewQueueFiles(vaultRoot);
+		const retryFinishWithProposals = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: {
+				task_id: taskId,
+				summary: 'Smoke finish task with auto proposal retry.',
+				outcomes: ['Closeout proposal capture'],
+				next_actions: ['Verify memory proposals'],
+				decisions: ['Use project-scoped recall for context'],
+				solution_changes: ['Added finish_task closeout proposal flow'],
+				lessons: ['Prefer explicit session scope filtering'],
+				preferences: ['Favor local vault-first memory'],
+				memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
+				review_proposal_mode: 'auto_propose',
+			},
+		}));
+		assert.equal(retryFinishWithProposals.proposal_count, 6);
+		assert.deepEqual(
+			retryFinishWithProposals.proposals.map((proposal) => proposal.path).sort(),
+			finishWithProposals.proposals.map((proposal) => proposal.path).sort(),
+			'auto_propose retry should reuse existing finish_task proposals'
+		);
+		assert.equal(countReviewQueueFiles(vaultRoot), queueCountAfterAutoPropose, 'auto_propose retry should not duplicate proposals');
 
 		const distillSession = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.distill_session',
@@ -670,7 +834,7 @@ async function main() {
 				proposal_kind: 'smoke_memory',
 				content: 'Smoke proposal content.',
 				evidence: 'smoke test',
-				target_note: '04_projects/demo/project_overview.md',
+				target_note: '01_knowledge/memory/projects/demo/memory.md',
 				risk_level: 'medium',
 				task_id: taskId,
 			},
@@ -678,10 +842,149 @@ async function main() {
 		assert.equal(proposedMemory.ok, true);
 		assert.ok(fs.existsSync(path.join(vaultRoot, proposedMemory.path)));
 
+		const autoMemoryClient = new McpTestClient(vaultRoot, vaultConfigDir, {
+			memoryRules: {
+				globalMemoryRule: 'review_queue',
+				projectMemoryRule: 'auto_write',
+				taskMemoryProposalMode: 'off',
+			},
+		});
+		try {
+			await autoMemoryClient.start();
+			await autoMemoryClient.call('initialize', {
+				protocolVersion: '2025-06-18',
+				capabilities: {},
+				clientInfo: {
+					name: 'tracekeeper-smoke-auto-memory',
+					version: '0.1.7',
+				},
+			});
+			const queueCountBeforeAutoMemory = countReviewQueueFiles(vaultRoot);
+			const autoMemory = buildStructured(await autoMemoryClient.call('tools/call', {
+				name: 'tracekeeper.propose_memory',
+				arguments: {
+					proposal_kind: 'project_update',
+					content: '- Auto-saved project memory from smoke test.',
+					evidence: 'smoke test',
+					risk_level: 'medium',
+					task_id: taskId,
+					project_hint: 'demo',
+					memory_scope: 'project',
+					related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
+					related_sources: ['01_knowledge/sources/local-source.md'],
+				},
+			}));
+			assert.equal(autoMemory.ok, true);
+			assert.equal(autoMemory.auto_applied, true);
+			assert.equal(autoMemory.path, '01_knowledge/memory/projects/demo/memory.md');
+			assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeAutoMemory);
+			assert.equal(Array.isArray(autoMemory.missing_graph_bridges), true);
+			assert.equal(autoMemory.missing_wiki_bridge, false);
+			const autoTargetText = fs.readFileSync(path.join(vaultRoot, '01_knowledge/memory/projects/demo/memory.md'), 'utf8');
+			assert.ok(autoTargetText.includes('Auto-saved project memory from smoke test.'));
+			assert.ok(autoTargetText.includes('content_signature:'));
+
+			const duplicateAutoMemory = buildStructured(await autoMemoryClient.call('tools/call', {
+				name: 'tracekeeper.propose_memory',
+				arguments: {
+					proposal_kind: 'project_update',
+					content: '- Auto-saved project memory from smoke test.',
+					evidence: 'smoke test',
+					risk_level: 'medium',
+					task_id: taskId,
+					project_hint: 'demo',
+					memory_scope: 'project',
+					related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
+					related_sources: ['01_knowledge/sources/local-source.md'],
+				},
+			}));
+			assert.equal(duplicateAutoMemory.ok, true);
+			assert.equal(duplicateAutoMemory.status, 'skipped');
+			assert.equal(duplicateAutoMemory.duplicate, true);
+			assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeAutoMemory);
+			const missingBridgeAutoMemory = buildStructured(await autoMemoryClient.call('tools/call', {
+				name: 'tracekeeper.propose_memory',
+				arguments: {
+					proposal_kind: 'project_update',
+					content: '- Missing wiki bridge path should fallback to review queue.',
+					evidence: 'smoke test',
+					risk_level: 'medium',
+					task_id: taskId,
+					project_hint: 'demo',
+					memory_scope: 'project',
+					related_wiki: ['nonexistent-wiki-note'],
+				},
+			}));
+			assert.equal(missingBridgeAutoMemory.ok, true);
+			assert.equal(missingBridgeAutoMemory.auto_applied, false);
+			assert.equal(missingBridgeAutoMemory.memory_rule, 'review_queue');
+			assert.equal(missingBridgeAutoMemory.missing_wiki_bridge, true);
+			assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeAutoMemory + 1);
+			assert.equal(fs.readFileSync(path.join(vaultRoot, missingBridgeAutoMemory.path), 'utf8').includes('related_wiki'), true);
+
+			const autoFinishQueueBefore = countReviewQueueFiles(vaultRoot);
+			const autoFinish = buildStructured(await autoMemoryClient.call('tools/call', {
+				name: 'tracekeeper.finish_task',
+				arguments: {
+					task_id: 'auto-memory-task',
+					summary: 'Smoke finish task with project auto memory.',
+					outcomes: ['Project memory auto-write validated'],
+					next_actions: ['Keep project memory scoped'],
+					decisions: ['Project memory can save without repeated manual review'],
+					solution_changes: ['Added project memory auto-save rule'],
+					lessons: ['Prefer project-scoped automatic memory for routine work'],
+					preferences: ['Keep global memory reviewed by default'],
+					memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
+					project_hint: 'demo',
+					review_proposal_mode: 'auto_propose',
+					memory_scope: 'project',
+					related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
+					related_sources: ['01_knowledge/sources/local-source.md'],
+				},
+			}));
+			assert.equal(autoFinish.ok, true);
+			assert.equal(autoFinish.review_proposal_mode, 'auto_propose');
+			assert.equal(autoFinish.proposal_count, 0);
+			assert.equal(autoFinish.auto_applied_count, 6);
+			assert.equal(countReviewQueueFiles(vaultRoot), autoFinishQueueBefore);
+			const autoProjectMemoryText = fs.readFileSync(path.join(vaultRoot, '01_knowledge/memory/projects/demo/memory.md'), 'utf8');
+			assert.ok(autoProjectMemoryText.includes('Project memory can save without repeated manual review'));
+			assert.ok(autoProjectMemoryText.includes('Keep global memory reviewed by default'));
+			assert.equal(autoFinish.architecture_status === 'healthy' || autoFinish.architecture_status === 'needs_attention', true);
+			assert.equal(Array.isArray(autoFinish.missing_graph_bridges), true);
+
+			const autoFinishBridgeFallback = buildStructured(await autoMemoryClient.call('tools/call', {
+				name: 'tracekeeper.finish_task',
+				arguments: {
+					task_id: 'auto-memory-task-no-bridge',
+					summary: 'Smoke finish task with missing wiki bridge.',
+					outcomes: ['Project finish should use review queue'],
+					next_actions: ['Review proposal candidates'],
+					decisions: ['Wiki bridge is required for project auto save'],
+					solution_changes: ['Added fallback behavior'],
+					lessons: ['Missing wiki bridge should force review queue'],
+					preferences: ['Prefer explicit review queue fallback'],
+					memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
+					project_hint: 'demo',
+					memory_scope: 'project',
+					related_wiki: ['missing-wiki-demo-note'],
+					related_sources: ['01_knowledge/sources/local-source.md'],
+					review_proposal_mode: 'auto_propose',
+				},
+			}));
+			assert.equal(autoFinishBridgeFallback.ok, true);
+			assert.equal(autoFinishBridgeFallback.proposal_count, 6);
+			assert.equal(autoFinishBridgeFallback.auto_applied_count, 0);
+			assert.equal(autoFinishBridgeFallback.missing_wiki_bridge, true);
+			await autoMemoryClient.deleteSession();
+		} finally {
+			await autoMemoryClient.close().catch(() => {});
+		}
+
 		const captureSource = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.capture_source',
 			arguments: {
-				source: '03_sources/local-source.md',
+				source: '01_knowledge/sources/local-source.md',
 				mode: 'local_copy',
 				content: '# Source\n\ncopied content.',
 				task_id: taskId,
@@ -708,10 +1011,23 @@ async function main() {
 		const afterFailureAudit = readAuditLog(vaultRoot);
 		assertToolCallEvent(afterFailureAudit, 'tracekeeper.write_context_pack', 'failed');
 
-		const analyze = buildStructured(await client.call('tools/call', {
-			name: 'tracekeeper.analyze_source_request',
+		const sourceRequestList = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.source_request',
 			arguments: {
-				request_path: '01_inbox/agent_requests/local-source-request.md',
+				action: 'list',
+				max_items: 10,
+			},
+		}));
+		assert.equal(sourceRequestList.ok, true);
+		const sourceRequestEntries = sourceRequestList.entries || sourceRequestList.requests || [];
+		assert.ok(Array.isArray(sourceRequestEntries));
+		assert.ok(sourceRequestEntries.some((entry) => entry.path === '00_tracekeeper/inbox/agent_requests/local-source-request.md'));
+
+		const analyze = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.source_request',
+			arguments: {
+				action: 'analyze',
+				request_path: '00_tracekeeper/inbox/agent_requests/local-source-request.md',
 				task_id: taskId,
 			},
 		}));
@@ -726,9 +1042,22 @@ async function main() {
 		assert.ok(taskText.includes(analyze.source_note.path), 'task should reference analyzed source note');
 		assert.ok(taskText.includes(analyze.report.path), 'task should reference analyzed source report');
 
+		const pendingReviewQueue = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.review_queue',
+			arguments: {
+				action: 'list_pending',
+				max_items: 20,
+			},
+		}));
+		assert.equal(pendingReviewQueue.ok, true);
+		assert.ok(Array.isArray(pendingReviewQueue.entries));
+
 		const approvedWritebacks = buildStructured(await client.call('tools/call', {
-			name: 'tracekeeper.list_approved_writebacks',
-			arguments: {},
+			name: 'tracekeeper.review_queue',
+			arguments: {
+				action: 'list_approved',
+				max_items: 20,
+			},
 		}));
 		assert.equal(approvedWritebacks.ok, true);
 		assert.equal(approvedWritebacks.count, 1);
@@ -744,7 +1073,7 @@ async function main() {
 		}));
 		assert.equal(dryRunApply.ok, true);
 		assert.equal(dryRunApply.read_only, true);
-		assert.equal(dryRunApply.target_note, '04_projects/demo/project_overview.md');
+		assert.equal(dryRunApply.target_note, '01_knowledge/memory/projects/demo/memory.md');
 
 		const applied = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.apply_approved_writeback',
@@ -755,22 +1084,22 @@ async function main() {
 		}));
 		assert.equal(applied.ok, true);
 		assert.equal(applied.status, 'applied');
-		const targetText = fs.readFileSync(path.join(vaultRoot, '04_projects/demo/project_overview.md'), 'utf8');
+		const targetText = fs.readFileSync(path.join(vaultRoot, '01_knowledge/memory/projects/demo/memory.md'), 'utf8');
 		assert.ok(targetText.includes('## Approved Writeback: prop_smoke_apply'));
 		assert.ok(targetText.includes('Runtime-approved memory from smoke test.'));
-		const proposalText = fs.readFileSync(path.join(vaultRoot, '01_inbox/review_queue/approved-writeback.md'), 'utf8');
+		const proposalText = fs.readFileSync(path.join(vaultRoot, '00_tracekeeper/inbox/review_queue/approved-writeback.md'), 'utf8');
 		assert.ok(proposalText.includes('approval_status: applied'));
 		assert.ok(proposalText.includes('status: applied'));
 		taskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
-		assert.ok(taskText.includes('04_projects/demo/project_overview.md'), 'task should reference applied writeback target');
+		assert.ok(taskText.includes('01_knowledge/memory/projects/demo/memory.md'), 'task should reference applied writeback target');
 
-		writeNote(vaultRoot, '01_inbox/review_queue/approved-secret-writeback.md', [
+		writeNote(vaultRoot, '00_tracekeeper/inbox/review_queue/approved-secret-writeback.md', [
 			'---',
 			'type: memory-proposal',
 			'proposal_id: prop_secret_apply',
 			'proposal_kind: project_update',
 			'approval_status: approved',
-			'target_note: 04_projects/demo/project_overview.md',
+			'target_note: 01_knowledge/memory/projects/demo/memory.md',
 			'risk_level: medium',
 			'---',
 			'',

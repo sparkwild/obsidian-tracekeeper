@@ -5,4 +5,5 @@ export * from './lint';
 export * from './context-pack';
 export * from './safety';
 export * from './graph-health';
+export * from './knowledge-architecture';
 export * from './source-analysis';

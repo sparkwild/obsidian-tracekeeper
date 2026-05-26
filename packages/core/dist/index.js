@@ -21,4 +21,5 @@ __exportStar(require("./lint"), exports);
 __exportStar(require("./context-pack"), exports);
 __exportStar(require("./safety"), exports);
 __exportStar(require("./graph-health"), exports);
+__exportStar(require("./knowledge-architecture"), exports);
 __exportStar(require("./source-analysis"), exports);

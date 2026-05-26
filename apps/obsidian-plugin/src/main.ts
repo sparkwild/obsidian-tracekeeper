@@ -21,6 +21,28 @@ import {
 	type RuntimeState,
 } from '../../mcp-server/src/http-runtime';
 import { toolDefinitions } from '../../mcp-server/src/tools';
+import {
+	ARCHIVE_REVIEW_QUEUE_DIR,
+	KNOWLEDGE_INDEX_PATH,
+	KNOWLEDGE_MEMORY_INDEX_PATH,
+	KNOWLEDGE_PROJECTS_INDEX_PATH,
+	KNOWLEDGE_SOURCES_DIR,
+	KNOWLEDGE_SOURCES_INDEX_PATH,
+	KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
+	KNOWLEDGE_WIKI_INDEX_PATH,
+	REQUIRED_KNOWLEDGE_DIRECTORIES,
+	TRACEKEEPER_AGENT_REQUESTS_DIR,
+	TRACEKEEPER_AUDIT_DIR,
+	TRACEKEEPER_AUDIT_LOG_PATH,
+	TRACEKEEPER_CONTEXT_PACKS_DIR,
+	TRACEKEEPER_CONTROL_DIR,
+	TRACEKEEPER_DASHBOARDS_DIR,
+	TRACEKEEPER_MEMORY_POLICY_PATH,
+	TRACEKEEPER_PERMISSIONS_PATH,
+	TRACEKEEPER_REVIEW_QUEUE_DIR,
+	TRACEKEEPER_SYSTEM_PATH,
+	TRACEKEEPER_TASKS_DIR,
+} from '../../../packages/core/dist/index';
 
 const TRACEKEEPER_ACTIVITY_VIEW = 'tracekeeper-activity';
 const TRACEKEEPER_SOURCE_STATUS_VIEW = 'tracekeeper-source-status';
@@ -33,29 +55,55 @@ const TRACEKEEPER_GRAPH_HEALTH_VIEW = 'tracekeeper-graph-health';
 const LEGACY_AGENT_CONNECTIONS_VIEW = 'tracekeeper-agent-connections';
 const CONTROL_FILES: Array<{ path: string; content: string }> = [
 	{
-		path: '00_control/system.md',
+		path: TRACEKEEPER_SYSTEM_PATH,
 		content: '# System Control\n\nObsidian-native memory system control defaults for Tracekeeper.\n',
 	},
 	{
-		path: '00_control/memory_policy.md',
+		path: TRACEKEEPER_MEMORY_POLICY_PATH,
 		content: '# Memory Policy\n\n- Writing is permissioned.\n- Vault scope: vault-root only.\n',
 	},
 	{
-		path: '00_control/permissions.md',
+		path: TRACEKEEPER_PERMISSIONS_PATH,
 		content: '# Permissions\n\n- Default: read-only for automation.\n- User confirmation required for memory writes.\n',
 	},
 ];
+const KNOWLEDGE_ENTRY_FILES: Array<{ path: string; content: string }> = [
+	{
+		path: KNOWLEDGE_INDEX_PATH,
+		content: '# Knowledge Index\n\n- [[memory/index|Memory]]\n- [[wiki/index|Wiki]]\n- [[sources/index|Sources]]\n',
+	},
+	{
+		path: KNOWLEDGE_MEMORY_INDEX_PATH,
+		content: '# Memory Index\n\n- [[projects/index|Project memory]]\n',
+	},
+	{
+		path: KNOWLEDGE_PROJECTS_INDEX_PATH,
+		content: '# Project Memory Index\n\nProject-level memory indexes live here.\n',
+	},
+	{
+		path: KNOWLEDGE_WIKI_INDEX_PATH,
+		content: '# Wiki Index\n\n- [[hubs/index|Hubs]]\n',
+	},
+	{
+		path: KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
+		content: '# Wiki Hubs\n\nCreate topic hubs here and link related memory from each hub.\n',
+	},
+	{
+		path: KNOWLEDGE_SOURCES_INDEX_PATH,
+		content: '# Sources Index\n\nSource notes and captured references live here.\n',
+	},
+];
 const CONTROL_PATHS = {
-	root: '00_control',
-	auditLog: '00_control/audit_log.md',
-	auditDir: '00_control/audit',
-	dashboards: '00_control/dashboards',
+	root: TRACEKEEPER_CONTROL_DIR,
+	auditLog: TRACEKEEPER_AUDIT_LOG_PATH,
+	auditDir: TRACEKEEPER_AUDIT_DIR,
+	dashboards: TRACEKEEPER_DASHBOARDS_DIR,
 };
-const SOURCE_REQUESTS_PATH = '01_inbox/agent_requests';
-const REVIEW_QUEUE_PATH = '01_inbox/review_queue';
-const AGENT_TASKS_PATH = '02_timeline/agent_tasks';
-const CONTEXT_PACKS_PATH = '06_outputs/context_packs';
-const SOURCES_PATH = '03_sources';
+const SOURCE_REQUESTS_PATH = TRACEKEEPER_AGENT_REQUESTS_DIR;
+const REVIEW_QUEUE_PATH = TRACEKEEPER_REVIEW_QUEUE_DIR;
+const AGENT_TASKS_PATH = TRACEKEEPER_TASKS_DIR;
+const CONTEXT_PACKS_PATH = TRACEKEEPER_CONTEXT_PACKS_DIR;
+const SOURCES_PATH = KNOWLEDGE_SOURCES_DIR;
 const MAX_TASK_SNIPPET_LENGTH = 160;
 const MAX_TASK_ROWS = 6;
 const MAX_AUDIT_ROWS = 12;
@@ -64,6 +112,7 @@ const MAX_REVIEW_QUEUE_ROWS = 20;
 const ACTIVITY_TIMELINE_PREVIEW_ROWS = 5;
 const ACTIVITY_TIMELINE_PAGE_SIZE = 10;
 const RUNTIME_LOG_PAGE_SIZE = 20;
+const TRACE_RECALL_RESULT_LIMIT = 8;
 const MAX_ACTIVITY_CONTEXT_PACK_ROWS = 5;
 const MAX_ACTIVITY_SOURCE_CAPTURE_ROWS = 5;
 const MAX_ACTIVITY_PROPOSAL_ROWS = 5;
@@ -77,6 +126,9 @@ const DEFAULT_MCP_HOST = '127.0.0.1';
 const DEFAULT_MCP_PATH = '/mcp';
 const DEFAULT_MCP_HTTP_ENDPOINT = `http://${DEFAULT_MCP_HOST}:${DEFAULT_MCP_PORT}${DEFAULT_MCP_PATH}`;
 const LEGACY_DEFAULT_MCP_HTTP_ENDPOINTS = ['http://127.0.0.1:37241/mcp'];
+const MEMORY_RECALL_SCOPES = ['global', 'project', 'project_history'] as const;
+
+type TracekeeperRecallScope = typeof MEMORY_RECALL_SCOPES[number];
 const isChineseLanguage = (language: string): boolean => {
 	const normalized = language.toLowerCase();
 	return normalized === 'zh' || normalized.startsWith('zh-') || normalized.startsWith('zh_');
@@ -84,27 +136,7 @@ const isChineseLanguage = (language: string): boolean => {
 const ui = (zh: string, en: string): string => (isChineseLanguage(getLanguage()) ? zh : en);
 const localizedText = (text: LocalizedText): string => ui(text.zh, text.en);
 const pluginDisplayName = (): string => ui(PLUGIN_DISPLAY_NAME_ZH, PLUGIN_DISPLAY_NAME_EN);
-const MEMORY_STRUCTURE: string[] = [
-	'01_inbox/agent_requests',
-	'01_inbox/review_queue',
-	'02_timeline/sessions',
-	'02_timeline/agent_tasks',
-	'03_sources/web',
-	'03_sources/files',
-	'03_sources/transcripts',
-	'03_sources/attachments',
-	'04_memory/concepts',
-	'04_memory/claims',
-	'04_memory/procedures',
-	'04_memory/preferences',
-	'04_memory/reflections',
-	'05_projects',
-	'06_outputs/context_packs',
-	'06_outputs/reports',
-	'06_outputs/source_analysis',
-	'06_outputs/summaries',
-	'07_archive',
-];
+const MEMORY_STRUCTURE: string[] = [...REQUIRED_KNOWLEDGE_DIRECTORIES];
 
 interface LocalizedText {
 	zh: string;
@@ -151,8 +183,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.recall': {
 		title: { zh: '召回记忆', en: 'Recall memory' },
 		description: {
-			zh: '按查询从本地 Obsidian 知识库检索相关笔记，供 Agent 在任务中参考。',
-			en: 'Searches the local Obsidian vault for notes relevant to a query so agents can use them as context.',
+			zh: '按查询检索全局或项目范围内的相关笔记，也可读取项目历史记录。',
+			en: 'Searches global or project-scoped notes for a query, and can also return project history.',
 		},
 		category: { zh: '检索', en: 'Recall' },
 		risk: 'read-only',
@@ -184,11 +216,20 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 		category: { zh: '检索', en: 'Recall' },
 		risk: 'read-only',
 	},
+	'tracekeeper.review_queue': {
+		title: { zh: '查看审核队列', en: 'Review queue' },
+		description: {
+			zh: '查看待审核或已批准的记忆提案；真正写回仍需要单独的审核后写入动作。',
+			en: 'Lists pending or approved memory proposals; durable writeback still requires the separate review-gated apply action.',
+		},
+		category: { zh: '审核', en: 'Review' },
+		risk: 'read-only',
+	},
 	'tracekeeper.list_review_queue': {
 		title: { zh: '查看审核队列', en: 'List review queue' },
 		description: {
-			zh: '读取等待用户确认的记忆提案，Tracekeeper 不会绕过审核直接写入长期记忆。',
-			en: 'Reads memory proposals waiting for user review; Tracekeeper does not bypass review to write durable memory.',
+			zh: '读取等待用户确认的记忆提案；全局记忆默认需要审核，项目记忆可按规则自动保存。',
+			en: 'Reads memory proposals waiting for review; global memory defaults to review, while project memory can auto-save by rule.',
 		},
 		category: { zh: '审核', en: 'Review' },
 		risk: 'read-only',
@@ -228,6 +269,15 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 		},
 		category: { zh: '资料', en: 'Source' },
 		risk: 'low-risk-write',
+	},
+	'tracekeeper.source_request': {
+		title: { zh: '处理资料请求', en: 'Source requests' },
+		description: {
+			zh: '查看待处理资料请求，或处理指定请求并生成来源记录、分析输出和审核提案。',
+			en: 'Lists pending source requests, or processes a selected request into source records, analysis output, and review proposals.',
+		},
+		category: { zh: '资料', en: 'Source' },
+		risk: 'optional-write',
 	},
 	'tracekeeper.apply_approved_writeback': {
 		title: { zh: '应用已批准写回', en: 'Apply approved writeback' },
@@ -277,8 +327,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.write_context_pack': {
 		title: { zh: '写入上下文包', en: 'Write context pack' },
 		description: {
-			zh: '把已生成的上下文内容写入 06_outputs/context_packs，便于后续复用和审计。',
-			en: 'Writes generated context content under 06_outputs/context_packs for reuse and auditability.',
+			zh: '把已生成的上下文内容写入 Tracekeeper 工作区，便于后续复用和审计。',
+			en: 'Writes generated context content under the Tracekeeper workspace for reuse and auditability.',
 		},
 		category: { zh: '上下文', en: 'Context' },
 		risk: 'low-risk-write',
@@ -286,8 +336,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.write_session_note': {
 		title: { zh: '写入会话记录', en: 'Write session note' },
 		description: {
-			zh: '把会话内容写入 02_timeline/sessions，作为任务过程的本地记录。',
-			en: 'Writes session content under 02_timeline/sessions as a local record of the work.',
+			zh: '把会话内容写入 Tracekeeper 工作区，作为任务过程的本地记录。',
+			en: 'Writes session content under the Tracekeeper workspace as a local record of the work.',
 		},
 		category: { zh: '记录', en: 'Record' },
 		risk: 'low-risk-write',
@@ -304,8 +354,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.propose_memory': {
 		title: { zh: '提交记忆提案', en: 'Propose memory' },
 		description: {
-			zh: '把 Agent 认为值得长期保存的内容放入审核队列，等待用户确认后再写入正式记忆。',
-			en: 'Places agent-suggested durable memory into the review queue so the user can approve it before it becomes formal memory.',
+			zh: '按记忆规则处理 Agent 认为值得长期保存的内容；全局默认审核，项目可自动保存。',
+			en: 'Handles agent-suggested durable memory by memory rules; global defaults to review, project memory can auto-save.',
 		},
 		category: { zh: '记忆', en: 'Memory' },
 		risk: 'low-risk-write',
@@ -441,12 +491,13 @@ const memoryProposalStatusLabel = (status: MemoryProposalStatus): string => {
 
 type GraphProfile = 'off' | 'advisory' | 'strict';
 type GraphProfileIssueSeverity = 'warning' | 'error';
-type MemoryProposalRule = 'review_queue' | 'disabled';
-type TaskMemoryProposalMode = 'off' | 'suggest' | 'auto_propose';
+type MemoryProposalRule = 'review_queue' | 'auto_write' | 'disabled';
+type TaskMemoryProposalMode = 'off' | 'suggest' | 'review_queue' | 'auto_propose';
 
 const GRAPH_PROFILES: GraphProfile[] = ['off', 'advisory', 'strict'];
-const MEMORY_PROPOSAL_RULES: MemoryProposalRule[] = ['review_queue', 'disabled'];
-const TASK_MEMORY_PROPOSAL_MODES: TaskMemoryProposalMode[] = ['off', 'suggest', 'auto_propose'];
+const MEMORY_PROPOSAL_RULES: MemoryProposalRule[] = ['auto_write', 'review_queue', 'disabled'];
+const TASK_MEMORY_PROPOSAL_MODES: TaskMemoryProposalMode[] = ['auto_propose', 'review_queue', 'off'];
+const MEMORY_RULES_VERSION = 2;
 
 const normalizeGraphProfileValue = (value: unknown): GraphProfile => {
 	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -467,25 +518,30 @@ const graphProfileLabel = (profile: GraphProfile): string => {
 	}
 };
 
-const normalizeMemoryProposalRule = (value: unknown): MemoryProposalRule => {
+const normalizeMemoryProposalRule = (value: unknown, fallback: MemoryProposalRule = 'review_queue'): MemoryProposalRule => {
 	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
 	return MEMORY_PROPOSAL_RULES.includes(normalized as MemoryProposalRule)
 		? normalized as MemoryProposalRule
-		: 'review_queue';
+		: fallback;
 };
 
 const memoryProposalRuleLabel = (rule: MemoryProposalRule): string => {
 	switch (rule) {
+		case 'auto_write':
+			return ui('自动', 'Auto');
 		case 'disabled':
-			return ui('不接收提案', 'Do not accept proposals');
+			return ui('忽略', 'Ignore');
 		case 'review_queue':
 		default:
-			return ui('进入审核队列', 'Send to review queue');
+			return ui('审核', 'Review');
 	}
 };
 
 const normalizeTaskMemoryProposalMode = (value: unknown): TaskMemoryProposalMode => {
 	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+	if (normalized === 'suggest') {
+		return 'review_queue';
+	}
 	return TASK_MEMORY_PROPOSAL_MODES.includes(normalized as TaskMemoryProposalMode)
 		? normalized as TaskMemoryProposalMode
 		: 'off';
@@ -493,13 +549,14 @@ const normalizeTaskMemoryProposalMode = (value: unknown): TaskMemoryProposalMode
 
 const taskMemoryProposalModeLabel = (mode: TaskMemoryProposalMode): string => {
 	switch (mode) {
+		case 'review_queue':
 		case 'suggest':
-			return ui('建议生成', 'Suggest');
+			return ui('审核', 'Review');
 		case 'auto_propose':
-			return ui('自动提交到审核队列', 'Auto-propose to review queue');
+			return ui('自动', 'Auto');
 		case 'off':
 		default:
-			return ui('关闭', 'Off');
+			return ui('忽略', 'Ignore');
 	}
 };
 
@@ -561,6 +618,7 @@ interface MemoryProposalRecord {
 	proposalId: string;
 	proposalKind: string;
 	proposedBy: string;
+	relatedProject: string;
 	taskId: string;
 	targetNote: string;
 	evidence: string[];
@@ -569,6 +627,30 @@ interface MemoryProposalRecord {
 	created: string;
 	snippet: string;
 	sortTimestamp: number;
+}
+
+interface MemoryRecallInput {
+	query: string;
+	scope: TracekeeperRecallScope;
+	projectHint?: string;
+}
+
+interface MemoryRecallResultEntry {
+	path: string;
+	title: string;
+	scope: string;
+	type: string;
+	score: number;
+	matchedTokens: string[];
+	reason: string;
+}
+
+interface MemoryRecallResult {
+	query: string;
+	scope: TracekeeperRecallScope;
+	projectHint: string;
+	items: MemoryRecallResultEntry[];
+	sourceTool: string;
 }
 
 interface MemoryReviewQueueSnapshot {
@@ -824,6 +906,7 @@ interface AgentConnectionsSnapshot {
 }
 
 interface TracekeeperSettings {
+	memoryRulesVersion: number;
 	defaultAgentScope: string;
 	mcpRuntimeEnabled: boolean;
 	mcpPort: number;
@@ -836,6 +919,7 @@ interface TracekeeperSettings {
 }
 
 const DEFAULT_SETTINGS: TracekeeperSettings = {
+	memoryRulesVersion: MEMORY_RULES_VERSION,
 	defaultAgentScope: 'vault',
 	mcpRuntimeEnabled: true,
 	mcpPort: DEFAULT_MCP_PORT,
@@ -843,7 +927,7 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 	runtimeTokenCreatedAt: '',
 	graphProfile: 'advisory',
 	globalMemoryRule: 'review_queue',
-	projectMemoryRule: 'review_queue',
+	projectMemoryRule: 'auto_write',
 	taskMemoryProposalMode: 'off',
 };
 
@@ -1008,8 +1092,13 @@ export default class TracekeeperPlugin extends Plugin {
 			? this.normalizeTimestamp(saved.runtimeTokenCreatedAt)
 			: new Date().toISOString();
 		next.graphProfile = normalizeGraphProfileValue(saved.graphProfile);
-		next.globalMemoryRule = normalizeMemoryProposalRule(saved.globalMemoryRule);
-		next.projectMemoryRule = normalizeMemoryProposalRule(saved.projectMemoryRule);
+		const savedMemoryRulesVersion = typeof saved.memoryRulesVersion === 'number' ? saved.memoryRulesVersion : 0;
+		next.memoryRulesVersion = MEMORY_RULES_VERSION;
+		next.globalMemoryRule = normalizeMemoryProposalRule(saved.globalMemoryRule, DEFAULT_SETTINGS.globalMemoryRule);
+		const savedProjectRule = normalizeMemoryProposalRule(saved.projectMemoryRule, DEFAULT_SETTINGS.projectMemoryRule);
+		next.projectMemoryRule = savedMemoryRulesVersion < MEMORY_RULES_VERSION && savedProjectRule === 'review_queue'
+			? DEFAULT_SETTINGS.projectMemoryRule
+			: savedProjectRule;
 		next.taskMemoryProposalMode = normalizeTaskMemoryProposalMode(saved.taskMemoryProposalMode);
 		return next;
 	}
@@ -1169,7 +1258,7 @@ export default class TracekeeperPlugin extends Plugin {
 			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditLog) === null;
 
 		const filesToCreate: string[] = [];
-		for (const controlFile of CONTROL_FILES) {
+		for (const controlFile of [...CONTROL_FILES, ...KNOWLEDGE_ENTRY_FILES]) {
 			if (!this.app.vault.getAbstractFileByPath(controlFile.path)) {
 				filesToCreate.push(controlFile.path);
 			}
@@ -1188,7 +1277,7 @@ export default class TracekeeperPlugin extends Plugin {
 	getStructureStatus(): TracekeeperStructureStatus {
 		const plan = this.buildInitializationPlan();
 		const totalFolders = this.getNormalizedFolderPlan().length;
-		const expectedFiles = new Set(CONTROL_FILES.map((file) => file.path));
+		const expectedFiles = new Set([...CONTROL_FILES, ...KNOWLEDGE_ENTRY_FILES].map((file) => file.path));
 		expectedFiles.add(CONTROL_PATHS.auditLog);
 		const missingCount = plan.foldersToCreate.length + plan.filesToCreate.length;
 		const totalCount = totalFolders + expectedFiles.size;
@@ -1305,7 +1394,7 @@ export default class TracekeeperPlugin extends Plugin {
 				await this.ensureFolderExists(folder);
 			}
 
-			for (const controlFile of CONTROL_FILES.filter((file) =>
+			for (const controlFile of [...CONTROL_FILES, ...KNOWLEDGE_ENTRY_FILES].filter((file) =>
 				plan.filesToCreate.includes(file.path)
 			)) {
 				await this.ensureFileDoesNotExist(controlFile.path, controlFile.content);
@@ -2015,7 +2104,7 @@ export default class TracekeeperPlugin extends Plugin {
 			proposal_kind: 'graph_health_improvement',
 			title: ui('知识图谱修复建议', 'Graph health improvement proposal'),
 			filename: `graph_health_improvement_${timestamp}`,
-			target_note: snapshot.missingRecommendedEntry || '04_memory/concepts/knowledge_graph_index.md',
+			target_note: snapshot.missingRecommendedEntry || KNOWLEDGE_INDEX_PATH,
 			risk_level: snapshot.profile === 'strict' ? 'medium' : 'low',
 			evidence: `tracekeeper.graph_health ${snapshot.scannedAt || snapshot.updatedAt}`,
 			content,
@@ -2826,7 +2915,10 @@ export default class TracekeeperPlugin extends Plugin {
 		if (request.taskId) {
 			args.task_id = request.taskId;
 		}
-		await this.callLocalMcpTool('tracekeeper.analyze_source_request', args);
+		await this.callLocalMcpTool('tracekeeper.source_request', {
+			...args,
+			action: 'analyze',
+		});
 		await this.refreshGovernanceViews();
 	}
 
@@ -2852,6 +2944,121 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 		await this.callLocalMcpTool('tracekeeper.apply_approved_writeback', args);
 		await this.refreshGovernanceViews();
+	}
+
+	async runMemoryRecall(input: MemoryRecallInput): Promise<MemoryRecallResult> {
+		const query = input.query.trim();
+		const scope = this.normalizeMemoryRecallScope(input.scope);
+		if (!query && scope !== 'project_history') {
+			throw new Error(ui('请输入检索文本。', 'Please enter a query.'));
+		}
+
+		const projectHint = input.projectHint?.trim() || '';
+		const args: Record<string, unknown> = {
+			scope,
+			max_items: TRACE_RECALL_RESULT_LIMIT,
+		};
+		if (query) {
+			args.query = query;
+		}
+		if (projectHint) {
+			args.project_hint = projectHint;
+		}
+		const result = await this.callLocalMcpTool('tracekeeper.recall', args);
+
+		return this.parseMemoryRecallResult(result, scope, {
+			query,
+			scope,
+			projectHint,
+			sourceTool: 'tracekeeper.recall',
+		});
+	}
+
+	private parseMemoryRecallResult(
+		result: Record<string, unknown>,
+		scope: TracekeeperRecallScope,
+		options: MemoryRecallInput & { sourceTool: string }
+	): MemoryRecallResult {
+		const rawMatches = this.extractRecallMatches(result);
+		const entries = rawMatches.map((match) => this.normalizeMemoryRecallEntry(match, scope));
+		return {
+			query: options.query,
+			scope,
+			projectHint: options.projectHint || '',
+			items: entries,
+			sourceTool: options.sourceTool,
+		};
+	}
+
+	private extractRecallMatches(result: Record<string, unknown>): unknown[] {
+		const matches = result.matches;
+		if (Array.isArray(matches)) {
+			return matches;
+		}
+		const entries = result.entries;
+		if (Array.isArray(entries)) {
+			return entries;
+		}
+		if (Array.isArray(result.results)) {
+			return result.results as unknown[];
+		}
+		return [];
+	}
+
+	private normalizeMemoryRecallEntry(match: unknown, scope: TracekeeperRecallScope): MemoryRecallResultEntry {
+		if (!this.isRecord(match)) {
+			return {
+				path: ui('未知路径', 'Unknown path'),
+				title: ui('未知标题', 'Unknown title'),
+				scope: this.memoryRecallScopeLabel(scope),
+				type: ui('笔记', 'Note'),
+				score: 0,
+				matchedTokens: [],
+				reason: ui('缺少可展示字段', 'No display fields available'),
+			};
+		}
+		const recallMatch = match as ParsedRecord;
+		const path = this.trimText(this.firstString(recallMatch, ['path']), 280);
+		const title = this.firstString(recallMatch, ['title']) || path;
+		const scoreRaw = recallMatch.score;
+		const score = typeof scoreRaw === 'number'
+			? scoreRaw
+			: typeof scoreRaw === 'string'
+				? Number.parseFloat(scoreRaw)
+				: 0;
+
+		return {
+			path,
+			title,
+			scope: this.memoryRecallScopeLabel(
+				this.normalizeMemoryRecallScope(this.firstString(recallMatch, ['scope']) || scope)
+			),
+			type: this.firstString(recallMatch, ['type']) || ui('笔记', 'Note'),
+			score: Number.isFinite(score) ? score : 0,
+			matchedTokens: this.readStringList(recallMatch, ['matched_tokens', 'matchedTokens', 'tokens', 'keywords']).slice(0, 8),
+			reason: this.readStringList(recallMatch, ['score_reason', 'scoreReason']).join('；')
+				|| this.firstString(recallMatch, ['reason'])
+				|| this.firstString(recallMatch, ['summary'])
+				|| ui('暂无说明', 'No reason provided'),
+		};
+	}
+
+	normalizeMemoryRecallScope(scope: string): TracekeeperRecallScope {
+		return (scope && (MEMORY_RECALL_SCOPES as readonly string[]).includes(scope))
+			? scope as TracekeeperRecallScope
+			: 'global';
+	}
+
+	memoryRecallScopeLabel(scope: TracekeeperRecallScope): string {
+		switch (scope) {
+			case 'project':
+				return ui('项目', 'Project');
+			case 'project_history':
+				return ui('项目历史', 'Project history');
+			case 'global':
+			default:
+				return ui('全局', 'Global');
+		}
 	}
 
 	async applyClientConfig(config: GeneratedClientConfig): Promise<void> {
@@ -3212,13 +3419,14 @@ export default class TracekeeperPlugin extends Plugin {
 			file.stat?.mtime
 		);
 
-		return {
-			path: file.path,
-			proposalId,
-			proposalKind: this.firstString(data, ['proposal_kind', 'proposalKind']) || 'unknown',
-			proposedBy: this.firstString(data, ['proposed_by', 'proposedBy']) || 'unknown',
-			taskId: this.firstString(data, ['task_id', 'taskId']) || '',
-			targetNote: this.firstString(data, ['target_note', 'targetNote']) || '',
+			return {
+				path: file.path,
+				proposalId,
+				proposalKind: this.firstString(data, ['proposal_kind', 'proposalKind']) || 'unknown',
+				proposedBy: this.firstString(data, ['proposed_by', 'proposedBy']) || 'unknown',
+				relatedProject: this.firstString(data, ['related_project', 'relatedProject', 'project_hint', 'projectHint']) || '',
+				taskId: this.firstString(data, ['task_id', 'taskId']) || '',
+				targetNote: this.firstString(data, ['target_note', 'targetNote']) || '',
 			evidence: this.readStringList(data, ['evidence']),
 			riskLevel: this.firstString(data, ['risk_level', 'riskLevel']) || 'unknown',
 			approvalStatus,
@@ -3248,6 +3456,51 @@ export default class TracekeeperPlugin extends Plugin {
 			},
 			normalizedStatus
 		);
+	}
+
+	async archiveMemoryProposals(proposals: MemoryProposalRecord[]): Promise<number> {
+		const archiveFolder = ARCHIVE_REVIEW_QUEUE_DIR;
+		await this.ensureFolderExists(archiveFolder);
+		let moved = 0;
+		for (const proposal of proposals) {
+			const file = this.app.vault.getAbstractFileByPath(proposal.path);
+			if (!(file instanceof TFile)) {
+				continue;
+			}
+			const fileName = proposal.path.split('/').pop() || `${proposal.proposalId || 'proposal'}.md`;
+			const targetPath = await this.availableArchivePath(archiveFolder, fileName);
+			await this.app.vault.rename(file, targetPath);
+			moved += 1;
+		}
+		if (moved > 0) {
+			const now = new Date().toISOString();
+			await this.appendToAuditLog(
+				`## ${now}\n` +
+				'action: memory.proposal.archive\n' +
+				'actor: user\n' +
+				`target: ${archiveFolder}\n` +
+				`reason: archived ${moved} processed review queue item(s)\n` +
+				`timestamp: ${now}\n\n`
+			);
+			await this.refreshGovernanceViews();
+		}
+		return moved;
+	}
+
+	private async availableArchivePath(folder: string, fileName: string): Promise<string> {
+		const normalizedName = fileName.endsWith('.md') ? fileName : `${fileName}.md`;
+		const base = normalizedName.replace(/\.md$/i, '');
+		let candidate = this.normalizeVaultPath(`${folder}/${normalizedName}`);
+		if (!this.app.vault.getAbstractFileByPath(candidate)) {
+			return candidate;
+		}
+		const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+		let suffix = 1;
+		do {
+			candidate = this.normalizeVaultPath(`${folder}/${base}-${stamp}-${suffix}.md`);
+			suffix += 1;
+		} while (this.app.vault.getAbstractFileByPath(candidate));
+		return candidate;
 	}
 
 	private normalizeProposalStatus(rawStatus?: string): MemoryProposalStatus {
@@ -3876,10 +4129,12 @@ export default class TracekeeperPlugin extends Plugin {
 			start_task: ui('开始任务记录', 'Start task record'),
 			recall: ui('查找相关笔记', 'Find related notes'),
 			read_note: ui('读取笔记', 'Read note'),
+			review_queue: ui('查看审核队列', 'Review queue'),
 			list_review_queue: ui('查看待审核内容', 'Review pending items'),
 			list_source_requests: ui('查看资料请求', 'Review material requests'),
 			list_approved_writebacks: ui('查看已批准写回', 'Review approved writebacks'),
 			audit_recent: ui('查看最近记录', 'Review recent activity'),
+			source_request: ui('处理资料请求', 'Handle source requests'),
 			build_context_pack: ui('整理上下文材料', 'Prepare context material'),
 			lint: ui('检查笔记结构', 'Check note structure'),
 			finish_task: ui('记录任务结果', 'Record task results'),
@@ -4254,6 +4509,12 @@ class TracekeeperActivityView extends ItemView {
 		logButton.addEventListener('click', () => {
 			void this.plugin.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);
 		});
+		const recallButton = actions.createEl('button', {
+			text: ui('测试召回', 'Test recall'),
+		});
+		recallButton.addEventListener('click', () => {
+			new MemoryRecallPreviewModal(this.app, this.plugin).open();
+		});
 
 		const statusBar = contentEl.createDiv({ cls: 'tracekeeper-status-bar' });
 		this.renderStatusItem(
@@ -4270,19 +4531,7 @@ class TracekeeperActivityView extends ItemView {
 		this.renderMetricCard(metrics, ui('最近连接', 'Recent connections'), String(snapshot.recentAgentCount), ui('最近出现的 AI 工具', 'Recently seen AI tools'));
 		this.renderMetricCard(metrics, ui('工具使用', 'Tool usage'), String(snapshot.recentToolCallCount), ui('最近连接操作记录', 'Recent connection activity'));
 
-		if (snapshot.structureStatus.state !== 'initialized') {
-			const structurePanel = contentEl.createDiv({ cls: 'tracekeeper-card' });
-			structurePanel.createEl('h3', { text: ui('知识库结构', 'Tracekeeper structure') });
-			structurePanel.createEl('p', { text: snapshot.structureStatus.detail, cls: 'tracekeeper-view__description' });
-			if (snapshot.structureStatus.missingCount > 0) {
-				structurePanel.createEl('small', {
-					text: ui(
-						`缺少文件夹 ${snapshot.structureStatus.missingFolders.length} 个，文件 ${snapshot.structureStatus.missingFiles.length} 个。`,
-						`Missing ${snapshot.structureStatus.missingFolders.length} folders and ${snapshot.structureStatus.missingFiles.length} files.`
-					),
-				});
-			}
-		}
+		this.renderMemoryLoopSection(contentEl, snapshot);
 
 		const currentSection = contentEl.createDiv({ cls: 'tracekeeper-card' });
 		currentSection.createEl('h3', { text: ui('最后一次执行的任务', 'Last task') });
@@ -4318,6 +4567,61 @@ class TracekeeperActivityView extends ItemView {
 				this.plugin.renderTimelineItem(list, item);
 			}
 		}
+	}
+
+	private renderMemoryLoopSection(container: HTMLElement, snapshot: AgentActivitySnapshot): void {
+		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-memory-loop-card' });
+		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
+		header.createEl('h3', { text: ui('记忆闭环', 'Memory loop') });
+		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
+		const recallButton = actions.createEl('button', { text: ui('测试召回', 'Test recall') });
+		recallButton.addEventListener('click', () => {
+			new MemoryRecallPreviewModal(this.app, this.plugin).open();
+		});
+		const reviewButton = actions.createEl('button', { text: ui('处理审核', 'Review items') });
+		reviewButton.addEventListener('click', () => {
+			void this.plugin.openPluginView(TRACEKEEPER_REVIEW_QUEUE_VIEW);
+		});
+
+		const pendingCount = snapshot.recentProposals.filter((proposal) => proposal.approvalStatus === 'pending').length;
+		const latestProposal = snapshot.recentProposals[0] ?? null;
+		const latestRecall = this.latestRecallEvent(snapshot.recentAuditEvents);
+		const details = card.createDiv({ cls: 'tracekeeper-detail-grid tracekeeper-memory-loop-grid' });
+		this.renderMemoryLoopDetail(details, ui('待审核记忆', 'Pending memories'), String(pendingCount));
+		this.renderMemoryLoopDetail(
+			details,
+			ui('最近记忆提案', 'Latest proposal'),
+			latestProposal
+				? `${latestProposal.proposalKind} • ${this.plugin.formatDisplayTime(latestProposal.sortTimestamp)}`
+				: ui('暂无', 'None')
+		);
+		this.renderMemoryLoopDetail(
+			details,
+			ui('最后一次任务', 'Last task'),
+			snapshot.latestTask
+				? this.plugin.trimText(snapshot.latestTask.objective || snapshot.latestTask.taskId, 80)
+				: ui('暂无', 'None')
+		);
+		this.renderMemoryLoopDetail(
+			details,
+			ui('最近召回', 'Latest recall'),
+			latestRecall
+				? `${this.plugin.formatToolDisplayName(latestRecall.toolName)} • ${this.plugin.formatDisplayTime(latestRecall.sortTimestamp)}`
+				: ui('暂无', 'None')
+		);
+	}
+
+	private renderMemoryLoopDetail(container: HTMLElement, label: string, value: string): void {
+		const item = container.createDiv({ cls: 'tracekeeper-detail' });
+		item.createEl('span', { text: label });
+		item.createEl('strong', { text: value || ui('暂无', 'None') });
+	}
+
+	private latestRecallEvent(events: AuditEventRecord[]): AuditEventRecord | null {
+		return events.find((event) => {
+			const tool = event.toolName || event.action;
+			return tool === 'tracekeeper.recall' || tool === 'tracekeeper.project_context' || tool === 'tracekeeper.project_history';
+		}) ?? null;
 	}
 
 	private renderStatusItem(container: HTMLElement, label: string, value: string, className = ''): void {
@@ -4365,33 +4669,53 @@ class TracekeeperActivityView extends ItemView {
 	}
 
 	private renderTaskEntry(container: HTMLElement, task: AgentTaskRecord, expanded: boolean): void {
-		const item = container.createDiv({ cls: 'tracekeeper-task-card' });
+		const item = container.createDiv({ cls: 'tracekeeper-task-card tracekeeper-task-card--latest' });
 		const header = item.createDiv({ cls: 'tracekeeper-task-card__header' });
 		const title = header.createDiv({ cls: 'tracekeeper-task-card__title' });
 		title.createEl('h4', { text: task.objective || task.taskId || ui('未命名任务', 'Untitled task') });
-		title.createEl('small', { text: `${ui('任务 ID', 'Task ID')}: ${task.taskId || ui('未知', 'Unknown')}` });
 		const badges = header.createDiv({ cls: 'tracekeeper-badge-row tracekeeper-task-card__badges' });
 		badges.createEl('span', { text: task.status || ui('未知', 'Unknown'), cls: `tracekeeper-badge ${this.taskStatusClass(task.status)}` });
-		badges.createEl('span', { text: task.agent || ui('未知 Agent', 'Unknown agent'), cls: 'tracekeeper-badge tracekeeper-badge--muted' });
-
-		const meta = item.createDiv({ cls: 'tracekeeper-task-card__meta' });
-		this.renderTaskField(meta, ui('执行时间', 'Run time'), this.plugin.formatDisplayTime(task.sortTimestamp));
-		this.renderTaskField(meta, ui('项目', 'Project'), task.relatedProject || ui('未关联', 'Not linked'));
-		this.renderTaskField(meta, ui('上下文', 'Context'), task.contextPack || ui('未生成', 'None'));
-		if (expanded) {
-			this.renderTaskField(meta, ui('开始时间', 'Started'), this.formatTaskTime(task.startedAt));
-			this.renderTaskField(meta, ui('完成时间', 'Finished'), this.formatTaskTime(task.finishedAt));
-
-			const metrics = item.createDiv({ cls: 'tracekeeper-task-card__metrics' });
-			this.renderTaskMetric(metrics, ui('读取', 'Reads'), task.memoryReads.length);
-			this.renderTaskMetric(metrics, ui('写入', 'Writes'), task.memoryWrites.length);
-			this.renderTaskMetric(metrics, ui('捕获', 'Captures'), task.sourceCaptures.length);
-			this.renderTaskMetric(metrics, ui('记忆更新', 'Memory updates'), task.proposals.length);
+		const agentLabel = this.readableAgentLabel(task.agent);
+		if (agentLabel) {
+			badges.createEl('span', { text: agentLabel, cls: 'tracekeeper-badge tracekeeper-badge--muted' });
 		}
 
-		const path = item.createDiv({ cls: 'tracekeeper-task-card__path' });
-		path.createEl('span', { text: ui('文件', 'File') });
+		const focus = item.createDiv({ cls: 'tracekeeper-task-card__focus' });
+		this.renderTaskInfoItem(focus, this.taskTimeLabel(task), this.formatTaskPrimaryTime(task));
+		this.renderTaskInfoItem(focus, ui('项目', 'Project'), task.relatedProject || ui('未关联', 'Not linked'));
+		this.renderTaskInfoItem(focus, ui('任务记录', 'Task record'), task.taskId || ui('未知', 'Unknown'));
+		if (task.contextPack) {
+			this.renderTaskInfoItem(focus, ui('召回上下文', 'Recall context'), this.formatPathBasename(task.contextPack));
+		}
+		if (expanded) {
+			const changes = item.createDiv({ cls: 'tracekeeper-task-card__changes' });
+			changes.createEl('span', { text: ui('本次变化', 'Changes') });
+			const chips = changes.createDiv({ cls: 'tracekeeper-task-card__chips' });
+			const changeItems = this.taskChangeItems(task);
+			if (changeItems.length === 0) {
+				chips.createEl('span', {
+					text: ui('没有产生记忆或资料变化', 'No memory or source changes'),
+					cls: 'tracekeeper-task-card__change-note',
+				});
+			} else {
+				for (const change of changeItems) {
+					const chip = chips.createEl('span', { cls: 'tracekeeper-task-card__change-chip' });
+					chip.createEl('strong', { text: String(change.value) });
+					chip.createEl('span', { text: change.label });
+				}
+			}
+		}
+
+		const footer = item.createDiv({ cls: 'tracekeeper-task-card__footer' });
+		const path = footer.createDiv({ cls: 'tracekeeper-task-card__path' });
+		path.createEl('span', { text: ui('保存位置', 'Saved in') });
 		path.createEl('code', { text: task.path || ui('未知', 'Unknown') });
+		if (task.path) {
+			const openButton = footer.createEl('button', { text: ui('打开记录', 'Open record') });
+			openButton.addEventListener('click', () => {
+				void this.openTaskRecord(task.path);
+			});
+		}
 
 		const normalizedSnippet = task.snippet.trim();
 		if (normalizedSnippet && normalizedSnippet !== task.objective.trim()) {
@@ -4401,16 +4725,68 @@ class TracekeeperActivityView extends ItemView {
 		}
 	}
 
-	private renderTaskField(container: HTMLElement, label: string, value: string): void {
-		const field = container.createDiv({ cls: 'tracekeeper-task-card__field' });
+	private renderTaskInfoItem(container: HTMLElement, label: string, value: string): void {
+		const field = container.createDiv({ cls: 'tracekeeper-task-card__info' });
 		field.createEl('span', { text: label });
 		field.createEl('strong', { text: value || ui('未知', 'Unknown') });
 	}
 
-	private renderTaskMetric(container: HTMLElement, label: string, value: number): void {
-		const metric = container.createDiv({ cls: 'tracekeeper-task-card__metric' });
-		metric.createEl('span', { text: label });
-		metric.createEl('strong', { text: String(value) });
+	private taskChangeItems(task: AgentTaskRecord): Array<{ label: string; value: number }> {
+		return [
+			{ label: ui('读取记忆', 'Memory reads'), value: task.memoryReads.length },
+			{ label: ui('写入记录', 'Writes'), value: task.memoryWrites.length },
+			{ label: ui('捕获资料', 'Source captures'), value: task.sourceCaptures.length },
+			{ label: ui('记忆提案', 'Memory proposals'), value: task.proposals.length },
+		].filter((item) => item.value > 0);
+	}
+
+	private taskTimeLabel(task: AgentTaskRecord): string {
+		const normalized = task.status.toLowerCase().trim();
+		if ((normalized === 'completed' || normalized === 'done' || normalized === 'success') && task.finishedAt) {
+			return ui('完成时间', 'Finished');
+		}
+		if ((normalized === 'active' || normalized === 'running') && task.startedAt) {
+			return ui('开始时间', 'Started');
+		}
+		return ui('执行时间', 'Run time');
+	}
+
+	private formatTaskPrimaryTime(task: AgentTaskRecord): string {
+		const normalized = task.status.toLowerCase().trim();
+		if ((normalized === 'completed' || normalized === 'done' || normalized === 'success') && task.finishedAt) {
+			return this.formatTaskTime(task.finishedAt);
+		}
+		if ((normalized === 'active' || normalized === 'running') && task.startedAt) {
+			return this.formatTaskTime(task.startedAt);
+		}
+		return this.plugin.formatDisplayTime(task.sortTimestamp);
+	}
+
+	private formatPathBasename(path: string): string {
+		const normalized = path.replace(/\\/g, '/');
+		return normalized.split('/').pop()?.replace(/\.md$/i, '') || path;
+	}
+
+	private readableAgentLabel(agent: string): string {
+		const normalized = agent.trim();
+		if (!normalized || normalized.toLowerCase() === 'unknown' || this.isOpaqueIdentifier(normalized)) {
+			return '';
+		}
+		return this.plugin.trimText(normalized, 36);
+	}
+
+	private isOpaqueIdentifier(value: string): boolean {
+		const compact = value.replace(/-/g, '');
+		return compact.length >= 24 && /^[a-f0-9]+$/i.test(compact);
+	}
+
+	private async openTaskRecord(path: string): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) {
+			new Notice(ui('没有找到任务记录文件。', 'Task record file was not found.'));
+			return;
+		}
+		await this.app.workspace.getLeaf(false).openFile(file);
 	}
 
 	private formatTaskTime(value: string): string {
@@ -4541,8 +4917,8 @@ class TracekeeperReviewQueueView extends ItemView {
 				contentEl,
 				ui('还没有待审核的记忆更新。', 'No memory updates waiting for review yet.'),
 				ui(
-					'审核队列只在 AI 助手提交记忆提案后出现内容：通过 tracekeeper.propose_memory、tracekeeper.distill_session，或在 tracekeeper.finish_task 中启用 review_proposal_mode。先完成任务 closeout，再到这里决定是否批准。Tracekeeper 不会自动写入长期记忆。',
-					'Proposals appear here only after an agent submits one: tracekeeper.propose_memory, tracekeeper.distill_session, or tracekeeper.finish_task with review_proposal_mode enabled. Finish task closeout first, then approve here. Tracekeeper does not write durable memory automatically.'
+					'审核队列只显示需要你确认的提案。建议模式只返回候选内容，不会写入队列；项目记忆如果设置为自动保存，也不会出现在这里。',
+					'The review queue only shows proposals that need your confirmation. Suggest mode only returns candidates and does not write queue files; project memory set to auto-save will not appear here.'
 				)
 			);
 			return;
@@ -4566,6 +4942,7 @@ class TracekeeperReviewQueueView extends ItemView {
 		const visibleProposals = snapshot.proposals.filter((proposal) =>
 			this.activeFilter === 'all' ? true : proposal.approvalStatus === this.activeFilter
 		);
+		this.renderBatchActions(contentEl, visibleProposals, snapshot.proposals);
 		const grid = contentEl.createDiv({ cls: 'tracekeeper-proposal-grid' });
 		if (visibleProposals.length === 0) {
 			this.renderEmptyState(
@@ -4576,8 +4953,14 @@ class TracekeeperReviewQueueView extends ItemView {
 			return;
 		}
 
-		for (const proposal of visibleProposals) {
-			this.renderProposalCard(grid, proposal);
+		for (const group of this.groupProposalWorkbenchItems(visibleProposals)) {
+			const section = grid.createDiv({ cls: 'tracekeeper-proposal-group' });
+			const groupHeader = section.createDiv({ cls: 'tracekeeper-proposal-group__header' });
+			groupHeader.createEl('strong', { text: group.label });
+			groupHeader.createEl('span', { text: ui(`${group.items.length} 条`, `${group.items.length} items`), cls: 'tracekeeper-badge tracekeeper-badge--muted' });
+			for (const proposal of group.items) {
+				this.renderProposalCard(section, proposal);
+			}
 		}
 	}
 
@@ -4613,6 +4996,83 @@ class TracekeeperReviewQueueView extends ItemView {
 		return counts;
 	}
 
+	private renderBatchActions(container: HTMLElement, visibleProposals: MemoryProposalRecord[], allProposals: MemoryProposalRecord[]): void {
+		const pending = visibleProposals.filter((proposal) => proposal.approvalStatus === 'pending');
+		const processed = allProposals.filter((proposal) =>
+			proposal.approvalStatus !== 'pending' && proposal.approvalStatus !== 'approved'
+		);
+		if (pending.length === 0 && processed.length === 0) {
+			return;
+		}
+		const toolbar = container.createDiv({ cls: 'tracekeeper-batch-toolbar' });
+		if (pending.length > 0) {
+			const reject = toolbar.createEl('button', {
+				text: ui(`批量拒绝 (${pending.length})`, `Reject visible (${pending.length})`),
+				cls: 'mod-warning',
+			});
+			reject.addEventListener('click', () => {
+				void this.batchUpdate(pending, 'rejected');
+			});
+			const defer = toolbar.createEl('button', {
+				text: ui(`批量暂缓 (${pending.length})`, `Defer visible (${pending.length})`),
+			});
+			defer.addEventListener('click', () => {
+				void this.batchUpdate(pending, 'deferred');
+			});
+		}
+		if (processed.length > 0) {
+			const archive = toolbar.createEl('button', {
+				text: ui(`归档已处理 (${processed.length})`, `Archive processed (${processed.length})`),
+			});
+			archive.addEventListener('click', () => {
+				void this.batchArchive(processed);
+			});
+		}
+	}
+
+	private groupProposalWorkbenchItems(proposals: MemoryProposalRecord[]): Array<{ label: string; items: MemoryProposalRecord[] }> {
+		const groups = new Map<string, MemoryProposalRecord[]>();
+		for (const proposal of proposals) {
+			const label = [
+				memoryProposalStatusLabel(proposal.approvalStatus),
+				proposal.relatedProject || ui('未关联项目', 'No project'),
+				proposal.taskId ? `${ui('任务', 'Task')} ${proposal.taskId}` : ui('无任务', 'No task'),
+				proposal.proposalKind || ui('未分类', 'Uncategorized'),
+			].join(' · ');
+			const items = groups.get(label) || [];
+			items.push(proposal);
+			groups.set(label, items);
+		}
+		return Array.from(groups.entries()).map(([label, items]) => ({ label, items }));
+	}
+
+	private async batchUpdate(proposals: MemoryProposalRecord[], status: MemoryProposalStatus): Promise<void> {
+		try {
+			for (const proposal of proposals) {
+				await this.plugin.updateMemoryProposalStatus(proposal, status);
+			}
+			new Notice(ui(
+				`已更新 ${proposals.length} 条审核项。`,
+				`Updated ${proposals.length} review items.`
+			));
+			await this.refresh();
+		} catch (error) {
+			console.error('tracekeeper failed to batch update proposals', error);
+			new Notice(ui('批量更新失败。', 'Batch update failed.'));
+		}
+	}
+
+	private async batchArchive(proposals: MemoryProposalRecord[]): Promise<void> {
+		try {
+			const moved = await this.plugin.archiveMemoryProposals(proposals);
+			new Notice(ui(`已归档 ${moved} 条审核项。`, `Archived ${moved} review items.`));
+			await this.refresh();
+		} catch (error) {
+			console.error('tracekeeper failed to archive proposals', error);
+			new Notice(ui('归档审核项失败。', 'Failed to archive review items.'));
+		}
+	}
+
 	private renderProposalCard(container: HTMLElement, proposal: MemoryProposalRecord): void {
 		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-proposal-card' });
 		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
@@ -4623,9 +5083,10 @@ class TracekeeperReviewQueueView extends ItemView {
 		badges.createEl('span', { text: memoryProposalStatusLabel(proposal.approvalStatus), cls: 'tracekeeper-badge' });
 
 		const facts = card.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderDetail(facts, ui('项目', 'Project'), proposal.relatedProject || ui('未关联', 'Not linked'));
 		this.renderDetail(facts, ui('目标笔记', 'Target note'), proposal.targetNote || ui('未指定', 'Not specified'));
-		this.renderDetail(facts, ui('证据数量', 'Evidence count'), String(proposal.evidence.length));
 		this.renderDetail(facts, ui('任务', 'Task'), proposal.taskId || ui('无', 'None'));
+		this.renderDetail(facts, ui('证据摘要', 'Evidence'), proposal.evidence.length ? this.plugin.trimText(proposal.evidence.join(', '), 120) : ui('无', 'None'));
 		this.renderDetail(facts, ui('创建时间', 'Created'), proposal.created || ui('未知', 'Unknown'));
 		this.renderDetail(facts, ui('提出来源', 'Proposed by'), proposal.proposedBy || 'unknown');
 		if (proposal.snippet) {
@@ -4710,6 +5171,144 @@ class TracekeeperReviewQueueView extends ItemView {
 		const empty = container.createDiv({ cls: 'tracekeeper-empty-state' });
 		empty.createEl('strong', { text: title });
 		empty.createEl('p', { text: detail });
+	}
+}
+
+class MemoryRecallPreviewModal extends Modal {
+	private query = '';
+	private projectHint = '';
+	private recallScope: TracekeeperRecallScope = 'project';
+	private resultsContainer: HTMLElement | null = null;
+	private statusEl: HTMLElement | null = null;
+
+	constructor(
+		app: App,
+		private plugin: TracekeeperPlugin
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		void super.onOpen();
+		this.titleEl.setText(ui('测试召回', 'Test recall'));
+		this.render();
+	}
+
+	private render(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('tracekeeper-recall-modal');
+		contentEl.createEl('p', {
+			text: ui(
+				'输入当前任务关键词，查看 Agent 可能读取到哪些记忆。',
+				'Enter task keywords to see which memories an agent may read.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+
+		new Setting(contentEl)
+			.setName(ui('召回范围', 'Recall scope'))
+			.setDesc(ui('项目历史可不填关键词，用于查看最近连续性记录。', 'Project history can run without a query to show recent continuity records.'))
+			.addDropdown((dropdown) => {
+				for (const scope of MEMORY_RECALL_SCOPES) {
+					dropdown.addOption(scope, this.plugin.memoryRecallScopeLabel(scope));
+				}
+				dropdown.setValue(this.recallScope).onChange((value) => {
+					this.recallScope = this.plugin.normalizeMemoryRecallScope(value);
+				});
+			});
+
+		new Setting(contentEl)
+			.setName(ui('关键词', 'Query'))
+			.setDesc(ui('例如项目名、功能名、决策或问题。', 'For example a project, feature, decision, or issue.'))
+			.addText((text) => {
+				text.setPlaceholder(ui('输入检索文本', 'Enter query'));
+				text.setValue(this.query);
+				text.onChange((value) => {
+					this.query = value;
+				});
+			});
+
+		new Setting(contentEl)
+			.setName(ui('项目或仓库', 'Project or repository'))
+			.setDesc(ui('可选。用于限定项目记忆和项目历史。', 'Optional. Narrows project memory and project history.'))
+			.addText((text) => {
+				text.setPlaceholder(ui('例如 obsidian-tracekeeper', 'For example obsidian-tracekeeper'));
+				text.setValue(this.projectHint);
+				text.onChange((value) => {
+					this.projectHint = value;
+				});
+			});
+
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		const runButton = actions.createEl('button', { text: ui('查看召回结果', 'Preview recall'), cls: 'mod-cta' });
+		runButton.addEventListener('click', () => {
+			void this.run(runButton);
+		});
+		const closeButton = actions.createEl('button', { text: ui('关闭', 'Close') });
+		closeButton.addEventListener('click', () => this.close());
+		this.statusEl = contentEl.createDiv({ cls: 'tracekeeper-view__description' });
+		this.resultsContainer = contentEl.createDiv({ cls: 'tracekeeper-recall-results' });
+	}
+
+	private async run(button: HTMLButtonElement): Promise<void> {
+		if (!this.resultsContainer || !this.statusEl) {
+			return;
+		}
+		button.disabled = true;
+		button.setText(ui('检索中...', 'Searching...'));
+		this.statusEl.setText('');
+		this.resultsContainer.empty();
+		try {
+			const result = await this.plugin.runMemoryRecall({
+				query: this.query,
+				scope: this.recallScope,
+				projectHint: this.projectHint,
+			});
+			this.renderResults(result);
+		} catch (error) {
+			console.error('tracekeeper recall preview failed', error);
+			this.statusEl.setText(error instanceof Error ? error.message : String(error));
+		} finally {
+			button.disabled = false;
+			button.setText(ui('查看召回结果', 'Preview recall'));
+		}
+	}
+
+	private renderResults(result: MemoryRecallResult): void {
+		if (!this.resultsContainer || !this.statusEl) {
+			return;
+		}
+		this.resultsContainer.empty();
+		this.statusEl.setText(ui(
+			`共 ${result.items.length} 条结果 · ${this.plugin.memoryRecallScopeLabel(result.scope)}`,
+			`${result.items.length} results · ${this.plugin.memoryRecallScopeLabel(result.scope)}`
+		));
+		if (result.items.length === 0) {
+			const empty = this.resultsContainer.createDiv({ cls: 'tracekeeper-empty-state' });
+			empty.createEl('strong', { text: ui('没有匹配结果', 'No matches') });
+			empty.createEl('p', { text: ui('可以换一个关键词，或补充项目/仓库信息后再试。', 'Try another query, or add project/repository context.') });
+			return;
+		}
+		for (const item of result.items) {
+			const card = this.resultsContainer.createDiv({ cls: 'tracekeeper-card tracekeeper-recall-result-card' });
+			const header = card.createDiv({ cls: 'tracekeeper-card__header' });
+			header.createEl('strong', { text: item.title || item.path });
+			const badges = header.createDiv({ cls: 'tracekeeper-badge-row' });
+			badges.createEl('span', { text: item.scope, cls: 'tracekeeper-badge' });
+			badges.createEl('span', { text: `${ui('分数', 'Score')} ${item.score}`, cls: 'tracekeeper-badge tracekeeper-badge--muted' });
+			const details = card.createDiv({ cls: 'tracekeeper-detail-grid' });
+			this.renderDetail(details, ui('路径', 'Path'), item.path || ui('未知', 'Unknown'));
+			this.renderDetail(details, ui('类型', 'Type'), item.type || ui('笔记', 'Note'));
+			this.renderDetail(details, ui('命中词', 'Matched tokens'), item.matchedTokens.length ? item.matchedTokens.join(', ') : ui('无', 'None'));
+			this.renderDetail(details, ui('原因', 'Reason'), item.reason);
+		}
+	}
+
+	private renderDetail(container: HTMLElement, label: string, value: string): void {
+		const item = container.createDiv({ cls: 'tracekeeper-detail tracekeeper-detail--description' });
+		item.createEl('span', { text: label });
+		item.createEl('strong', { text: value || ui('未知', 'Unknown') });
 	}
 }
 
@@ -5691,14 +6290,14 @@ class TracekeeperPermissionPolicyView extends ItemView {
 					ui('保存来源资料和分析结果', 'Save source material and analysis results'),
 					ui('整理上下文材料', 'Prepare context material'),
 					ui('记录任务结果和会话摘要', 'Record task results and session summaries'),
-					ui('提出长期记忆更新，等待你审核', 'Propose long-term memory updates for your review'),
+					ui('按记忆规则提交长期记忆更新', 'Submit long-term memory updates by memory rules'),
 				],
 			},
 			{
 				title: ui('必须先审核', 'Needs review first'),
 				items: [
-					ui('长期记忆写入前必须先批准', 'Long-term memory writes must be approved first'),
-					ui('用户偏好和重要决定会先进入审核队列', 'Preferences and important decisions enter the review queue first'),
+					ui('全局记忆默认先进入审核队列', 'Global memory enters the review queue by default'),
+					ui('项目记忆可按规则自动保存', 'Project memory can auto-save by rule'),
 					ui('批准后的写入会留下记录，方便追溯', 'Approved writes leave records for traceability'),
 				],
 			},
@@ -5776,7 +6375,7 @@ class TracekeeperSettingTab extends PluginSettingTab {
 		this.renderTokenSection(containerEl);
 		this.renderAgentClientConfigSection(containerEl, snapshot);
 		this.renderMemoryRulesSection(containerEl);
-		this.renderKnowledgeRulesSection(containerEl);
+		this.renderAdvancedMaintenanceSection(containerEl);
 	}
 
 	private renderAgentClientConfigSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
@@ -5875,8 +6474,8 @@ class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('全局记忆', 'Global memory'))
 			.setDesc(ui(
-				'控制通用偏好、长期决策等非项目级记忆是否进入审核队列。',
-				'Controls whether general preferences, long-term decisions, and other non-project memory enter the review queue.'
+				'通用偏好、长期决策等默认进入审核队列；也可以改为自动保存或不接收。',
+				'General preferences and long-term decisions go to review by default; you can also auto-save or ignore them.'
 			))
 			.addDropdown((dropdown) => {
 				for (const rule of MEMORY_PROPOSAL_RULES) {
@@ -5896,8 +6495,8 @@ class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('项目记忆', 'Project memory'))
 			.setDesc(ui(
-				'控制项目、仓库或工作区相关记忆是否进入审核队列。',
-				'Controls whether project, repository, or workspace-scoped memory enters the review queue.'
+				'项目、仓库或工作区相关记忆默认自动保存，减少重复审核。',
+				'Project, repository, or workspace memory auto-saves by default to reduce repeated review.'
 			))
 			.addDropdown((dropdown) => {
 				for (const rule of MEMORY_PROPOSAL_RULES) {
@@ -5917,8 +6516,8 @@ class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('任务结束记忆提案', 'Task closeout memory proposals'))
 			.setDesc(ui(
-				'作为 Agent 未显式指定时的默认规则；即使自动提交，也只会进入审核队列。',
-				'Default when an agent does not specify a mode; even auto-proposals only enter the review queue.'
+				'自动按上面的记忆规则保存或进入审核队列；审核会统一进入审核队列；忽略不生成提案。',
+				'Auto follows the memory rules above to save or queue updates; Review sends updates to the review queue; Ignore creates no proposals.'
 			))
 			.addDropdown((dropdown) => {
 				for (const mode of TASK_MEMORY_PROPOSAL_MODES) {
@@ -5937,12 +6536,39 @@ class TracekeeperSettingTab extends PluginSettingTab {
 			});
 	}
 
-	private renderKnowledgeRulesSection(container: HTMLElement): void {
+	private renderAdvancedMaintenanceSection(container: HTMLElement): void {
 		const section = this.createSection(
 			container,
-			ui('知识库规则', 'Knowledge base rules'),
-			ui('调整图谱结构检查策略。', 'Adjust the graph structure check profile.')
+			ui('高级维护', 'Advanced maintenance'),
+			ui('查看运行记录，清理日志，并调整图谱检查策略。', 'Review runtime records, clear logs, and adjust graph checks.')
 		);
+		new Setting(section)
+			.setName(ui('运行日志', 'Runtime log'))
+			.setDesc(ui('查看 Agent 连接、工具调用、配置写入和错误记录。', 'Review agent connections, tool calls, config writes, and errors.'))
+			.addButton((button) =>
+				button
+					.setButtonText(ui('打开日志', 'Open log'))
+					.onClick(() => {
+						void this.plugin.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);
+					})
+			)
+			.addButton((button) =>
+				button
+					.setButtonText(ui('清理日志', 'Clear logs'))
+					.onClick(() => {
+						new RuntimeLogCleanupModal(this.app, this.plugin, async () => undefined).open();
+					})
+			);
+		new Setting(section)
+			.setName(ui('召回预览', 'Recall preview'))
+			.setDesc(ui('输入关键词，查看 Agent 可能读取到的记忆。', 'Enter keywords to see which memories an agent may read.'))
+			.addButton((button) =>
+				button
+					.setButtonText(ui('测试召回', 'Test recall'))
+					.onClick(() => {
+						new MemoryRecallPreviewModal(this.app, this.plugin).open();
+					})
+			);
 		new Setting(section)
 			.setName(ui('知识图谱检查', 'Graph health profile'))
 			.setDesc(ui(

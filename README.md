@@ -2,7 +2,7 @@
 
 [简体中文说明](./README.zh-CN.md)
 
-Tracekeeper is an Obsidian plugin for local memory workflows that stay Memory-first with optional Wiki layers.
+Tracekeeper is an Obsidian plugin for a local Agent Knowledge System that combines Memory and Wiki in one vault structure.
 
 It turns AI-assisted work into reviewable traces: task memories, session records, and proposals stay visible inside Obsidian.
 
@@ -29,8 +29,9 @@ AI assistants are useful for finding patterns, summarizing long conversations, a
 
 Tracekeeper keeps that boundary clear:
 
-- Memory first: task memory, session memory, and project memory are the core durable layer.
-- Wiki second: topic hubs and graph structuring are optional, and only applied through the same review process.
+- Memory captures tasks, sessions, decisions, preferences, and project continuity.
+- Wiki organizes reusable topics, hubs, sources, and graph entry points.
+- Memory and Wiki stay connected through explicit wikilinks so Obsidian graph and agent recall use the same structure.
 - No external database is required, and no app auto-sync platform is required.
 
 AI can help recall context, draft proposals, and prepare updates, while you keep the final decision before anything becomes durable knowledge.
@@ -44,19 +45,19 @@ Tracekeeper treats every AI suggestion as a candidate memory proposal. You can i
 ## First Use
 
 1. Write and collect notes in Obsidian as usual.
-2. Enable Tracekeeper and open the **AI Assistant Connections** view.
-3. Copy or auto-configure the connection for your AI tool.
+2. Enable Tracekeeper and open **Settings -> Community plugins -> Tracekeeper**.
+3. Copy or auto-configure the Agent connection from the **Agent configuration** section.
 4. Ask the AI assistant to summarize, connect, or refine a topic from your vault.
 5. Review proposed wiki or memory updates in the **Review Queue**.
-6. Edit, approve, reject, defer, or request revisions before anything becomes durable memory.
+6. Edit, approve, reject, defer, or request revisions for Review Queue items before they become durable memory.
 
 ## Agent And MCP Connection
 
 Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian is open. The Runtime binds to loopback by default and uses a generated local token in the connection URL or bearer token.
 
-AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and propose memory updates for review. It does not give an assistant permission to silently rewrite long-term memory.
+AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and submit memory updates according to your memory rules. Global memory goes to review by default; project memory can auto-save as an append-only project note when you enable that rule.
 
-For shared use across Codex, Claude, OpenClaw, and other MCP clients, use the same pattern: start a task, recall only project-scoped context, finish the task, and send durable memories to the Review Queue. See [Agent MCP usage](./docs/AGENT_MCP_USAGE.md).
+For shared use across Codex, Claude, OpenClaw, and other MCP clients, use the same pattern: start a task, recall only project-scoped context, finish the task, and decide whether closeout memories should be handled automatically, reviewed, or ignored. Tracekeeper keeps the public MCP surface small so agents can choose the right action quickly. See [Agent MCP usage](./docs/AGENT_MCP_USAGE.md).
 
 The connection is local-first:
 
@@ -70,9 +71,11 @@ The connection is local-first:
 
 ## Review Queue
 
-Long-term memory changes are review-gated. When an assistant proposes a durable update, Tracekeeper stores it as a Review Queue item first. You decide whether to approve, reject, defer, or request revision.
+Global long-term memory changes are review-gated by default. When an assistant proposes a durable global update, Tracekeeper stores it as a Review Queue item first. You decide whether to approve, reject, defer, or request revision.
 
 Approved writeback is a separate action. Tracekeeper only applies an approved proposal to its target note after that review step has happened.
+
+Project memory is lighter by default: project-scoped updates can auto-save as append-only entries in `01_knowledge/memory/projects/<project>/memory.md`, with duplicate signatures to avoid repeated writes. Project auto-save still requires a valid Wiki bridge, so memory lines remain connected to topic pages. Task closeout has three memory modes: auto follows your memory rules, review sends candidates to the Review Queue, and ignore skips closeout memory candidates.
 
 ## What It Helps With
 
@@ -80,12 +83,12 @@ Approved writeback is a separate action. Tracekeeper only applies an approved pr
 - Capturing recurring preferences, decisions, and lessons as long-term memory.
 - Reviewing AI-generated knowledge before it becomes part of your vault.
 - Keeping AI collaboration grounded in your own Obsidian workspace.
-- Optional wiki support such as graph entry gaps and topic hubs for easier recall.
+- A stable Memory + Wiki structure where project memory lines stay connected to topic hubs.
 - Building a personal knowledge system where automation suggests and the user decides.
 
 ## Graph Health
 
-Tracekeeper can report Obsidian wikilink graph health through the read-only `tracekeeper.graph_health` tool. It measures isolated notes, one-way leaf nodes, connected components, hub candidates, unresolved wikilinks, and missing recommended graph entry files.
+Tracekeeper reports Obsidian wikilink graph health through `tracekeeper.lint`. The lint output includes isolated notes, one-way leaf nodes, connected components, hub candidates, unresolved wikilinks, and missing recommended graph entry files.
 
 The graph health profile is configured in the Tracekeeper settings:
 

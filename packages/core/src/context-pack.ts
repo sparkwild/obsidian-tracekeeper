@@ -1,6 +1,12 @@
 import path from 'node:path';
 import { scanVault, type ScannedNote } from './scan';
 import { recallNotes, type RecallMatch } from './recall';
+import {
+	KNOWLEDGE_SOURCES_DIR,
+	TRACEKEEPER_CONTEXT_PACKS_DIR,
+	TRACEKEEPER_REVIEW_QUEUE_DIR,
+	TRACEKEEPER_SESSIONS_DIR,
+} from './knowledge-architecture';
 
 export interface ContextPack {
 	query: string;
@@ -153,10 +159,10 @@ export function buildContextPack(
 	}
 
 	const suggestedWritebackTargets = [
-		path.join('06_outputs', 'context_packs'),
-		path.join('01_inbox', 'review_queue'),
-		path.join('03_sources'),
-		path.join('02_timeline', 'sessions'),
+		TRACEKEEPER_CONTEXT_PACKS_DIR,
+		TRACEKEEPER_REVIEW_QUEUE_DIR,
+		KNOWLEDGE_SOURCES_DIR,
+		TRACEKEEPER_SESSIONS_DIR,
 	].map((entry) => path.join(scan.vaultRoot, entry));
 
 	return {

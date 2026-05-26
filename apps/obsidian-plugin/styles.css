@@ -315,6 +315,12 @@
 	background: var(--background-primary);
 }
 
+.tracekeeper-settings-root .setting-item-control select {
+	width: 140px;
+	min-width: 140px;
+	max-width: 140px;
+}
+
 .tracekeeper-runtime-log-toolbar {
 	display: flex;
 	flex-wrap: wrap;
@@ -387,18 +393,22 @@
 
 .tracekeeper-task-card {
 	display: grid;
-	gap: 10px;
+	gap: 12px;
 	margin-top: 10px;
-	padding: 10px;
+	padding: 14px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 6px;
 	background: var(--background-primary);
 }
 
+.tracekeeper-task-card--latest {
+	background: var(--background-secondary);
+}
+
 .tracekeeper-task-card__header {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
-	gap: 10px;
+	gap: 12px;
 	align-items: start;
 }
 
@@ -408,15 +418,16 @@
 
 .tracekeeper-task-card__title h4 {
 	margin: 0 0 4px;
-	font-size: 15px;
+	font-size: 17px;
 	line-height: 1.4;
 	overflow-wrap: anywhere;
 }
 
 .tracekeeper-task-card__title small,
-.tracekeeper-task-card__field span,
+.tracekeeper-task-card__info span,
 .tracekeeper-task-card__path span,
 .tracekeeper-task-card__summary span,
+.tracekeeper-task-card__changes > span,
 .tracekeeper-task-card__metric span {
 	color: var(--text-muted);
 	font-size: 12px;
@@ -427,12 +438,19 @@
 	min-width: fit-content;
 }
 
+.tracekeeper-task-card__focus {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: 8px;
+}
+
 .tracekeeper-task-card__meta {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 	gap: 8px;
 }
 
+.tracekeeper-task-card__info,
 .tracekeeper-task-card__field {
 	display: grid;
 	gap: 2px;
@@ -440,9 +458,10 @@
 	padding: 8px 10px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 6px;
-	background: var(--background-secondary);
+	background: var(--background-primary);
 }
 
+.tracekeeper-task-card__info strong,
 .tracekeeper-task-card__field strong,
 .tracekeeper-task-card__path code,
 .tracekeeper-task-card__summary p {
@@ -469,6 +488,46 @@
 	line-height: 1.2;
 }
 
+.tracekeeper-task-card__changes {
+	display: grid;
+	gap: 6px;
+	min-width: 0;
+}
+
+.tracekeeper-task-card__chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.tracekeeper-task-card__change-chip {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 5px;
+	padding: 4px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	background: var(--background-primary);
+	color: var(--text-muted);
+}
+
+.tracekeeper-task-card__change-chip strong {
+	color: var(--text-normal);
+	font-size: 14px;
+}
+
+.tracekeeper-task-card__change-note {
+	color: var(--text-muted);
+}
+
+.tracekeeper-task-card__footer {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 8px;
+	align-items: end;
+	padding-top: 2px;
+}
+
 .tracekeeper-task-card__path,
 .tracekeeper-task-card__summary {
 	display: grid;
@@ -480,7 +539,7 @@
 	display: block;
 	padding: 6px 8px;
 	border-radius: 6px;
-	background: var(--background-secondary);
+	background: var(--background-primary);
 	color: var(--text-muted);
 	font-size: 12px;
 	white-space: normal;
@@ -791,6 +850,49 @@
 	color: var(--text-muted);
 }
 
+.tracekeeper-memory-loop-card {
+	margin-top: 12px;
+}
+
+.tracekeeper-memory-loop-grid {
+	margin-top: 8px;
+}
+
+.tracekeeper-batch-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 12px 0;
+}
+
+.tracekeeper-proposal-group {
+	display: grid;
+	gap: 10px;
+}
+
+.tracekeeper-proposal-group__header {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	justify-content: space-between;
+	padding: 4px 2px;
+	color: var(--text-muted);
+}
+
+.tracekeeper-recall-modal {
+	max-width: 760px;
+}
+
+.tracekeeper-recall-results {
+	display: grid;
+	gap: 10px;
+	margin-top: 12px;
+}
+
+.tracekeeper-recall-result-card {
+	margin-top: 0;
+}
+
 .tracekeeper-advanced-details {
 	margin-top: 8px;
 }
@@ -869,6 +971,7 @@
 	}
 
 	.tracekeeper-task-card__header,
+	.tracekeeper-task-card__footer,
 	.tracekeeper-task-card__metrics {
 		grid-template-columns: 1fr;
 	}
@@ -901,5 +1004,14 @@
 	.tracekeeper-capability-row__badge {
 		justify-content: flex-start;
 		width: fit-content;
+	}
+
+	.tracekeeper-batch-toolbar {
+		flex-direction: column;
+	}
+
+	.tracekeeper-proposal-group__header {
+		align-items: flex-start;
+		flex-direction: column;
 	}
 }
