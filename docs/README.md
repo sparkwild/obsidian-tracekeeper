@@ -14,3 +14,4 @@ This directory keeps the maintained Tracekeeper product and release documentatio
 - Obsidian is the human review and governance surface.
 - The vault is the durable knowledge layer.
 - Client connection details use local Runtime defaults that users can change; Tracekeeper does not hardcode vault paths, repository paths, or developer machine paths.
+- Graph health checks are configurable, but graph repair remains review-gated and never runs automatically.

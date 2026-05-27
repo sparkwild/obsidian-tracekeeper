@@ -7,6 +7,8 @@ import path from 'node:path';
 import safety from '../dist/safety.js';
 import sourceAnalysisModule from '../dist/source-analysis.js';
 import scanModule from '../dist/scan.js';
+import graphHealthModule from '../dist/graph-health.js';
+import lintModule from '../dist/lint.js';
 
 function writeFile(relativePath, content, basePath) {
 	const target = path.join(basePath, relativePath);
@@ -51,6 +53,33 @@ function run() {
 		const scanBeforeSymlink = scanModule.scanVault(vaultRoot, { vaultConfigDir: configDir });
 		assert.ok(scanBeforeSymlink.notes.some((note) => note.relativePath === '00_control/system.md'));
 		assert.ok(!scanBeforeSymlink.notes.some((note) => note.relativePath.startsWith(`${configDir}/`)), 'Expected vault config directory to be skipped');
+		const graphHealth = graphHealthModule.analyzeGraphHealth(scanBeforeSymlink.notes, { maxItems: 10 });
+		const advisoryGraphProfile = graphHealthModule.evaluateGraphProfile(graphHealth, 'advisory');
+		assert.equal(advisoryGraphProfile.profile, 'advisory');
+		assert.equal(advisoryGraphProfile.disabled, false);
+		assert.ok(advisoryGraphProfile.profile_issues.every((issue) => issue.severity === 'warning'));
+		const strictGraphProfile = graphHealthModule.evaluateGraphProfile(graphHealth, 'strict');
+		assert.equal(strictGraphProfile.profile, 'strict');
+		assert.ok(strictGraphProfile.profile_issues.some((issue) => issue.severity === 'error'));
+		const offGraphProfile = graphHealthModule.evaluateGraphProfile(graphHealth, 'off');
+		assert.equal(offGraphProfile.profile, 'off');
+		assert.equal(offGraphProfile.disabled, true);
+		assert.equal(offGraphProfile.profile_issues.length, 0);
+		const advisoryLint = lintModule.lintNotes(vaultRoot, scanBeforeSymlink.notes, {
+			graphHealth,
+			graphProfile: 'advisory',
+		});
+		assert.ok(advisoryLint.issues.some((issue) => issue.kind.startsWith('graph_') && issue.severity === 'warning'));
+		const strictLint = lintModule.lintNotes(vaultRoot, scanBeforeSymlink.notes, {
+			graphHealth,
+			graphProfile: 'strict',
+		});
+		assert.ok(strictLint.issues.some((issue) => issue.kind.startsWith('graph_') && issue.severity === 'error'));
+		const offLint = lintModule.lintNotes(vaultRoot, scanBeforeSymlink.notes, {
+			graphHealth,
+			graphProfile: 'off',
+		});
+		assert.equal(offLint.issues.some((issue) => issue.kind.startsWith('graph_')), false);
 
 		const linkedTarget = path.join(vaultRoot, '03_sources', 'target.md');
 		const linkedSource = path.join(vaultRoot, '03_sources', 'symlink_source.md');

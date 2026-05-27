@@ -1,6 +1,6 @@
 {
   "name": "tracekeeper-plugin",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Review AI-proposed wiki and memory updates before they reach your vault.",
   "private": true,
   "main": "main.js",

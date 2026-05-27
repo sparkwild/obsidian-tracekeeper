@@ -60,6 +60,7 @@ Before submitting to the community directory, follow [Community Plugin Submissio
 3. Split large Obsidian plugin UI modules out of `main.ts`.
 4. Add local runtime packaging for `tracekeeper-mcp`.
 5. Add integration smoke checks for installed local plugin reload.
+6. Add visual regression coverage for the Graph Health view.
 
 ## Release Readiness
 

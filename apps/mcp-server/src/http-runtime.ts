@@ -21,6 +21,7 @@ export interface StreamableHttpRuntimeOptions {
 	allowMissingTokenForDev?: boolean;
 	defaultVaultRoot?: string;
 	vaultConfigDir?: string;
+	graphProfile?: unknown;
 	runtimeVersion?: string;
 }
 
@@ -72,6 +73,7 @@ export class StreamableHttpMcpRuntime {
 		this.handler = new McpJsonRpcHandler({
 			defaultVaultRoot: options.defaultVaultRoot,
 			vaultConfigDir: options.vaultConfigDir,
+			graphProfile: options.graphProfile,
 			runtimeVersion: this.runtimeVersion,
 			transport: STREAMABLE_HTTP_TRANSPORT,
 		});

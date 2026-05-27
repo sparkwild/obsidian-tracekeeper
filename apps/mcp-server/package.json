@@ -1,6 +1,6 @@
 {
 	"name": "tracekeeper-mcp-server",
-	"version": "0.1.5",
+	"version": "0.1.6",
 	"description": "Agent-first MCP server for Tracekeeper: read-only default, bounded writes, and review-gated apply.",
 	"private": true,
 	"type": "commonjs",

@@ -7,6 +7,7 @@ export interface StreamableHttpRuntimeOptions {
     allowMissingTokenForDev?: boolean;
     defaultVaultRoot?: string;
     vaultConfigDir?: string;
+    graphProfile?: unknown;
     runtimeVersion?: string;
 }
 export interface StreamableHttpRuntimeStatus {

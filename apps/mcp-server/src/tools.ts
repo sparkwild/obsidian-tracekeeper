@@ -6,6 +6,10 @@ import {
 	analyzeSourceText,
 	type ContextPack,
 	type ParsedMarkdown,
+	analyzeGraphHealth,
+	evaluateGraphProfile,
+	type GraphProfile,
+	normalizeGraphProfile,
 	type SourceAnalysisResult,
 	type SourceProposalDraft,
 	buildContextPack,
@@ -52,6 +56,7 @@ type SensitiveTextScan = { ok: true } | { ok: false; reason: string };
 interface ToolContext {
 	defaultVaultRoot?: string;
 	vaultConfigDir?: string;
+	graphProfile?: unknown;
 }
 
 export interface ToolInvocationContext extends ToolContext {
@@ -86,6 +91,7 @@ interface ToolCallAuditEventInput {
 
 const READ_ONLY_TOOL_NAMES = new Set([
 	'tracekeeper.status',
+	'tracekeeper.graph_health',
 	'tracekeeper.recall',
 	'tracekeeper.read_note',
 	'tracekeeper.list_review_queue',
@@ -124,6 +130,7 @@ const MAX_ARGS_SUMMARY_LENGTH = 512;
 
 type ToolName =
 	| 'tracekeeper.status'
+	| 'tracekeeper.graph_health'
 	| 'tracekeeper.start_task'
 	| 'tracekeeper.recall'
 	| 'tracekeeper.read_note'
@@ -144,6 +151,7 @@ type ToolName =
 
 const TOOL_NAME_SET = new Set<string>([
 	'tracekeeper.status',
+	'tracekeeper.graph_health',
 	'tracekeeper.start_task',
 	'tracekeeper.recall',
 	'tracekeeper.read_note',
@@ -173,6 +181,11 @@ interface ToolArgs {
 
 type StatusArgs = ToolArgs;
 
+interface GraphHealthArgs extends ToolArgs {
+	max_items?: unknown;
+	graph_profile?: unknown;
+}
+
 interface StartTaskArgs extends ToolArgs {
 	goal?: unknown;
 	client?: unknown;
@@ -191,6 +204,7 @@ interface BuildContextPackArgs extends ToolArgs {
 
 interface LintArgs extends ToolArgs {
 	max_items?: unknown;
+	graph_profile?: unknown;
 }
 
 interface FinishTaskArgs extends ToolArgs {
@@ -407,6 +421,10 @@ function pathSafetyOptions(context: ToolContext): { vaultConfigDir?: string } {
 	return {
 		vaultConfigDir: context.vaultConfigDir,
 	};
+}
+
+function graphProfileFromArgs(value: unknown, context: ToolContext): GraphProfile {
+	return normalizeGraphProfile(value ?? context.graphProfile);
 }
 
 function scanVaultForContext(vaultRoot: string, context: ToolContext): ScanResult {
@@ -1722,6 +1740,9 @@ function buildFixPlanSummary(issues: Array<{ kind: string; severity: string }>):
 	if (issueKinds.includes('claim_missing_source')) {
 		summary.push('Add source:: references under [!claim] blocks that currently have no source refs.');
 	}
+	if (issueKinds.some((kind) => kind.startsWith('graph_'))) {
+		summary.push('Review graph profile findings by adding explicit entry, hub, or wikilink structure; Tracekeeper does not auto-fix graph structure.');
+	}
 
 	if (summary.length === 1) {
 		summary.push('No fix plan generated because no lint issues were found.');
@@ -1745,6 +1766,33 @@ export function toolDefinitions(): McpToolDefinition[] {
 					},
 				},
 				additionalProperties: false,
+			},
+		},
+		{
+			name: 'tracekeeper.graph_health',
+			title: 'tracekeeper.graph_health',
+			description: '[read-only] Analyze wikilinks and return graph health metrics.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					vaultRoot: {
+						type: 'string',
+						description: 'Vault root path. If omitted, uses server configured --vault-root.',
+					},
+					max_items: {
+						type: 'integer',
+						description: 'Maximum number of array entries to return.',
+					},
+					graph_profile: {
+						type: 'string',
+						enum: ['off', 'advisory', 'strict'],
+						description: 'Graph checking mode. Defaults to the server graphProfile setting.',
+					},
+				},
+				additionalProperties: false,
+			},
+			annotations: {
+				readOnlyHint: true,
 			},
 		},
 		{
@@ -2058,6 +2106,11 @@ export function toolDefinitions(): McpToolDefinition[] {
 						type: 'integer',
 						description: 'Maximum number of issues to return.',
 					},
+					graph_profile: {
+						type: 'string',
+						enum: ['off', 'advisory', 'strict'],
+						description: 'Graph checking mode. Defaults to the server graphProfile setting.',
+					},
 				},
 				additionalProperties: false,
 			},
@@ -2311,6 +2364,9 @@ export function callTool(
 			case 'tracekeeper.status':
 				toolResult = toolResultWithError(handleStatus(args, context));
 				break;
+			case 'tracekeeper.graph_health':
+				toolResult = toolResultWithError(handleGraphHealth(args, context));
+				break;
 			case 'tracekeeper.start_task':
 				toolResult = toolResultWithError(handleStartTask(args, context));
 				break;
@@ -2419,6 +2475,39 @@ function handleStatus(rawArgs: StatusArgs, context: ToolContext) {
 			by_type: buildProjectCounts(scan.notes),
 		},
 		scan_errors: scan.errors.slice(0, 5),
+	};
+}
+
+function handleGraphHealth(rawArgs: GraphHealthArgs, context: ToolContext) {
+	const vaultRoot = vaultRootFromArgs(rawArgs, context);
+	const maxItems = coercePositiveInt(rawArgs.max_items, 20, 1, 2000);
+	const profile = graphProfileFromArgs(rawArgs.graph_profile, context);
+	if (profile === 'off') {
+		return {
+			ok: true,
+			read_only: true,
+			disabled: true,
+			profile,
+			profile_issues: [],
+			vault_root: vaultRoot,
+		};
+	}
+
+	const scan = scanVaultForContext(vaultRoot, context);
+	const graphHealth = analyzeGraphHealth(scan.notes, {
+		maxItems,
+	});
+	const profileEvaluation = evaluateGraphProfile(graphHealth, profile);
+
+	return {
+		ok: true,
+		read_only: true,
+		disabled: profileEvaluation.disabled,
+		profile: profileEvaluation.profile,
+		profile_issues: profileEvaluation.profile_issues,
+		vault_root: vaultRoot,
+		scanned_at: scan.scannedAt,
+		...graphHealth,
 	};
 }
 
@@ -3401,13 +3490,24 @@ function handleBuildContextPack(rawArgs: BuildContextPackArgs, context: ToolCont
 function handleLint(rawArgs: LintArgs, context: ToolContext) {
 	const vaultRoot = vaultRootFromArgs(rawArgs, context);
 	const maxItems = coercePositiveInt(rawArgs.max_items, 40, 1, 2000);
+	const profile = graphProfileFromArgs(rawArgs.graph_profile, context);
 	const scan = scanVaultForContext(vaultRoot, context);
-	const { issues } = lintNotes(vaultRoot, scan.notes);
+	const graphHealth = profile === 'off' ? undefined : analyzeGraphHealth(scan.notes, { maxItems });
+	const profileEvaluation = graphHealth
+		? evaluateGraphProfile(graphHealth, profile)
+		: { profile, disabled: true, profile_issues: [] };
+	const { issues } = lintNotes(vaultRoot, scan.notes, {
+		graphHealth,
+		graphProfile: profile,
+	});
 	const limitedIssues = issues.slice(0, maxItems);
 
 	return {
 		ok: true,
 		read_only: true,
+		profile: profileEvaluation.profile,
+		graph_profile_disabled: profileEvaluation.disabled,
+		profile_issues: profileEvaluation.profile_issues,
 		vault_root: vaultRoot,
 		scanned_at: scan.scannedAt,
 		issue_count: issues.length,
