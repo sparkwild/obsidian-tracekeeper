@@ -15,6 +15,7 @@ Streamable HTTP MCP Runtime for Tracekeeper operations. It is read-only by defau
 `tools/list` returns:
 
 - `tracekeeper.status`
+- `tracekeeper.graph_health`
 - `tracekeeper.start_task`
 - `tracekeeper.recall`
 - `tracekeeper.read_note`
@@ -36,6 +37,7 @@ Streamable HTTP MCP Runtime for Tracekeeper operations. It is read-only by defau
 Permission policy:
 
 - default posture: read-only vault-local access
+- graph health checks are advisory and never write notes or enforce a vault structure
 - controlled write tools are limited to low-risk working records
 - protected memory writeback is review-gated and only runs through approved Review Queue proposals
 - full matrix: [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)

@@ -7,6 +7,7 @@ interface ServerArgs {
 	port?: number;
 	token?: string;
 	allowMissingTokenForDev?: boolean;
+	graphProfile?: string;
 }
 
 function parseArgs(argv: string[]): ServerArgs {
@@ -39,6 +40,11 @@ function parseArgs(argv: string[]): ServerArgs {
 		}
 		if (value === '--token' && next) {
 			result.token = next;
+			index += 1;
+			continue;
+		}
+		if ((value === '--graph-profile' || value === '--graphProfile') && next) {
+			result.graphProfile = next;
 			index += 1;
 			continue;
 		}

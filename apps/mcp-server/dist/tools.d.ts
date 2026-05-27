@@ -2,6 +2,7 @@ import { type McpPrompt, type McpStructuredToolResult, type McpToolDefinition } 
 interface ToolContext {
     defaultVaultRoot?: string;
     vaultConfigDir?: string;
+    graphProfile?: unknown;
 }
 export interface ToolInvocationContext extends ToolContext {
     agentId?: string;

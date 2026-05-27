@@ -9,6 +9,7 @@ This package implements the shared TypeScript runtime for local Obsidian vault p
 - Block id, wikilink, claim/evidence callout extraction (`src/markdown.ts`)
 - Simple token recall/search (`src/recall.ts`)
 - Context pack construction (`src/context-pack.ts`)
+- Wikilink graph health metrics (`src/graph-health.ts`)
 - Lint preview for:
   - Broken wikilinks
   - Claim blocks without source references
@@ -17,12 +18,13 @@ This package implements the shared TypeScript runtime for local Obsidian vault p
 ## Usage
 
 ```ts
-import { scanVault, recallNotes, buildContextPack, lintNotes } from './src/index';
+import { scanVault, recallNotes, buildContextPack, lintNotes, analyzeGraphHealth } from './src/index';
 
 const scan = scanVault('/path/to/vault');
 const recall = recallNotes(scan.notes, 'project memory');
 const contextPack = buildContextPack('/path/to/vault', 'project memory');
 const lint = lintNotes(scan.vaultRoot, scan.notes);
+const graph = analyzeGraphHealth(scan.notes);
 ```
 
 ## Security behavior

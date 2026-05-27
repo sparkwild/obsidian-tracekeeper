@@ -34,6 +34,11 @@ function parseArgs(argv) {
             index += 1;
             continue;
         }
+        if ((value === '--graph-profile' || value === '--graphProfile') && next) {
+            result.graphProfile = next;
+            index += 1;
+            continue;
+        }
         if (value === '--allow-missing-token-for-dev') {
             result.allowMissingTokenForDev = true;
         }

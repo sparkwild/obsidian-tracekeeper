@@ -32,6 +32,7 @@ The Obsidian plugin is the human review and governance surface. It provides thes
 - Runtime Status
 - Permission Policy
 - Agent Connections
+- Graph Health
 
 The plugin may provide review actions:
 
@@ -46,6 +47,7 @@ The plugin settings are intentionally user-controlled:
 - welcome/status text
 - MCP Runtime port
 - local connection token rotation
+- graph health profile (`off`, `advisory`, or `strict`)
 - agent scope label
 
 The plugin is desktop-only because it hosts a local Streamable HTTP Runtime on `127.0.0.1`. The default endpoint is `http://127.0.0.1:58437/mcp`, and generated client configuration includes a local token. The Runtime starts with Obsidian and stops when Obsidian or the plugin closes.
@@ -67,6 +69,7 @@ Current MCP tools:
 | Tool | Permission | Notes |
 | --- | --- | --- |
 | `tracekeeper.status` | `read-only` | Scans vault summary counts. |
+| `tracekeeper.graph_health` | `read-only` | Reports wikilink graph metrics, graph profile issues, and hub recommendations. |
 | `tracekeeper.start_task` | `read-only` | Creates a deterministic task context summary without writing. |
 | `tracekeeper.recall` | `read-only` | Returns matching vault notes for a query. |
 | `tracekeeper.read_note` | `read-only` | Reads one vault-relative note. |
@@ -98,6 +101,18 @@ The MCP server must not expose tools that:
 The Runtime refuses to start without a token by default. The only exception is the explicit development-only flag used by standalone local checks. Production Obsidian-hosted Runtime instances must use the generated local token.
 
 Browser-style CORS requests are accepted only from Obsidian and loopback origins. The Runtime does not return `Access-Control-Allow-Origin: *`.
+
+## Graph Health Profile
+
+Graph health is a read-only structural check. It never creates notes, rewrites links, or applies long-term memory. The profile only controls how findings are reported:
+
+| Profile | Behavior |
+| --- | --- |
+| `off` | Suppresses graph profile issues in lint while keeping manual inspection available in the plugin. |
+| `advisory` | Adds graph findings as warnings and recommendations. This is the default. |
+| `strict` | Treats missing graph entry notes, missing recommended hubs, isolated nodes, and unresolved graph links as lint errors. Disconnected components and one-way leaf nodes remain warnings. |
+
+When users want Tracekeeper to help improve graph structure, the Obsidian Graph Health view can create a Review Queue proposal. That proposal is still only a candidate; any durable vault change must be reviewed and applied through the normal review-gated workflow.
 
 ## Agent Client Configuration
 
