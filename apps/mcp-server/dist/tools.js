@@ -4556,7 +4556,20 @@ function handleLint(rawArgs, context) {
         issues: limitedIssues,
         graph_summary: graphHealth ? buildGraphSummary(graphHealth) : null,
         graph_health: lintGraphHealth,
+        legacy_structure: buildLegacyStructureSummary(vaultRoot, scan.notes),
         fix_plan_summary: buildFixPlanSummary(issues),
+    };
+}
+function buildLegacyStructureSummary(vaultRoot, notes) {
+    const legacyRoots = index_1.LEGACY_TOP_LEVEL_DIRS.filter((root) => fs.existsSync(path.join(vaultRoot, root)));
+    const legacyNoteCount = notes.filter((note) => legacyRoots.some((root) => note.relativePath === root || note.relativePath.startsWith(`${root}/`))).length;
+    return {
+        detected: legacyRoots.length > 0,
+        legacy_roots: legacyRoots,
+        legacy_note_count: legacyNoteCount,
+        recommendation: legacyRoots.length > 0
+            ? 'Use the Obsidian plugin structure check to preview, rebuild, validate, and trash legacy folders after explicit user confirmation. MCP lint is read-only and will not migrate or delete folders.'
+            : 'No legacy Tracekeeper top-level folders detected.',
     };
 }
 function buildGraphSummary(graphHealth) {

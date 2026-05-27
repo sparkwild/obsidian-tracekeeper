@@ -10,6 +10,7 @@ import scanModule from '../dist/scan.js';
 import graphHealthModule from '../dist/graph-health.js';
 import lintModule from '../dist/lint.js';
 import recallModule from '../dist/recall.js';
+import legacyStructureModule from '../dist/legacy-structure.js';
 
 const KNOWLEDGE_DIR = '01_knowledge';
 const CONFIG_DIR = 'vault-config';
@@ -201,6 +202,50 @@ function run() {
 		assert.equal(Array.isArray(sourceAnalysis.evidenceScaffolds), true);
 		assert.equal(Array.isArray(sourceAnalysis.claimScaffolds), true);
 		assert.equal(Array.isArray(sourceAnalysis.proposalDrafts), true);
+
+		const sourceTarget = legacyStructureModule.getLegacyStructureTarget('03_sources/web/example.md');
+		assert.deepEqual(sourceTarget, {
+			oldPath: '03_sources/web/example.md',
+			newPath: '01_knowledge/sources/web/example.md',
+			kind: 'source',
+		});
+		const wikiTarget = legacyStructureModule.getLegacyStructureTarget('04_memory/concepts/topic.md');
+		assert.deepEqual(wikiTarget, {
+			oldPath: '04_memory/concepts/topic.md',
+			newPath: '01_knowledge/wiki/concepts/topic.md',
+			kind: 'wiki_concept',
+		});
+		const dashboardTarget = legacyStructureModule.getLegacyStructureTarget('00_control/dashboards/knowledge.base');
+		assert.deepEqual(dashboardTarget, {
+			oldPath: '00_control/dashboards/knowledge.base',
+			newPath: '00_tracekeeper/control/dashboards/knowledge.base',
+			kind: 'dashboard',
+		});
+		const enrichedMemory = legacyStructureModule.enrichLegacyMarkdownContent('# Preference\n', {
+			migrationId: 'legacy-test',
+			oldPath: '04_memory/preferences/style.md',
+			newPath: '01_knowledge/memory/global/preferences/style.md',
+			kind: 'memory_global',
+		});
+		assert.match(enrichedMemory, /## Tracekeeper migration/);
+		assert.match(enrichedMemory, /## Graph links/);
+		const enrichedWiki = legacyStructureModule.enrichLegacyMarkdownContent('# Topic\n', {
+			migrationId: 'legacy-test',
+			oldPath: '04_memory/concepts/topic.md',
+			newPath: '01_knowledge/wiki/concepts/topic.md',
+			kind: 'wiki_concept',
+		});
+		assert.match(enrichedWiki, /## Related memory/);
+		const review = legacyStructureModule.renderLegacyMigrationReview({
+			migrationId: 'legacy-test',
+			oldPath: '00_control/system.md',
+			newPath: '00_tracekeeper/control/system.md',
+			kind: 'control',
+			reason: 'conflict',
+			sourceContent: '# Old system',
+		});
+		assert.match(review, /type: legacy_migration_review/);
+		assert.match(review, /source_path: "00_control\/system.md"/);
 
 		console.log(
 			JSON.stringify(

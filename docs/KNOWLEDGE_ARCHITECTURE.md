@@ -45,7 +45,18 @@ Tracekeeper uses one local Agent Knowledge System. Memory and Wiki are not separ
 
 `00_tracekeeper` is for plugin/runtime workflow records. `01_knowledge` is the durable knowledge layer. `02_archive` stores processed or old operational records.
 
-Legacy folders are read for compatibility only: `00_control`, `01_inbox`, `02_timeline`, `03_sources`, `04_memory`, `05_projects`, `06_outputs`, and `07_archive`. Lint reports them so the user can decide whether to migrate later.
+Legacy folders are read for compatibility only: `00_control`, `01_inbox`, `02_timeline`, `03_sources`, `04_memory`, `05_projects`, `06_outputs`, and `07_archive`. Lint reports them, and the Obsidian plugin structure check can rebuild their content into the current layout after user confirmation.
+
+## Structure Organizer
+
+The plugin-side structure check is the only place that performs legacy cleanup. MCP lint stays read-only.
+
+- First it repairs missing base entries only.
+- Then it previews legacy roots, file counts, copy targets, and conflicts.
+- Copy/rebuild never overwrites current files; conflicts become `legacy_migration_review` items in the Review Queue.
+- Cleanup is a second confirmation step and uses Obsidian system trash, not permanent deletion.
+- Migration and cleanup reports are written under `00_tracekeeper/control/migrations/`.
+- A task record is written under `00_tracekeeper/work/tasks/` so the activity home shows the cleanup as the latest task.
 
 ## Memory-Wiki Bridge
 

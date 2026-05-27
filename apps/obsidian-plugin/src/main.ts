@@ -31,6 +31,7 @@ import {
 	KNOWLEDGE_SOURCES_INDEX_PATH,
 	KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
 	KNOWLEDGE_WIKI_INDEX_PATH,
+	LEGACY_TOP_LEVEL_DIRS,
 	TRACEKEEPER_AGENT_REQUESTS_DIR,
 	TRACEKEEPER_AUDIT_DIR,
 	TRACEKEEPER_AUDIT_LOG_PATH,
@@ -42,6 +43,11 @@ import {
 	TRACEKEEPER_SYSTEM_PATH,
 	TRACEKEEPER_TASKS_DIR,
 	TRACEKEEPER_WORK_DIR,
+	buildLegacyMigrationReviewPath,
+	enrichLegacyMarkdownContent,
+	getLegacyStructureTarget,
+	renderLegacyMigrationReview,
+	type LegacyStructureKind,
 } from '../../../packages/core/dist/index';
 
 const TRACEKEEPER_ACTIVITY_VIEW = 'tracekeeper-activity';
@@ -385,7 +391,8 @@ interface MemoryInitializationPlan {
 	missingAuditLog: boolean;
 }
 
-type StructureState = 'initialized' | 'partial' | 'missing';
+type StructureState = 'initialized' | 'partial' | 'missing' | 'legacy_detected';
+type LegacyStructureAction = 'copy_rebuild' | 'review_conflict' | 'review_existing' | 'skip_existing' | 'unmapped';
 
 interface TracekeeperStructureStatus {
 	state: StructureState;
@@ -395,6 +402,53 @@ interface TracekeeperStructureStatus {
 	missingFiles: string[];
 	missingCount: number;
 	totalCount: number;
+}
+
+interface LegacyStructurePlanItem {
+	oldPath: string;
+	newPath: string;
+	kind: LegacyStructureKind;
+	action: LegacyStructureAction;
+	reason: string;
+	isMarkdown: boolean;
+}
+
+interface LegacyStructurePlan {
+	migrationId: string;
+	legacyRoots: string[];
+	items: LegacyStructurePlanItem[];
+	fileCount: number;
+	markdownCount: number;
+	nonMarkdownCount: number;
+	copyCount: number;
+	conflictCount: number;
+	reviewCount: number;
+	skipCount: number;
+	uncoveredCount: number;
+}
+
+interface StructureOrganizerSnapshot {
+	basePlan: MemoryInitializationPlan;
+	legacyPlan: LegacyStructurePlan;
+	state: 'ready' | 'needs_repair' | 'legacy_detected';
+}
+
+interface LegacyMigrationResult {
+	migrationId: string;
+	copiedCount: number;
+	conflictCount: number;
+	reviewCount: number;
+	reportMdPath: string;
+	reportJsonPath: string;
+}
+
+interface LegacyCleanupResult {
+	cleanupId: string;
+	trashedRoots: string[];
+	missingRoots: string[];
+	failedRoots: Array<{ path: string; error: string }>;
+	reportPath: string;
+	taskPath: string;
 }
 
 interface AgentTaskRecord {
@@ -1245,13 +1299,23 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	async openInitializeMemoryStructureModal(): Promise<void> {
-		const plan = this.buildInitializationPlan();
+		const snapshot = await this.buildStructureOrganizerSnapshot();
 		new InitializeMemoryStructureModal(this.app, {
-			plan,
-			onConfirm: async () => {
-				await this.initializeMemoryStructure(plan);
-			},
+			plugin: this,
+			snapshot,
 		}).open();
+	}
+
+	async buildStructureOrganizerSnapshot(migrationId = this.createStructureMigrationId()): Promise<StructureOrganizerSnapshot> {
+		const basePlan = this.buildInitializationPlan();
+		const legacyPlan = await this.buildLegacyStructurePlan(migrationId);
+		const hasMissingBase = basePlan.foldersToCreate.length > 0 || basePlan.filesToCreate.length > 0;
+		const state = legacyPlan.legacyRoots.length > 0
+			? 'legacy_detected'
+			: hasMissingBase
+				? 'needs_repair'
+				: 'ready';
+		return { basePlan, legacyPlan, state };
 	}
 
 	private buildInitializationPlan(): MemoryInitializationPlan {
@@ -1280,6 +1344,176 @@ export default class TracekeeperPlugin extends Plugin {
 		};
 	}
 
+	private getLegacyRootFolders(): string[] {
+		return LEGACY_TOP_LEVEL_DIRS.filter((root) => this.app.vault.getAbstractFileByPath(root) instanceof TFolder);
+	}
+
+	private createStructureMigrationId(): string {
+		return `legacy-rebuild-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+	}
+
+	private createStructureCleanupId(): string {
+		return `legacy-cleanup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+	}
+
+	private async buildLegacyStructurePlan(migrationId: string): Promise<LegacyStructurePlan> {
+		const legacyRoots = this.getLegacyRootFolders();
+		const files = legacyRoots.flatMap((root) => {
+			const folder = this.app.vault.getAbstractFileByPath(root);
+			return folder instanceof TFolder ? this.collectFiles(folder) : [];
+		});
+		const items: LegacyStructurePlanItem[] = [];
+
+		for (const file of files) {
+			const target = getLegacyStructureTarget(file.path);
+			const isMarkdown = file.extension === 'md';
+			if (!target) {
+				if (await this.legacyMigrationReviewExists(file.path, migrationId)) {
+					items.push({
+						oldPath: file.path,
+						newPath: 'unmapped',
+						kind: 'archive',
+						action: 'review_existing',
+						reason: ui('已存在迁移审核项。', 'A migration review item already exists.'),
+						isMarkdown,
+					});
+					continue;
+				}
+				items.push({
+					oldPath: file.path,
+					newPath: '',
+					kind: 'archive',
+					action: 'unmapped',
+					reason: ui('没有稳定的新结构映射。', 'No stable current-architecture mapping exists.'),
+					isMarkdown: file.extension === 'md',
+				});
+				continue;
+			}
+
+			const targetFile = this.app.vault.getAbstractFileByPath(target.newPath);
+			if (await this.legacyMigrationReviewExists(file.path, migrationId)) {
+				items.push({
+					oldPath: file.path,
+					newPath: target.newPath,
+					kind: target.kind,
+					action: 'review_existing',
+					reason: ui('已存在迁移审核项。', 'A migration review item already exists.'),
+					isMarkdown,
+				});
+				continue;
+			}
+
+			if (targetFile && !(targetFile instanceof TFile)) {
+				items.push({
+					oldPath: file.path,
+					newPath: target.newPath,
+					kind: target.kind,
+					action: 'review_conflict',
+					reason: ui('新版目标路径已被文件夹占用。', 'The current-architecture target path is occupied by a folder.'),
+					isMarkdown,
+				});
+				continue;
+			}
+
+			if (targetFile instanceof TFile) {
+				const sameContent = await this.legacyTargetMatches(file, targetFile, {
+					migrationId,
+					oldPath: file.path,
+					newPath: target.newPath,
+					kind: target.kind,
+				});
+				items.push({
+					oldPath: file.path,
+					newPath: target.newPath,
+					kind: target.kind,
+					action: sameContent ? 'skip_existing' : 'review_conflict',
+					reason: sameContent
+						? ui('新版目标已存在。', 'The current-architecture target already exists.')
+						: ui('新版目标已存在且内容不同。', 'The current-architecture target exists with different content.'),
+					isMarkdown,
+				});
+				continue;
+			}
+
+			items.push({
+				oldPath: file.path,
+				newPath: target.newPath,
+				kind: target.kind,
+				action: 'copy_rebuild',
+				reason: ui('可复制重建到新结构。', 'Can be copied into the current architecture.'),
+				isMarkdown,
+			});
+		}
+
+		return {
+			migrationId,
+			legacyRoots,
+			items,
+			fileCount: files.length,
+			markdownCount: files.filter((file) => file.extension === 'md').length,
+			nonMarkdownCount: files.filter((file) => file.extension !== 'md').length,
+			copyCount: items.filter((item) => item.action === 'copy_rebuild').length,
+			conflictCount: items.filter((item) => item.action === 'review_conflict').length,
+			reviewCount: items.filter((item) => item.action === 'review_conflict' || item.action === 'review_existing').length,
+			skipCount: items.filter((item) => item.action === 'skip_existing').length,
+			uncoveredCount: items.filter((item) => item.action === 'unmapped').length,
+		};
+	}
+
+	private collectFiles(folder: TFolder): TFile[] {
+		const files: TFile[] = [];
+		for (const child of folder.children) {
+			if (child instanceof TFile) {
+				files.push(child);
+			} else if (child instanceof TFolder) {
+				files.push(...this.collectFiles(child));
+			}
+		}
+		return files.sort((a, b) => a.path.localeCompare(b.path));
+	}
+
+	private async legacyMigrationReviewExists(oldPath: string, migrationId: string): Promise<boolean> {
+		const directPath = buildLegacyMigrationReviewPath(migrationId, oldPath);
+		if (this.app.vault.getAbstractFileByPath(directPath) instanceof TFile) {
+			return true;
+		}
+		const folder = this.app.vault.getAbstractFileByPath(TRACEKEEPER_REVIEW_QUEUE_DIR);
+		if (!(folder instanceof TFolder)) {
+			return false;
+		}
+		for (const file of this.collectFiles(folder).filter((item) => item.extension === 'md')) {
+			const content = await this.app.vault.cachedRead(file);
+			if (content.includes(`source_path: ${JSON.stringify(oldPath)}`)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private async legacyTargetMatches(
+		source: TFile,
+		target: TFile,
+		input: {
+			migrationId: string;
+			oldPath: string;
+			newPath: string;
+			kind: LegacyStructureKind;
+		}
+	): Promise<boolean> {
+		if (source.extension === 'md') {
+			const sourceText = await this.app.vault.cachedRead(source);
+			const targetText = await this.app.vault.cachedRead(target);
+			const enriched = enrichLegacyMarkdownContent(sourceText, input);
+			return targetText === sourceText || targetText === enriched || targetText.includes(`Migrated from: \`${source.path}\``);
+		}
+		const sourceBytes = new Uint8Array(await this.app.vault.readBinary(source));
+		const targetBytes = new Uint8Array(await this.app.vault.readBinary(target));
+		if (sourceBytes.length !== targetBytes.length) {
+			return false;
+		}
+		return sourceBytes.every((value, index) => value === targetBytes[index]);
+	}
+
 	getStructureStatus(): TracekeeperStructureStatus {
 		const plan = this.buildInitializationPlan();
 		const totalFolders = this.getNormalizedFolderPlan().length;
@@ -1288,11 +1522,29 @@ export default class TracekeeperPlugin extends Plugin {
 		const missingCount = plan.foldersToCreate.length + plan.filesToCreate.length;
 		const totalCount = totalFolders + expectedFiles.size;
 		const rootExists = this.app.vault.getAbstractFileByPath(CONTROL_PATHS.root) !== null;
+		const legacyRoots = this.getLegacyRootFolders();
 		const state: StructureState = missingCount === 0
-			? 'initialized'
+			? legacyRoots.length > 0
+				? 'legacy_detected'
+				: 'initialized'
 			: rootExists
 				? 'partial'
 				: 'missing';
+
+		if (state === 'legacy_detected') {
+			return {
+				state,
+				label: ui('需要整理', 'Needs cleanup'),
+				detail: ui(
+					`发现 ${legacyRoots.length} 个旧 Tracekeeper 目录。可在结构检查中预览并整理。`,
+					`${legacyRoots.length} legacy Tracekeeper folder(s) were found. Review and clean them from structure check.`
+				),
+				missingFolders: [],
+				missingFiles: [],
+				missingCount,
+				totalCount,
+			};
+		}
 
 		if (state === 'initialized') {
 			return {
@@ -1397,7 +1649,7 @@ export default class TracekeeperPlugin extends Plugin {
 		return this.normalizeVaultPath(CONTROL_PATHS.auditLog);
 	}
 
-	private async initializeMemoryStructure(plan: MemoryInitializationPlan): Promise<void> {
+	async initializeMemoryStructure(plan: MemoryInitializationPlan): Promise<void> {
 		try {
 			for (const folder of plan.foldersToCreate) {
 				await this.ensureFolderExists(folder);
@@ -1423,6 +1675,317 @@ export default class TracekeeperPlugin extends Plugin {
 			console.error('tracekeeper failed to initialize memory structure', error);
 			new Notice(ui('知识库基础结构补齐失败。', 'Tracekeeper failed to repair the base structure.'));
 		}
+	}
+
+	async migrateLegacyStructure(snapshot: StructureOrganizerSnapshot): Promise<LegacyMigrationResult> {
+		if (snapshot.basePlan.foldersToCreate.length > 0 || snapshot.basePlan.filesToCreate.length > 0) {
+			await this.initializeMemoryStructure(snapshot.basePlan);
+		}
+
+		const plan = snapshot.legacyPlan;
+		let copiedCount = 0;
+		let reviewCount = 0;
+
+		for (const item of plan.items) {
+			if (item.action === 'copy_rebuild') {
+				await this.copyLegacyStructureItem(item, plan.migrationId);
+				copiedCount += 1;
+			} else if (item.action === 'review_conflict' || item.action === 'unmapped') {
+				await this.writeLegacyMigrationReview(item, plan.migrationId);
+				reviewCount += 1;
+			}
+		}
+
+		const result = await this.writeLegacyMigrationReports(plan, {
+			migrationId: plan.migrationId,
+			copiedCount,
+			conflictCount: plan.conflictCount,
+			reviewCount,
+			reportMdPath: '',
+			reportJsonPath: '',
+		});
+		await this.appendToAuditLog(this.renderLegacyMigrationAuditEvent(result));
+		await this.refreshGovernanceViews();
+		new Notice(ui('旧目录内容已复制重建，旧目录尚未清理。', 'Legacy content rebuilt. Legacy folders are not cleaned yet.'));
+		return result;
+	}
+
+	async cleanupLegacyStructure(migrationId: string): Promise<LegacyCleanupResult> {
+		const plan = await this.buildLegacyStructurePlan(migrationId);
+		const blocking = plan.items.filter((item) =>
+			item.action === 'copy_rebuild' || item.action === 'review_conflict' || item.action === 'unmapped'
+		);
+		if (blocking.length > 0) {
+			throw new Error(`Cannot clean legacy folders: ${blocking.length} file(s) are not covered by migration targets or review items.`);
+		}
+
+		const cleanupId = this.createStructureCleanupId();
+		const trashedRoots: string[] = [];
+		const missingRoots: string[] = [];
+		const failedRoots: Array<{ path: string; error: string }> = [];
+
+		for (const root of LEGACY_TOP_LEVEL_DIRS) {
+			const folder = this.app.vault.getAbstractFileByPath(root);
+			if (!folder) {
+				missingRoots.push(root);
+				continue;
+			}
+			try {
+				await this.app.vault.trash(folder, true);
+				trashedRoots.push(root);
+			} catch (error) {
+				failedRoots.push({
+					path: root,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		const reportPath = await this.writeLegacyCleanupReport({
+			cleanupId,
+			trashedRoots,
+			missingRoots,
+			failedRoots,
+			reportPath: '',
+			taskPath: '',
+		});
+		const taskPath = await this.writeLegacyCleanupTask(cleanupId, migrationId, reportPath, trashedRoots, failedRoots);
+		const result: LegacyCleanupResult = {
+			cleanupId,
+			trashedRoots,
+			missingRoots,
+			failedRoots,
+			reportPath,
+			taskPath,
+		};
+		await this.appendToAuditLog(this.renderLegacyCleanupAuditEvent(result));
+		await this.refreshGovernanceViews();
+		if (failedRoots.length > 0) {
+			new Notice(ui('旧目录清理部分失败，请查看清理报告。', 'Legacy cleanup partially failed. Review the cleanup report.'));
+		} else {
+			new Notice(ui('旧目录已移入系统回收站。', 'Legacy folders moved to system trash.'));
+		}
+		return result;
+	}
+
+	private async copyLegacyStructureItem(item: LegacyStructurePlanItem, migrationId: string): Promise<void> {
+		if (!item.newPath) {
+			return;
+		}
+		const source = this.app.vault.getAbstractFileByPath(item.oldPath);
+		if (!(source instanceof TFile)) {
+			throw new Error(`Legacy source is not a file: ${item.oldPath}`);
+		}
+		await this.ensureFolderExists(vaultParentFolder(item.newPath));
+		if (item.isMarkdown) {
+			const content = await this.app.vault.cachedRead(source);
+			const next = enrichLegacyMarkdownContent(content, {
+				migrationId,
+				oldPath: item.oldPath,
+				newPath: item.newPath,
+				kind: item.kind,
+			});
+			await this.ensureFileDoesNotExist(item.newPath, next);
+			return;
+		}
+		const bytes = await this.app.vault.readBinary(source);
+		await this.app.vault.createBinary(this.normalizeVaultPath(item.newPath), bytes);
+	}
+
+	private async writeLegacyMigrationReview(item: LegacyStructurePlanItem, migrationId: string): Promise<void> {
+		const reviewPath = buildLegacyMigrationReviewPath(migrationId, item.oldPath);
+		if (this.app.vault.getAbstractFileByPath(reviewPath)) {
+			return;
+		}
+		await this.ensureFolderExists(vaultParentFolder(reviewPath));
+		const sourceContent = await this.readLegacyEvidenceText(item.oldPath);
+		const content = renderLegacyMigrationReview({
+			migrationId,
+			oldPath: item.oldPath,
+			newPath: item.newPath || 'unmapped',
+			kind: item.kind,
+			reason: item.reason,
+			sourceContent,
+		});
+		await this.ensureFileDoesNotExist(reviewPath, content);
+	}
+
+	private async readLegacyEvidenceText(path: string): Promise<string> {
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) {
+			return '';
+		}
+		try {
+			return await this.app.vault.cachedRead(file);
+		} catch {
+			return `[binary file: ${path}]`;
+		}
+	}
+
+	private async writeLegacyMigrationReports(
+		plan: LegacyStructurePlan,
+		result: LegacyMigrationResult
+	): Promise<LegacyMigrationResult> {
+		const reportDir = '00_tracekeeper/control/migrations';
+		await this.ensureFolderExists(reportDir);
+		const reportMdPath = `${reportDir}/${plan.migrationId}.md`;
+		const reportJsonPath = `${reportDir}/${plan.migrationId}.json`;
+		const summary = {
+			migration_id: plan.migrationId,
+			legacy_roots: plan.legacyRoots,
+			copied_count: result.copiedCount,
+			conflict_count: plan.conflictCount,
+			review_count: result.reviewCount,
+			trashed_roots: [],
+			report_paths: {
+				migration_markdown: reportMdPath,
+				migration_json: reportJsonPath,
+			},
+			old_directories_untouched: true,
+			old_directories_cleaned: false,
+		};
+		const json = JSON.stringify({
+			summary,
+			items: plan.items,
+		}, null, 2);
+		const conflictLines = plan.items
+			.filter((item) => item.action === 'review_conflict')
+			.map((item) => `- \`${item.oldPath}\` -> \`${item.newPath}\`: ${item.reason}`);
+		const md = [
+			'# Legacy structure migration report',
+			'',
+			`- Migration id: \`${plan.migrationId}\``,
+			`- Legacy roots: ${plan.legacyRoots.length}`,
+			`- Files scanned: ${plan.fileCount}`,
+			`- Copied: ${result.copiedCount}`,
+			`- Conflicts queued: ${result.reviewCount}`,
+			`- Uncovered: ${plan.uncoveredCount}`,
+			'- Old directories untouched: yes',
+			'',
+			'## Legacy roots',
+			'',
+			...(plan.legacyRoots.length > 0 ? plan.legacyRoots.map((root) => `- \`${root}\``) : ['None']),
+			'',
+			'## Conflicts',
+			'',
+			...(conflictLines.length > 0 ? conflictLines : ['None']),
+			'',
+		].join('\n');
+		await this.ensureFileDoesNotExist(reportMdPath, md);
+		await this.ensureFileDoesNotExist(reportJsonPath, json);
+		return {
+			...result,
+			reportMdPath,
+			reportJsonPath,
+		};
+	}
+
+	private async writeLegacyCleanupReport(input: LegacyCleanupResult): Promise<string> {
+		const reportDir = '00_tracekeeper/control/migrations';
+		await this.ensureFolderExists(reportDir);
+		const reportPath = `${reportDir}/${input.cleanupId}.md`;
+		const content = [
+			'# Legacy directory cleanup report',
+			'',
+			`- Cleanup id: \`${input.cleanupId}\``,
+			'- Method: Obsidian system trash',
+			`- Trashed legacy directories: ${input.trashedRoots.length}`,
+			`- Missing legacy directories: ${input.missingRoots.length}`,
+			`- Failed: ${input.failedRoots.length}`,
+			'- Old directories cleaned: yes',
+			'',
+			'## Trashed',
+			'',
+			...(input.trashedRoots.length > 0 ? input.trashedRoots.map((root) => `- \`${root}\``) : ['None']),
+			'',
+			'## Failed',
+			'',
+			...(input.failedRoots.length > 0 ? input.failedRoots.map((item) => `- \`${item.path}\`: ${item.error}`) : ['None']),
+			'',
+		].join('\n');
+		await this.ensureFileDoesNotExist(reportPath, content);
+		return reportPath;
+	}
+
+	private async writeLegacyCleanupTask(
+		cleanupId: string,
+		migrationId: string,
+		cleanupReportPath: string,
+		trashedRoots: string[],
+		failedRoots: Array<{ path: string; error: string }>
+	): Promise<string> {
+		const now = new Date().toISOString();
+		const taskId = `obs_task_${cleanupId.replace(/^legacy-cleanup-/, '').replace(/[^0-9A-Za-z]+/g, '_')}`;
+		const taskPath = `${TRACEKEEPER_TASKS_DIR}/${taskId}.md`;
+		await this.ensureFolderExists(TRACEKEEPER_TASKS_DIR);
+		const content = [
+			'---',
+			'agent: "tracekeeper"',
+			'client: "obsidian"',
+			'objective: "整理旧 Tracekeeper 目录结构到统一知识体系"',
+			'related_project: "tracekeeper_legacy_structure_migration"',
+			`session_id: "${migrationId}"`,
+			`started_at: "${now}"`,
+			`finished_at: "${now}"`,
+			failedRoots.length > 0 ? 'status: "warning"' : 'status: "completed"',
+			`task_id: "${taskId}"`,
+			'title: "旧目录迁移与结构清理"',
+			'tool: "tracekeeper.structure_organizer"',
+			'type: "agent-task"',
+			'memory_writes:',
+			`  - "${cleanupReportPath}"`,
+			`  - "00_tracekeeper/control/migrations/${migrationId}.md"`,
+			'---',
+			'',
+			'# 旧目录迁移与结构清理',
+			'',
+			'## Summary',
+			'',
+			`- 旧目录清理：${trashedRoots.length} 个目录已移入系统回收站。`,
+			`- 清理失败：${failedRoots.length} 个。`,
+			`- 迁移报告：[[00_tracekeeper/control/migrations/${migrationId}|${migrationId}]]`,
+			`- 清理报告：[[${cleanupReportPath.replace(/\.md$/i, '')}|${cleanupId}]]`,
+			'',
+			'## Graph links',
+			'',
+			`- [[${KNOWLEDGE_INDEX_PATH.replace(/\.md$/i, '')}|Knowledge index]]`,
+			`- [[${KNOWLEDGE_MEMORY_INDEX_PATH.replace(/\.md$/i, '')}|Memory index]]`,
+			`- [[${KNOWLEDGE_WIKI_HUBS_INDEX_PATH.replace(/\.md$/i, '')}|Wiki hubs]]`,
+			'',
+		].join('\n');
+		await this.ensureFileDoesNotExist(taskPath, content);
+		return taskPath;
+	}
+
+	private renderLegacyMigrationAuditEvent(result: LegacyMigrationResult): string {
+		const now = new Date().toISOString();
+		return (
+			`## ${now}\n` +
+			`action: legacy_structure.migrate\n` +
+			`actor: user\n` +
+			`result: success\n` +
+			`migration_id: ${result.migrationId}\n` +
+			`copied_count: ${result.copiedCount}\n` +
+			`review_count: ${result.reviewCount}\n` +
+			`target: ${result.reportMdPath}\n` +
+			`timestamp: ${now}\n\n`
+		);
+	}
+
+	private renderLegacyCleanupAuditEvent(result: LegacyCleanupResult): string {
+		const now = new Date().toISOString();
+		return (
+			`## ${now}\n` +
+			`action: legacy_structure.cleanup\n` +
+			`actor: user\n` +
+			`result: ${result.failedRoots.length > 0 ? 'partial' : 'success'}\n` +
+			`cleanup_id: ${result.cleanupId}\n` +
+			`trashed_roots: ${result.trashedRoots.length}\n` +
+			`failed_roots: ${result.failedRoots.length}\n` +
+			`task_id: ${result.taskPath.replace(`${TRACEKEEPER_TASKS_DIR}/`, '').replace(/\.md$/i, '')}\n` +
+			`target: ${result.reportPath}\n` +
+			`timestamp: ${now}\n\n`
+		);
 	}
 
 	private buildAuditLogHeader(): string {
@@ -1977,6 +2540,12 @@ export default class TracekeeperPlugin extends Plugin {
 		if (event.action === 'structure.repair') {
 			return ui('补齐基础结构', 'Repair base structure');
 		}
+		if (event.action === 'legacy_structure.migrate') {
+			return ui('复制重建旧目录', 'Rebuild legacy structure');
+		}
+		if (event.action === 'legacy_structure.cleanup') {
+			return ui('清理旧目录', 'Clean legacy folders');
+		}
 		return event.action || ui('运行记录', 'Runtime record');
 	}
 
@@ -2039,7 +2608,7 @@ export default class TracekeeperPlugin extends Plugin {
 			event.eventType === 'agent-connection-event' ||
 			event.action === 'connection' ||
 			event.action === 'mcp.initialize';
-		const isStructureRepair = event.action === 'structure.repair';
+		const isStructureEvent = event.action === 'structure.repair' || event.action === 'legacy_structure.migrate' || event.action === 'legacy_structure.cleanup';
 		const agentLabel = this.formatAgentDisplayName(event.clientName, event.agentId);
 		return {
 			time: event.sortTimestamp,
@@ -2047,7 +2616,7 @@ export default class TracekeeperPlugin extends Plugin {
 				? agentLabel
 				: isConnection
 					? agentLabel
-					: isStructureRepair
+					: isStructureEvent
 						? ui('结构', 'Structure')
 						: ui('记录', 'Record'),
 			title: event.toolName
@@ -4230,72 +4799,248 @@ export default class TracekeeperPlugin extends Plugin {
 }
 
 class InitializeMemoryStructureModal extends Modal {
+	private snapshot: StructureOrganizerSnapshot;
+	private migrationResult: LegacyMigrationResult | null = null;
+	private cleanupResult: LegacyCleanupResult | null = null;
+	private busy = false;
+
 	constructor(
 		app: App,
 		private options: {
-			plan: MemoryInitializationPlan;
-			onConfirm: () => Promise<void>;
+			plugin: TracekeeperPlugin;
+			snapshot: StructureOrganizerSnapshot;
 		}
 	) {
 		super(app);
+		this.snapshot = options.snapshot;
 	}
 
 	onOpen(): void {
 		void super.onOpen();
+		this.render();
+	}
+
+	private render(): void {
 		this.titleEl.setText(ui('知识库结构校验', 'Knowledge structure check'));
 
 		const { contentEl } = this;
 		contentEl.empty();
 
-		const { foldersToCreate, filesToCreate } = this.options.plan;
 		contentEl.createEl('p', {
 			text: ui(
-				'Tracekeeper 只检查基础入口。项目、来源、Wiki 主题等子结构会在 Agent 使用时按需创建。',
-				'Tracekeeper checks only base entries. Project, source, and Wiki topic substructures are created as agents use them.'
+				'Tracekeeper 会先检查基础入口；发现旧目录时，可在这里预览并整理到统一知识体系。',
+				'Tracekeeper checks base entries first. When legacy folders are found, you can preview and organize them here.'
 			),
 		});
 
-		if (foldersToCreate.length === 0 && filesToCreate.length === 0) {
-			contentEl.createEl('p', {
-				text: ui(
-					'基础结构完整，不需要创建新的文件或文件夹。',
-					'The base structure is complete. No files or folders will be created.'
-				),
-			});
-		} else {
-			const summary = contentEl.createDiv({ cls: 'tracekeeper-structure-check-summary' });
-			summary.createEl('strong', {
-				text: ui(
-					`发现 ${foldersToCreate.length + filesToCreate.length} 个基础结构缺失项。`,
-					`${foldersToCreate.length + filesToCreate.length} base structure item(s) are missing.`
-				),
-			});
-			summary.createEl('p', {
-				text: ui(
-					`将补齐必要目录 ${foldersToCreate.length} 个、入口文件 ${filesToCreate.length} 个；不会移动、删除或重写你已有的笔记。`,
-					`This will create ${foldersToCreate.length} required folder(s) and ${filesToCreate.length} entry file(s). Existing notes will not be moved, deleted, or rewritten.`
-				),
-			});
-			summary.createEl('p', {
-				text: ui(
-					'扩展目录会在实际产生任务、审核、来源或项目记忆时再创建。',
-					'Extended folders are created later when tasks, review items, sources, or project memories are actually written.'
-				),
-			});
+		const basePlan = this.snapshot.basePlan;
+		const legacyPlan = this.snapshot.legacyPlan;
+		const baseMissingCount = basePlan.foldersToCreate.length + basePlan.filesToCreate.length;
+		const summary = contentEl.createDiv({ cls: 'tracekeeper-structure-check-summary tracekeeper-detail-grid' });
+		this.renderFact(summary, ui('基础结构', 'Base structure'), baseMissingCount === 0 ? ui('完整', 'Ready') : ui(`${baseMissingCount} 项缺失`, `${baseMissingCount} missing`));
+		this.renderFact(summary, ui('旧目录', 'Legacy folders'), legacyPlan.legacyRoots.length === 0 ? ui('未发现', 'None') : ui(`${legacyPlan.legacyRoots.length} 个`, `${legacyPlan.legacyRoots.length}`));
+		this.renderFact(summary, ui('旧文件', 'Legacy files'), String(legacyPlan.fileCount));
+		this.renderFact(summary, ui('冲突', 'Conflicts'), String(legacyPlan.conflictCount));
+
+		if (this.cleanupResult) {
+			this.renderCleanupDone(contentEl, this.cleanupResult);
+			return;
 		}
 
+		if (this.migrationResult) {
+			this.renderMigrationDone(contentEl, this.migrationResult);
+			return;
+		}
+
+		if (this.snapshot.state === 'ready') {
+			this.renderEmptyMessage(contentEl, {
+				title: ui('结构清晰，无需整理。', 'Structure is clean.'),
+				text: ui(
+					'当前知识库只有新版 Tracekeeper 顶层结构，没有需要处理的旧目录。',
+					'The vault only has the current Tracekeeper top-level structure. No legacy folders need attention.'
+				),
+			});
+			this.renderCloseAction(contentEl);
+			return;
+		}
+
+		if (this.snapshot.state === 'needs_repair') {
+			this.renderBaseRepair(contentEl, baseMissingCount);
+			return;
+		}
+
+		this.renderLegacyDetected(contentEl, legacyPlan, baseMissingCount);
+	}
+
+	private renderBaseRepair(contentEl: HTMLElement, missingCount: number): void {
+		this.renderEmptyMessage(contentEl, {
+			title: ui('需要补齐基础结构。', 'Base structure needs repair.'),
+			text: ui(
+				`将创建 ${missingCount} 个必要入口；不会移动、删除或重写已有笔记。`,
+				`${missingCount} required item(s) will be created. Existing notes will not be moved, deleted, or rewritten.`
+			),
+		});
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
-		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel'), cls: 'mod-warning' });
+		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
 		cancel.addEventListener('click', () => this.close());
 
 		const confirm = actions.createEl('button', { text: ui('补齐基础结构', 'Repair base structure'), cls: 'mod-cta' });
-		confirm.disabled = foldersToCreate.length === 0 && filesToCreate.length === 0;
+		confirm.disabled = this.busy;
 		confirm.addEventListener('click', () => {
 			void (async () => {
-				await this.options.onConfirm();
-				this.close();
+				this.busy = true;
+				this.render();
+				try {
+					await this.options.plugin.initializeMemoryStructure(this.snapshot.basePlan);
+					this.snapshot = await this.options.plugin.buildStructureOrganizerSnapshot(this.snapshot.legacyPlan.migrationId);
+				} catch (error) {
+					console.error('tracekeeper failed to repair structure from modal', error);
+					new Notice(ui('基础结构补齐失败。', 'Base structure repair failed.'));
+				} finally {
+					this.busy = false;
+					this.render();
+				}
 			})();
 		});
+	}
+
+	private renderLegacyDetected(contentEl: HTMLElement, plan: LegacyStructurePlan, baseMissingCount: number): void {
+		const readyForCleanup = plan.legacyRoots.length > 0 && plan.copyCount === 0 && plan.conflictCount === 0 && plan.uncoveredCount === 0;
+		const detail = contentEl.createDiv({ cls: 'tracekeeper-card' });
+		detail.createEl('h3', { text: ui('发现旧目录结构', 'Legacy structure found') });
+		detail.createEl('p', {
+			text: readyForCleanup
+				? ui(
+					'旧目录内容已能在新结构中找到，可直接确认清理旧目录。',
+					'Legacy content is already covered by the current structure. You can confirm cleanup now.'
+				)
+				: ui(
+					`将先复制重建 ${plan.copyCount} 个文件；${plan.conflictCount} 个冲突会进入审核队列；旧目录会保留到你再次确认清理。`,
+					`${plan.copyCount} file(s) will be copied first; ${plan.conflictCount} conflict(s) will go to review; legacy folders remain until you confirm cleanup.`
+				),
+		});
+		if (plan.uncoveredCount > 0) {
+			detail.createEl('p', {
+				text: ui(
+					`有 ${plan.uncoveredCount} 个文件没有稳定映射，会阻止清理。`,
+					`${plan.uncoveredCount} file(s) have no stable mapping and will block cleanup.`
+				),
+				cls: 'tracekeeper-view__description',
+			});
+		}
+		const facts = detail.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderFact(facts, ui('Markdown', 'Markdown'), String(plan.markdownCount));
+		this.renderFact(facts, ui('其他文件', 'Other files'), String(plan.nonMarkdownCount));
+		this.renderFact(facts, ui('已存在', 'Existing'), String(plan.skipCount));
+		this.renderFact(facts, ui('基础缺失', 'Base missing'), String(baseMissingCount));
+
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		actions.createEl('button', { text: ui('取消', 'Cancel') }).addEventListener('click', () => this.close());
+		if (readyForCleanup) {
+			const cleanup = actions.createEl('button', { text: ui('确认清理旧目录', 'Confirm cleanup'), cls: 'mod-warning' });
+			cleanup.disabled = this.busy;
+			cleanup.addEventListener('click', () => {
+				void (async () => {
+					this.busy = true;
+					this.render();
+					try {
+						this.cleanupResult = await this.options.plugin.cleanupLegacyStructure(plan.migrationId);
+					} catch (error) {
+						console.error('tracekeeper failed to cleanup legacy structure', error);
+						new Notice(ui('旧目录清理失败，请查看控制台。', 'Legacy cleanup failed. Check the console.'));
+					} finally {
+						this.busy = false;
+						this.render();
+					}
+				})();
+			});
+			return;
+		}
+		const migrate = actions.createEl('button', { text: ui('复制重建', 'Copy and rebuild'), cls: 'mod-cta' });
+		migrate.disabled = this.busy || plan.fileCount === 0;
+		migrate.addEventListener('click', () => {
+			void (async () => {
+				this.busy = true;
+				this.render();
+				try {
+					this.migrationResult = await this.options.plugin.migrateLegacyStructure(this.snapshot);
+				} catch (error) {
+					console.error('tracekeeper failed to migrate legacy structure', error);
+					new Notice(ui('旧目录复制重建失败。', 'Legacy copy and rebuild failed.'));
+				} finally {
+					this.busy = false;
+					this.render();
+				}
+			})();
+		});
+	}
+
+	private renderMigrationDone(contentEl: HTMLElement, result: LegacyMigrationResult): void {
+		const card = contentEl.createDiv({ cls: 'tracekeeper-card' });
+		card.createEl('h3', { text: ui('复制重建已完成', 'Copy and rebuild complete') });
+		card.createEl('p', {
+			text: ui(
+				'旧目录还没有清理。确认清理后，旧目录会移入系统回收站。',
+				'Legacy folders have not been cleaned yet. Confirm cleanup to move them to system trash.'
+			),
+		});
+		const facts = card.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderFact(facts, ui('已复制', 'Copied'), String(result.copiedCount));
+		this.renderFact(facts, ui('审核项', 'Review items'), String(result.reviewCount));
+		this.renderFact(facts, ui('迁移报告', 'Migration report'), result.reportMdPath);
+
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		actions.createEl('button', { text: ui('稍后清理', 'Clean later') }).addEventListener('click', () => this.close());
+		const cleanup = actions.createEl('button', { text: ui('确认清理旧目录', 'Confirm cleanup'), cls: 'mod-warning' });
+		cleanup.disabled = this.busy;
+		cleanup.addEventListener('click', () => {
+			void (async () => {
+				this.busy = true;
+				this.render();
+				try {
+					this.cleanupResult = await this.options.plugin.cleanupLegacyStructure(result.migrationId);
+				} catch (error) {
+					console.error('tracekeeper failed to cleanup legacy structure', error);
+					new Notice(ui('旧目录清理失败，请查看控制台。', 'Legacy cleanup failed. Check the console.'));
+				} finally {
+					this.busy = false;
+					this.render();
+				}
+			})();
+		});
+	}
+
+	private renderCleanupDone(contentEl: HTMLElement, result: LegacyCleanupResult): void {
+		const card = contentEl.createDiv({ cls: 'tracekeeper-card' });
+		card.createEl('h3', { text: ui('整理完成', 'Cleanup complete') });
+		card.createEl('p', {
+			text: ui(
+				`已清理 ${result.trashedRoots.length} 个旧目录，任务记录和清理报告已写入。`,
+				`${result.trashedRoots.length} legacy folder(s) cleaned. Task record and cleanup report were written.`
+			),
+		});
+		const facts = card.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderFact(facts, ui('清理报告', 'Cleanup report'), result.reportPath);
+		this.renderFact(facts, ui('任务记录', 'Task record'), result.taskPath);
+		this.renderFact(facts, ui('失败', 'Failed'), String(result.failedRoots.length));
+		this.renderCloseAction(contentEl);
+	}
+
+	private renderEmptyMessage(contentEl: HTMLElement, input: { title: string; text: string }): void {
+		const card = contentEl.createDiv({ cls: 'tracekeeper-card' });
+		card.createEl('h3', { text: input.title });
+		card.createEl('p', { text: input.text });
+	}
+
+	private renderFact(container: HTMLElement, label: string, value: string): void {
+		const item = container.createDiv({ cls: 'tracekeeper-detail' });
+		item.createEl('span', { text: label });
+		item.createEl('strong', { text: value || ui('无', 'None') });
+	}
+
+	private renderCloseAction(contentEl: HTMLElement): void {
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		actions.createEl('button', { text: ui('关闭', 'Close'), cls: 'mod-cta' }).addEventListener('click', () => this.close());
 	}
 
 	onClose(): void {

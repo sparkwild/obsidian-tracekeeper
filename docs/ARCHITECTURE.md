@@ -63,7 +63,7 @@ New vault initialization creates only this top-level layout:
   review_queue/
 ```
 
-Legacy folders such as `00_control`, `01_inbox`, `02_timeline`, `03_sources`, `04_memory`, `05_projects`, `06_outputs`, and `07_archive` are read for compatibility and reported by lint. New writes should not target them.
+Legacy folders such as `00_control`, `01_inbox`, `02_timeline`, `03_sources`, `04_memory`, `05_projects`, `06_outputs`, and `07_archive` are read for compatibility and reported by lint. New writes should not target them. Directory cleanup is handled by the Obsidian plugin structure check, which previews the plan, copies into the current layout, queues conflicts for review, and only then moves old roots to system trash after user confirmation.
 
 Stable write rules:
 

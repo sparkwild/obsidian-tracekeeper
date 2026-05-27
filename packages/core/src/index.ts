@@ -7,3 +7,4 @@ export * from './safety';
 export * from './graph-health';
 export * from './knowledge-architecture';
 export * from './source-analysis';
+export * from './legacy-structure';
