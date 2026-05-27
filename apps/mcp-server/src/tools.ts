@@ -8,11 +8,25 @@ import {
 	type ParsedMarkdown,
 	analyzeGraphHealth,
 	evaluateGraphProfile,
+	type GraphHealthReport,
 	type GraphProfile,
 	normalizeGraphProfile,
 	type SourceAnalysisResult,
 	type SourceProposalDraft,
 	buildContextPack,
+	TRACEKEEPER_AUDIT_LOG_PATH,
+	TRACEKEEPER_AGENT_REQUESTS_DIR,
+	TRACEKEEPER_CONTEXT_PACKS_DIR,
+	TRACEKEEPER_REVIEW_QUEUE_DIR,
+	TRACEKEEPER_SESSIONS_DIR,
+	TRACEKEEPER_SOURCE_ANALYSIS_DIR,
+	TRACEKEEPER_TASKS_DIR,
+	KNOWLEDGE_GLOBAL_MEMORY_DIR,
+	KNOWLEDGE_PROJECTS_MEMORY_DIR,
+	KNOWLEDGE_SOURCES_DIR,
+	LEGACY_TOP_LEVEL_DIRS,
+	isKnowledgeWikiPath,
+	projectMemoryPath,
 	lintNotes,
 	parseMarkdown,
 	recallNotes,
@@ -36,27 +50,46 @@ import {
 	toSafeVaultRoot,
 } from './safety';
 
-const REVIEW_QUEUE_PREFIX = '01_inbox/review_queue';
-const AUDIT_LOG_PATH = '00_control/audit_log.md';
+const REVIEW_QUEUE_PREFIX = TRACEKEEPER_REVIEW_QUEUE_DIR;
+const AUDIT_LOG_PATH = TRACEKEEPER_AUDIT_LOG_PATH;
 const MAX_LIST_QUEUE_ITEMS = 20;
 const MAX_AUDIT_ITEMS = 20;
 const MAX_APPROVED_WRITEBACKS = 20;
-const CONTEXT_PACK_DIR = '06_outputs/context_packs';
-const SESSION_NOTE_DIR = '02_timeline/sessions';
-const AGENT_TASK_DIR = '02_timeline/agent_tasks';
-const SOURCE_REQUESTS_DIR = '01_inbox/agent_requests';
-const SOURCES_DIR = '03_sources';
-const SOURCE_ANALYSIS_REPORT_DIR = '06_outputs/source_analysis';
-const MEMORY_PROPOSAL_DIR = '01_inbox/review_queue';
+const MAX_PROJECT_TOOL_ITEMS = 20;
+const MAX_PROJECT_SCOPE_CANDIDATES = 8;
+const CONTEXT_PACK_DIR = TRACEKEEPER_CONTEXT_PACKS_DIR;
+const SESSION_NOTE_DIR = TRACEKEEPER_SESSIONS_DIR;
+const AGENT_TASK_DIR = TRACEKEEPER_TASKS_DIR;
+const PROJECT_MEMORY_DIRS = [KNOWLEDGE_PROJECTS_MEMORY_DIR, '05_projects', '04_projects'];
+const PROJECT_MEMORY_READ_DIRS = PROJECT_MEMORY_DIRS;
+const GLOBAL_MEMORY_DIRS = [KNOWLEDGE_GLOBAL_MEMORY_DIR, '04_memory', '05_memory'];
+const SOURCE_REQUESTS_DIR = TRACEKEEPER_AGENT_REQUESTS_DIR;
+const SOURCES_DIR = KNOWLEDGE_SOURCES_DIR;
+const SOURCE_ANALYSIS_REPORT_DIR = TRACEKEEPER_SOURCE_ANALYSIS_DIR;
+const MEMORY_PROPOSAL_DIR = TRACEKEEPER_REVIEW_QUEUE_DIR;
 const MAX_SOURCE_EXCERPT_LENGTH = 1000;
+const MAX_RECALL_EXCERPT_LENGTH = 480;
+const MAX_RECALL_GRAPH_LINKS = 8;
+const DEFAULT_FINISH_TASK_REVIEW_MODE = 'off';
 
 type CaptureSourceMode = 'external_reference' | 'extracted_snapshot' | 'local_copy';
+type ReviewProposalMode = 'off' | 'suggest' | 'review_queue' | 'auto_propose';
+type MemoryProposalRule = 'review_queue' | 'auto_write' | 'disabled';
+type MemoryScope = 'global' | 'project';
+type ArchitectureStatus = 'healthy' | 'needs_attention';
 type SensitiveTextScan = { ok: true } | { ok: false; reason: string };
+
+interface MemoryRulesContext {
+	globalMemoryRule?: unknown;
+	projectMemoryRule?: unknown;
+	taskMemoryProposalMode?: unknown;
+}
 
 interface ToolContext {
 	defaultVaultRoot?: string;
 	vaultConfigDir?: string;
 	graphProfile?: unknown;
+	memoryRules?: MemoryRulesContext;
 }
 
 export interface ToolInvocationContext extends ToolContext {
@@ -93,7 +126,10 @@ const READ_ONLY_TOOL_NAMES = new Set([
 	'tracekeeper.status',
 	'tracekeeper.graph_health',
 	'tracekeeper.recall',
+	'tracekeeper.project_context',
+	'tracekeeper.project_history',
 	'tracekeeper.read_note',
+	'tracekeeper.review_queue',
 	'tracekeeper.list_review_queue',
 	'tracekeeper.list_source_requests',
 	'tracekeeper.list_approved_writebacks',
@@ -105,6 +141,7 @@ const REVIEW_GATED_TOOL_NAMES = new Set(['tracekeeper.apply_approved_writeback']
 
 const LOW_RISK_TOOL_NAMES = new Set([
 	'tracekeeper.start_task',
+	'tracekeeper.source_request',
 	'tracekeeper.analyze_source_request',
 	'tracekeeper.write_context_pack',
 	'tracekeeper.build_context_pack',
@@ -133,11 +170,15 @@ type ToolName =
 	| 'tracekeeper.graph_health'
 	| 'tracekeeper.start_task'
 	| 'tracekeeper.recall'
+	| 'tracekeeper.project_context'
+	| 'tracekeeper.project_history'
 	| 'tracekeeper.read_note'
+	| 'tracekeeper.review_queue'
 	| 'tracekeeper.list_review_queue'
 	| 'tracekeeper.list_source_requests'
 	| 'tracekeeper.list_approved_writebacks'
 	| 'tracekeeper.audit_recent'
+	| 'tracekeeper.source_request'
 	| 'tracekeeper.analyze_source_request'
 	| 'tracekeeper.apply_approved_writeback'
 	| 'tracekeeper.build_context_pack'
@@ -154,11 +195,15 @@ const TOOL_NAME_SET = new Set<string>([
 	'tracekeeper.graph_health',
 	'tracekeeper.start_task',
 	'tracekeeper.recall',
+	'tracekeeper.project_context',
+	'tracekeeper.project_history',
 	'tracekeeper.read_note',
+	'tracekeeper.review_queue',
 	'tracekeeper.list_review_queue',
 	'tracekeeper.list_source_requests',
 	'tracekeeper.list_approved_writebacks',
 	'tracekeeper.audit_recent',
+	'tracekeeper.source_request',
 	'tracekeeper.analyze_source_request',
 	'tracekeeper.apply_approved_writeback',
 	'tracekeeper.build_context_pack',
@@ -170,6 +215,34 @@ const TOOL_NAME_SET = new Set<string>([
 	'tracekeeper.capture_source',
 	'tracekeeper.propose_memory',
 ]);
+
+const DEPRECATED_TOOL_REPLACEMENTS: Record<string, string> = {
+	'tracekeeper.project_context': 'tracekeeper.recall with scope="project"',
+	'tracekeeper.project_history': 'tracekeeper.recall with scope="project_history"',
+	'tracekeeper.list_review_queue': 'tracekeeper.review_queue with action="list_pending"',
+	'tracekeeper.list_source_requests': 'tracekeeper.source_request with action="list"',
+	'tracekeeper.list_approved_writebacks': 'tracekeeper.review_queue with action="list_approved"',
+	'tracekeeper.audit_recent': 'Obsidian runtime log view',
+	'tracekeeper.analyze_source_request': 'tracekeeper.source_request with action="analyze"',
+	'tracekeeper.write_context_pack': 'tracekeeper.build_context_pack with write=true',
+	'tracekeeper.write_session_note': 'tracekeeper.finish_task',
+	'tracekeeper.distill_session': 'tracekeeper.finish_task',
+};
+
+const PUBLIC_TOOL_NAME_ORDER = [
+	'tracekeeper.status',
+	'tracekeeper.lint',
+	'tracekeeper.recall',
+	'tracekeeper.read_note',
+	'tracekeeper.start_task',
+	'tracekeeper.finish_task',
+	'tracekeeper.build_context_pack',
+	'tracekeeper.review_queue',
+	'tracekeeper.apply_approved_writeback',
+	'tracekeeper.source_request',
+	'tracekeeper.capture_source',
+	'tracekeeper.propose_memory',
+];
 
 function isToolName(value: string): value is ToolName {
 	return TOOL_NAME_SET.has(value);
@@ -192,6 +265,24 @@ interface StartTaskArgs extends ToolArgs {
 	project_hint?: unknown;
 }
 
+interface ProjectScopeArgs extends ToolArgs {
+	project_hint?: unknown;
+	project_id?: unknown;
+	repo_path?: unknown;
+	repo?: unknown;
+	project_path?: unknown;
+}
+
+interface ProjectContextArgs extends ProjectScopeArgs {
+	query?: unknown;
+	max_items?: unknown;
+}
+
+interface ProjectHistoryArgs extends ProjectScopeArgs {
+	query?: unknown;
+	max_items?: unknown;
+}
+
 interface BuildContextPackArgs extends ToolArgs {
 	query?: unknown;
 	task_id?: unknown;
@@ -211,15 +302,72 @@ interface FinishTaskArgs extends ToolArgs {
 	task_id?: unknown;
 	summary?: unknown;
 	outcomes?: unknown;
+	decisions?: unknown;
+	solution_changes?: unknown;
+	lessons?: unknown;
+	preferences?: unknown;
+	memory_candidates?: unknown;
+	review_proposal_mode?: unknown;
 	next_actions?: unknown;
 	client?: unknown;
 	project_hint?: unknown;
+	memory_scope?: unknown;
+	related_wiki?: unknown;
+	related_sources?: unknown;
 	filename?: unknown;
 }
 
 interface RecallArgs extends ToolArgs {
 	query?: unknown;
 	max_items?: unknown;
+	scope?: unknown;
+	project_hint?: unknown;
+	project_id?: unknown;
+	repo_path?: unknown;
+	repo?: unknown;
+	project_path?: unknown;
+}
+
+interface RankedRecallMatch {
+	note: ScannedNote;
+	score: number;
+	raw_score: number;
+	matchedTokens: string[];
+	score_reason: string[];
+}
+
+interface ArchitectureStatusReport {
+	architecture_status: ArchitectureStatus;
+	missing_graph_bridges: string[];
+}
+
+interface MemoryBridgeReport {
+	missing_wiki_bridge: boolean;
+	related_wiki: string[];
+	missing_related_wiki: string[];
+}
+
+interface MemoryRoutingContext {
+	memoryScope: MemoryScope;
+	projectHint: string;
+	relatedWiki: string[];
+	relatedSources: string[];
+	architecture: ArchitectureStatusReport;
+	missingWikiBridge: boolean;
+	missingRelatedWiki: string[];
+}
+
+interface FinishTaskSuggestion {
+	kind: string;
+	label: string;
+	values: string[];
+}
+
+interface FinishTaskProposalResult {
+	proposals: Array<{ kind: string; path: string }>;
+	suggestedMemoryUpdates: FinishTaskSuggestion[];
+	autoAppliedMemoryUpdates: Array<{ kind: string; path: string; status: string }>;
+	hasMissingWikiBridge: boolean;
 }
 
 interface ReadNoteArgs extends ToolArgs {
@@ -280,12 +428,20 @@ interface ProposeMemoryArgs extends ToolArgs {
 	task_id?: unknown;
 	filename?: unknown;
 	title?: unknown;
+	project_hint?: unknown;
+	memory_scope?: unknown;
+	related_wiki?: unknown;
+	related_sources?: unknown;
 }
 
 interface ListApprovedWritebacksArgs extends ToolArgs {
 	scope?: unknown;
 	max_items?: unknown;
 	limit?: unknown;
+}
+
+interface ReviewQueueArgs extends ListApprovedWritebacksArgs {
+	action?: unknown;
 }
 
 interface ApplyApprovedWritebackArgs extends ToolArgs {
@@ -308,6 +464,10 @@ interface AnalyzeSourceRequestArgs extends ToolArgs {
 	task_id?: unknown;
 	update_request_status?: unknown;
 	force_reprocess?: unknown;
+}
+
+interface SourceRequestArgs extends ListSourceRequestsArgs, AnalyzeSourceRequestArgs {
+	action?: unknown;
 }
 
 interface SourceRequestRecord {
@@ -390,12 +550,63 @@ interface WritebackPlan {
 	reason?: string;
 }
 
+function truncateSummaryText(value: string, maxLength = 900): string {
+	const normalized = value.replace(/\s+/g, ' ').trim();
+	if (normalized.length <= maxLength) {
+		return normalized;
+	}
+	return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function summarizeToolPayload(payload: unknown, isError: boolean): string {
+	if (isError) {
+		return typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+	}
+	if (!isRecord(payload)) {
+		return truncateSummaryText(typeof payload === 'string' ? payload : 'Tracekeeper MCP tool completed.');
+	}
+
+	const summaryParts: string[] = [];
+	const keys = [
+		'ok',
+		'read_only',
+		'tool',
+		'action',
+		'scope_mode',
+		'review_proposal_mode',
+		'task_id',
+		'path',
+		'matched_count',
+		'total_matches',
+		'count',
+		'issue_count',
+		'proposal_count',
+		'suggestion_count',
+		'auto_applied_count',
+	];
+	for (const key of keys) {
+		const value = payload[key];
+		if (value === undefined || value === null || Array.isArray(value) || isRecord(value)) {
+			continue;
+		}
+		summaryParts.push(`${key}=${String(value)}`);
+	}
+
+	const nextActions = Array.isArray(payload.next_actions_for_agent)
+		? payload.next_actions_for_agent
+			.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+			.slice(0, 2)
+		: [];
+	const base = summaryParts.length > 0 ? summaryParts.join(' | ') : 'Tracekeeper MCP tool completed.';
+	return truncateSummaryText([base, ...nextActions].join('\n'));
+}
+
 function toolResult(payload: unknown, isError = false): McpStructuredToolResult {
 	return {
 		content: [
 			{
 				type: 'text',
-				text: JSON.stringify(payload, null, 2),
+				text: summarizeToolPayload(payload, isError),
 			},
 		],
 		structuredContent: payload,
@@ -427,6 +638,51 @@ function graphProfileFromArgs(value: unknown, context: ToolContext): GraphProfil
 	return normalizeGraphProfile(value ?? context.graphProfile);
 }
 
+type RecallScope = 'global' | 'project' | 'project_history';
+
+function coerceRecallScope(value: unknown): RecallScope {
+	const normalized = coerceOptionalString(value).toLowerCase();
+	if (!normalized || normalized === 'global') {
+		return 'global';
+	}
+	if (normalized === 'project' || normalized === 'project_context') {
+		return 'project';
+	}
+	if (normalized === 'project_history' || normalized === 'history') {
+		return 'project_history';
+	}
+	throw new ToolInputError('scope must be one of: global, project, project_history.');
+}
+
+type ReviewQueueAction = 'list_pending' | 'list_approved';
+
+function coerceReviewQueueAction(value: unknown): ReviewQueueAction {
+	const normalized = coerceOptionalString(value).toLowerCase();
+	if (!normalized || normalized === 'list_pending' || normalized === 'pending') {
+		return 'list_pending';
+	}
+	if (normalized === 'list_approved' || normalized === 'approved') {
+		return 'list_approved';
+	}
+	throw new ToolInputError('review_queue action must be one of: list_pending, list_approved.');
+}
+
+type SourceRequestAction = 'list' | 'analyze';
+
+function coerceSourceRequestAction(value: unknown, rawArgs: SourceRequestArgs): SourceRequestAction {
+	const normalized = coerceOptionalString(value).toLowerCase();
+	if (!normalized) {
+		return rawArgs.request_path || rawArgs.path ? 'analyze' : 'list';
+	}
+	if (normalized === 'list' || normalized === 'pending') {
+		return 'list';
+	}
+	if (normalized === 'analyze' || normalized === 'process') {
+		return 'analyze';
+	}
+	throw new ToolInputError('source_request action must be one of: list, analyze.');
+}
+
 function scanVaultForContext(vaultRoot: string, context: ToolContext): ScanResult {
 	return scanVault(vaultRoot, pathSafetyOptions(context));
 }
@@ -455,6 +711,198 @@ function coerceNonEmptyString(value: unknown, required = false, field = 'value')
 
 function coerceOptionalString(value: unknown): string {
 	return typeof value === 'string' ? value.trim() : '';
+}
+
+function coerceMemoryScope(value: unknown): MemoryScope | undefined {
+	const normalized = coerceOptionalString(value).toLowerCase();
+	if (!normalized) {
+		return undefined;
+	}
+	if (normalized === 'global' || normalized === 'project') {
+		return normalized;
+	}
+	throw new ToolInputError('memory_scope must be one of: global, project.');
+}
+
+function resolveMemoryScope(
+	proposalKind: string,
+	targetNote: string,
+	projectHint: string,
+	memoryScopeValue: unknown
+): MemoryScope {
+	return coerceMemoryScope(memoryScopeValue) || normalizeMemoryScope(proposalKind, targetNote, projectHint, '');
+}
+
+function dedupeAndNormalizeList(values: string[]): string[] {
+	const normalized = values
+		.map((value) => value.trim())
+		.filter(Boolean)
+		.map((value) => value.replace(/\s+/g, ' '))
+		.sort((a, b) => a.localeCompare(b));
+	return Array.from(new Set(normalized));
+}
+
+function normalizeMultiValueList(value: unknown, field: string, required = false): string[] {
+	const source = coerceStringOrStringArray(value, field, required);
+	const normalized: string[] = [];
+	for (const entry of source) {
+		const chunks = entry
+			.split(/[\n,]/g)
+			.map((item) => item.trim())
+			.filter(Boolean);
+		normalized.push(...chunks);
+	}
+	return dedupeAndNormalizeList(normalized);
+}
+
+function normalizeWikilinkOrSourceValue(value: string): string {
+	let candidate = value.trim();
+	if (!candidate) {
+		return '';
+	}
+	const markdownLink = candidate.match(/\]\(([^)]+)\)/);
+	if (markdownLink?.[1]) {
+		candidate = markdownLink[1].trim();
+	}
+	candidate = candidate
+		.replace(/^\s*!\[\[(.*?)\]\]\s*$/, (_, body) => body)
+		.replace(/^\s*\[\[(.*?)\]\]\s*$/, (_, body) => body);
+	const aliasSplit = candidate.indexOf('|');
+	if (aliasSplit >= 0) {
+		candidate = candidate.slice(0, aliasSplit).trim();
+	}
+	return candidate.replace(/^['"]|['"]$/g, '').trim();
+}
+
+function normalizeMemoryScope(
+	proposalKind: string,
+	targetNote: string,
+	projectHint: string,
+	memoryScopeValue: unknown
+): MemoryScope {
+	const normalized = coerceOptionalString(memoryScopeValue).toLowerCase();
+	if (normalized === 'project' || normalized === 'global') {
+		return normalized;
+	}
+	return isProjectMemoryProposal(proposalKind, targetNote, projectHint) ? 'project' : 'global';
+}
+
+function buildArchitectureStatus(vaultRoot: string, context: ToolContext): ArchitectureStatusReport {
+	const scan = scanVaultForContext(vaultRoot, context);
+	const graphHealth = analyzeGraphHealth(scan.notes, { maxItems: 20 });
+	const missingGraphBridges = [
+		...graphHealth.missing_recommended_hubs,
+		graphHealth.missing_recommended_entry,
+	].filter((value): value is string => Boolean(value));
+	const isHealthy =
+		graphHealth.unresolved_edge_count === 0 &&
+		graphHealth.component_count <= 1 &&
+		missingGraphBridges.length === 0;
+	return {
+		architecture_status: isHealthy ? 'healthy' : 'needs_attention',
+		missing_graph_bridges: dedupeAndNormalizeList(missingGraphBridges),
+	};
+}
+
+function resolveProjectMemoryBridgeMetadata(
+	vaultRoot: string,
+	memoryScope: MemoryScope,
+	projectHint: string,
+	relatedWikiRaw: string[],
+	context: ToolContext
+): MemoryBridgeReport {
+	if (memoryScope !== 'project') {
+		return {
+			missing_wiki_bridge: false,
+			related_wiki: relatedWikiRaw,
+			missing_related_wiki: [],
+		};
+	}
+
+	const options = pathSafetyOptions(context);
+	const scan = scanVaultForContext(vaultRoot, context);
+	const pathSet = new Set(scan.notes.map((note) => note.relativePath.toLowerCase()));
+
+	if (projectHint && !projectHint.trim()) {
+		projectHint = '';
+	}
+
+	const relatedWiki = dedupeAndNormalizeList(relatedWikiRaw.map(normalizeWikilinkOrSourceValue));
+	if (relatedWiki.length === 0) {
+		return {
+			missing_wiki_bridge: true,
+			related_wiki: [],
+			missing_related_wiki: [],
+		};
+	}
+
+	const missing_related_wiki: string[] = [];
+	const resolved: string[] = [];
+
+	const resolveReference = (rawReference: string): string | null => {
+		const candidates = new Set<string>();
+		candidates.add(rawReference);
+		if (!rawReference.toLowerCase().endsWith('.md')) {
+			candidates.add(`${rawReference}.md`);
+		}
+		if (rawReference.endsWith('.md') && rawReference.length > 3) {
+			candidates.add(rawReference.slice(0, -3));
+		}
+
+		for (const candidate of candidates) {
+			const normalizedCandidate = coerceOptionalString(candidate);
+			if (!normalizedCandidate) {
+				continue;
+			}
+			let notePath: string;
+			try {
+				notePath = normalizeNotePath(normalizedCandidate, options);
+			} catch {
+				continue;
+			}
+			const lowerPath = notePath.toLowerCase();
+			if (pathSet.has(lowerPath)) {
+				return notePath;
+			}
+			const absolutePath = path.join(vaultRoot, notePath);
+			if (fs.existsSync(absolutePath)) {
+				return notePath;
+			}
+		}
+
+		const title = rawReference.toLowerCase().replace(/\.md$/i, '');
+		for (const note of scan.notes) {
+			const noteTitle = note.title.toLowerCase();
+			const basePath = note.relativePath.toLowerCase().split('/').pop()?.replace(/\.md$/i, '') || '';
+			if (noteTitle === title || basePath === title) {
+				return note.relativePath;
+			}
+		}
+		return null;
+	};
+
+	for (const reference of relatedWiki) {
+		const resolvedPath = resolveReference(reference);
+		if (resolvedPath && isKnowledgeWikiPath(resolvedPath)) {
+			resolved.push(resolvedPath);
+		} else {
+			missing_related_wiki.push(reference);
+		}
+	}
+
+	if (missing_related_wiki.length > 0 || resolved.length === 0) {
+		return {
+			missing_wiki_bridge: true,
+			related_wiki: dedupeAndNormalizeList(resolved),
+			missing_related_wiki: dedupeAndNormalizeList(missing_related_wiki),
+		};
+	}
+
+	return {
+		missing_wiki_bridge: false,
+		related_wiki: dedupeAndNormalizeList(resolved),
+		missing_related_wiki: [],
+	};
 }
 
 function coerceStringOrStringArray(value: unknown, field: string, required = false): string[] {
@@ -491,6 +939,878 @@ function coerceStringOrStringArray(value: unknown, field: string, required = fal
 	}
 
 	throw new ToolInputError(`${field} must be a string or string array.`);
+}
+
+function coerceReviewProposalMode(value: unknown, fallback: ReviewProposalMode = DEFAULT_FINISH_TASK_REVIEW_MODE): ReviewProposalMode {
+	const normalized = coerceOptionalString(value).toLowerCase();
+	if (!normalized) {
+		return fallback;
+	}
+	if (normalized === 'off' || normalized === 'suggest' || normalized === 'review_queue' || normalized === 'auto_propose') {
+		return normalized;
+	}
+	throw new ToolInputError('review_proposal_mode must be one of: off, suggest, review_queue, auto_propose.');
+}
+
+const FINISH_TASK_PROPOSAL_SIGNATURE_KEY = 'content_signature';
+
+function normalizeFinishTaskProposalValues(values: string[]): string[] {
+	return [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))].sort((a, b) =>
+		a.localeCompare(b)
+	);
+}
+
+function buildFinishTaskProposalSignature(taskId: string, proposalKind: string, values: string[]): string {
+	const payload = {
+		taskId,
+		proposalKind,
+		values: normalizeFinishTaskProposalValues(values),
+	};
+	return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+function finishTaskProposalLabel(proposalKind: string): string {
+	switch (proposalKind) {
+		case 'task_decision':
+			return 'Task Decisions';
+		case 'solution_change':
+			return 'Solution Changes';
+		case 'lesson_learned':
+			return 'Lessons';
+		case 'user_preference':
+			return 'User Preferences';
+		case 'project_next_action':
+			return 'Project Next Actions';
+		case 'memory_candidate':
+			return 'Memory Candidates';
+		default:
+			return 'Closeout Items';
+	}
+}
+
+function extractFinishTaskSectionValues(body: string, label: string): string[] {
+	const needle = `## ${label.toLowerCase()}`;
+	const lines = body.split('\n');
+	let inSection = false;
+	const values: string[] = [];
+
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (trimmed.startsWith('## ')) {
+			inSection = trimmed.toLowerCase() === needle;
+			continue;
+		}
+		if (!inSection || !trimmed.startsWith('- ')) {
+			continue;
+		}
+		const value = trimmed.slice(2).trim();
+		if (value.length > 0) {
+			values.push(value);
+		}
+	}
+
+	return normalizeFinishTaskProposalValues(values);
+}
+
+function findExistingFinishTaskProposal(
+	vaultRoot: string,
+	taskId: string,
+	proposalKind: string,
+	proposalValues: string[],
+	context: ToolContext
+): string | null {
+	const scan = scanVaultForContext(vaultRoot, context);
+	const signature = buildFinishTaskProposalSignature(taskId, proposalKind, proposalValues);
+	const label = finishTaskProposalLabel(proposalKind);
+
+	for (const note of scan.notes) {
+		if (!note.relativePath.startsWith(`${MEMORY_PROPOSAL_DIR}/`)) {
+			continue;
+		}
+		const sourceTool = stripYamlQuotes(readFrontmatterString(note.frontmatter, ['proposal_source_tool', 'proposalSourceTool']));
+		const noteTaskId = stripYamlQuotes(readFrontmatterString(note.frontmatter, ['proposal_source_task_id', 'proposalSourceTaskId']));
+		const noteProposalKind = stripYamlQuotes(readFrontmatterString(note.frontmatter, ['proposal_kind', 'proposalKind']));
+		if (
+			sourceTool !== 'tracekeeper.finish_task' ||
+			noteTaskId !== taskId ||
+			noteProposalKind !== proposalKind
+		) {
+			continue;
+		}
+
+		const noteSignature = stripYamlQuotes(
+			readFrontmatterString(note.frontmatter, [FINISH_TASK_PROPOSAL_SIGNATURE_KEY, 'proposal_signature'])
+		);
+		if (noteSignature && noteSignature === signature) {
+			return note.relativePath;
+		}
+
+		const sectionValues = extractFinishTaskSectionValues(note.content, label);
+		const candidateSignature = buildFinishTaskProposalSignature(taskId, proposalKind, sectionValues);
+		if (candidateSignature === signature && sectionValues.length > 0) {
+			return note.relativePath;
+		}
+	}
+
+	return null;
+}
+
+function normalizeReviewProposalMode(value: unknown, fallback: ReviewProposalMode = DEFAULT_FINISH_TASK_REVIEW_MODE): ReviewProposalMode {
+	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+	return normalized === 'off' || normalized === 'suggest' || normalized === 'review_queue' || normalized === 'auto_propose'
+		? normalized
+		: fallback;
+}
+
+function defaultReviewProposalMode(context: ToolContext): ReviewProposalMode {
+	return normalizeReviewProposalMode(context.memoryRules?.taskMemoryProposalMode, DEFAULT_FINISH_TASK_REVIEW_MODE);
+}
+
+function normalizeMemoryProposalRule(value: unknown): MemoryProposalRule {
+	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+	if (normalized === 'disabled') {
+		return 'disabled';
+	}
+	if (normalized === 'auto_write' || normalized === 'auto' || normalized === 'automatic' || normalized === 'auto_save') {
+		return 'auto_write';
+	}
+	return 'review_queue';
+}
+
+function isProjectMemoryProposal(proposalKind: string, targetNote: string, projectHint: string): boolean {
+	const normalizedKind = proposalKind.trim().toLowerCase();
+	const normalizedTarget = targetNote.trim().toLowerCase();
+	return Boolean(
+		projectHint.trim()
+		|| normalizedKind.includes('project')
+		|| normalizedKind.includes('workspace')
+		|| normalizedKind.includes('repo')
+		|| PROJECT_MEMORY_READ_DIRS.some((projectDir) => normalizedTarget.startsWith(`${projectDir}/`))
+	);
+}
+
+function isProjectMemoryProposalForScope(
+	proposalKind: string,
+	targetNote: string,
+	projectHint: string,
+	memoryScope?: MemoryScope
+): boolean {
+	if (memoryScope === 'global') {
+		return false;
+	}
+	if (memoryScope === 'project') {
+		return true;
+	}
+	return isProjectMemoryProposal(proposalKind, targetNote, projectHint);
+}
+
+function memoryProposalRuleFor(
+	proposalKind: string,
+	targetNote: string,
+	projectHint: string,
+	context: ToolContext,
+	memoryScope?: MemoryScope
+): MemoryProposalRule {
+	const projectScoped = isProjectMemoryProposalForScope(proposalKind, targetNote, projectHint, memoryScope);
+	return normalizeMemoryProposalRule(projectScoped
+		? context.memoryRules?.projectMemoryRule
+		: context.memoryRules?.globalMemoryRule);
+}
+
+function isMemoryProposalAllowed(
+	proposalKind: string,
+	targetNote: string,
+	projectHint: string,
+	context: ToolContext,
+	memoryScope?: MemoryScope
+): boolean {
+	return memoryProposalRuleFor(proposalKind, targetNote, projectHint, context, memoryScope) !== 'disabled';
+}
+
+function assertMemoryProposalAllowed(
+	proposalKind: string,
+	targetNote: string,
+	projectHint: string,
+	context: ToolContext,
+	memoryScope?: MemoryScope
+): void {
+	if (isMemoryProposalAllowed(proposalKind, targetNote, projectHint, context, memoryScope)) {
+		return;
+	}
+	const scope = isProjectMemoryProposalForScope(proposalKind, targetNote, projectHint, memoryScope) ? 'project' : 'global';
+	throw new ToolInputError(`${scope} memory proposals are disabled by Tracekeeper memory rules.`);
+}
+
+function buildSafePathSegment(raw: string, fallback: string): string {
+	const segment = raw
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9._-]+/g, '-')
+		.replace(/-+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 80);
+	return segment || fallback;
+}
+
+function buildDefaultProjectMemoryTarget(vaultRoot: string, projectHint: string): string {
+	void vaultRoot;
+	return projectMemoryPath(projectHint || 'project');
+}
+
+function inferAutoMemoryAllowedDir(targetNote: string, projectScoped: boolean, context: ToolContext): string {
+	const normalized = normalizeNotePath(targetNote, pathSafetyOptions(context));
+	const allowedDirs = projectScoped ? PROJECT_MEMORY_READ_DIRS : GLOBAL_MEMORY_DIRS;
+	return allowedDirs.find((dir) => normalized.startsWith(`${dir}/`)) || '';
+}
+
+function resolveAutoMemoryTarget(
+	vaultRoot: string,
+	proposalKind: string,
+	targetNote: string,
+	projectHint: string,
+	context: ToolContext,
+	memoryScope?: MemoryScope
+): { targetNote: string; allowedDir: string } | null {
+	const projectScoped = isProjectMemoryProposalForScope(proposalKind, targetNote, projectHint, memoryScope);
+	if (targetNote) {
+		const normalized = normalizeNotePath(targetNote, pathSafetyOptions(context));
+		const allowedDir = inferAutoMemoryAllowedDir(normalized, projectScoped, context);
+		return allowedDir ? { targetNote: normalized, allowedDir } : null;
+	}
+	if (projectScoped && projectHint) {
+		const defaultTarget = buildDefaultProjectMemoryTarget(vaultRoot, projectHint);
+		const allowedDir = inferAutoMemoryAllowedDir(defaultTarget, true, context);
+		return allowedDir ? { targetNote: defaultTarget, allowedDir } : null;
+	}
+	return null;
+}
+
+interface ProjectScopeFilter {
+	projectHint: string;
+	projectId: string;
+	repoPath: string;
+}
+
+function coerceProjectScope(rawArgs: ProjectScopeArgs): ProjectScopeFilter {
+	return {
+		projectHint: coerceOptionalString(rawArgs.project_hint),
+		projectId: coerceOptionalString(rawArgs.project_id),
+		repoPath:
+			coerceOptionalString(rawArgs.repo_path) ||
+			coerceOptionalString(rawArgs.repo) ||
+			coerceOptionalString(rawArgs.project_path),
+	};
+}
+
+function hasProjectScope(scope: ProjectScopeFilter): boolean {
+	return Boolean(scope.projectHint || scope.projectId || scope.repoPath);
+}
+
+function normalizeRepoPrefix(value: string): string {
+	return value
+		.replace(/^\/+/, '')
+		.replace(/\/+$/, '')
+		.replace(/\\/g, '/');
+}
+
+function valueContainsAnyToken(value: string, tokens: string[]): boolean {
+	const normalized = value.toLowerCase();
+	return tokens.some((token) => token.length > 0 && normalized.includes(token));
+}
+
+function projectTokens(value: string): string[] {
+	const normalized = value.toLowerCase().trim();
+	if (!normalized) {
+		return [];
+	}
+	const variants = new Set<string>([
+		normalized,
+		normalized.replace(/\s+/g, '-'),
+		normalized.replace(/\s+/g, '_'),
+		normalized.replace(/[-_]+/g, ' '),
+	]);
+	return Array.from(variants).filter(Boolean);
+}
+
+function noteMatchesRepoPath(note: ScannedNote, repoPath: string): boolean {
+	if (!repoPath) {
+		return false;
+	}
+	const normalizedRepo = normalizeRepoPrefix(repoPath).toLowerCase();
+	if (!normalizedRepo) {
+		return false;
+	}
+	const repoLeaf = normalizedRepo.split('/').filter(Boolean).pop() || normalizedRepo;
+	const pathValue = note.relativePath.toLowerCase();
+	if (pathValue.startsWith(normalizedRepo) || pathValue.includes(`/${repoLeaf}/`) || pathValue.includes(`/${repoLeaf}.`)) {
+		return true;
+	}
+	const frontmatterValue = [
+		readFrontmatterString(note.frontmatter, ['repo_path', 'repoPath', 'repository_path', 'repositoryPath']),
+		readFrontmatterString(note.frontmatter, ['repo', 'repository']),
+		readFrontmatterString(note.frontmatter, ['project_path', 'projectPath', 'project_paths', 'projectPaths']),
+		readFrontmatterString(note.frontmatter, ['workspace', 'cwd']),
+	].join(' ');
+	return valueContainsAnyToken(frontmatterValue, [normalizedRepo, repoLeaf]);
+}
+
+function noteMatchesProjectId(note: ScannedNote, projectId: string): boolean {
+	if (!projectId) {
+		return false;
+	}
+	const token = projectId.toLowerCase();
+	const source = [
+		readFrontmatterString(note.frontmatter, ['project_id', 'projectId', 'project-id', 'pid']),
+		readFrontmatterString(note.frontmatter, ['id']),
+		note.title,
+	].map((item) => item.toLowerCase());
+	if (source.some((item) => item.includes(token))) {
+		return true;
+	}
+	const pathValue = note.relativePath.toLowerCase();
+	return pathValue.includes(`/${token}/`) || pathValue.includes(`_${token}_`) || pathValue.includes(`-${token}-`);
+}
+
+function noteMatchesProjectHint(note: ScannedNote, projectHint: string): boolean {
+	if (!projectHint) {
+		return false;
+	}
+	const tokens = projectTokens(projectHint);
+	if (tokens.length === 0) {
+		return false;
+	}
+	const pathValue = note.relativePath.toLowerCase();
+	if (tokens.some((token) => PROJECT_MEMORY_READ_DIRS.some((dir) => pathValue.includes(`${dir}/${token}`)) || pathValue.includes(`/${token}/`))) {
+		return true;
+	}
+	if (tokens.some((token) => PROJECT_MEMORY_READ_DIRS.some((dir) => pathValue.startsWith(`${dir}/${token}/`)))) {
+		return true;
+	}
+	const frontmatterValues = [
+		readFrontmatterString(note.frontmatter, ['project', 'project_hint', 'related_project', 'relatedProject']),
+		readFrontmatterString(note.frontmatter, ['project_name', 'project-name']),
+		readFrontmatterString(note.frontmatter, ['tags']),
+		note.title,
+	].join(' ');
+	return valueContainsAnyToken(frontmatterValues, tokens);
+}
+
+function filterNotesByProjectScope(notes: ScannedNote[], scope: ProjectScopeFilter): ScannedNote[] {
+	if (!hasProjectScope(scope)) {
+		return notes.filter((note) => PROJECT_MEMORY_READ_DIRS.some((dir) => note.relativePath.startsWith(`${dir}/`)));
+	}
+	const hasRepoPath = Boolean(scope.repoPath);
+	const normalizedRepo = hasRepoPath ? normalizeRepoPrefix(scope.repoPath).toLowerCase() : '';
+	const projectHint = scope.projectHint.toLowerCase();
+	const projectId = scope.projectId.toLowerCase();
+	return notes.filter((note) => {
+		if (hasRepoPath && !noteMatchesRepoPath(note, normalizedRepo)) {
+			return false;
+		}
+		if (projectHint && !noteMatchesProjectHint(note, projectHint)) {
+			return false;
+		}
+		if (projectId && !noteMatchesProjectId(note, projectId)) {
+			return false;
+		}
+		return true;
+	});
+}
+
+function scopedTaskIdsFromNotes(notes: ScannedNote[], scope: ProjectScopeFilter): Set<string> {
+	const taskIds = new Set<string>();
+	for (const note of filterNotesByProjectScope(notes, scope)) {
+		if (!note.relativePath.startsWith(`${AGENT_TASK_DIR}/`)) {
+			continue;
+		}
+		const taskId = readFrontmatterString(note.frontmatter, ['task_id', 'taskId']);
+		if (taskId) {
+			taskIds.add(taskId);
+		}
+	}
+	return taskIds;
+}
+
+function filterNotesByProjectScopeWithSessions(notes: ScannedNote[], scope: ProjectScopeFilter): ScannedNote[] {
+	const directMatches = filterNotesByProjectScope(notes, scope);
+	if (!hasProjectScope(scope)) {
+		return directMatches;
+	}
+	const directPaths = new Set(directMatches.map((note) => note.relativePath));
+	const taskIds = scopedTaskIdsFromNotes(notes, scope);
+	const results = [...directMatches];
+	for (const note of notes) {
+		if (!note.relativePath.startsWith(`${SESSION_NOTE_DIR}/`)) {
+			continue;
+		}
+		if (directPaths.has(note.relativePath)) {
+			continue;
+		}
+		const taskId = readFrontmatterString(note.frontmatter, ['task_id', 'taskId']);
+		if (taskId && taskIds.has(taskId)) {
+			results.push(note);
+		}
+	}
+	return results;
+}
+
+function collectProjectCandidates(notes: ScannedNote[], scope: ProjectScopeFilter, maxItems: number): string[] {
+	const candidates: string[] = [];
+	const seen = new Set<string>();
+	for (const note of notes) {
+		const pathParts = note.relativePath.split('/');
+		const isProjectMemoryNote = PROJECT_MEMORY_READ_DIRS.some((dir) => note.relativePath.startsWith(`${dir}/`));
+		if (pathParts.length >= 2 && isProjectMemoryNote) {
+			const candidate = `${pathParts[0]}/${pathParts[1]}`;
+			if (!seen.has(candidate)) {
+				seen.add(candidate);
+				candidates.push(candidate);
+			}
+		}
+		const notePath = note.relativePath.toLowerCase();
+		const hintTokens = projectTokens(scope.projectHint);
+		if (
+			scope.projectId &&
+			(notePath.includes(scope.projectId.toLowerCase()) || valueContainsAnyToken(notePath, hintTokens))
+		) {
+			if (!seen.has(note.relativePath)) {
+				seen.add(note.relativePath);
+				candidates.push(note.relativePath);
+			}
+		}
+		if (candidates.length >= maxItems) {
+			break;
+		}
+	}
+	return candidates.slice(0, maxItems);
+}
+
+function buildProjectHistoryEntries(matches: ScannedNote[], query = '') {
+	return matches.map((note) => ({
+		path: note.relativePath,
+		title: note.title,
+		type: note.type,
+		scope: 'project_history',
+		modifiedAt: note.modifiedAt,
+		task_id: readFrontmatterString(note.frontmatter, ['task_id', 'taskId']),
+		project_hint: readFrontmatterString(note.frontmatter, ['project_hint', 'related_project', 'project']),
+		why_matched: buildProjectHistoryWhy(note, query),
+		excerpt: compactNoteText(note.content),
+		graph_links: buildRecallGraphLinks(note),
+	}));
+}
+
+function matchesProjectQuery(note: ScannedNote, query: string): boolean {
+	const normalizedQuery = query.trim().toLowerCase();
+	if (!normalizedQuery) {
+		return true;
+	}
+	const haystack = [
+		note.relativePath,
+		note.title,
+		note.type,
+		note.tokens,
+		JSON.stringify(note.frontmatter),
+	].join(' ').toLowerCase();
+	return haystack.includes(normalizedQuery);
+}
+
+function buildProjectScopeMetadata(scope: ProjectScopeFilter) {
+	return {
+		project_hint: scope.projectHint || null,
+		project_id: scope.projectId || null,
+		repo_path: scope.repoPath || null,
+	};
+}
+
+function collectRecallScopeTokens(scope: ProjectScopeFilter): string[] {
+	const tokens = new Set<string>();
+	if (scope.projectHint) {
+		for (const token of projectTokens(scope.projectHint)) {
+			tokens.add(token);
+		}
+	}
+	if (scope.projectId) {
+		tokens.add(scope.projectId.toLowerCase());
+	}
+	if (scope.repoPath) {
+		const normalized = normalizeRepoPrefix(scope.repoPath).toLowerCase();
+		if (normalized) {
+			tokens.add(normalized);
+			tokens.add(normalized.split('/').filter(Boolean).pop() || normalized);
+		}
+	}
+	return Array.from(tokens).filter(Boolean);
+}
+
+function recallRecencyBoost(modifiedAt: string): number {
+	const modified = Date.parse(modifiedAt);
+	if (!Number.isFinite(modified)) {
+		return 0;
+	}
+	const ageHours = (Date.now() - modified) / (60 * 60 * 1000);
+	if (ageHours < 24) {
+		return 1;
+	}
+	if (ageHours < 72) {
+		return 0.6;
+	}
+	if (ageHours < 168) {
+		return 0.25;
+	}
+	return 0;
+}
+
+function rankRecallMatches(
+	matches: Array<{ note: ScannedNote; score: number; matchedTokens: string[] }>,
+	query: string,
+	scope: ProjectScopeFilter
+): RankedRecallMatch[] {
+	const fullQuery = query.trim().toLowerCase();
+	const scopeTokens = collectRecallScopeTokens(scope);
+
+	const ranked = matches.map((match) => {
+		let score = match.score;
+		const reasons: string[] = [];
+		const noteTitle = match.note.title.toLowerCase();
+		const notePath = match.note.relativePath.toLowerCase();
+		const noteFrontmatter = [
+			readFrontmatterString(match.note.frontmatter, ['project', 'project_hint', 'related_project']),
+			readFrontmatterString(match.note.frontmatter, ['project_id', 'projectId', 'pid']),
+			readFrontmatterString(match.note.frontmatter, ['repo_path', 'repoPath', 'project_path']),
+			readFrontmatterString(match.note.frontmatter, ['related_project', 'relatedProject', 'workspace']),
+		].join(' ').toLowerCase();
+
+		if (match.matchedTokens.length >= 2) {
+			score += 0.4;
+			reasons.push('Multiple query token matches (+0.4)');
+		}
+		const recency = recallRecencyBoost(match.note.modifiedAt);
+		if (recency > 0) {
+			score += recency;
+			reasons.push(`Recent edit (+${recency})`);
+		}
+		if (fullQuery && (noteTitle.includes(fullQuery) || notePath.includes(fullQuery))) {
+			score += 1;
+			reasons.push('Exact query phrase match in title/path (+1)');
+		}
+		if (scopeTokens.some((token) => valueContainsAnyToken(noteTitle, [token]) || valueContainsAnyToken(notePath, [token]) || valueContainsAnyToken(noteFrontmatter, [token]))) {
+			score += 0.4;
+			reasons.push('Project scope match (+0.4)');
+		}
+		return {
+			note: match.note,
+			raw_score: match.score,
+			score: Number(score.toFixed(2)),
+			matchedTokens: match.matchedTokens,
+			score_reason: reasons.length ? reasons : ['Core recall score'],
+		};
+	});
+
+	return ranked.sort((a, b) => b.score - a.score || a.note.relativePath.localeCompare(b.note.relativePath));
+}
+
+function compactNoteText(text: string, maxLength = MAX_RECALL_EXCERPT_LENGTH): string {
+	const compact = text
+		.replace(/```[\s\S]*?```/g, ' ')
+		.replace(/^#{1,6}\s+/gm, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+	if (compact.length <= maxLength) {
+		return compact;
+	}
+	return `${compact.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function buildRecallGraphLinks(note: ScannedNote): string[] {
+	const links = new Set<string>();
+	for (const link of note.wikilinks) {
+		const target = link.heading ? `${link.target}#${link.heading}` : link.target;
+		if (target.trim()) {
+			links.add(target.trim());
+		}
+		if (links.size >= MAX_RECALL_GRAPH_LINKS) {
+			break;
+		}
+	}
+	return Array.from(links);
+}
+
+function buildRecallWhyMatched(match: RankedRecallMatch, scope: RecallScope): string {
+	const scopeLabel = scope === 'project_history'
+		? 'Project-history recall'
+		: scope === 'project'
+			? 'Project recall'
+			: 'Global recall';
+	const tokenText = match.matchedTokens.slice(0, 6).join(', ');
+	const reasonText = match.score_reason.slice(0, 2).join('; ');
+	return [scopeLabel, tokenText ? `matched tokens: ${tokenText}` : '', reasonText].filter(Boolean).join(' - ');
+}
+
+function buildRecallEntry(match: RankedRecallMatch, scope: RecallScope) {
+	return {
+		path: match.note.relativePath,
+		title: match.note.title,
+		type: match.note.type,
+		scope,
+		score: match.score,
+		raw_score: match.raw_score,
+		matched_tokens: match.matchedTokens,
+		score_reason: match.score_reason,
+		why_matched: buildRecallWhyMatched(match, scope),
+		excerpt: compactNoteText(match.note.content),
+		graph_links: buildRecallGraphLinks(match.note),
+	};
+}
+
+function buildProjectHistoryWhy(note: ScannedNote, query: string): string {
+	const parts = ['Project-history recall'];
+	const taskId = readFrontmatterString(note.frontmatter, ['task_id', 'taskId']);
+	if (taskId) {
+		parts.push(`linked task: ${taskId}`);
+	}
+	if (query) {
+		parts.push(`matched query: ${query}`);
+	}
+	return parts.join(' - ');
+}
+
+function buildFinishTaskProposalEvidence(
+	taskId: string,
+	sessionNotePath: string,
+	projectHint: string,
+	proposalKind: string,
+	mode: ReviewProposalMode
+): string {
+	const parts = [
+		`tool_name=tracekeeper.finish_task`,
+		`task_id=${taskId}`,
+		`session_note=${sessionNotePath}`,
+		`project_hint=${projectHint || 'unset'}`,
+		`proposal_kind=${proposalKind}`,
+		`proposal_mode=${mode}`,
+	];
+	return parts.join(' | ');
+}
+
+function createFinishTaskProposal(
+	vaultRoot: string,
+	taskId: string,
+	sessionNotePath: string,
+	proposalKind: string,
+	label: string,
+	values: string[],
+	projectHint: string,
+	reviewProposalMode: ReviewProposalMode,
+	memoryScope: MemoryScope,
+	relatedWiki: string[],
+	relatedSources: string[],
+	architectureStatus: ArchitectureStatusReport,
+	missingGraphBridges: string[],
+	missingWikiBridge: boolean,
+	missingRelatedWiki: string[],
+	context: ToolContext
+): { path: string } {
+	const normalizedValues = normalizeFinishTaskProposalValues(values);
+	const proposalSignature = buildFinishTaskProposalSignature(taskId, proposalKind, normalizedValues);
+	const existingProposal = findExistingFinishTaskProposal(vaultRoot, taskId, proposalKind, normalizedValues, context);
+	if (existingProposal) {
+		return { path: existingProposal };
+	}
+
+	const now = new Date().toISOString();
+	const filename = buildSafeFilename(
+		`finish-task-${proposalKind}-${taskId}-${crypto.randomUUID()}`,
+		'proposal',
+		context
+	);
+	const evidence = buildFinishTaskProposalEvidence(taskId, sessionNotePath, projectHint, proposalKind, reviewProposalMode);
+	const body = [
+		'## Finish Task Proposal Source',
+			`- tool_name: tracekeeper.finish_task`,
+			`- task_id: ${taskId}`,
+			`- session_note: ${sessionNotePath}`,
+			`- memory_scope: ${memoryScope}`,
+			projectHint ? `- project_hint: ${projectHint}` : '',
+			relatedWiki.length ? `- related_wiki: ${JSON.stringify(relatedWiki)}` : '',
+			relatedSources.length ? `- related_sources: ${JSON.stringify(relatedSources)}` : '',
+			`- proposal_kind: ${proposalKind}`,
+			`- architecture_status: ${architectureStatus.architecture_status}`,
+			missingGraphBridges.length ? `- missing_graph_bridges: ${JSON.stringify(missingGraphBridges)}` : '',
+			missingWikiBridge ? '- missing_wiki_bridge: true' : '',
+			missingRelatedWiki.length ? `- missing_related_wiki: ${JSON.stringify(missingRelatedWiki)}` : '',
+			`- evidence: ${evidence}`,
+			'',
+			`## ${label}`,
+		...values.map((item) => `- ${item}`),
+	].filter(Boolean).join('\n');
+
+	return buildAndWriteNote(
+		vaultRoot,
+		'tracekeeper.finish_task',
+		MEMORY_PROPOSAL_DIR,
+		filename,
+		{
+			tool: 'tracekeeper.finish_task',
+			type: 'memory_proposal',
+			title: `${label} ${taskId}`,
+			proposal_kind: proposalKind,
+			status: 'pending',
+			target_note: null,
+			risk_level: 'medium',
+			proposal_source_tool: 'tracekeeper.finish_task',
+			proposal_source_task_id: taskId,
+			proposal_source_session_note: sessionNotePath,
+			project_hint: projectHint || null,
+			evidence,
+			created_at: now,
+			task_id: taskId,
+			[FINISH_TASK_PROPOSAL_SIGNATURE_KEY]: proposalSignature,
+		},
+		body,
+		taskId,
+		context,
+		{
+			target_type: 'memory_proposal',
+			proposal_kind: proposalKind,
+			source_note: sessionNotePath,
+		}
+	);
+}
+
+function buildFinishTaskProposals(
+	vaultRoot: string,
+	taskId: string,
+	sessionNotePath: string,
+	proposalMode: ReviewProposalMode,
+	projectHint: string,
+	rawMemoryScope: unknown,
+	relatedWiki: string[],
+	relatedSources: string[],
+	architectureStatus: ArchitectureStatusReport,
+	closeout: {
+		decisions: string[];
+		solution_changes: string[];
+		lessons: string[];
+		preferences: string[];
+		next_actions: string[];
+		memory_candidates: string[];
+	},
+	context: ToolContext
+): FinishTaskProposalResult {
+	if (proposalMode === 'off') {
+		return { proposals: [], suggestedMemoryUpdates: [], autoAppliedMemoryUpdates: [], hasMissingWikiBridge: false };
+	}
+
+	const groups: FinishTaskSuggestion[] = [
+		{ kind: 'task_decision', label: 'Task Decisions', values: closeout.decisions },
+		{ kind: 'solution_change', label: 'Solution Changes', values: closeout.solution_changes },
+		{ kind: 'lesson_learned', label: 'Lessons', values: closeout.lessons },
+		{ kind: 'user_preference', label: 'User Preferences', values: closeout.preferences },
+		{ kind: 'project_next_action', label: 'Project Next Actions', values: closeout.next_actions },
+		{ kind: 'memory_candidate', label: 'Memory Candidates', values: closeout.memory_candidates },
+	];
+
+	const proposals: Array<{ kind: string; path: string }> = [];
+	const suggestedMemoryUpdates: FinishTaskSuggestion[] = [];
+	const autoAppliedMemoryUpdates: Array<{ kind: string; path: string; status: string }> = [];
+	let hasMissingWikiBridge = false;
+	for (const group of groups) {
+		const values = normalizeFinishTaskProposalValues(group.values);
+		if (values.length === 0) {
+			continue;
+		}
+		const memoryScope = resolveMemoryScope(group.kind, '', projectHint, rawMemoryScope);
+		const bridgeMetadata = resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint, relatedWiki, context);
+		const memoryRule = memoryProposalRuleFor(group.kind, '', projectHint, context, memoryScope);
+		if (memoryRule === 'disabled') {
+			continue;
+		}
+		if (proposalMode === 'suggest') {
+			suggestedMemoryUpdates.push({
+				kind: group.kind,
+				label: group.label,
+				values,
+			});
+			continue;
+		}
+		if (proposalMode === 'auto_propose' && memoryRule === 'auto_write') {
+			const canAutoWrite = !(
+				memoryScope === 'project' &&
+				bridgeMetadata.missing_wiki_bridge
+			);
+			if (memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge) {
+				hasMissingWikiBridge = true;
+			}
+			if (canAutoWrite) {
+				const autoTarget = resolveAutoMemoryTarget(
+					vaultRoot,
+					group.kind,
+					'',
+					projectHint,
+					context,
+					memoryScope
+				);
+				if (autoTarget) {
+					const note = appendAutoMemoryWrite(vaultRoot, {
+						toolName: 'tracekeeper.finish_task',
+						proposalKind: group.kind,
+						targetNote: autoTarget.targetNote,
+						allowedDir: autoTarget.allowedDir,
+						title: group.label,
+						content: values.map((item) => `- ${item}`).join('\n'),
+						taskId,
+						context,
+						projectHint,
+						sourceNote: sessionNotePath,
+						memoryScope,
+						relatedWiki,
+						relatedSources,
+						architectureStatus,
+						missingGraphBridges: architectureStatus.missing_graph_bridges,
+						missingWikiBridge: false,
+						missingRelatedWiki: bridgeMetadata.missing_related_wiki,
+						signature: buildFinishTaskProposalSignature(taskId, group.kind, values),
+					});
+					autoAppliedMemoryUpdates.push({
+						kind: group.kind,
+						path: note.path,
+						status: note.status,
+					});
+					continue;
+				}
+			}
+		}
+		const note = createFinishTaskProposal(
+			vaultRoot,
+			taskId,
+			sessionNotePath,
+			group.kind,
+			group.label,
+			values,
+			projectHint,
+			proposalMode,
+			memoryScope,
+			bridgeMetadata.related_wiki,
+			relatedSources,
+			architectureStatus,
+			architectureStatus.missing_graph_bridges,
+			bridgeMetadata.missing_wiki_bridge,
+			bridgeMetadata.missing_related_wiki,
+			context
+		);
+		proposals.push({
+			kind: group.kind,
+			path: note.path,
+		});
+	}
+
+	return {
+		proposals,
+		suggestedMemoryUpdates,
+		autoAppliedMemoryUpdates,
+		hasMissingWikiBridge,
+	};
 }
 
 function formatListMarkdown(values: string[]): string {
@@ -927,6 +2247,10 @@ function assertAllowedWritebackTarget(relativePath: string): void {
 		'01_inbox/',
 		'03_sources/',
 		'06_outputs/',
+		'00_tracekeeper/control/',
+		'00_tracekeeper/inbox/',
+		'00_tracekeeper/work/',
+		'01_knowledge/sources/',
 	];
 	for (const prefix of forbiddenPrefixes) {
 		if (relativePath.startsWith(prefix)) {
@@ -1036,7 +2360,7 @@ function buildProjectCounts(scan: ScannedNote[]) {
 
 function buildRecentSessions(notes: ScannedNote[]) {
 	return notes
-		.filter((note) => note.relativePath.startsWith('02_timeline/sessions/'))
+		.filter((note) => note.relativePath.startsWith(`${SESSION_NOTE_DIR}/`))
 		.sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt))
 		.slice(0, 5)
 		.map((note) => ({
@@ -1236,6 +2560,224 @@ function buildAndWriteNote(
 	};
 }
 
+interface AutoMemoryWriteInput {
+	toolName: string;
+	proposalKind: string;
+	targetNote: string;
+	allowedDir: string;
+	title: string;
+	content: string;
+	taskId: string | null;
+	context: ToolContext;
+	memoryScope: MemoryScope;
+	projectHint?: string;
+	relatedWiki?: string[];
+	relatedSources?: string[];
+	architectureStatus: ArchitectureStatusReport;
+	missingGraphBridges: string[];
+	missingWikiBridge: boolean;
+	missingRelatedWiki?: string[];
+	sourceNote?: string;
+	evidence?: string;
+	riskLevel?: string;
+	signature?: string;
+}
+
+function resolveExistingOrNewAutoMemoryTarget(
+	vaultRoot: string,
+	targetNote: string,
+	allowedDir: string,
+	context: ToolContext
+): { absolutePath: string; relativePath: string; created: boolean } {
+	const options = pathSafetyOptions(context);
+	const normalizedTarget = normalizeNotePath(targetNote, options);
+	if (!normalizedTarget.startsWith(`${allowedDir}/`)) {
+		throw new ToolInputError(`Auto memory target must be under ${allowedDir}`);
+	}
+
+	try {
+		const absolutePath = resolveSafeNotePath(vaultRoot, normalizedTarget, options);
+		const relativePath = relativeFromAbsolute(vaultRoot, absolutePath);
+		if (!relativePath.startsWith(`${allowedDir}/`) || !relativePath.endsWith('.md')) {
+			throw new ToolInputError(`Auto memory target must be a markdown note under ${allowedDir}`);
+		}
+		assertAllowedWritebackTarget(relativePath);
+		return { absolutePath, relativePath, created: false };
+	} catch (error) {
+		if (!(error instanceof VaultPathError)) {
+			throw error;
+		}
+		const resolved = resolveSafeWritableNotePath(vaultRoot, normalizedTarget, allowedDir, options);
+		assertAllowedWritebackTarget(resolved.relativePath);
+		return { absolutePath: resolved.absolutePath, relativePath: resolved.relativePath, created: true };
+	}
+}
+
+function ensureProjectMemoryIndex(
+	vaultRoot: string,
+	targetRelativePath: string,
+	input: AutoMemoryWriteInput
+): string | null {
+	if (!targetRelativePath.startsWith(`${KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)) {
+		return null;
+	}
+	const suffix = targetRelativePath.slice(`${KNOWLEDGE_PROJECTS_MEMORY_DIR}/`.length);
+	const projectSlug = suffix.split('/', 1)[0] || '';
+	if (!projectSlug) {
+		return null;
+	}
+	const indexPath = `${KNOWLEDGE_PROJECTS_MEMORY_DIR}/${projectSlug}/index.md`;
+	const absolutePath = path.join(vaultRoot, indexPath);
+	if (fs.existsSync(absolutePath)) {
+		return indexPath;
+	}
+	const displayName = input.projectHint || projectSlug;
+	const relatedWikiLinks = dedupeAndNormalizeList(input.relatedWiki || []).map((link) => `- [[${link.replace(/\.md$/i, '')}]]`);
+	const markdown = buildMarkdownNote(
+		{
+			type: 'project_memory_index',
+			title: `Project memory: ${displayName}`,
+			project_hint: input.projectHint || projectSlug,
+			related_wiki: input.relatedWiki || [],
+			created_at: new Date().toISOString(),
+		},
+		[
+			`# Project memory: ${displayName}`,
+			'',
+			'## Related wiki',
+			...(relatedWikiLinks.length > 0 ? relatedWikiLinks : ['- (none)']),
+		].join('\n')
+	);
+	fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+	fs.writeFileSync(absolutePath, markdown, 'utf8');
+	return indexPath;
+}
+
+function buildAutoMemoryWriteBlock(input: AutoMemoryWriteInput, signature: string): string {
+	const blockId = `memory-${signature.slice(0, 16).replace(/[^A-Za-z0-9._-]/g, '-')}`;
+	const graphLinks = dedupeAndNormalizeList([
+		...(input.relatedWiki || []).map((link) => `[[${link.replace(/\.md$/i, '')}]]`),
+		...(input.relatedSources || []).map((link) => `[[${link.replace(/\.md$/i, '')}]]`),
+	]);
+	return [
+		`## ${input.title}`,
+		'',
+		`- source: ${input.toolName}`,
+		`- kind: ${input.proposalKind}`,
+		`- memory_scope: ${input.memoryScope}`,
+		input.taskId ? `- task_id: ${input.taskId}` : '',
+		input.projectHint ? `- project_hint: ${input.projectHint}` : '',
+		input.sourceNote ? `- source_note: ${input.sourceNote}` : '',
+		input.evidence ? `- evidence: ${input.evidence}` : '',
+		input.relatedWiki?.length ? `- related_wiki: ${JSON.stringify(input.relatedWiki)}` : '',
+		input.relatedSources?.length ? `- related_sources: ${JSON.stringify(input.relatedSources)}` : '',
+		`- architecture_status: ${input.architectureStatus.architecture_status}`,
+		input.missingGraphBridges?.length ? `- missing_graph_bridges: ${JSON.stringify(input.missingGraphBridges)}` : '',
+		input.missingWikiBridge ? '- missing_wiki_bridge: true' : '',
+		input.missingRelatedWiki?.length ? `- missing_related_wiki: ${JSON.stringify(input.missingRelatedWiki)}` : '',
+		input.riskLevel ? `- risk_level: ${input.riskLevel}` : '',
+		`- created_at: ${new Date().toISOString()}`,
+		`- content_signature: ${signature}`,
+		'',
+		'### Graph links',
+		...(graphLinks.length > 0 ? graphLinks.map((link) => `- ${link}`) : ['- (none)']),
+		'',
+		'### Memory update',
+		input.content.trim(),
+		'',
+		`^${blockId}`,
+	].filter(Boolean).join('\n');
+}
+
+function appendAutoMemoryWrite(
+	vaultRoot: string,
+	input: AutoMemoryWriteInput
+): { path: string; audit_path: string; status: 'written' | 'skipped'; warnings: string[]; duplicate: boolean } {
+	assertNoSensitiveText([
+		{ label: 'content', value: input.content },
+		{ label: 'target_note', value: input.targetNote },
+		{ label: 'project_hint', value: input.projectHint || '' },
+		{ label: 'evidence', value: input.evidence || '' },
+	]);
+
+	const signature = input.signature || crypto
+		.createHash('sha256')
+		.update(JSON.stringify({
+			toolName: input.toolName,
+			proposalKind: input.proposalKind,
+			targetNote: input.targetNote,
+			taskId: input.taskId,
+			content: input.content.trim(),
+		}))
+		.digest('hex');
+	const target = resolveExistingOrNewAutoMemoryTarget(vaultRoot, input.targetNote, input.allowedDir, input.context);
+	const projectIndexPath = ensureProjectMemoryIndex(vaultRoot, target.relativePath, input);
+	const block = buildAutoMemoryWriteBlock(input, signature);
+
+	if (!target.created) {
+		const current = fs.readFileSync(target.absolutePath, 'utf8');
+		if (current.includes(`content_signature: ${signature}`)) {
+			const audit = appendAuditEvent(vaultRoot, {
+				tool: input.toolName,
+				targetPath: target.relativePath,
+				status: 'skipped',
+				taskId: input.taskId,
+				metadata: {
+					action: 'memory.auto_write.duplicate',
+					proposal_kind: input.proposalKind,
+					memory_rule: 'auto_write',
+					content_signature: signature,
+				},
+			});
+			return {
+				path: target.relativePath,
+				audit_path: audit.path,
+				status: 'skipped',
+				warnings: [],
+				duplicate: true,
+			};
+		}
+		fs.writeFileSync(target.absolutePath, `${current.replace(/\s*$/, '')}\n\n${block}\n`, 'utf8');
+	} else {
+		fs.mkdirSync(path.dirname(target.absolutePath), { recursive: true });
+		const markdown = buildMarkdownNote(
+			{
+				type: 'memory',
+				title: input.projectHint ? `Project memory: ${input.projectHint}` : 'Tracekeeper memory',
+				project_hint: input.projectHint || null,
+				memory_scope: input.memoryScope,
+				related_wiki: input.relatedWiki || [],
+				related_sources: input.relatedSources || [],
+				created_at: new Date().toISOString(),
+			},
+			[`# ${input.projectHint ? `Project memory: ${input.projectHint}` : 'Tracekeeper memory'}`, '', block].join('\n')
+		);
+		fs.writeFileSync(target.absolutePath, markdown, 'utf8');
+	}
+
+	const audit = appendAuditEvent(vaultRoot, {
+			tool: input.toolName,
+			targetPath: target.relativePath,
+			status: 'written',
+		taskId: input.taskId,
+		metadata: {
+			action: 'memory.auto_write',
+			proposal_kind: input.proposalKind,
+			memory_rule: 'auto_write',
+			content_signature: signature,
+			project_index: projectIndexPath || undefined,
+		},
+	});
+
+	return {
+		path: target.relativePath,
+		audit_path: audit.path,
+		status: 'written',
+		warnings: [],
+		duplicate: false,
+	};
+}
+
 function buildTaskNotePath(taskId: string): string {
 	const safeId = taskId
 		.trim()
@@ -1247,6 +2789,26 @@ function buildTaskNotePath(taskId: string): string {
 		throw new ToolInputError('task_id must contain at least one safe filename character.');
 	}
 	return `${AGENT_TASK_DIR}/${safeId}.md`;
+}
+
+function readAgentTaskMetadata(
+	vaultRoot: string,
+	taskId: string,
+	context: ToolContext
+): { projectHint: string; client: string } {
+	try {
+		const absolute = resolveSafeNotePath(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
+		const parsed = parseMarkdown(fs.readFileSync(absolute, 'utf8'));
+		return {
+			projectHint: readFrontmatterString(parsed.frontmatter.fields, ['project_hint', 'related_project', 'project']),
+			client: readFrontmatterString(parsed.frontmatter.fields, ['client']),
+		};
+	} catch (error) {
+		if (error instanceof ToolInputError || error instanceof VaultPathError || error instanceof Error) {
+			return { projectHint: '', client: '' };
+		}
+		return { projectHint: '', client: '' };
+	}
 }
 
 function readFrontmatterStringList(frontmatter: Record<string, unknown>, key: string): string[] {
@@ -1357,6 +2919,7 @@ function createAgentTaskRecord(
 			client: clientName || null,
 			session_id: input.context.sessionId || null,
 			objective: input.goal,
+			project_hint: input.projectHint || null,
 			related_project: input.projectHint || null,
 			started_at: now,
 		},
@@ -1740,6 +3303,15 @@ function buildFixPlanSummary(issues: Array<{ kind: string; severity: string }>):
 	if (issueKinds.includes('claim_missing_source')) {
 		summary.push('Add source:: references under [!claim] blocks that currently have no source refs.');
 	}
+	if (issueKinds.includes('architecture_legacy_directory')) {
+		summary.push('Review legacy folders and migrate only after explicit user confirmation.');
+	}
+	if (issueKinds.includes('architecture_missing_required_path')) {
+		summary.push('Create missing 01_knowledge entry notes before relying on graph-first recall.');
+	}
+	if (issueKinds.includes('graph_missing_memory_wiki_bridge')) {
+		summary.push('Add body wikilinks between memory notes and related wiki topics.');
+	}
 	if (issueKinds.some((kind) => kind.startsWith('graph_'))) {
 		summary.push('Review graph profile findings by adding explicit entry, hub, or wikilink structure; Tracekeeper does not auto-fix graph structure.');
 	}
@@ -1752,11 +3324,11 @@ function buildFixPlanSummary(issues: Array<{ kind: string; severity: string }>):
 }
 
 export function toolDefinitions(): McpToolDefinition[] {
-	return [
+	const definitions: McpToolDefinition[] = [
 		{
 			name: 'tracekeeper.status',
 			title: 'tracekeeper.status',
-			description: '[read-only] Scan vault and return summary counts.',
+			description: '[read-only] Use for a quick vault and service summary. Does not read full note content or write files.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -1771,7 +3343,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.graph_health',
 			title: 'tracekeeper.graph_health',
-			description: '[read-only] Analyze wikilinks and return graph health metrics.',
+			description: '[deprecated] Use tracekeeper.lint for graph checks. This compatibility tool is read-only.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -1798,7 +3370,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.start_task',
 			title: 'tracekeeper.start_task',
-			description: '[low-risk write] Create an active task record and return a context summary.',
+			description: '[low-risk write] Call once when starting meaningful work. Records a bounded task and returns the recommended recall step.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -1823,7 +3395,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.recall',
 			title: 'tracekeeper.recall',
-			description: '[read-only] Scan vault and return matching notes for a recall query.',
+			description: '[read-only] Use before read_note to find relevant memory, wiki, and source notes. Supports global, project, and project_history scopes.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -1833,7 +3405,79 @@ export function toolDefinitions(): McpToolDefinition[] {
 					},
 					query: {
 						type: 'string',
-						description: 'Recall query text.',
+						description: 'Recall query text. Required unless scope is project_history.',
+					},
+					scope: {
+						type: 'string',
+						enum: ['global', 'project', 'project_history'],
+						description: 'Recall scope. Defaults to global.',
+					},
+					project_hint: {
+						type: 'string',
+						description: 'Project hint for scoped matching.',
+					},
+					project_id: {
+						type: 'string',
+						description: 'Project id for scoped matching.',
+					},
+					repo_path: {
+						type: 'string',
+						description: 'Repository/path prefix for scoped matching.',
+					},
+					repo: {
+						type: 'string',
+						description: 'Alias of repo_path for repository-scoped matching.',
+					},
+					project_path: {
+						type: 'string',
+						description: 'Alias of repo_path for workspace/project path matching.',
+					},
+					max_items: {
+						type: 'integer',
+						description: 'Maximum number of matches to return.',
+					},
+				},
+				additionalProperties: false,
+			},
+			annotations: {
+				readOnlyHint: true,
+			},
+		},
+		{
+			name: 'tracekeeper.project_context',
+			title: 'tracekeeper.project_context',
+			description:
+				'[deprecated] Use tracekeeper.recall with scope="project". Compatibility tool, read-only.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					vaultRoot: {
+						type: 'string',
+						description: 'Vault root path. If omitted, uses server configured --vault-root.',
+					},
+					query: {
+						type: 'string',
+						description: 'Project-scoped recall query.',
+					},
+					project_hint: {
+						type: 'string',
+						description: 'Project hint for scoped matching.',
+					},
+					project_id: {
+						type: 'string',
+						description: 'Project id for scoped matching.',
+					},
+					repo_path: {
+						type: 'string',
+						description: 'Repository/path prefix for scoped matching.',
+					},
+					repo: {
+						type: 'string',
+						description: 'Alias of repo_path for repository-scoped matching.',
+					},
+					project_path: {
+						type: 'string',
+						description: 'Alias of repo_path for workspace/project path matching.',
 					},
 					max_items: {
 						type: 'integer',
@@ -1848,9 +3492,56 @@ export function toolDefinitions(): McpToolDefinition[] {
 			},
 		},
 		{
+			name: 'tracekeeper.project_history',
+			title: 'tracekeeper.project_history',
+			description: '[deprecated] Use tracekeeper.recall with scope="project_history". Compatibility tool, read-only.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					vaultRoot: {
+						type: 'string',
+						description: 'Vault root path. If omitted, uses server configured --vault-root.',
+					},
+					project_hint: {
+						type: 'string',
+						description: 'Project hint for scoped matching.',
+					},
+					project_id: {
+						type: 'string',
+						description: 'Project id for scoped matching.',
+					},
+					repo_path: {
+						type: 'string',
+						description: 'Repository/path prefix for scoped matching.',
+					},
+					repo: {
+						type: 'string',
+						description: 'Alias of repo_path for repository-scoped matching.',
+					},
+					project_path: {
+						type: 'string',
+						description: 'Alias of repo_path for workspace/project path matching.',
+					},
+					query: {
+						type: 'string',
+						description: 'Optional query filter.',
+					},
+					max_items: {
+						type: 'integer',
+						description: 'Maximum number of entries to return.',
+					},
+				},
+				required: [],
+				additionalProperties: false,
+			},
+			annotations: {
+				readOnlyHint: true,
+			},
+		},
+		{
 			name: 'tracekeeper.read_note',
 			title: 'tracekeeper.read_note',
-			description: '[read-only] Read markdown/text content of one note in vault.',
+			description: '[read-only] Read one vault note only after recall excerpts are not enough. Does not write files.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -1871,9 +3562,44 @@ export function toolDefinitions(): McpToolDefinition[] {
 			},
 		},
 		{
+			name: 'tracekeeper.review_queue',
+			title: 'tracekeeper.review_queue',
+			description: '[read-only] Inspect pending proposals or approved writeback candidates. Does not approve or apply changes.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					vaultRoot: {
+						type: 'string',
+						description: 'Vault root path. If omitted, uses server configured --vault-root.',
+					},
+					action: {
+						type: 'string',
+						enum: ['list_pending', 'list_approved'],
+						description: 'Review Queue action. Defaults to list_pending.',
+					},
+					scope: {
+						type: 'string',
+						description: 'Optional proposal kind or target-note prefix filter for approved proposals.',
+					},
+					max_items: {
+						type: 'integer',
+						description: 'Maximum number of entries to return.',
+					},
+					limit: {
+						type: 'integer',
+						description: 'Alias of max_items.',
+					},
+				},
+				additionalProperties: false,
+			},
+			annotations: {
+				readOnlyHint: true,
+			},
+		},
+		{
 			name: 'tracekeeper.list_review_queue',
 			title: 'tracekeeper.list_review_queue',
-			description: '[read-only] Read pending memory proposal notes under 01_inbox/review_queue.',
+			description: '[deprecated] Use tracekeeper.review_queue with action="list_pending". Compatibility tool, read-only.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -1892,7 +3618,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.list_source_requests',
 			title: 'tracekeeper.list_source_requests',
-			description: '[read-only] Read pending source-analysis agent requests under 01_inbox/agent_requests.',
+			description: '[deprecated] Use tracekeeper.source_request with action="list". Compatibility tool, read-only.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -1919,7 +3645,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.list_approved_writebacks',
 			title: 'tracekeeper.list_approved_writebacks',
-			description: '[read-only] Read approved Review Queue proposals that are candidates for runtime writeback.',
+			description: '[deprecated] Use tracekeeper.review_queue with action="list_approved". Compatibility tool, read-only.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -1949,7 +3675,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.audit_recent',
 			title: 'tracekeeper.audit_recent',
-			description: '[read-only] Read parsed sections from 00_control/audit_log.md.',
+			description: '[deprecated] Prefer the Obsidian runtime log view. Compatibility tool, read-only.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -1969,10 +3695,62 @@ export function toolDefinitions(): McpToolDefinition[] {
 			},
 		},
 		{
+			name: 'tracekeeper.source_request',
+			title: 'tracekeeper.source_request',
+			description: '[read-only | low-risk write] List source requests or analyze one existing request. Does not fetch network content.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					vaultRoot: {
+						type: 'string',
+						description: 'Vault root path. If omitted, uses server configured --vault-root.',
+					},
+					action: {
+						type: 'string',
+						enum: ['list', 'analyze'],
+						description: 'Source request action. Defaults to list unless request_path/path is provided.',
+					},
+					request_path: {
+						type: 'string',
+						description: 'Vault-relative path to an agent-request note when action is analyze.',
+					},
+					path: {
+						type: 'string',
+						description: 'Alias of request_path.',
+					},
+					task_id: {
+						type: 'string',
+						description: 'Optional task id to update with generated source/proposal paths.',
+					},
+					update_request_status: {
+						type: 'boolean',
+						description: 'Whether to update request status to completed/failed. Defaults to true.',
+					},
+					force_reprocess: {
+						type: 'boolean',
+						description: 'Process request even if status is not pending.',
+					},
+					max_items: {
+						type: 'integer',
+						description: 'Maximum number of pending requests to return when listing.',
+					},
+					status: {
+						type: 'string',
+						description: 'Optional status filter when listing, defaults to pending.',
+					},
+					source_kind: {
+						type: 'string',
+						description: 'Optional source kind filter when listing.',
+					},
+				},
+				additionalProperties: false,
+			},
+		},
+		{
 			name: 'tracekeeper.analyze_source_request',
 			title: 'tracekeeper.analyze_source_request',
 			description:
-				'[low-risk write] Analyze one pending source request and write source note, report, review proposals, request status, and audit entry.',
+				'[deprecated] Use tracekeeper.source_request with action="analyze". Compatibility tool, low-risk write.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -2011,7 +3789,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 			name: 'tracekeeper.apply_approved_writeback',
 			title: 'tracekeeper.apply_approved_writeback',
 			description:
-				'[review-gated apply] Apply an approved Review Queue proposal by appending explicit writeback content to its target note.',
+				'[review-gated apply] Use only after the user approves a Review Queue proposal. Appends approved content to the target note.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -2050,7 +3828,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 			name: 'tracekeeper.build_context_pack',
 			title: 'tracekeeper.build_context_pack',
 			description:
-				'[read-only | optional write] Build context pack from vault and optionally write a markdown artifact.',
+				'[read-only | optional write] Build a compact context pack from recall results. Writes an artifact only when write=true.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -2094,7 +3872,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.lint',
 			title: 'tracekeeper.lint',
-			description: '[read-only] Run lint checks across vault notes.',
+			description: '[read-only] Run the single vault check entry for structure, links, sources, claims, and graph health.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -2121,7 +3899,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.finish_task',
 			title: 'tracekeeper.finish_task',
-			description: '[low-risk write] Create a task session summary note under 02_timeline/sessions.',
+			description: '[low-risk write] Call once at task closeout. Records the session and handles memory candidates according to memory rules.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -2141,9 +3919,34 @@ export function toolDefinitions(): McpToolDefinition[] {
 						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
 						description: 'Optional outcomes.',
 					},
+					decisions: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional decisions.',
+					},
+					solution_changes: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional solution changes.',
+					},
+					lessons: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional lessons learned.',
+					},
+					preferences: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional user preferences.',
+					},
+					memory_candidates: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional memory candidates.',
+					},
 					next_actions: {
 						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
 						description: 'Optional next actions.',
+					},
+					review_proposal_mode: {
+						type: 'string',
+						enum: ['off', 'suggest', 'review_queue', 'auto_propose'],
+						description: 'Propose mode for closeout fields.',
 					},
 					client: {
 						type: 'string',
@@ -2152,6 +3955,19 @@ export function toolDefinitions(): McpToolDefinition[] {
 					project_hint: {
 						type: 'string',
 						description: 'Optional project hint.',
+					},
+					memory_scope: {
+						type: 'string',
+						enum: ['global', 'project'],
+						description: 'Optional memory scope override.',
+					},
+					related_wiki: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional related wiki note references.',
+					},
+					related_sources: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional related sources.',
 					},
 					filename: {
 						type: 'string',
@@ -2168,7 +3984,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.distill_session',
 			title: 'tracekeeper.distill_session',
-			description: '[low-risk write] Create a task session note and memory proposals from decisions/preferences.',
+			description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool for older session distillation flows.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -2219,7 +4035,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.write_context_pack',
 			title: 'tracekeeper.write_context_pack',
-			description: '[low-risk write] Create a new context-pack note under 06_outputs/context_packs.',
+			description: '[deprecated] Use tracekeeper.build_context_pack with write=true. Compatibility tool, low-risk write.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -2242,7 +4058,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.write_session_note',
 			title: 'tracekeeper.write_session_note',
-			description: '[low-risk write] Create a new session note under 02_timeline/sessions.',
+			description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool, low-risk write.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -2264,7 +4080,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.capture_source',
 			title: 'tracekeeper.capture_source',
-			description: '[low-risk write] Capture source metadata/content under 03_sources with mode control.',
+			description: '[low-risk write] Save user-provided source metadata or content under sources. Does not fetch external content.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -2297,7 +4113,7 @@ export function toolDefinitions(): McpToolDefinition[] {
 		{
 			name: 'tracekeeper.propose_memory',
 			title: 'tracekeeper.propose_memory',
-			description: '[low-risk write] Create a memory proposal note under 01_inbox/review_queue.',
+			description: '[low-risk write] Submit a memory update through Tracekeeper rules. Global memory stays review-gated by default.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -2308,6 +4124,20 @@ export function toolDefinitions(): McpToolDefinition[] {
 					target_note: { type: 'string', description: 'Optional target note path.' },
 					risk_level: { type: 'string', description: 'Risk level label.' },
 					task_id: { type: 'string', description: 'Optional task id for traceability.' },
+					project_hint: { type: 'string', description: 'Optional project hint for project memory routing.' },
+					memory_scope: {
+						type: 'string',
+						enum: ['global', 'project'],
+						description: 'Optional memory scope override.',
+					},
+					related_wiki: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional related wiki note references.',
+					},
+					related_sources: {
+						oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+						description: 'Optional related sources.',
+					},
 					filename: {
 						type: 'string',
 						description: 'Optional file stem. If omitted, auto-generates one.',
@@ -2322,6 +4152,10 @@ export function toolDefinitions(): McpToolDefinition[] {
 			},
 		},
 	];
+	const definitionByName = new Map(definitions.map((definition) => [definition.name, definition]));
+	return PUBLIC_TOOL_NAME_ORDER.map((toolName) => definitionByName.get(toolName)).filter(
+		(definition): definition is McpToolDefinition => Boolean(definition)
+	);
 }
 
 export function toolPrompts(): McpPrompt[] {
@@ -2376,6 +4210,15 @@ export function callTool(
 			case 'tracekeeper.read_note':
 				toolResult = toolResultWithError(handleReadNote(args, context));
 				break;
+			case 'tracekeeper.review_queue':
+				toolResult = toolResultWithError(handleReviewQueueUnified(args, context));
+				break;
+			case 'tracekeeper.project_context':
+				toolResult = toolResultWithError(handleProjectContext(args, context));
+				break;
+			case 'tracekeeper.project_history':
+				toolResult = toolResultWithError(handleProjectHistory(args, context));
+				break;
 			case 'tracekeeper.list_review_queue':
 				toolResult = toolResultWithError(handleReviewQueue(args, context));
 				break;
@@ -2387,6 +4230,9 @@ export function callTool(
 				break;
 			case 'tracekeeper.audit_recent':
 				toolResult = toolResultWithError(handleAuditRecent(args, context));
+				break;
+			case 'tracekeeper.source_request':
+				toolResult = toolResultWithError(handleSourceRequest(args, context));
 				break;
 			case 'tracekeeper.analyze_source_request':
 				toolResult = toolResultWithError(handleAnalyzeSourceRequest(args, context));
@@ -2421,6 +4267,7 @@ export function callTool(
 			default:
 				assertUnreachable(requestName);
 		}
+		toolResult = markDeprecatedToolResult(requestName, toolResult);
 		status = isToolResultFailure(toolResult) ? 'failed' : 'success';
 	} catch (error) {
 		if (error instanceof ToolInputError || error instanceof VaultPathError) {
@@ -2458,6 +4305,50 @@ export function callTool(
 
 function toolResultWithError<T>(value: T): McpStructuredToolResult {
 	return toolResult(value);
+}
+
+function markDeprecatedToolResult(toolName: string, result: McpStructuredToolResult): McpStructuredToolResult {
+	const replacement = DEPRECATED_TOOL_REPLACEMENTS[toolName];
+	if (!replacement || result.isError || !isRecord(result.structuredContent)) {
+		return result;
+	}
+	return toolResult({
+		...result.structuredContent,
+		deprecated: true,
+		replacement_tool: replacement,
+	});
+}
+
+function buildRecommendedRecall(goal: string, projectHint: string): Record<string, unknown> {
+	const scope: RecallScope = projectHint ? 'project' : 'global';
+	const args: Record<string, unknown> = {
+		query: goal,
+		scope,
+		max_items: 6,
+	};
+	if (projectHint) {
+		args.project_hint = projectHint;
+	}
+	return {
+		tool: 'tracekeeper.recall',
+		arguments: args,
+		reason: projectHint
+			? 'Use project-scoped recall before reading individual notes.'
+			: 'Use global recall first, then narrow with project_hint when a project is known.',
+	};
+}
+
+function buildStartTaskNextActions(projectHint: string): string[] {
+	const actions = [
+		'Call tracekeeper.recall before reading individual notes.',
+		'Use tracekeeper.read_note only when a recall excerpt is not enough.',
+		'Call tracekeeper.finish_task once at the end with decisions, lessons, and memory candidates.',
+	];
+	if (projectHint) {
+		actions.unshift('Use scope="project" with the same project_hint for targeted recall.');
+		actions.splice(2, 0, 'Use scope="project_history" when continuity from earlier sessions is needed.');
+	}
+	return actions;
 }
 
 function handleStatus(rawArgs: StatusArgs, context: ToolContext) {
@@ -2524,7 +4415,7 @@ function handleStartTask(rawArgs: StartTaskArgs, context: ToolInvocationContext)
 	const contextPack = buildContextPackForContext(vaultRoot, goal, context, { limit: 8 });
 	const taskId = `obs_task_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
 	const relatedProjects = scan.notes
-		.filter((note) => note.relativePath.startsWith('05_projects/'))
+	.filter((note) => PROJECT_MEMORY_READ_DIRS.some((dir) => note.relativePath.startsWith(`${dir}/`)))
 		.slice(0, 10)
 		.map((note) => ({ path: note.relativePath, title: note.title }));
 	const task = createAgentTaskRecord(vaultRoot, {
@@ -2557,29 +4448,55 @@ function handleStartTask(rawArgs: StartTaskArgs, context: ToolInvocationContext)
 		recent_sessions: buildRecentSessions(scan.notes),
 		user_preferences: buildUserPreferences(scan),
 		recommended_next_tool: 'tracekeeper.recall',
+		recommended_recall: buildRecommendedRecall(goal, projectHint),
+		next_actions_for_agent: buildStartTaskNextActions(projectHint),
 	};
 }
 
 function handleRecall(rawArgs: RecallArgs, context: ToolContext) {
+	const scope = coerceRecallScope(rawArgs.scope);
+	if (scope === 'project') {
+		const result = handleProjectContext(rawArgs, context);
+		return {
+			...result,
+			scope: {
+				...result.scope,
+				scope,
+			},
+			scope_mode: scope,
+		};
+	}
+	if (scope === 'project_history') {
+		const result = handleProjectHistory(rawArgs, context);
+		return {
+			...result,
+			scope: {
+				...result.scope,
+				scope,
+			},
+			scope_mode: scope,
+		};
+	}
 	const vaultRoot = vaultRootFromArgs(rawArgs, context);
 	const query = coerceNonEmptyString(rawArgs.query, true, 'query');
 	const maxItems = coercePositiveInt(rawArgs.max_items, 6, 1, 20);
 	const scan = scanVaultForContext(vaultRoot, context);
-	const matches = recallNotes(scan.notes, query, { limit: maxItems });
+	const rawMatches = recallNotes(scan.notes, query, { limit: maxItems });
+	const matches = rankRecallMatches(rawMatches, query, {
+		projectHint: '',
+		projectId: '',
+		repoPath: '',
+	});
 
 	return {
 		ok: true,
+		read_only: true,
+		scope_mode: scope,
 		query,
 		vault_root: vaultRoot,
 		max_items: maxItems,
 		matched_count: matches.length,
-		matches: matches.map((match) => ({
-			path: match.note.relativePath,
-			title: match.note.title,
-			type: match.note.type,
-			score: match.score,
-			matched_tokens: match.matchedTokens,
-		})),
+		matches: matches.map((match) => buildRecallEntry(match, scope)),
 	};
 }
 
@@ -2598,6 +4515,62 @@ function handleReadNote(rawArgs: ReadNoteArgs, context: ToolContext) {
 		mime_type: data.path.endsWith('.txt') || data.path.endsWith('.text') ? 'text/plain' : 'text/markdown',
 		content: data.text,
 		excerpt: parsed.body.slice(0, 1024),
+	};
+}
+
+function handleProjectContext(rawArgs: ProjectContextArgs, context: ToolContext) {
+	const vaultRoot = vaultRootFromArgs(rawArgs, context);
+	const query = coerceNonEmptyString(rawArgs.query, true, 'query');
+	const scope = coerceProjectScope(rawArgs);
+	const maxItems = coercePositiveInt(rawArgs.max_items, MAX_PROJECT_TOOL_ITEMS, 1, MAX_PROJECT_TOOL_ITEMS);
+	const scan = scanVaultForContext(vaultRoot, context);
+	const scopedNotes = filterNotesByProjectScopeWithSessions(scan.notes, scope);
+	const uncertain = !hasProjectScope(scope);
+	const rawMatches = recallNotes(scopedNotes, query, { limit: maxItems });
+	const matches = rankRecallMatches(rawMatches, query, scope);
+	const candidates = collectProjectCandidates(scan.notes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
+
+	return {
+		ok: true,
+		read_only: true,
+		vault_root: vaultRoot,
+		query,
+		uncertain: uncertain,
+		scope: buildProjectScopeMetadata(scope),
+		max_items: maxItems,
+		matched_count: matches.length,
+		candidates: candidates,
+		entries: matches.map((match) => buildRecallEntry(match, 'project')),
+	};
+}
+
+function handleProjectHistory(rawArgs: ProjectHistoryArgs, context: ToolContext) {
+	const vaultRoot = vaultRootFromArgs(rawArgs, context);
+	const query = coerceOptionalString(rawArgs.query);
+	const scope = coerceProjectScope(rawArgs);
+	const maxItems = coercePositiveInt(rawArgs.max_items, MAX_PROJECT_TOOL_ITEMS, 1, MAX_PROJECT_TOOL_ITEMS);
+	const scan = scanVaultForContext(vaultRoot, context);
+	const scopedNotes = filterNotesByProjectScopeWithSessions(scan.notes, scope);
+	const uncertain = !hasProjectScope(scope);
+	const filteredByQuery = query ? scopedNotes.filter((note) => matchesProjectQuery(note, query)) : scopedNotes;
+	const sortedMatches = filteredByQuery
+		.filter((note) => note.relativePath !== '')
+		.sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
+	const candidates = collectProjectCandidates(scan.notes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
+	const matches = sortedMatches.slice(0, maxItems);
+
+	return {
+		ok: true,
+		read_only: true,
+		vault_root: vaultRoot,
+		query: query || null,
+		uncertain: uncertain,
+		scope: buildProjectScopeMetadata(scope),
+		max_items: maxItems,
+		matched_count: matches.length,
+		total_matches: sortedMatches.length,
+		candidates,
+		entries: buildProjectHistoryEntries(matches, query),
 	};
 }
 
@@ -2789,7 +4762,11 @@ function buildReportContent(
 	return section.join('\n');
 }
 
-function handleAnalyzeSourceRequest(rawArgs: AnalyzeSourceRequestArgs, context: ToolContext) {
+function handleAnalyzeSourceRequest(
+	rawArgs: AnalyzeSourceRequestArgs,
+	context: ToolContext,
+	sourceToolName = 'tracekeeper.analyze_source_request'
+) {
 	const vaultRoot = vaultRootFromArgs(rawArgs, context);
 	const requestPath = coerceOptionalString(rawArgs.request_path) || coerceOptionalString(rawArgs.path);
 	if (!requestPath) {
@@ -2832,11 +4809,11 @@ function handleAnalyzeSourceRequest(rawArgs: AnalyzeSourceRequestArgs, context: 
 		const sourceFilename = buildSafeFilename(`${runToken}-source`, 'source', context);
 		const sourceNote = buildAndWriteNote(
 			vaultRoot,
-			'tracekeeper.analyze_source_request',
+			sourceToolName,
 			SOURCES_DIR,
 			sourceFilename,
 			{
-				tool: 'tracekeeper.analyze_source_request',
+				tool: sourceToolName,
 				type: 'source_analysis_source',
 				title: `source_analysis_source_${runToken}`,
 				source: request.source,
@@ -2856,11 +4833,11 @@ function handleAnalyzeSourceRequest(rawArgs: AnalyzeSourceRequestArgs, context: 
 		const reportFilename = buildSafeFilename(`${runToken}-report`, 'source-report', context);
 		const report = buildAndWriteNote(
 			vaultRoot,
-			'tracekeeper.analyze_source_request',
+			sourceToolName,
 			SOURCE_ANALYSIS_REPORT_DIR,
 			reportFilename,
 			{
-				tool: 'tracekeeper.analyze_source_request',
+				tool: sourceToolName,
 				type: 'source_analysis_report',
 				title: `source_analysis_report_${runToken}`,
 				source: request.source,
@@ -2880,11 +4857,11 @@ function handleAnalyzeSourceRequest(rawArgs: AnalyzeSourceRequestArgs, context: 
 	const proposalPaths = analysis.proposalDrafts.map((entry: SourceProposalDraft) => {
 		const proposalNote = buildAndWriteNote(
 				vaultRoot,
-				'tracekeeper.analyze_source_request',
+				sourceToolName,
 				MEMORY_PROPOSAL_DIR,
 				buildSafeFilename(`proposal-${runToken}-${entry.proposalKind}`, entry.proposalKind, context),
 				{
-					tool: 'tracekeeper.analyze_source_request',
+					tool: sourceToolName,
 					type: 'memory_proposal',
 					title: entry.title || `source_proposal_${runToken}`,
 					proposal_kind: entry.proposalKind,
@@ -2913,7 +4890,7 @@ function handleAnalyzeSourceRequest(rawArgs: AnalyzeSourceRequestArgs, context: 
 		if (updateStatus) {
 			updateRequestStatus(vaultRoot, request.path, 'completed', context);
 			auditPathForReturn = appendAuditEvent(vaultRoot, {
-				tool: 'tracekeeper.analyze_source_request',
+				tool: sourceToolName,
 				targetPath: request.path,
 				status: 'written',
 				taskId,
@@ -2933,7 +4910,7 @@ function handleAnalyzeSourceRequest(rawArgs: AnalyzeSourceRequestArgs, context: 
 		return {
 			ok: true,
 			read_only: false,
-			tool: 'tracekeeper.analyze_source_request',
+			tool: sourceToolName,
 			status: 'completed',
 			vault_root: vaultRoot,
 			request_path: request.path,
@@ -2956,7 +4933,7 @@ function handleAnalyzeSourceRequest(rawArgs: AnalyzeSourceRequestArgs, context: 
 			try {
 				updateRequestStatus(vaultRoot, requestPathAlias, 'failed', context);
 				appendAuditEvent(vaultRoot, {
-					tool: 'tracekeeper.analyze_source_request',
+					tool: sourceToolName,
 					targetPath: requestPathAlias,
 					status: 'failed',
 					taskId: coerceOptionalString(rawArgs.task_id) || null,
@@ -2971,6 +4948,30 @@ function handleAnalyzeSourceRequest(rawArgs: AnalyzeSourceRequestArgs, context: 
 		}
 		throw error;
 	}
+}
+
+function handleReviewQueueUnified(rawArgs: ReviewQueueArgs, context: ToolContext) {
+	const action = coerceReviewQueueAction(rawArgs.action);
+	const result = action === 'list_approved'
+		? handleListApprovedWritebacks(rawArgs, context)
+		: handleReviewQueue(rawArgs, context);
+	return {
+		...result,
+		tool: 'tracekeeper.review_queue',
+		action,
+	};
+}
+
+function handleSourceRequest(rawArgs: SourceRequestArgs, context: ToolContext) {
+	const action = coerceSourceRequestAction(rawArgs.action, rawArgs);
+	const result = action === 'analyze'
+		? handleAnalyzeSourceRequest(rawArgs, context, 'tracekeeper.source_request')
+		: handleListSourceRequests(rawArgs, context);
+	return {
+		...result,
+		tool: 'tracekeeper.source_request',
+		action,
+	};
 }
 
 function handleReviewQueue(rawArgs: ListReviewQueueArgs, context: ToolContext) {
@@ -3327,13 +5328,83 @@ function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolContext) {
 	const title = coerceOptionalString(rawArgs.title);
 	const filename = buildSafeFilename(rawArgs.filename, 'proposal', context);
 	const taskId = coerceOptionalString(rawArgs.task_id) || null;
+	const projectHint = coerceOptionalString(rawArgs.project_hint);
+	const memoryScope = resolveMemoryScope(proposalKind, targetNote, projectHint, rawArgs.memory_scope);
+	const relatedWiki = normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki');
+	const relatedSources = normalizeMultiValueList(rawArgs.related_sources, 'related_sources');
+	const architectureStatus = buildArchitectureStatus(vaultRoot, context);
+	const bridgeMetadata = resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint, relatedWiki, context);
 	const now = new Date().toISOString();
+	assertMemoryProposalAllowed(proposalKind, targetNote, projectHint, context, memoryScope);
 	assertNoSensitiveText([
 		{ label: 'content', value: content },
 		{ label: 'evidence', value: evidence },
 		{ label: 'target_note', value: targetNote },
 		{ label: 'title', value: title },
+		{ label: 'project_hint', value: projectHint },
+		{ label: 'related_wiki', value: relatedWiki.join('\n') },
+		{ label: 'related_sources', value: relatedSources.join('\n') },
 	]);
+
+	const memoryRule = memoryProposalRuleFor(proposalKind, targetNote, projectHint, context, memoryScope);
+	if (memoryRule === 'auto_write') {
+		const canAutoWrite = !(memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge);
+		const autoTarget = canAutoWrite
+			? resolveAutoMemoryTarget(
+				vaultRoot,
+				proposalKind,
+				targetNote,
+				projectHint,
+				context,
+				memoryScope
+			)
+			: null;
+		if (autoTarget) {
+			const note = appendAutoMemoryWrite(vaultRoot, {
+				toolName: 'tracekeeper.propose_memory',
+				proposalKind,
+				targetNote: autoTarget.targetNote,
+				allowedDir: autoTarget.allowedDir,
+				title: title || `Memory update: ${proposalKind}`,
+				content,
+				taskId,
+				context,
+				projectHint,
+				evidence,
+				riskLevel,
+				memoryScope,
+				relatedWiki,
+				relatedSources,
+				architectureStatus,
+				missingGraphBridges: architectureStatus.missing_graph_bridges,
+				missingWikiBridge: false,
+			});
+			updateAgentTaskRecord(vaultRoot, taskId, {}, context, {
+				memory_writes: [note.path],
+			});
+
+			return {
+				ok: true,
+				tool: 'tracekeeper.propose_memory',
+				status: note.status,
+				path: note.path,
+				target_note: note.path,
+				audit_path: note.audit_path,
+				warnings: note.warnings,
+				auto_applied: true,
+				duplicate: note.duplicate,
+				memory_rule: 'auto_write',
+				memory_scope: memoryScope,
+				project_hint: projectHint || null,
+				related_wiki: bridgeMetadata.related_wiki,
+				related_sources: relatedSources,
+				architecture_status: architectureStatus.architecture_status,
+				missing_graph_bridges: architectureStatus.missing_graph_bridges,
+				missing_wiki_bridge: false,
+				proposal_path: null,
+			};
+		}
+	}
 
 	const body = [
 		'## Proposal',
@@ -3341,7 +5412,15 @@ function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolContext) {
 		`- proposal_kind: ${proposalKind}`,
 		evidence ? `- evidence: ${evidence}` : '',
 		targetNote ? `- target_note: ${targetNote}` : '',
+		`- memory_scope: ${memoryScope}`,
+		projectHint ? `- project_hint: ${projectHint}` : '',
+		bridgeMetadata.related_wiki.length ? `- related_wiki: ${JSON.stringify(bridgeMetadata.related_wiki)}` : '',
+		relatedSources.length ? `- related_sources: ${JSON.stringify(relatedSources)}` : '',
 		riskLevel ? `- risk_level: ${riskLevel}` : '',
+		`- architecture_status: ${architectureStatus.architecture_status}`,
+		`- missing_graph_bridges: ${JSON.stringify(architectureStatus.missing_graph_bridges)}`,
+		bridgeMetadata.missing_wiki_bridge ? '- missing_wiki_bridge: true' : '',
+		bridgeMetadata.missing_related_wiki.length ? `- missing_related_wiki: ${JSON.stringify(bridgeMetadata.missing_related_wiki)}` : '',
 		'',
 		content,
 	].filter(Boolean).join('\n');
@@ -3359,6 +5438,14 @@ function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolContext) {
 			status: 'pending',
 			target_note: targetNote || null,
 			risk_level: riskLevel || null,
+			project_hint: projectHint || null,
+			memory_scope: memoryScope,
+			related_wiki: bridgeMetadata.related_wiki,
+			related_sources: relatedSources,
+			architecture_status: architectureStatus.architecture_status,
+			missing_graph_bridges: architectureStatus.missing_graph_bridges,
+			missing_wiki_bridge: bridgeMetadata.missing_wiki_bridge,
+			missing_related_wiki: bridgeMetadata.missing_related_wiki,
 			created_at: now,
 			task_id: taskId || null,
 		},
@@ -3374,8 +5461,47 @@ function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolContext) {
 	updateAgentTaskRecord(vaultRoot, taskId, {}, context, {
 		proposals: [note.path],
 	});
-
-	return makeToolResultForWrite('tracekeeper.propose_memory', note);
+	const response: {
+		ok: true;
+		tool: string;
+		status: string;
+		path: string;
+		audit_path: string;
+		warnings: string[];
+		auto_applied: boolean;
+		duplicate: boolean;
+		proposal_path: string;
+		memory_rule: MemoryProposalRule;
+		memory_scope: MemoryScope;
+		project_hint: string | null;
+		related_wiki: string[];
+		related_sources: string[];
+		architecture_status: ArchitectureStatus;
+		missing_graph_bridges: string[];
+		missing_wiki_bridge: boolean;
+	} = {
+		ok: true,
+		tool: 'tracekeeper.propose_memory',
+		status: note.status,
+		path: note.path,
+		audit_path: note.audit_path,
+		warnings: note.warnings,
+		auto_applied: false,
+		duplicate: false,
+		proposal_path: note.path,
+		memory_rule: memoryRule,
+		memory_scope: memoryScope,
+		project_hint: projectHint || null,
+		related_wiki: bridgeMetadata.related_wiki,
+		related_sources: relatedSources,
+		architecture_status: architectureStatus.architecture_status,
+		missing_graph_bridges: architectureStatus.missing_graph_bridges,
+		missing_wiki_bridge: bridgeMetadata.missing_wiki_bridge,
+	};
+	if (memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge && memoryRule === 'auto_write') {
+		response.memory_rule = 'review_queue';
+	}
+	return response;
 }
 
 function handleBuildContextPack(rawArgs: BuildContextPackArgs, context: ToolContext) {
@@ -3496,6 +5622,14 @@ function handleLint(rawArgs: LintArgs, context: ToolContext) {
 	const profileEvaluation = graphHealth
 		? evaluateGraphProfile(graphHealth, profile)
 		: { profile, disabled: true, profile_issues: [] };
+	const lintGraphHealth = graphHealth
+		? {
+			disabled: profileEvaluation.disabled,
+			profile: profileEvaluation.profile,
+			profile_issues: profileEvaluation.profile_issues,
+			...graphHealth,
+		}
+		: null;
 	const { issues } = lintNotes(vaultRoot, scan.notes, {
 		graphHealth,
 		graphProfile: profile,
@@ -3512,7 +5646,48 @@ function handleLint(rawArgs: LintArgs, context: ToolContext) {
 		scanned_at: scan.scannedAt,
 		issue_count: issues.length,
 		issues: limitedIssues,
+		graph_summary: graphHealth ? buildGraphSummary(graphHealth) : null,
+		graph_health: lintGraphHealth,
+		legacy_structure: buildLegacyStructureSummary(vaultRoot, scan.notes),
 		fix_plan_summary: buildFixPlanSummary(issues),
+	};
+}
+
+function buildLegacyStructureSummary(vaultRoot: string, notes: ScannedNote[]): Record<string, unknown> {
+	const legacyRoots = LEGACY_TOP_LEVEL_DIRS.filter((root) => fs.existsSync(path.join(vaultRoot, root)));
+	const legacyNoteCount = notes.filter((note) =>
+		legacyRoots.some((root) => note.relativePath === root || note.relativePath.startsWith(`${root}/`))
+	).length;
+	return {
+		detected: legacyRoots.length > 0,
+		legacy_roots: legacyRoots,
+		legacy_note_count: legacyNoteCount,
+		recommendation: legacyRoots.length > 0
+			? 'Use the Obsidian plugin structure check to preview, rebuild, validate, and trash legacy folders after explicit user confirmation. MCP lint is read-only and will not migrate or delete folders.'
+			: 'No legacy Tracekeeper top-level folders detected.',
+	};
+}
+
+function buildGraphSummary(graphHealth: GraphHealthReport): Record<string, unknown> {
+	return {
+		note_count: graphHealth.note_count,
+		wikilink_edge_count: graphHealth.wikilink_edge_count,
+		resolved_edge_count: graphHealth.resolved_edge_count,
+		unresolved_edge_count: graphHealth.unresolved_edge_count,
+		component_count: graphHealth.component_count,
+		largest_component_node_count: graphHealth.largest_component_node_count,
+		isolated_node_count: graphHealth.isolated_node_count,
+		only_inbound_node_count: graphHealth.only_inbound_node_count,
+		only_outbound_node_count: graphHealth.only_outbound_node_count,
+		hub_candidate_count: graphHealth.hub_candidate_count,
+		missing_recommended_entry: graphHealth.missing_recommended_entry,
+		missing_recommended_hub_count: graphHealth.missing_recommended_hub_count,
+		recommendation_count: graphHealth.recommendation_count,
+		entry_issues: graphHealth.missing_recommended_entry ? [graphHealth.missing_recommended_entry] : [],
+		hub_issues: graphHealth.missing_recommended_hubs,
+		isolated_notes: graphHealth.isolated_nodes,
+		unresolved_links: graphHealth.unresolved_edges,
+		recommendations: graphHealth.recommendations,
 	};
 }
 
@@ -3531,6 +5706,79 @@ function buildSessionNoteBody(summary: string, outcomes: string[], nextActions: 
 		...formatListMarkdown(nextActions).split('\n'),
 	].join('\n');
 	return lines.trim();
+}
+
+function buildSessionNoteBodyWithCloseout(
+	summary: string,
+	outcomes: string[],
+	nextActions: string[],
+	decisions: string[],
+	solutionChanges: string[],
+	lessons: string[],
+	preferences: string[],
+	memoryCandidates: string[],
+): string {
+	const lines = [
+		'# Task Session Note',
+		`- created_at: ${new Date().toISOString()}`,
+		'',
+		'## Summary',
+		summary,
+		'',
+		'## Outcomes',
+		...formatListMarkdown(outcomes).split('\n'),
+		'',
+		'## Next Actions',
+		...formatListMarkdown(nextActions).split('\n'),
+		'',
+		'## Decisions',
+		...formatListMarkdown(decisions).split('\n'),
+		'',
+		'## Solution Changes',
+		...formatListMarkdown(solutionChanges).split('\n'),
+		'',
+		'## Lessons',
+		...formatListMarkdown(lessons).split('\n'),
+		'',
+		'## Preferences',
+		...formatListMarkdown(preferences).split('\n'),
+		'',
+		'## Memory Candidates',
+		...formatListMarkdown(memoryCandidates).split('\n'),
+	].join('\n');
+	return lines.trim();
+}
+
+function buildFinishTaskNextActions(
+	reviewProposalMode: ReviewProposalMode,
+	proposalResult: FinishTaskProposalResult,
+	projectHint: string
+): string[] {
+	const actions: string[] = [];
+	if (reviewProposalMode === 'off') {
+		actions.push('Task session was recorded; no memory suggestions or Review Queue proposals were created.');
+	}
+	if (reviewProposalMode === 'suggest') {
+		actions.push('Review suggested_memory_updates in this response; nothing was written to the Review Queue.');
+	}
+	if (reviewProposalMode === 'review_queue' || reviewProposalMode === 'auto_propose') {
+		if (proposalResult.proposals.length > 0) {
+			actions.push('Review queued proposals in Obsidian before durable memory writeback.');
+		}
+		if (proposalResult.autoAppliedMemoryUpdates.length > 0) {
+			actions.push('Project memory was auto-saved as append-only project memory according to the user rule.');
+		}
+		if (proposalResult.hasMissingWikiBridge) {
+			actions.push('Some project memory candidates need a related_wiki bridge before automatic project memory save.');
+		}
+		if (actions.length === 0) {
+			actions.push('Task session was recorded; no closeout memory candidates were produced.');
+		}
+	}
+	if (projectHint) {
+		actions.push('For the next related session, call tracekeeper.recall with scope="project_history" and the same project_hint.');
+	}
+	return actions;
 }
 
 function buildSessionNoteBodyWithDistill(
@@ -3568,6 +5816,7 @@ function createDistillProposal(
 	proposalKind: string,
 	kindLabel: string,
 	contentItems: string[],
+	projectHint: string,
 	context: ToolContext
 ): { path: string } {
 	const body = [
@@ -3592,6 +5841,7 @@ function createDistillProposal(
 			risk_level: 'medium',
 			created_at: now,
 			task_id: taskId,
+			project_hint: projectHint || null,
 		},
 		body,
 		taskId,
@@ -3610,18 +5860,48 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 	const summary = coerceNonEmptyString(rawArgs.summary, true, 'summary');
 	const outcomes = coerceStringOrStringArray(rawArgs.outcomes, 'outcomes');
 	const nextActions = coerceStringOrStringArray(rawArgs.next_actions, 'next_actions');
-	const client = coerceOptionalString(rawArgs.client);
-	const projectHint = coerceOptionalString(rawArgs.project_hint);
+	const decisions = coerceStringOrStringArray(rawArgs.decisions, 'decisions');
+	const solutionChanges = coerceStringOrStringArray(rawArgs.solution_changes, 'solution_changes');
+	const lessons = coerceStringOrStringArray(rawArgs.lessons, 'lessons');
+	const preferences = coerceStringOrStringArray(rawArgs.preferences, 'preferences');
+	const memoryCandidates = coerceStringOrStringArray(rawArgs.memory_candidates, 'memory_candidates');
+	const reviewProposalMode = coerceReviewProposalMode(
+		rawArgs.review_proposal_mode,
+		defaultReviewProposalMode(context)
+	);
+	const taskMetadata = readAgentTaskMetadata(vaultRoot, taskId, context);
+	const client = coerceOptionalString(rawArgs.client) || taskMetadata.client;
+	const projectHint = coerceOptionalString(rawArgs.project_hint) || taskMetadata.projectHint;
+	const memoryScopeValue = rawArgs.memory_scope;
+	const relatedWiki = normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki');
+	const relatedSources = normalizeMultiValueList(rawArgs.related_sources, 'related_sources');
+	const architectureStatus = buildArchitectureStatus(vaultRoot, context);
 	const filename = buildSafeFilename(rawArgs.filename, 'session', context);
 	const now = new Date().toISOString();
 
-	const body = buildSessionNoteBody(summary, outcomes, nextActions);
+	const body = buildSessionNoteBodyWithCloseout(
+		summary,
+		outcomes,
+		nextActions,
+		decisions,
+		solutionChanges,
+		lessons,
+		preferences,
+		memoryCandidates
+	);
 	assertNoSensitiveText([
 		{ label: 'summary', value: summary },
 		{ label: 'outcomes', value: outcomes.join('\n') },
 		{ label: 'next_actions', value: nextActions.join('\n') },
+		{ label: 'decisions', value: decisions.join('\n') },
+		{ label: 'solution_changes', value: solutionChanges.join('\n') },
+		{ label: 'lessons', value: lessons.join('\n') },
+		{ label: 'preferences', value: preferences.join('\n') },
+		{ label: 'memory_candidates', value: memoryCandidates.join('\n') },
 		{ label: 'client', value: client },
 		{ label: 'project_hint', value: projectHint },
+		{ label: 'related_wiki', value: relatedWiki.join('\n') },
+		{ label: 'related_sources', value: relatedSources.join('\n') },
 	]);
 
 	const note = buildAndWriteNote(
@@ -3636,7 +5916,14 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 			task_id: taskId,
 			client: client || null,
 			project_hint: projectHint || null,
+			related_project: projectHint || null,
+			memory_scope: resolveMemoryScope('session_finish', '', projectHint, memoryScopeValue),
+			related_wiki: relatedWiki,
+			related_sources: relatedSources,
+			architecture_status: architectureStatus.architecture_status,
+			missing_graph_bridges: architectureStatus.missing_graph_bridges,
 			created_at: now,
+			review_proposal_mode: reviewProposalMode || null,
 		},
 		body,
 		taskId,
@@ -3646,6 +5933,30 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 			task_stage: 'finish',
 		}
 	);
+
+	const proposalResult = buildFinishTaskProposals(
+		vaultRoot,
+		taskId,
+		note.path,
+		reviewProposalMode,
+		projectHint,
+		memoryScopeValue,
+		relatedWiki,
+		relatedSources,
+		architectureStatus,
+		{
+			decisions,
+			solution_changes: solutionChanges,
+			lessons,
+			preferences,
+			next_actions: nextActions,
+			memory_candidates: memoryCandidates,
+		},
+		context
+	);
+	const proposalPaths = proposalResult.proposals.map((proposal) => proposal.path);
+	const autoWritePaths = proposalResult.autoAppliedMemoryUpdates.map((update) => update.path);
+
 	const taskPath = updateAgentTaskRecord(
 		vaultRoot,
 		taskId,
@@ -3656,10 +5967,19 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 			session_note: note.path,
 			outcomes: outcomes.join(', '),
 			next_actions: nextActions.join(', '),
+			decisions: decisions.join(', '),
+			solution_changes: solutionChanges.join(', '),
+			lessons: lessons.join(', '),
+			preferences: preferences.join(', '),
+			memory_candidates: memoryCandidates.join(', '),
+			review_proposal_mode: reviewProposalMode,
+			project_hint: projectHint,
+			related_project: projectHint,
 		},
 		context,
 		{
-			memory_writes: [note.path],
+			memory_writes: [note.path, ...autoWritePaths],
+			proposals: proposalPaths,
 		},
 		[
 			'## Completion Summary',
@@ -3670,19 +5990,92 @@ function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolContext) {
 			'',
 			'## Next Actions',
 			...formatListMarkdown(nextActions).split('\n'),
+			'',
+			'## Decisions',
+			...formatListMarkdown(decisions).split('\n'),
+			'',
+			'## Solution Changes',
+			...formatListMarkdown(solutionChanges).split('\n'),
+			'',
+			'## Lessons',
+			...formatListMarkdown(lessons).split('\n'),
+			'',
+			'## Preferences',
+			...formatListMarkdown(preferences).split('\n'),
+			'',
+			'## Memory Candidates',
+			...formatListMarkdown(memoryCandidates).split('\n'),
 		].join('\n')
 	);
 
-	return {
+	const response: {
+		ok: true;
+		read_only: false;
+		task_id: string;
+		task_path: string | null;
+		path: string;
+		audit_path: string;
+		review_proposal_mode: ReviewProposalMode;
+		outcome_count: number;
+		next_action_count: number;
+		proposal_count?: number;
+		proposals?: Array<{ kind: string; path: string }>;
+		suggestion_count?: number;
+		suggested_memory_updates?: FinishTaskSuggestion[];
+		auto_applied_count?: number;
+		auto_applied_memory_updates?: Array<{ kind: string; path: string; status: string }>;
+		memory_scope?: MemoryScope;
+		project_hint?: string | null;
+		related_wiki?: string[];
+		related_sources?: string[];
+		architecture_status?: ArchitectureStatus;
+		missing_graph_bridges?: string[];
+		missing_wiki_bridge?: boolean;
+		next_actions_for_agent: string[];
+	} = {
 		ok: true,
 		read_only: false,
 		task_id: taskId,
 		task_path: taskPath,
 		path: note.path,
 		audit_path: note.audit_path,
+		review_proposal_mode: reviewProposalMode,
 		outcome_count: outcomes.length,
 		next_action_count: nextActions.length,
+		memory_scope: resolveMemoryScope('session_finish', '', projectHint, memoryScopeValue),
+		project_hint: projectHint || null,
+		related_wiki: relatedWiki,
+		related_sources: relatedSources,
+		architecture_status: architectureStatus.architecture_status,
+		missing_graph_bridges: architectureStatus.missing_graph_bridges,
+		missing_wiki_bridge: proposalResult.hasMissingWikiBridge,
+		next_actions_for_agent: buildFinishTaskNextActions(reviewProposalMode, proposalResult, projectHint),
 	};
+
+	if (reviewProposalMode === 'auto_propose' || reviewProposalMode === 'review_queue') {
+		response.proposal_count = proposalResult.proposals.length;
+		response.proposals = proposalResult.proposals.map((proposal) => ({
+			kind: proposal.kind,
+			path: proposal.path,
+		}));
+		response.auto_applied_count = proposalResult.autoAppliedMemoryUpdates.length;
+		response.auto_applied_memory_updates = proposalResult.autoAppliedMemoryUpdates.map((update) => ({
+			kind: update.kind,
+			path: update.path,
+			status: update.status,
+		}));
+	}
+
+	if (reviewProposalMode === 'suggest') {
+		response.suggestion_count = proposalResult.suggestedMemoryUpdates.length;
+		response.suggested_memory_updates = proposalResult.suggestedMemoryUpdates.map((update) => ({
+			kind: update.kind,
+			label: update.label,
+			values: update.values,
+		}));
+	}
+
+	return response;
 }
 
 function handleDistillSession(rawArgs: DistillSessionArgs, context: ToolContext) {
@@ -3693,7 +6086,7 @@ function handleDistillSession(rawArgs: DistillSessionArgs, context: ToolContext)
 	const nextActions = coerceStringOrStringArray(rawArgs.next_actions, 'next_actions');
 	const possiblePreferences = coerceStringOrStringArray(rawArgs.possible_preferences, 'possible_preferences');
 	const outcomes = coerceStringOrStringArray(rawArgs.outcomes, 'outcomes');
-	const projectHint = coerceOptionalString(rawArgs.project_hint);
+	const projectHint = coerceOptionalString(rawArgs.project_hint) || readAgentTaskMetadata(vaultRoot, taskId, context).projectHint;
 	const filename = buildSafeFilename(rawArgs.filename, 'session', context);
 	const now = new Date().toISOString();
 
@@ -3718,6 +6111,7 @@ function handleDistillSession(rawArgs: DistillSessionArgs, context: ToolContext)
 			title: `Task ${taskId} distill note`,
 			task_id: taskId,
 			project_hint: projectHint || null,
+			related_project: projectHint || null,
 			created_at: now,
 		},
 		body,
@@ -3731,26 +6125,32 @@ function handleDistillSession(rawArgs: DistillSessionArgs, context: ToolContext)
 
 	const proposals: string[] = [];
 	if (decisions.length > 0) {
-		const proposal = createDistillProposal(
-			vaultRoot,
-			taskId,
-			'distill_decisions',
-			'Decisions',
-			decisions,
-			context
-		);
-		proposals.push(proposal.path);
+		if (isMemoryProposalAllowed('distill_decisions', '', projectHint, context)) {
+			const proposal = createDistillProposal(
+				vaultRoot,
+				taskId,
+				'distill_decisions',
+				'Decisions',
+				decisions,
+				projectHint,
+				context
+			);
+			proposals.push(proposal.path);
+		}
 	}
 	if (possiblePreferences.length > 0) {
-		const proposal = createDistillProposal(
-			vaultRoot,
-			taskId,
-			'distill_preferences',
-			'Possible Preferences',
-			possiblePreferences,
-			context
-		);
-		proposals.push(proposal.path);
+		if (isMemoryProposalAllowed('distill_preferences', '', projectHint, context)) {
+			const proposal = createDistillProposal(
+				vaultRoot,
+				taskId,
+				'distill_preferences',
+				'Possible Preferences',
+				possiblePreferences,
+				projectHint,
+				context
+			);
+			proposals.push(proposal.path);
+		}
 	}
 	updateAgentTaskRecord(vaultRoot, taskId, {
 		session_note: note.path,

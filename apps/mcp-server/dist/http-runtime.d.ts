@@ -1,3 +1,4 @@
+import { McpJsonRpcHandler } from './handler';
 export type RuntimeState = 'stopped' | 'starting' | 'running' | 'failed' | 'port_conflict';
 export interface StreamableHttpRuntimeOptions {
     host?: string;
@@ -8,6 +9,7 @@ export interface StreamableHttpRuntimeOptions {
     defaultVaultRoot?: string;
     vaultConfigDir?: string;
     graphProfile?: unknown;
+    memoryRules?: NonNullable<ConstructorParameters<typeof McpJsonRpcHandler>[0]>['memoryRules'];
     runtimeVersion?: string;
 }
 export interface StreamableHttpRuntimeStatus {
