@@ -2,6 +2,22 @@
 
 All notable changes to Tracekeeper will be documented in this file.
 
+## [0.2.1] - Obsidian Memory Workflow
+
+First public release in the 0.2 series. Version 0.2.0 was skipped as an internal stabilization point; 0.2.1 is the reviewed release candidate for the Obsidian Memory workflow.
+
+### Added
+
+- `tracekeeper.project_context` and `tracekeeper.project_history` for project-scoped recall and continuity.
+- `tracekeeper.finish_task` closeout fields for decisions, solution changes, lessons, preferences, and memory candidates.
+- Optional `review_proposal_mode` on `tracekeeper.finish_task` to create Review Queue proposals without writing durable memory directly.
+- Agent MCP usage documentation for cross-agent start, recall, closeout, and review flow.
+
+### Changed
+
+- Review Queue empty state now explains why no proposals appear until an agent submits or closes out memory candidates.
+- README positioning now emphasizes Obsidian Memory first, optional Obsidian Wiki structure second.
+
 ## [0.1.0] - Initial Private Build
 
 ### Added

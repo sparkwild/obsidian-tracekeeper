@@ -1,4 +1,9 @@
 import path from 'node:path';
+import {
+	GRAPH_RECOMMENDED_ENTRY,
+	GRAPH_RECOMMENDED_HUBS,
+	normalizeKnowledgePath as normalizeVaultPath,
+} from './knowledge-architecture';
 import { ScannedNote } from './scan';
 
 export interface GraphHealthOptions {
@@ -67,14 +72,6 @@ export interface GraphHealthUnresolvedEdge {
 
 const DEFAULT_MAX_ITEMS = 20;
 export const DEFAULT_GRAPH_PROFILE: GraphProfile = 'advisory';
-const DEFAULT_RECOMMENDED_ENTRY = '04_memory/concepts/knowledge_graph_index.md';
-const DEFAULT_RECOMMENDED_HUBS = [
-	'04_memory/concepts/java_backend_hub.md',
-	'04_memory/concepts/ai_agent_hub.md',
-	'04_memory/concepts/wechat_account_ecosystem_hub.md',
-	'04_memory/concepts/engineering_infrastructure_hub.md',
-	'04_memory/concepts/knowledge_maintenance_hub.md',
-];
 
 type MultiLookup = Map<string, string[]>;
 
@@ -90,6 +87,7 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 	const maxItems = normalizeMaxItems(options.maxItems);
 	const index = buildGraphIndex(notes);
 	const notePaths = notes.map((note) => normalizeRelativePath(note.relativePath)).filter(Boolean);
+	const notePathSet = new Set(notePaths);
 
 	const outgoing = new Map<string, Set<string>>();
 	const incoming = new Map<string, Set<string>>();
@@ -169,12 +167,12 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 
 	const componentResult = computeComponents(notePaths, undirected);
 
-	const missingRecommendedHubs = DEFAULT_RECOMMENDED_HUBS.filter(
-		(hub) => !index.pathByRelativePath.has(normalizeRelativePath(hub))
+	const missingRecommendedHubs = GRAPH_RECOMMENDED_HUBS.filter((hub) => !notePathSet.has(normalizeVaultPath(hub))).map(
+		(hub) => hub
 	);
-	const missingRecommendedEntry = index.pathByRelativePath.has(normalizeRelativePath(DEFAULT_RECOMMENDED_ENTRY))
+	const missingRecommendedEntry = notePathSet.has(normalizeVaultPath(GRAPH_RECOMMENDED_ENTRY))
 		? null
-		: DEFAULT_RECOMMENDED_ENTRY;
+		: GRAPH_RECOMMENDED_ENTRY;
 
 	const hubCandidatesSorted = hubScores
 		.sort((a, b) => {
@@ -221,7 +219,6 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 	const sortedOnlyInboundNodes = onlyInboundNodes.sort();
 	const sortedOnlyOutboundNodes = onlyOutboundNodes.sort();
 	const sortedMissingRecommendedHubs = missingRecommendedHubs.sort();
-	const sortedRecommendations = recommendations;
 
 	return {
 		note_count: notes.length,
@@ -242,8 +239,8 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 		missing_recommended_entry: missingRecommendedEntry,
 		missing_recommended_hubs: sortedMissingRecommendedHubs.slice(0, maxItems),
 		missing_recommended_hub_count: sortedMissingRecommendedHubs.length,
-		recommendations: sortedRecommendations.slice(0, maxItems),
-		recommendation_count: sortedRecommendations.length,
+		recommendations: recommendations.slice(0, maxItems),
+		recommendation_count: recommendations.length,
 	};
 }
 
@@ -488,8 +485,7 @@ function normalizeRelativePath(value: string): string {
 		return '';
 	}
 	const relative = replaced.replace(/^\.\//, '');
-	const normalized = path.posix.normalize(relative);
-	return normalized === '.' ? '' : normalized;
+	return path.posix.normalize(relative) === '.' ? '' : path.posix.normalize(relative);
 }
 
 function normalizeLookupToken(value: string): string {
@@ -536,7 +532,7 @@ function normalizePathCandidateForResolution(target: string, sourcePath: string)
 		normalized = `${normalized}.md`;
 	}
 
-	return normalizeRelativePath(normalized);
+	return normalizeVaultPath(normalized);
 }
 
 function addToLookup(map: MultiLookup, key: string, value: string): void {

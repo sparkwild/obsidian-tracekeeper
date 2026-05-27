@@ -22,6 +22,7 @@ export interface StreamableHttpRuntimeOptions {
 	defaultVaultRoot?: string;
 	vaultConfigDir?: string;
 	graphProfile?: unknown;
+	memoryRules?: NonNullable<ConstructorParameters<typeof McpJsonRpcHandler>[0]>['memoryRules'];
 	runtimeVersion?: string;
 }
 
@@ -74,6 +75,7 @@ export class StreamableHttpMcpRuntime {
 			defaultVaultRoot: options.defaultVaultRoot,
 			vaultConfigDir: options.vaultConfigDir,
 			graphProfile: options.graphProfile,
+			memoryRules: options.memoryRules,
 			runtimeVersion: this.runtimeVersion,
 			transport: STREAMABLE_HTTP_TRANSPORT,
 		});

@@ -9,6 +9,11 @@ import sourceAnalysisModule from '../dist/source-analysis.js';
 import scanModule from '../dist/scan.js';
 import graphHealthModule from '../dist/graph-health.js';
 import lintModule from '../dist/lint.js';
+import recallModule from '../dist/recall.js';
+import legacyStructureModule from '../dist/legacy-structure.js';
+
+const KNOWLEDGE_DIR = '01_knowledge';
+const CONFIG_DIR = 'vault-config';
 
 function writeFile(relativePath, content, basePath) {
 	const target = path.join(basePath, relativePath);
@@ -23,36 +28,107 @@ function createFixture(rootPath) {
 	return vaultRoot;
 }
 
+function createSourceSeed(vaultRoot) {
+	writeFile(
+		`${CONFIG_DIR}/config.json`,
+		'{}',
+		vaultRoot
+	);
+	writeFile('00_tracekeeper/control/system.md', '# System\n', vaultRoot);
+	writeFile('01_knowledge/sources/source_seed.md', '# Source Seed\n\nProof text used for scan tests.', vaultRoot);
+	writeFile('03_sources/legacy_source.md', '# Legacy Source\n', vaultRoot);
+}
+
+function createGraphAndLintFixture(vaultRoot) {
+	writeFile(
+		`${KNOWLEDGE_DIR}/wiki/hubs/wiki-bridge.md`,
+		'# Wiki Bridge\n',
+		vaultRoot
+	);
+	writeFile(
+		`${KNOWLEDGE_DIR}/wiki/hubs/wiki-only-link.md`,
+		'# Wiki Link\n',
+		vaultRoot
+	);
+	writeFile(
+		`${KNOWLEDGE_DIR}/memory/memory-bridge.md`,
+		['---', 'type: memory', 'related_wiki: [01_knowledge/wiki/hubs/wiki-bridge.md, 00_tracekeeper/work/sessions/session-invalid.md]', '---', '# Memory Bridge'].join('\n'),
+		vaultRoot
+	);
+	writeFile(
+		`${KNOWLEDGE_DIR}/memory/memory-yaml-only.md`,
+		['---', 'type: memory', '---', '# Memory YAML Only', '[[01_knowledge/wiki/hubs/wiki-only-link]]'].join('\n'),
+		vaultRoot
+	);
+
+	writeFile(
+		`${KNOWLEDGE_DIR}/memory/projects/alpha/note.md`,
+		'# Project Alpha\n',
+		vaultRoot
+	);
+
+	writeFile(
+		`${KNOWLEDGE_DIR}/wiki/concepts/recall-priority.md`,
+		'# Recall Priority\nRecall priority token for recall ranking.\n',
+		vaultRoot
+	);
+	writeFile(
+		'04_memory/recall-priority.md',
+		'# Recall Priority\nRecall priority token for recall ranking.\n',
+		vaultRoot
+	);
+}
+
+function createReciprocalCase(vaultRoot) {
+	writeFile(
+		`${KNOWLEDGE_DIR}/wiki/hubs/wiki-bad-bridge.md`,
+		'# Wiki Bad Bridge\n',
+		vaultRoot
+	);
+}
+
+function assertLintKinds(issues, expectedKinds) {
+	const actualKinds = new Set(issues.map((issue) => issue.kind));
+	for (const kind of expectedKinds) {
+		assert.equal(actualKinds.has(kind), true, `Expected lint kind "${kind}" to be present`);
+	}
+}
+
 function run() {
 	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-core-test-'));
 	let symlinkSupported = false;
 
 	try {
 		const vaultRoot = createFixture(tempRoot);
-		const configDir = 'vault-config';
-		writeFile('00_control/system.md', '# System\n', vaultRoot);
-		writeFile('05_knowledge/notes/entry.md', '# Entry\n', vaultRoot);
-		writeFile(`${configDir}/config.json`, '{}', vaultRoot);
+		createSourceSeed(vaultRoot);
+		createGraphAndLintFixture(vaultRoot);
+		createReciprocalCase(vaultRoot);
 
-		writeFile('03_sources/source_seed.md', '# Source Seed\n\nProof text used for scan tests.', vaultRoot);
+		const results = { skipped: [] };
+		const rootConfigPath = path.join(vaultRoot, CONFIG_DIR, 'config.json');
 		const outsideFile = path.join(tempRoot, 'outside.md');
 		fs.writeFileSync(outsideFile, 'outside', 'utf8');
 
-		const results = { skipped: [] };
-
-		assert.equal(safety.isSafeDirectoryName(configDir, { protectedDirectoryName: configDir }), false);
+		assert.equal(safety.isSafeDirectoryName(CONFIG_DIR, { protectedDirectoryName: CONFIG_DIR }), false);
 		assert.equal(safety.isSafeDirectoryName('.hidden', { allowHidden: false }), false);
 		assert.equal(safety.isSafeDirectoryName('.hidden', { allowHidden: true }), true);
 
 		assert.equal(safety.isSafeDirectoryName('notes'), true);
 		assert.equal(safety.isSafeDirectoryName('..'), false);
-		assert.equal(safety.ensureInsideVaultRoot(vaultRoot, path.join(vaultRoot, '00_control/system.md')), path.join(vaultRoot, '00_control/system.md'));
+		assert.equal(safety.ensureInsideVaultRoot(vaultRoot, path.join(vaultRoot, '00_tracekeeper/control/system.md')), path.join(vaultRoot, '00_tracekeeper/control/system.md'));
 		assert.throws(() => safety.ensureInsideVaultRoot(vaultRoot, outsideFile), /outside vault root/);
 		assert.throws(() => safety.ensureInsideVaultRoot(vaultRoot, path.join(vaultRoot, '../outside.md')), /outside vault root/);
+		assert.equal(fs.existsSync(rootConfigPath), true);
 
-		const scanBeforeSymlink = scanModule.scanVault(vaultRoot, { vaultConfigDir: configDir });
-		assert.ok(scanBeforeSymlink.notes.some((note) => note.relativePath === '00_control/system.md'));
-		assert.ok(!scanBeforeSymlink.notes.some((note) => note.relativePath.startsWith(`${configDir}/`)), 'Expected vault config directory to be skipped');
+		const scanBeforeSymlink = scanModule.scanVault(vaultRoot, { vaultConfigDir: CONFIG_DIR });
+		assert.ok(scanBeforeSymlink.notes.some((note) => note.relativePath === '00_tracekeeper/control/system.md'));
+		assert.ok(!scanBeforeSymlink.notes.some((note) => note.relativePath.startsWith(`${CONFIG_DIR}/`)), 'Expected vault config directory to be skipped');
+
+		const recallScan = scanModule.scanVault(vaultRoot, { vaultConfigDir: CONFIG_DIR });
+		const recallMatches = recallModule.recallNotes(recallScan.notes, 'recall priority', { limit: 3 });
+		assert.ok(recallMatches.length > 0, 'recall should return at least one result');
+		assert.equal(recallMatches[0].note.relativePath, `${KNOWLEDGE_DIR}/wiki/concepts/recall-priority.md`);
+
 		const graphHealth = graphHealthModule.analyzeGraphHealth(scanBeforeSymlink.notes, { maxItems: 10 });
 		const advisoryGraphProfile = graphHealthModule.evaluateGraphProfile(graphHealth, 'advisory');
 		assert.equal(advisoryGraphProfile.profile, 'advisory');
@@ -65,11 +141,22 @@ function run() {
 		assert.equal(offGraphProfile.profile, 'off');
 		assert.equal(offGraphProfile.disabled, true);
 		assert.equal(offGraphProfile.profile_issues.length, 0);
+
 		const advisoryLint = lintModule.lintNotes(vaultRoot, scanBeforeSymlink.notes, {
 			graphHealth,
 			graphProfile: 'advisory',
 		});
 		assert.ok(advisoryLint.issues.some((issue) => issue.kind.startsWith('graph_') && issue.severity === 'warning'));
+		assertLintKinds(advisoryLint.issues, [
+			'architecture_legacy_directory',
+			'architecture_missing_required_path',
+			'architecture_invalid_wiki_path',
+			'graph_missing_memory_wiki_bridge',
+			'graph_missing_wiki_memory_backlink',
+			'graph_missing_project_index',
+			'graph_yaml_only_relation',
+		]);
+
 		const strictLint = lintModule.lintNotes(vaultRoot, scanBeforeSymlink.notes, {
 			graphHealth,
 			graphProfile: 'strict',
@@ -81,8 +168,8 @@ function run() {
 		});
 		assert.equal(offLint.issues.some((issue) => issue.kind.startsWith('graph_')), false);
 
-		const linkedTarget = path.join(vaultRoot, '03_sources', 'target.md');
-		const linkedSource = path.join(vaultRoot, '03_sources', 'symlink_source.md');
+		const linkedTarget = path.join(vaultRoot, '01_knowledge', 'sources', 'target.md');
+		const linkedSource = path.join(vaultRoot, '01_knowledge', 'sources', 'symlink_source.md');
 		fs.mkdirSync(path.dirname(linkedTarget), { recursive: true });
 		fs.writeFileSync(linkedTarget, '# Target\n', 'utf8');
 
@@ -95,19 +182,19 @@ function run() {
 		}
 
 		if (symlinkSupported) {
-			const scanWithSymlink = scanModule.scanVault(vaultRoot, { vaultConfigDir: configDir });
-			assert.equal(scanWithSymlink.notes.some((note) => note.relativePath === '03_sources/symlink_source.md'), false);
+			const scanWithSymlink = scanModule.scanVault(vaultRoot, { vaultConfigDir: CONFIG_DIR });
+			assert.equal(scanWithSymlink.notes.some((note) => note.relativePath === '01_knowledge/sources/symlink_source.md'), false);
 		} else {
 			console.log('SKIP: platform does not support creating symlinks in this environment');
 		}
 
 		const sourceAnalysis = sourceAnalysisModule.analyzeSourceText({
-			source: '03_sources/source_seed.md',
+			source: '01_knowledge/sources/source_seed.md',
 			sourceKind: 'local_file',
 			analysisMode: 'default',
 			purpose: 'smoke test for source analysis',
 			content: '# Source\n\nThis is a claim that indicates a source-backed fact and provides evidence.',
-			requestPath: '01_inbox/agent_requests/request.md',
+			requestPath: '00_tracekeeper/inbox/agent_requests/request.md',
 		});
 
 		assert.ok(typeof sourceAnalysis.summary === 'string' && sourceAnalysis.summary.length > 0);
@@ -116,6 +203,50 @@ function run() {
 		assert.equal(Array.isArray(sourceAnalysis.claimScaffolds), true);
 		assert.equal(Array.isArray(sourceAnalysis.proposalDrafts), true);
 
+		const sourceTarget = legacyStructureModule.getLegacyStructureTarget('03_sources/web/example.md');
+		assert.deepEqual(sourceTarget, {
+			oldPath: '03_sources/web/example.md',
+			newPath: '01_knowledge/sources/web/example.md',
+			kind: 'source',
+		});
+		const wikiTarget = legacyStructureModule.getLegacyStructureTarget('04_memory/concepts/topic.md');
+		assert.deepEqual(wikiTarget, {
+			oldPath: '04_memory/concepts/topic.md',
+			newPath: '01_knowledge/wiki/concepts/topic.md',
+			kind: 'wiki_concept',
+		});
+		const dashboardTarget = legacyStructureModule.getLegacyStructureTarget('00_control/dashboards/knowledge.base');
+		assert.deepEqual(dashboardTarget, {
+			oldPath: '00_control/dashboards/knowledge.base',
+			newPath: '00_tracekeeper/control/dashboards/knowledge.base',
+			kind: 'dashboard',
+		});
+		const enrichedMemory = legacyStructureModule.enrichLegacyMarkdownContent('# Preference\n', {
+			migrationId: 'legacy-test',
+			oldPath: '04_memory/preferences/style.md',
+			newPath: '01_knowledge/memory/global/preferences/style.md',
+			kind: 'memory_global',
+		});
+		assert.match(enrichedMemory, /## Tracekeeper migration/);
+		assert.match(enrichedMemory, /## Graph links/);
+		const enrichedWiki = legacyStructureModule.enrichLegacyMarkdownContent('# Topic\n', {
+			migrationId: 'legacy-test',
+			oldPath: '04_memory/concepts/topic.md',
+			newPath: '01_knowledge/wiki/concepts/topic.md',
+			kind: 'wiki_concept',
+		});
+		assert.match(enrichedWiki, /## Related memory/);
+		const review = legacyStructureModule.renderLegacyMigrationReview({
+			migrationId: 'legacy-test',
+			oldPath: '00_control/system.md',
+			newPath: '00_tracekeeper/control/system.md',
+			kind: 'control',
+			reason: 'conflict',
+			sourceContent: '# Old system',
+		});
+		assert.match(review, /type: legacy_migration_review/);
+		assert.match(review, /source_path: "00_control\/system.md"/);
+
 		console.log(
 			JSON.stringify(
 				{
@@ -123,7 +254,6 @@ function run() {
 					vaultRoot,
 					scannedNotes: scanBeforeSymlink.notes.length,
 					symlinkSupported,
-					proposalDrafts: sourceAnalysis.proposalDrafts.length,
 					skipped: results.skipped,
 				},
 				null,

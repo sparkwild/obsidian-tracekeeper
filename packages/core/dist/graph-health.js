@@ -8,20 +8,14 @@ exports.analyzeGraphHealth = analyzeGraphHealth;
 exports.normalizeGraphProfile = normalizeGraphProfile;
 exports.evaluateGraphProfile = evaluateGraphProfile;
 const node_path_1 = __importDefault(require("node:path"));
+const knowledge_architecture_1 = require("./knowledge-architecture");
 const DEFAULT_MAX_ITEMS = 20;
 exports.DEFAULT_GRAPH_PROFILE = 'advisory';
-const DEFAULT_RECOMMENDED_ENTRY = '04_memory/concepts/knowledge_graph_index.md';
-const DEFAULT_RECOMMENDED_HUBS = [
-    '04_memory/concepts/java_backend_hub.md',
-    '04_memory/concepts/ai_agent_hub.md',
-    '04_memory/concepts/wechat_account_ecosystem_hub.md',
-    '04_memory/concepts/engineering_infrastructure_hub.md',
-    '04_memory/concepts/knowledge_maintenance_hub.md',
-];
 function analyzeGraphHealth(notes, options = {}) {
     const maxItems = normalizeMaxItems(options.maxItems);
     const index = buildGraphIndex(notes);
     const notePaths = notes.map((note) => normalizeRelativePath(note.relativePath)).filter(Boolean);
+    const notePathSet = new Set(notePaths);
     const outgoing = new Map();
     const incoming = new Map();
     const undirected = new Map();
@@ -90,10 +84,10 @@ function analyzeGraphHealth(notes, options = {}) {
         }
     }
     const componentResult = computeComponents(notePaths, undirected);
-    const missingRecommendedHubs = DEFAULT_RECOMMENDED_HUBS.filter((hub) => !index.pathByRelativePath.has(normalizeRelativePath(hub)));
-    const missingRecommendedEntry = index.pathByRelativePath.has(normalizeRelativePath(DEFAULT_RECOMMENDED_ENTRY))
+    const missingRecommendedHubs = knowledge_architecture_1.GRAPH_RECOMMENDED_HUBS.filter((hub) => !notePathSet.has((0, knowledge_architecture_1.normalizeKnowledgePath)(hub))).map((hub) => hub);
+    const missingRecommendedEntry = notePathSet.has((0, knowledge_architecture_1.normalizeKnowledgePath)(knowledge_architecture_1.GRAPH_RECOMMENDED_ENTRY))
         ? null
-        : DEFAULT_RECOMMENDED_ENTRY;
+        : knowledge_architecture_1.GRAPH_RECOMMENDED_ENTRY;
     const hubCandidatesSorted = hubScores
         .sort((a, b) => {
         if (b.degree !== a.degree) {
@@ -137,7 +131,6 @@ function analyzeGraphHealth(notes, options = {}) {
     const sortedOnlyInboundNodes = onlyInboundNodes.sort();
     const sortedOnlyOutboundNodes = onlyOutboundNodes.sort();
     const sortedMissingRecommendedHubs = missingRecommendedHubs.sort();
-    const sortedRecommendations = recommendations;
     return {
         note_count: notes.length,
         wikilink_edge_count: wikilinkEdgeCount,
@@ -157,8 +150,8 @@ function analyzeGraphHealth(notes, options = {}) {
         missing_recommended_entry: missingRecommendedEntry,
         missing_recommended_hubs: sortedMissingRecommendedHubs.slice(0, maxItems),
         missing_recommended_hub_count: sortedMissingRecommendedHubs.length,
-        recommendations: sortedRecommendations.slice(0, maxItems),
-        recommendation_count: sortedRecommendations.length,
+        recommendations: recommendations.slice(0, maxItems),
+        recommendation_count: recommendations.length,
     };
 }
 function normalizeGraphProfile(value) {
@@ -367,8 +360,7 @@ function normalizeRelativePath(value) {
         return '';
     }
     const relative = replaced.replace(/^\.\//, '');
-    const normalized = node_path_1.default.posix.normalize(relative);
-    return normalized === '.' ? '' : normalized;
+    return node_path_1.default.posix.normalize(relative) === '.' ? '' : node_path_1.default.posix.normalize(relative);
 }
 function normalizeLookupToken(value) {
     return value.trim().toLowerCase();
@@ -406,7 +398,7 @@ function normalizePathCandidateForResolution(target, sourcePath) {
     if (!node_path_1.default.posix.extname(normalized)) {
         normalized = `${normalized}.md`;
     }
-    return normalizeRelativePath(normalized);
+    return (0, knowledge_architecture_1.normalizeKnowledgePath)(normalized);
 }
 function addToLookup(map, key, value) {
     const normalized = normalizeLookupToken(key);
