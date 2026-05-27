@@ -2,7 +2,9 @@
 
 All notable changes to Tracekeeper will be documented in this file.
 
-## [0.1.7] - Obsidian Memory Workflow
+## [0.2.1] - Obsidian Memory Workflow
+
+First public release in the 0.2 series. Version 0.2.0 was skipped as an internal stabilization point; 0.2.1 is the reviewed release candidate for the Obsidian Memory workflow.
 
 ### Added
 

@@ -326,7 +326,7 @@ async function main() {
 			capabilities: {},
 			clientInfo: {
 				name: 'tracekeeper-smoke',
-				version: '0.1.7',
+				version: '0.2.1',
 			},
 		});
 		assert.equal(initialize.capabilities.tools.listChanged, false);
@@ -910,7 +910,7 @@ async function main() {
 				capabilities: {},
 				clientInfo: {
 					name: 'tracekeeper-smoke-auto-memory',
-					version: '0.1.7',
+					version: '0.2.1',
 				},
 			});
 			const queueCountBeforeAutoMemory = countReviewQueueFiles(vaultRoot);

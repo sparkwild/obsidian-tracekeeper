@@ -3406,7 +3406,7 @@ export default class TracekeeperPlugin extends Plugin {
 			capabilities: {},
 			clientInfo: {
 				name: 'tracekeeper-plugin-ui',
-				version: '0.1.7',
+				version: '0.2.1',
 			},
 		}, false);
 		if (!this.isRecord(result)) {
