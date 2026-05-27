@@ -7,6 +7,7 @@ exports.buildContextPack = buildContextPack;
 const node_path_1 = __importDefault(require("node:path"));
 const scan_1 = require("./scan");
 const recall_1 = require("./recall");
+const knowledge_architecture_1 = require("./knowledge-architecture");
 function isStringArrayValue(value) {
     return Array.isArray(value);
 }
@@ -96,10 +97,10 @@ function buildContextPack(vaultRoot, query, options = {}) {
         staleWarnings.push('No stale notes found in top matches.');
     }
     const suggestedWritebackTargets = [
-        node_path_1.default.join('06_outputs', 'context_packs'),
-        node_path_1.default.join('01_inbox', 'review_queue'),
-        node_path_1.default.join('03_sources'),
-        node_path_1.default.join('02_timeline', 'sessions'),
+        knowledge_architecture_1.TRACEKEEPER_CONTEXT_PACKS_DIR,
+        knowledge_architecture_1.TRACEKEEPER_REVIEW_QUEUE_DIR,
+        knowledge_architecture_1.KNOWLEDGE_SOURCES_DIR,
+        knowledge_architecture_1.TRACEKEEPER_SESSIONS_DIR,
     ].map((entry) => node_path_1.default.join(scan.vaultRoot, entry));
     return {
         query,

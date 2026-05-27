@@ -4,7 +4,7 @@ exports.McpJsonRpcHandler = exports.STREAMABLE_HTTP_TRANSPORT = exports.MCP_SERV
 const protocol_1 = require("./protocol");
 const tools_1 = require("./tools");
 exports.MCP_PROTOCOL_VERSION = '2025-06-18';
-exports.MCP_SERVER_VERSION = '0.1.6';
+exports.MCP_SERVER_VERSION = '0.1.7';
 exports.STREAMABLE_HTTP_TRANSPORT = 'streamable-http';
 const RESOURCES = [
     {
@@ -48,6 +48,7 @@ class McpJsonRpcHandler {
         this.defaultVaultRoot = options.defaultVaultRoot;
         this.vaultConfigDir = options.vaultConfigDir;
         this.graphProfile = options.graphProfile;
+        this.memoryRules = options.memoryRules;
         this.runtimeVersion = options.runtimeVersion || exports.MCP_SERVER_VERSION;
         this.transport = options.transport || exports.STREAMABLE_HTTP_TRANSPORT;
     }
@@ -138,6 +139,7 @@ class McpJsonRpcHandler {
             defaultVaultRoot: this.defaultVaultRoot,
             vaultConfigDir: this.vaultConfigDir,
             graphProfile: this.graphProfile,
+            memoryRules: this.memoryRules,
             agentId: state.agentId,
             sessionId: state.sessionId,
             clientName: state.clientName,

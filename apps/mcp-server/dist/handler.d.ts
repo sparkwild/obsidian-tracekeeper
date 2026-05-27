@@ -1,6 +1,7 @@
 import { type JsonRpcResponse } from './protocol';
+import { type ToolInvocationContext } from './tools';
 export declare const MCP_PROTOCOL_VERSION = "2025-06-18";
-export declare const MCP_SERVER_VERSION = "0.1.6";
+export declare const MCP_SERVER_VERSION = "0.1.7";
 export declare const STREAMABLE_HTTP_TRANSPORT = "streamable-http";
 export interface McpConnectionState {
     sessionId: string;
@@ -12,6 +13,7 @@ export interface McpJsonRpcHandlerOptions {
     defaultVaultRoot?: string;
     vaultConfigDir?: string;
     graphProfile?: unknown;
+    memoryRules?: ToolInvocationContext['memoryRules'];
     runtimeVersion?: string;
     transport?: string;
 }
@@ -19,6 +21,7 @@ export declare class McpJsonRpcHandler {
     private defaultVaultRoot?;
     private vaultConfigDir?;
     private graphProfile?;
+    private memoryRules?;
     private runtimeVersion;
     private transport;
     constructor(options?: McpJsonRpcHandlerOptions);

@@ -5,6 +5,9 @@ This directory keeps the maintained Tracekeeper product and release documentatio
 ## Current Docs
 
 - [Architecture](./ARCHITECTURE.md): product architecture, plugin surface, MCP permissions, Runtime security, and agent client configuration.
+- [Knowledge architecture](./KNOWLEDGE_ARCHITECTURE.md): unified `00_tracekeeper / 01_knowledge / 02_archive` layout, memory-wiki bridge rules, and lint constraints.
+- [Agent MCP usage](./AGENT_MCP_USAGE.md): cross-agent task start, project-scoped recall, closeout, and Review Queue proposal rules.
+- [Cross-agent MCP workflow](./ARCHITECTURE.md#cross-agent-mcp-workflow-practical): practical start-task, project-scoped recall, task closeout, and Review Queue proposal handling.
 - [Community plugin submission](./COMMUNITY_PLUGIN_SUBMISSION.md): Obsidian community checklist, release creation steps, and submission entry.
 - [Development and release notes](./DEVELOPMENT.md): repository layout, verification commands, release readiness, roadmap, and acknowledgement policy.
 

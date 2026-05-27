@@ -1,8 +1,14 @@
 import { type McpPrompt, type McpStructuredToolResult, type McpToolDefinition } from './protocol';
+interface MemoryRulesContext {
+    globalMemoryRule?: unknown;
+    projectMemoryRule?: unknown;
+    taskMemoryProposalMode?: unknown;
+}
 interface ToolContext {
     defaultVaultRoot?: string;
     vaultConfigDir?: string;
     graphProfile?: unknown;
+    memoryRules?: MemoryRulesContext;
 }
 export interface ToolInvocationContext extends ToolContext {
     agentId?: string;

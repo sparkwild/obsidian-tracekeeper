@@ -2,9 +2,9 @@
 
 [English README](./README.md)
 
-Tracekeeper 是一个 Obsidian 插件，适合想让 AI 帮忙维护个人 wiki、但不希望自动化直接改写自己知识库的人。
+Tracekeeper 是一个面向本地 Agent 知识体系的 Obsidian 插件：Memory 和 Wiki 使用同一套稳定结构。
 
-它把 AI 辅助的知识整理变成可追踪、可审阅、可决定的候选内容：来源笔记、候选更新和人工决策都留在 Obsidian 里。
+它把 AI 辅助工作变成可追踪、可审阅、可决定的候选内容：任务记忆、会话记录和记忆提案都留在 Obsidian 里。
 
 ## 安装
 
@@ -27,32 +27,43 @@ Tracekeeper 进入 Obsidian 社区插件目录后：
 
 AI 很擅长发现模式、总结长对话、把散落材料整理成结构化知识。但个人知识库仍然需要一个真正的主人。
 
-Tracekeeper 的核心想法是把边界划清楚：AI 可以帮助回忆上下文、草拟 wiki 更新、整理长期记忆，但是否写入、怎么写入，最后由你决定。
+Tracekeeper 的核心想法是把边界划清楚：
+
+- Memory 记录任务、会话、决策、偏好和项目连续性。
+- Wiki 组织可复用主题、hub、来源和图谱入口。
+- Memory 和 Wiki 通过明确 wikilink 串起来，让 Obsidian 图谱和 Agent 召回看到同一套结构。
+- 不需要外部数据库，也不需要自动同步其他 App 数据。
+
+AI 可以帮助回忆上下文、草拟提案、整理长期记忆，但是否写入、怎么写入，最后由你决定。
 
 ## 背景
 
 个人知识库经常卡在两个极端：有价值的内容停留在一次性对话里，无法沉淀；或者自动化写入太积极，把 vault 变得混乱。Tracekeeper 选择站在中间。
 
-Tracekeeper 会把 AI 给出的整理结果当成候选内容。你可以在熟悉的 Obsidian 环境里检查它、修改它、批准它，或者拒绝它。
+Tracekeeper 会把 AI 给出的整理结果当成候选记忆提案。你可以在熟悉的 Obsidian 环境里检查它、修改它、批准它，或者拒绝它。
 
 ## 首次使用
 
 1. 像平时一样在 Obsidian 中记录和收集资料。
-2. 启用 Tracekeeper，并打开 **AI 助手连接** 视图。
-3. 复制连接配置，或使用插件提供的自动配置。
+2. 启用 Tracekeeper，并打开 **设置 -> 第三方插件 -> Tracekeeper**。
+3. 在 **Agent 配置** 中复制连接配置，或使用插件提供的自动配置。
 4. 让 AI 助手围绕某个项目、主题或问题进行总结、关联和提炼。
-5. 在 **Review Queue** 中查看候选的 wiki 更新或长期记忆更新。
+5. 在 **Review Queue** 中查看需要审核的 wiki 更新或长期记忆更新。
 6. 逐条审阅、调整、批准、拒绝、暂缓或要求修订。
 
 ## Agent 与 MCP 连接
 
 Tracekeeper 在桌面端 Obsidian 开启时提供本机 Streamable HTTP MCP Runtime。Runtime 默认绑定 loopback 地址，并使用插件生成的本地 token 作为连接 URL 或 bearer token 的一部分。
 
-AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 vault 上下文、构建 context pack、记录有限范围内的工作笔记，并提出记忆更新候选。它不能静默改写长期记忆。
+AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 vault 上下文、构建 context pack、记录有限范围内的工作笔记，并按你的记忆规则提交更新。全局记忆默认进入审核队列；项目记忆可以按规则自动追加保存到项目记忆笔记。
+
+Codex、Claude、OpenClaw 等 MCP 客户端应使用同一套流程：开始任务、只读取项目范围内的上下文、结束任务，并决定任务收尾记忆自动处理、进入审核，还是忽略。召回结果会包含精简摘要、命中原因和图谱链接，Agent 只有在摘要不够时才需要读取完整笔记。参见 [Agent MCP usage](./docs/AGENT_MCP_USAGE.md)。
 
 连接是 local-first 的：
 
 - 没有 Tracekeeper 托管后端
+- 没有外部数据库
+- 没有 App 自动同步或后台同步服务
 - 默认不上传 vault 内容
 - 不执行系统命令
 - MCP tools 不能访问 vault 外文件
@@ -60,22 +71,24 @@ AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助�
 
 ## Review Queue
 
-长期记忆变更必须先进入 Review Queue。AI 助手提出的 durable memory 更新会先成为候选项，由你决定批准、拒绝、暂缓或要求修订。
+全局长期记忆默认必须先进入 Review Queue。AI 助手提出的全局 durable memory 更新会先成为候选项，由你决定批准、拒绝、暂缓或要求修订。
 
 批准写回是独立动作。只有候选项已通过审核后，Tracekeeper 才会把已批准内容应用到对应目标笔记。
 
+项目记忆默认更轻量：项目级更新可以自动追加到 `01_knowledge/memory/projects/<project>/memory.md`，并使用内容签名避免重复写入。项目自动保存仍然要求有效的 Wiki 主题链接，避免记忆线和知识主题脱节。任务收尾有三种记忆模式：自动会按你的记忆规则保存或进入 Review Queue；审核会统一进入 Review Queue；忽略不会生成记忆候选。
+
 ## 适合场景
 
-- 把散落的项目记录整理成清晰的主题 wiki。
+- 优先把散落的项目记录整理成任务记忆和会话记忆。
 - 将反复出现的偏好、决策和经验沉淀为长期记忆。
 - 在 AI 生成内容写入 vault 前进行人工审核。
 - 让 AI 协作始终围绕自己的 Obsidian 知识库展开。
-- 发现图谱入口缺口，让 AI 从稳定 hub 组装上下文，而不是只依赖散落叶子笔记。
+- 使用稳定的 Memory + Wiki 结构，让项目记忆线能穿插到主题 hub 中。
 - 建立一种“AI 提议，人来决定”的个人知识工作流。
 
 ## 知识图谱健康
 
-Tracekeeper 可以通过只读的 `tracekeeper.graph_health` 工具检查 Obsidian wikilink 图谱。它会统计孤立节点、只有入链或出链的节点、连通分量、hub 候选、未解析 wikilink，以及推荐图谱入口是否缺失。
+Tracekeeper 通过只读的 `tracekeeper.lint` 统一检查 Obsidian wikilink 图谱和知识库结构。它会统计孤立节点、只有入链或出链的节点、连通分量、hub 候选、未解析 wikilink，以及推荐图谱入口是否缺失。
 
 图谱检查策略可以在 Tracekeeper 设置中配置：
 

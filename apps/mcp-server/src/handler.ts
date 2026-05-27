@@ -14,7 +14,7 @@ import {
 } from './tools';
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
-export const MCP_SERVER_VERSION = '0.1.6';
+export const MCP_SERVER_VERSION = '0.1.7';
 export const STREAMABLE_HTTP_TRANSPORT = 'streamable-http';
 
 interface ResourcesResource {
@@ -74,6 +74,7 @@ export interface McpJsonRpcHandlerOptions {
 	defaultVaultRoot?: string;
 	vaultConfigDir?: string;
 	graphProfile?: unknown;
+	memoryRules?: ToolInvocationContext['memoryRules'];
 	runtimeVersion?: string;
 	transport?: string;
 }
@@ -82,6 +83,7 @@ export class McpJsonRpcHandler {
 	private defaultVaultRoot?: string;
 	private vaultConfigDir?: string;
 	private graphProfile?: unknown;
+	private memoryRules?: ToolInvocationContext['memoryRules'];
 	private runtimeVersion: string;
 	private transport: string;
 
@@ -89,6 +91,7 @@ export class McpJsonRpcHandler {
 		this.defaultVaultRoot = options.defaultVaultRoot;
 		this.vaultConfigDir = options.vaultConfigDir;
 		this.graphProfile = options.graphProfile;
+		this.memoryRules = options.memoryRules;
 		this.runtimeVersion = options.runtimeVersion || MCP_SERVER_VERSION;
 		this.transport = options.transport || STREAMABLE_HTTP_TRANSPORT;
 	}
@@ -187,6 +190,7 @@ export class McpJsonRpcHandler {
 			defaultVaultRoot: this.defaultVaultRoot,
 			vaultConfigDir: this.vaultConfigDir,
 			graphProfile: this.graphProfile,
+			memoryRules: this.memoryRules,
 			agentId: state.agentId,
 			sessionId: state.sessionId,
 			clientName: state.clientName,
