@@ -2,6 +2,12 @@
 
 All notable changes to Tracekeeper will be documented in this file.
 
+## [0.2.3] - Community CSS Lint Fix
+
+### Fixed
+
+- Removed duplicate Review Queue button background declarations reported by the Obsidian community CSS scanner.
+
 ## [0.2.2] - Review Queue and Memory Closeout Polish
 
 ### Added
