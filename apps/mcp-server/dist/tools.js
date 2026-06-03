@@ -64,7 +64,7 @@ const MEMORY_PROPOSAL_DIR = index_1.TRACEKEEPER_REVIEW_QUEUE_DIR;
 const MAX_SOURCE_EXCERPT_LENGTH = 1000;
 const MAX_RECALL_EXCERPT_LENGTH = 480;
 const MAX_RECALL_GRAPH_LINKS = 8;
-const DEFAULT_FINISH_TASK_REVIEW_MODE = 'off';
+const DEFAULT_FINISH_TASK_REVIEW_MODE = 'auto_propose';
 const READ_ONLY_TOOL_NAMES = new Set([
     'tracekeeper.status',
     'tracekeeper.graph_health',
@@ -593,7 +593,7 @@ function normalizeReviewProposalMode(value, fallback = DEFAULT_FINISH_TASK_REVIE
 function defaultReviewProposalMode(context) {
     return normalizeReviewProposalMode(context.memoryRules?.taskMemoryProposalMode, DEFAULT_FINISH_TASK_REVIEW_MODE);
 }
-function normalizeMemoryProposalRule(value) {
+function normalizeMemoryProposalRule(value, fallback = 'review_queue') {
     const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (normalized === 'disabled') {
         return 'disabled';
@@ -601,7 +601,10 @@ function normalizeMemoryProposalRule(value) {
     if (normalized === 'auto_write' || normalized === 'auto' || normalized === 'automatic' || normalized === 'auto_save') {
         return 'auto_write';
     }
-    return 'review_queue';
+    if (normalized === 'review_queue' || normalized === 'review') {
+        return 'review_queue';
+    }
+    return fallback;
 }
 function isProjectMemoryProposal(proposalKind, targetNote, projectHint) {
     const normalizedKind = proposalKind.trim().toLowerCase();
@@ -623,9 +626,7 @@ function isProjectMemoryProposalForScope(proposalKind, targetNote, projectHint, 
 }
 function memoryProposalRuleFor(proposalKind, targetNote, projectHint, context, memoryScope) {
     const projectScoped = isProjectMemoryProposalForScope(proposalKind, targetNote, projectHint, memoryScope);
-    return normalizeMemoryProposalRule(projectScoped
-        ? context.memoryRules?.projectMemoryRule
-        : context.memoryRules?.globalMemoryRule);
+    return normalizeMemoryProposalRule(projectScoped ? context.memoryRules?.projectMemoryRule : context.memoryRules?.globalMemoryRule, projectScoped ? 'auto_write' : 'review_queue');
 }
 function isMemoryProposalAllowed(proposalKind, targetNote, projectHint, context, memoryScope) {
     return memoryProposalRuleFor(proposalKind, targetNote, projectHint, context, memoryScope) !== 'disabled';
@@ -825,10 +826,8 @@ function collectProjectCandidates(notes, scope, maxItems) {
     const candidates = [];
     const seen = new Set();
     for (const note of notes) {
-        const pathParts = note.relativePath.split('/');
-        const isProjectMemoryNote = PROJECT_MEMORY_READ_DIRS.some((dir) => note.relativePath.startsWith(`${dir}/`));
-        if (pathParts.length >= 2 && isProjectMemoryNote) {
-            const candidate = `${pathParts[0]}/${pathParts[1]}`;
+        const candidate = projectMemoryCandidatePath(note.relativePath);
+        if (candidate) {
             if (!seen.has(candidate)) {
                 seen.add(candidate);
                 candidates.push(candidate);
@@ -848,6 +847,17 @@ function collectProjectCandidates(notes, scope, maxItems) {
         }
     }
     return candidates.slice(0, maxItems);
+}
+function projectMemoryCandidatePath(notePath) {
+    for (const dir of PROJECT_MEMORY_READ_DIRS) {
+        const prefix = `${dir}/`;
+        if (!notePath.startsWith(prefix)) {
+            continue;
+        }
+        const [projectSegment] = notePath.slice(prefix.length).split('/').filter(Boolean);
+        return projectSegment ? `${dir}/${projectSegment}` : dir;
+    }
+    return '';
 }
 function buildProjectHistoryEntries(matches, query = '') {
     return matches.map((note) => ({
@@ -875,7 +885,18 @@ function matchesProjectQuery(note, query) {
         note.tokens,
         JSON.stringify(note.frontmatter),
     ].join(' ').toLowerCase();
-    return haystack.includes(normalizedQuery);
+    if (haystack.includes(normalizedQuery)) {
+        return true;
+    }
+    const queryTokens = Array.from(new Set(normalizedQuery.split(/[^a-z0-9\u4e00-\u9fff]+/u).filter((token) => token.length > 1)));
+    if (queryTokens.length === 0) {
+        return false;
+    }
+    const matchedCount = queryTokens.filter((token) => haystack.includes(token)).length;
+    const requiredMatches = queryTokens.length <= 2
+        ? queryTokens.length
+        : Math.max(2, Math.ceil(queryTokens.length * 0.6));
+    return matchedCount >= requiredMatches;
 }
 function buildProjectScopeMetadata(scope) {
     return {
@@ -3025,7 +3046,7 @@ function toolDefinitions() {
         {
             name: 'tracekeeper.finish_task',
             title: 'tracekeeper.finish_task',
-            description: '[low-risk write] Call once at task closeout. Records the session and handles memory candidates according to memory rules.',
+            description: '[low-risk write] Required once at task closeout. Record the session and submit durable decisions, solution changes, lessons, preferences, next actions, and memory candidates according to memory rules.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -3453,11 +3474,29 @@ function buildRecommendedRecall(goal, projectHint) {
             : 'Use global recall first, then narrow with project_hint when a project is known.',
     };
 }
+function buildCloseoutContract(context) {
+    return {
+        required_tool: 'tracekeeper.finish_task',
+        default_mode: defaultReviewProposalMode(context),
+        fields: [
+            'summary',
+            'outcomes',
+            'decisions',
+            'solution_changes',
+            'lessons',
+            'preferences',
+            'next_actions',
+            'memory_candidates',
+        ],
+        project_hint_required_for_project_memory: true,
+        note: 'At task closeout, include durable decisions, solution changes, lessons, user preferences, next actions, and memory candidates when present.',
+    };
+}
 function buildStartTaskNextActions(projectHint) {
     const actions = [
         'Call tracekeeper.recall before reading individual notes.',
         'Use tracekeeper.read_note only when a recall excerpt is not enough.',
-        'Call tracekeeper.finish_task once at the end with decisions, lessons, and memory candidates.',
+        'Call tracekeeper.finish_task once at the end with decisions, solution changes, lessons, preferences, next actions, and memory candidates.',
     ];
     if (projectHint) {
         actions.unshift('Use scope="project" with the same project_hint for targeted recall.');
@@ -3556,6 +3595,7 @@ function handleStartTask(rawArgs, context) {
         user_preferences: buildUserPreferences(scan),
         recommended_next_tool: 'tracekeeper.recall',
         recommended_recall: buildRecommendedRecall(goal, projectHint),
+        closeout_contract: buildCloseoutContract(context),
         next_actions_for_agent: buildStartTaskNextActions(projectHint),
     };
 }
@@ -4641,8 +4681,11 @@ function buildSessionNoteBodyWithCloseout(summary, outcomes, nextActions, decisi
     ].join('\n');
     return lines.trim();
 }
-function buildFinishTaskNextActions(reviewProposalMode, proposalResult, projectHint) {
+function buildFinishTaskNextActions(reviewProposalMode, proposalResult, projectHint, hasCloseoutCandidates) {
     const actions = [];
+    if (!hasCloseoutCandidates) {
+        actions.push('Task session was recorded; no durable closeout memory candidates were submitted. If decisions, solution changes, lessons, preferences, or next actions matter, call tracekeeper.finish_task again with those fields.');
+    }
     if (reviewProposalMode === 'off') {
         actions.push('Task session was recorded; no memory suggestions or Review Queue proposals were created.');
     }
@@ -4667,6 +4710,53 @@ function buildFinishTaskNextActions(reviewProposalMode, proposalResult, projectH
         actions.push('For the next related session, call tracekeeper.recall with scope="project_history" and the same project_hint.');
     }
     return actions;
+}
+function hasFinishTaskCloseoutCandidates(input) {
+    return [
+        input.decisions,
+        input.solutionChanges,
+        input.lessons,
+        input.preferences,
+        input.nextActions,
+        input.memoryCandidates,
+    ].some((values) => values.length > 0);
+}
+function resolveMemoryCloseoutStatus(reviewProposalMode, proposalResult, hasCloseoutCandidates) {
+    if (!hasCloseoutCandidates) {
+        return 'empty';
+    }
+    if (reviewProposalMode === 'off' || reviewProposalMode === 'suggest') {
+        return 'ignored';
+    }
+    const queued = proposalResult.proposals.length;
+    const autoSaved = proposalResult.autoAppliedMemoryUpdates.length;
+    if (queued > 0 && autoSaved > 0) {
+        return 'mixed';
+    }
+    if (autoSaved > 0) {
+        return 'auto_saved';
+    }
+    if (queued > 0) {
+        return 'queued';
+    }
+    return 'empty';
+}
+function buildMemoryCloseoutSummary(status, proposalResult) {
+    const queued = proposalResult.proposals.length;
+    const autoSaved = proposalResult.autoAppliedMemoryUpdates.length;
+    switch (status) {
+        case 'auto_saved':
+            return `${autoSaved} project memory update(s) were auto-saved.`;
+        case 'queued':
+            return `${queued} memory candidate(s) were sent to the Review Queue.`;
+        case 'mixed':
+            return `${autoSaved} project memory update(s) were auto-saved and ${queued} candidate(s) were sent to the Review Queue.`;
+        case 'ignored':
+            return 'Closeout memory candidates were recorded in the session but not queued or written by the selected mode.';
+        case 'empty':
+        default:
+            return 'No durable closeout memory candidates were submitted.';
+    }
 }
 function buildSessionNoteBodyWithDistill(summary, outcomes, nextActions, decisions, possiblePreferences) {
     const lines = [
@@ -4736,6 +4826,14 @@ function handleFinishTask(rawArgs, context) {
     const architectureStatus = buildArchitectureStatus(vaultRoot, context);
     const filename = buildSafeFilename(rawArgs.filename, 'session', context);
     const now = new Date().toISOString();
+    const hasCloseoutCandidates = hasFinishTaskCloseoutCandidates({
+        decisions,
+        solutionChanges,
+        lessons,
+        preferences,
+        nextActions,
+        memoryCandidates,
+    });
     const body = buildSessionNoteBodyWithCloseout(summary, outcomes, nextActions, decisions, solutionChanges, lessons, preferences, memoryCandidates);
     assertNoSensitiveText([
         { label: 'summary', value: summary },
@@ -4780,6 +4878,7 @@ function handleFinishTask(rawArgs, context) {
     }, context);
     const proposalPaths = proposalResult.proposals.map((proposal) => proposal.path);
     const autoWritePaths = proposalResult.autoAppliedMemoryUpdates.map((update) => update.path);
+    const memoryCloseoutStatus = resolveMemoryCloseoutStatus(reviewProposalMode, proposalResult, hasCloseoutCandidates);
     const taskPath = updateAgentTaskRecord(vaultRoot, taskId, {
         status: 'completed',
         finished_at: now,
@@ -4840,7 +4939,9 @@ function handleFinishTask(rawArgs, context) {
         architecture_status: architectureStatus.architecture_status,
         missing_graph_bridges: architectureStatus.missing_graph_bridges,
         missing_wiki_bridge: proposalResult.hasMissingWikiBridge,
-        next_actions_for_agent: buildFinishTaskNextActions(reviewProposalMode, proposalResult, projectHint),
+        memory_closeout_status: memoryCloseoutStatus,
+        memory_closeout_summary: buildMemoryCloseoutSummary(memoryCloseoutStatus, proposalResult),
+        next_actions_for_agent: buildFinishTaskNextActions(reviewProposalMode, proposalResult, projectHint, hasCloseoutCandidates),
     };
     if (reviewProposalMode === 'auto_propose' || reviewProposalMode === 'review_queue') {
         response.proposal_count = proposalResult.proposals.length;

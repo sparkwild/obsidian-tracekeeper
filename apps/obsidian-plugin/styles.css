@@ -387,6 +387,52 @@
 	margin-bottom: 8px;
 }
 
+.tracekeeper-proposal-card__header {
+	margin-bottom: 0;
+}
+
+.tracekeeper-proposal-card__title {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	min-width: 0;
+}
+
+.tracekeeper-proposal-card__title-body {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+
+.tracekeeper-proposal-card__eyebrow,
+.tracekeeper-proposal-card__subject,
+.tracekeeper-proposal-card__summary span,
+.tracekeeper-proposal-card__technical small {
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.tracekeeper-proposal-card__title h4 {
+	margin: 0;
+	font-size: 16px;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-proposal-card__subject {
+	display: block;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-proposal-card__badges {
+	justify-content: flex-end;
+	min-width: fit-content;
+}
+
+.tracekeeper-proposal-select input[type='checkbox'] {
+	margin: 0;
+}
+
 .tracekeeper-card__header h3 {
 	margin: 0;
 }
@@ -558,6 +604,44 @@
 	gap: 6px;
 }
 
+button.tracekeeper-confirm-button {
+	background: var(--text-success);
+	background-color: var(--text-success);
+	color: var(--text-on-accent);
+}
+
+button.tracekeeper-confirm-button:hover,
+button.tracekeeper-confirm-button:focus {
+	background: var(--text-success);
+	background-color: var(--text-success);
+	color: var(--text-on-accent);
+	filter: brightness(0.95);
+}
+
+button.tracekeeper-confirm-button:disabled {
+	opacity: 0.55;
+	filter: none;
+}
+
+button.tracekeeper-revision-button {
+	background: var(--text-warning);
+	background-color: var(--text-warning);
+	color: var(--text-on-accent);
+}
+
+button.tracekeeper-revision-button:hover,
+button.tracekeeper-revision-button:focus {
+	background: var(--text-warning);
+	background-color: var(--text-warning);
+	color: var(--text-on-accent);
+	filter: brightness(0.95);
+}
+
+button.tracekeeper-revision-button:disabled {
+	opacity: 0.55;
+	filter: none;
+}
+
 .tracekeeper-badge {
 	display: inline-flex;
 	align-items: center;
@@ -629,7 +713,43 @@
 }
 
 .tracekeeper-proposal-card {
+	display: grid;
+	gap: 10px;
 	margin-top: 0;
+}
+
+.tracekeeper-proposal-card__summary {
+	display: grid;
+	gap: 3px;
+	padding: 8px 10px;
+	border-left: 3px solid var(--interactive-accent);
+	background: var(--background-primary);
+}
+
+.tracekeeper-proposal-card__summary strong {
+	font-size: 14px;
+	line-height: 1.45;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-proposal-card__context {
+	margin: 0;
+}
+
+.tracekeeper-proposal-card__technical {
+	min-width: 0;
+	padding-top: 2px;
+}
+
+.tracekeeper-proposal-card__technical small {
+	display: block;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-proposal-card > .tracekeeper-action-row {
+	margin-top: 2px;
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
 }
 
 .tracekeeper-detail {
@@ -644,6 +764,19 @@
 	padding: 8px;
 	border-left: 3px solid var(--interactive-accent);
 	background: var(--background-primary);
+}
+
+.tracekeeper-revision-comment {
+	margin-top: 8px;
+	padding: 8px;
+	border-left: 3px solid var(--text-warning);
+	background: var(--background-primary);
+}
+
+.tracekeeper-revision-comment__content {
+	margin: 6px 0 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 
 .tracekeeper-issue-list,
@@ -850,8 +983,90 @@
 	color: var(--text-muted);
 }
 
+.tracekeeper-review-revision-modal__help {
+	display: grid;
+	gap: 2px;
+	margin: 6px 0;
+}
+
+.tracekeeper-review-revision-modal__textarea {
+	width: 100%;
+	min-height: 170px;
+	box-sizing: border-box;
+	margin-top: 4px;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font: inherit;
+	resize: vertical;
+}
+
 .tracekeeper-memory-loop-card {
 	margin-top: 12px;
+}
+
+button.tracekeeper-review-queue-button {
+	font-weight: 600;
+}
+
+button.tracekeeper-review-queue-button--has-items {
+	border-color: var(--interactive-accent);
+	background: var(--background-modifier-hover);
+	background: color-mix(in srgb, var(--interactive-accent) 14%, var(--background-primary));
+	background-color: var(--background-modifier-hover);
+	background-color: color-mix(in srgb, var(--interactive-accent) 14%, var(--background-primary));
+	color: var(--interactive-accent);
+	box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+button.tracekeeper-review-queue-button--has-items:hover,
+button.tracekeeper-review-queue-button--has-items:focus {
+	background: var(--background-modifier-hover);
+	background: color-mix(in srgb, var(--interactive-accent) 22%, var(--background-primary));
+	background-color: var(--background-modifier-hover);
+	background-color: color-mix(in srgb, var(--interactive-accent) 22%, var(--background-primary));
+	color: var(--interactive-accent);
+}
+
+button.tracekeeper-review-queue-button--action {
+	border-color: var(--interactive-accent);
+	background: var(--interactive-accent);
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 25%, transparent);
+}
+
+button.tracekeeper-review-queue-button--action:hover,
+button.tracekeeper-review-queue-button--action:focus {
+	background: var(--interactive-accent-hover);
+	background-color: var(--interactive-accent-hover);
+	color: var(--text-on-accent);
+}
+
+.tracekeeper-memory-loop-summary {
+	display: grid;
+	gap: 2px;
+	margin-top: 2px;
+	padding: 10px 12px;
+	border-left: 3px solid var(--interactive-accent);
+	background: var(--background-primary);
+}
+
+.tracekeeper-memory-loop-summary span,
+.tracekeeper-memory-loop-summary p {
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.tracekeeper-memory-loop-summary strong {
+	font-size: 24px;
+	line-height: 1.1;
+}
+
+.tracekeeper-memory-loop-summary p {
+	margin: 0;
 }
 
 .tracekeeper-memory-loop-grid {
@@ -881,6 +1096,10 @@
 
 .tracekeeper-recall-modal {
 	max-width: 760px;
+}
+
+.tracekeeper-review-revision-modal {
+	max-width: 700px;
 }
 
 .tracekeeper-recall-results {

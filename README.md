@@ -48,8 +48,8 @@ Tracekeeper treats every AI suggestion as a candidate memory proposal. You can i
 2. Enable Tracekeeper and open **Settings -> Community plugins -> Tracekeeper**.
 3. Copy or auto-configure the Agent connection from the **Agent configuration** section.
 4. Ask the AI assistant to summarize, connect, or refine a topic from your vault.
-5. Review proposed wiki or memory updates in the **Review Queue**.
-6. Edit, approve, reject, defer, or request revisions for Review Queue items before they become durable memory.
+5. Review proposed memory, wiki, graph, or migration items in the **Review Queue**.
+6. Edit, approve, reject, or request revisions for Review Queue items before they become durable memory.
 
 ## Agent And MCP Connection
 
@@ -71,11 +71,11 @@ The connection is local-first:
 
 ## Review Queue
 
-Global long-term memory changes are review-gated by default. When an assistant proposes a durable global update, Tracekeeper stores it as a Review Queue item first. You decide whether to approve, reject, defer, or request revision.
+Global long-term memory changes are review-gated by default. When an assistant proposes a durable global update, Tracekeeper stores it as a Review Queue item first. The same queue also surfaces graph-health suggestions and structure-migration conflicts that need human confirmation. You decide whether to approve, reject, or request revision.
 
 Approved writeback is a separate action. Tracekeeper only applies an approved proposal to its target note after that review step has happened.
 
-Project memory is lighter by default: project-scoped updates can auto-save as append-only entries in `01_knowledge/memory/projects/<project>/memory.md`, with duplicate signatures to avoid repeated writes. Project auto-save still requires a valid Wiki bridge, so memory lines remain connected to topic pages. Task closeout has three memory modes: auto follows your memory rules, review sends candidates to the Review Queue, and ignore skips closeout memory candidates.
+Project memory is lighter by default: project-scoped updates can auto-save as append-only entries in `01_knowledge/memory/projects/<project>/memory.md`, with duplicate signatures to avoid repeated writes. Project auto-save still requires a valid Wiki bridge, so memory lines remain connected to topic pages. Task closeout defaults to auto mode: project memory follows the project rule, global memory enters the Review Queue, and summary-only closeouts are recorded without creating empty memory items.
 
 ## What It Helps With
 
