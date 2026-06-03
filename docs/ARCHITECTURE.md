@@ -91,7 +91,6 @@ The plugin may provide review actions:
 
 - Approve
 - Reject
-- Defer
 - Request Revision
 - Apply Approved Writeback
 
@@ -155,14 +154,15 @@ Use this flow for multi-agent safety:
 3. Task closeout
    - Use `tracekeeper.finish_task` for closure summary.
    - Add `decisions`, `solution_changes`, `lessons`, `preferences`, `next_actions`, or `memory_candidates` when the task produced durable knowledge.
-   - Set `review_proposal_mode` to `auto_propose`, `review_queue`, or `off` intentionally.
+   - Use the `closeout_contract` returned by `start_task` as the closeout checklist.
+   - `review_proposal_mode` defaults to `auto_propose`; agents may set `review_queue` or `off` intentionally.
    - `auto_propose` follows the configured memory rules; `review_queue` sends closeout memory candidates to Review Queue; `off` ignores closeout memory candidates.
 4. Review Queue proposals
 	- Global memory enters Review Queue by default when an agent calls `tracekeeper.propose_memory` or `tracekeeper.finish_task` with `review_proposal_mode: "auto_propose"`.
 	- Closeout memory enters Review Queue when an agent calls `tracekeeper.finish_task` with `review_proposal_mode: "review_queue"`.
 	- Project memory can auto-save as append-only project memory when the user sets the project memory rule to automatic.
 	- Use `tracekeeper.review_queue` to inspect pending or approved proposals.
-	- In Obsidian, review proposals and approve, reject, defer, or request revisions.
+- In Obsidian, review proposals and approve, reject, or request revisions.
 5. Durability rule
    - Global durable writeback runs through `tracekeeper.apply_approved_writeback` after Review Queue approval by default.
    - Project memory auto-save is user-controlled, append-only, and limited to project memory targets.

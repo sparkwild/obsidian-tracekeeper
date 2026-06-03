@@ -48,8 +48,8 @@ Tracekeeper 会把 AI 给出的整理结果当成候选记忆提案。你可以�
 2. 启用 Tracekeeper，并打开 **设置 -> 第三方插件 -> Tracekeeper**。
 3. 在 **Agent 配置** 中复制连接配置，或使用插件提供的自动配置。
 4. 让 AI 助手围绕某个项目、主题或问题进行总结、关联和提炼。
-5. 在 **Review Queue** 中查看需要审核的 wiki 更新或长期记忆更新。
-6. 逐条审阅、调整、批准、拒绝、暂缓或要求修订。
+5. 在 **Review Queue** 中查看需要审核的记忆、wiki、图谱或迁移候选项。
+6. 逐条审阅、调整、批准、拒绝或要求修订。
 
 ## Agent 与 MCP 连接
 
@@ -71,11 +71,11 @@ Codex、Claude、OpenClaw 等 MCP 客户端应使用同一套流程：开始任�
 
 ## Review Queue
 
-全局长期记忆默认必须先进入 Review Queue。AI 助手提出的全局 durable memory 更新会先成为候选项，由你决定批准、拒绝、暂缓或要求修订。
+全局长期记忆默认必须先进入 Review Queue。AI 助手提出的全局 durable memory 更新会先成为候选项；图谱健康建议和结构迁移冲突也会进入同一个队列等待你确认。你可以决定批准、拒绝或要求修订。
 
 批准写回是独立动作。只有候选项已通过审核后，Tracekeeper 才会把已批准内容应用到对应目标笔记。
 
-项目记忆默认更轻量：项目级更新可以自动追加到 `01_knowledge/memory/projects/<project>/memory.md`，并使用内容签名避免重复写入。项目自动保存仍然要求有效的 Wiki 主题链接，避免记忆线和知识主题脱节。任务收尾有三种记忆模式：自动会按你的记忆规则保存或进入 Review Queue；审核会统一进入 Review Queue；忽略不会生成记忆候选。
+项目记忆默认更轻量：项目级更新可以自动追加到 `01_knowledge/memory/projects/<project>/memory.md`，并使用内容签名避免重复写入。项目自动保存仍然要求有效的 Wiki 主题链接，避免记忆线和知识主题脱节。任务收尾默认使用自动模式：项目记忆按项目规则处理，全局记忆进入 Review Queue，只有 summary 的收尾只记录会话，不生成空记忆项。
 
 ## 适合场景
 
