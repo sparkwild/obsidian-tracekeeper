@@ -1013,9 +1013,6 @@ button.tracekeeper-review-queue-button {
 
 button.tracekeeper-review-queue-button--has-items {
 	border-color: var(--interactive-accent);
-	background: var(--background-modifier-hover);
-	background: color-mix(in srgb, var(--interactive-accent) 14%, var(--background-primary));
-	background-color: var(--background-modifier-hover);
 	background-color: color-mix(in srgb, var(--interactive-accent) 14%, var(--background-primary));
 	color: var(--interactive-accent);
 	box-shadow: inset 0 0 0 1px var(--interactive-accent);
@@ -1023,16 +1020,12 @@ button.tracekeeper-review-queue-button--has-items {
 
 button.tracekeeper-review-queue-button--has-items:hover,
 button.tracekeeper-review-queue-button--has-items:focus {
-	background: var(--background-modifier-hover);
-	background: color-mix(in srgb, var(--interactive-accent) 22%, var(--background-primary));
-	background-color: var(--background-modifier-hover);
 	background-color: color-mix(in srgb, var(--interactive-accent) 22%, var(--background-primary));
 	color: var(--interactive-accent);
 }
 
 button.tracekeeper-review-queue-button--action {
 	border-color: var(--interactive-accent);
-	background: var(--interactive-accent);
 	background-color: var(--interactive-accent);
 	color: var(--text-on-accent);
 	box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 25%, transparent);
@@ -1040,7 +1033,6 @@ button.tracekeeper-review-queue-button--action {
 
 button.tracekeeper-review-queue-button--action:hover,
 button.tracekeeper-review-queue-button--action:focus {
-	background: var(--interactive-accent-hover);
 	background-color: var(--interactive-accent-hover);
 	color: var(--text-on-accent);
 }
