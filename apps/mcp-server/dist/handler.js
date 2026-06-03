@@ -4,7 +4,7 @@ exports.McpJsonRpcHandler = exports.STREAMABLE_HTTP_TRANSPORT = exports.MCP_SERV
 const protocol_1 = require("./protocol");
 const tools_1 = require("./tools");
 exports.MCP_PROTOCOL_VERSION = '2025-06-18';
-exports.MCP_SERVER_VERSION = '0.2.2';
+exports.MCP_SERVER_VERSION = '0.2.3';
 exports.STREAMABLE_HTTP_TRANSPORT = 'streamable-http';
 const RESOURCES = [
     {
