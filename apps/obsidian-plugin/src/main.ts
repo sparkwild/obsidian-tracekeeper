@@ -8,6 +8,7 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	TAbstractFile,
 	TFile,
 	TFolder,
 	requestUrl,
@@ -24,8 +25,10 @@ import { toolDefinitions } from '../../mcp-server/src/tools';
 import {
 	ARCHIVE_ROOT,
 	ARCHIVE_REVIEW_QUEUE_DIR,
+	KNOWLEDGE_GLOBAL_MEMORY_DIR,
 	KNOWLEDGE_INDEX_PATH,
 	KNOWLEDGE_MEMORY_INDEX_PATH,
+	KNOWLEDGE_PROJECTS_MEMORY_DIR,
 	KNOWLEDGE_PROJECTS_INDEX_PATH,
 	KNOWLEDGE_SOURCES_DIR,
 	KNOWLEDGE_SOURCES_INDEX_PATH,
@@ -40,6 +43,7 @@ import {
 	TRACEKEEPER_MEMORY_POLICY_PATH,
 	TRACEKEEPER_PERMISSIONS_PATH,
 	TRACEKEEPER_REVIEW_QUEUE_DIR,
+	TRACEKEEPER_SESSIONS_DIR,
 	TRACEKEEPER_SYSTEM_PATH,
 	TRACEKEEPER_TASKS_DIR,
 	TRACEKEEPER_WORK_DIR,
@@ -139,6 +143,11 @@ const DEFAULT_MCP_HOST = '127.0.0.1';
 const DEFAULT_MCP_PATH = '/mcp';
 const DEFAULT_MCP_HTTP_ENDPOINT = `http://${DEFAULT_MCP_HOST}:${DEFAULT_MCP_PORT}${DEFAULT_MCP_PATH}`;
 const LEGACY_DEFAULT_MCP_HTTP_ENDPOINTS = ['http://127.0.0.1:37241/mcp'];
+const DEFAULT_AUTO_REFRESH_INTERVAL_SECONDS = 15;
+const MIN_AUTO_REFRESH_INTERVAL_SECONDS = 5;
+const MAX_AUTO_REFRESH_INTERVAL_SECONDS = 120;
+const AUTO_REFRESH_DEBOUNCE_MS = 800;
+const AUTO_REFRESH_INTERVAL_OPTIONS = [10, 15, 30, 60] as const;
 const MEMORY_RECALL_SCOPES = ['global', 'project', 'project_history'] as const;
 
 type TracekeeperRecallScope = typeof MEMORY_RECALL_SCOPES[number];
@@ -231,8 +240,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.review_queue': {
 		title: { zh: '查看审核队列', en: 'Review queue' },
 		description: {
-			zh: '查看待审核或已批准的记忆提案；真正写回仍需要单独的审核后写入动作。',
-			en: 'Lists pending or approved memory proposals; durable writeback still requires the separate review-gated apply action.',
+			zh: '查看待审核或已批准的审核项；真正写回仍需要单独的审核后写入动作。',
+			en: 'Lists pending or approved review items; durable writeback still requires the separate review-gated apply action.',
 		},
 		category: { zh: '审核', en: 'Review' },
 		risk: 'read-only',
@@ -240,8 +249,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.list_review_queue': {
 		title: { zh: '查看审核队列', en: 'List review queue' },
 		description: {
-			zh: '读取等待用户确认的记忆提案；全局记忆默认需要审核，项目记忆可按规则自动保存。',
-			en: 'Reads memory proposals waiting for review; global memory defaults to review, while project memory can auto-save by rule.',
+			zh: '读取等待用户确认的审核项；全局记忆默认需要审核，项目记忆可按规则自动保存。',
+			en: 'Reads review items waiting for confirmation; global memory defaults to review, while project memory can auto-save by rule.',
 		},
 		category: { zh: '审核', en: 'Review' },
 		risk: 'read-only',
@@ -321,8 +330,8 @@ const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = 
 	'tracekeeper.finish_task': {
 		title: { zh: '结束任务', en: 'Finish task' },
 		description: {
-			zh: '任务结束时记录总结，并按记忆规则忽略、建议、加入审核或保存项目记忆。',
-			en: 'Records task closeout and handles memory candidates by rule: ignore, suggest, review, or project save.',
+			zh: '任务结束时记录总结，并按记忆规则提交决策、方案调整、经验、偏好、后续动作和记忆候选。',
+			en: 'Records task closeout and submits decisions, solution changes, lessons, preferences, next actions, and memory candidates by rule.',
 		},
 		category: { zh: '任务', en: 'Task' },
 		risk: 'low-risk-write',
@@ -461,11 +470,13 @@ interface AgentTaskRecord {
 	startedAt: string;
 	finishedAt: string;
 	contextPack: string;
+	sessionNote: string;
 	relatedProject: string;
 	memoryReads: string[];
 	memoryWrites: string[];
 	sourceCaptures: string[];
 	proposals: string[];
+	memoryCandidates: string[];
 	snippet: string;
 	sortTimestamp: number;
 }
@@ -521,15 +532,43 @@ type MemoryProposalStatus =
 	| 'revision_requested'
 	| 'applied';
 
-const REVIEW_QUEUE_FILTERS: Array<MemoryProposalStatus | 'all'> = [
-	'pending',
-	'approved',
-	'rejected',
-	'deferred',
-	'revision_requested',
-	'applied',
-	'all',
-];
+type ReviewQueueFilter = 'pending' | 'revision_requested' | 'all';
+
+const REVIEW_QUEUE_FILTERS: Array<ReviewQueueFilter> = ['pending', 'revision_requested', 'all'];
+
+const isReviewQueuePendingStatus = (status: MemoryProposalStatus): boolean => status === 'pending';
+
+const isReviewQueueRevisionRequestedStatus = (status: MemoryProposalStatus): boolean =>
+	status === 'revision_requested';
+
+const isReviewQueueArchiveableStatus = (status: MemoryProposalStatus): boolean =>
+	status === 'rejected' || status === 'deferred' || status === 'applied';
+
+const isReviewQueueArchiveCandidate = (proposal: MemoryProposalRecord): boolean =>
+	isReviewQueueArchiveableStatus(proposal.approvalStatus)
+	|| (proposal.approvalStatus === 'approved' && proposal.classification !== 'memory_proposal');
+
+const reviewQueueFilterLabel = (filter: ReviewQueueFilter): string => {
+	switch (filter) {
+		case 'pending':
+			return ui('待审核', 'Pending');
+		case 'revision_requested':
+			return ui('需修订', 'Revision requested');
+		case 'all':
+		default:
+			return ui('全部', 'All');
+	}
+};
+
+const isReviewQueueFilterMatch = (status: MemoryProposalStatus, filter: ReviewQueueFilter): boolean => {
+	if (filter === 'pending') {
+		return isReviewQueuePendingStatus(status);
+	}
+	if (filter === 'revision_requested') {
+		return isReviewQueueRevisionRequestedStatus(status);
+	}
+	return true;
+};
 
 const memoryProposalStatusLabel = (status: MemoryProposalStatus): string => {
 	switch (status) {
@@ -557,7 +596,7 @@ type TaskMemoryProposalMode = 'off' | 'suggest' | 'review_queue' | 'auto_propose
 const GRAPH_PROFILES: GraphProfile[] = ['off', 'advisory', 'strict'];
 const MEMORY_PROPOSAL_RULES: MemoryProposalRule[] = ['auto_write', 'review_queue', 'disabled'];
 const TASK_MEMORY_PROPOSAL_MODES: TaskMemoryProposalMode[] = ['auto_propose', 'review_queue', 'off'];
-const MEMORY_RULES_VERSION = 2;
+const MEMORY_RULES_VERSION = 3;
 
 const normalizeGraphProfileValue = (value: unknown): GraphProfile => {
 	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -675,6 +714,7 @@ interface AuditEventRecord {
 
 interface MemoryProposalRecord {
 	path: string;
+	classification: ReviewQueueItemType;
 	proposalId: string;
 	proposalKind: string;
 	proposedBy: string;
@@ -687,7 +727,16 @@ interface MemoryProposalRecord {
 	created: string;
 	snippet: string;
 	sortTimestamp: number;
+	revisionComment: string;
+	revisionRequestedAt: string;
+	revisionRequestedBy: string;
+	writebackContent: string;
 }
+
+type ReviewQueueItemType =
+	| 'memory_proposal'
+	| 'legacy_migration_review'
+	| 'other_review_item';
 
 interface MemoryRecallInput {
 	query: string;
@@ -838,6 +887,10 @@ interface AgentActivitySnapshot {
 	recentSourceCaptures: SourceCaptureRecord[];
 	recentSourceRequests: SourceRequestRecord[];
 	recentProposals: MemoryProposalRecord[];
+	reviewQueueItemCount: number;
+	pendingReviewQueueItemCount: number;
+	revisionRequestedReviewQueueItemCount: number;
+	actionableReviewQueueItemCount: number;
 	recentAuditEvents: AuditEventRecord[];
 	timelineItems: ActivityTimelineItem[];
 	recentAgentCount: number;
@@ -976,6 +1029,8 @@ interface TracekeeperSettings {
 	globalMemoryRule: MemoryProposalRule;
 	projectMemoryRule: MemoryProposalRule;
 	taskMemoryProposalMode: TaskMemoryProposalMode;
+	autoRefreshEnabled: boolean;
+	autoRefreshIntervalSeconds: number;
 }
 
 const DEFAULT_SETTINGS: TracekeeperSettings = {
@@ -988,7 +1043,9 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 	graphProfile: 'advisory',
 	globalMemoryRule: 'review_queue',
 	projectMemoryRule: 'auto_write',
-	taskMemoryProposalMode: 'off',
+	taskMemoryProposalMode: 'auto_propose',
+	autoRefreshEnabled: true,
+	autoRefreshIntervalSeconds: DEFAULT_AUTO_REFRESH_INTERVAL_SECONDS,
 };
 
 export default class TracekeeperPlugin extends Plugin {
@@ -996,6 +1053,9 @@ export default class TracekeeperPlugin extends Plugin {
 	private mcpRuntime: StreamableHttpMcpRuntime | null = null;
 	private uiMcpSessionId = '';
 	private uiMcpRequestId = 1;
+	private autoRefreshIntervalId: number | null = null;
+	private autoRefreshDebounceId: number | null = null;
+	private autoRefreshInFlight = false;
 	private runtimeStatus: StreamableHttpRuntimeStatus = {
 		state: 'stopped',
 		host: DEFAULT_MCP_HOST,
@@ -1123,9 +1183,12 @@ export default class TracekeeperPlugin extends Plugin {
 		});
 
 		this.addSettingTab(new TracekeeperSettingTab(this.app, this));
+		this.registerAutoRefreshEvents();
+		this.restartAutoRefresh();
 	}
 
 	onunload(): void {
+		this.stopAutoRefresh();
 		void this.stopMcpRuntime();
 	}
 
@@ -1159,7 +1222,14 @@ export default class TracekeeperPlugin extends Plugin {
 		next.projectMemoryRule = savedMemoryRulesVersion < MEMORY_RULES_VERSION && savedProjectRule === 'review_queue'
 			? DEFAULT_SETTINGS.projectMemoryRule
 			: savedProjectRule;
-		next.taskMemoryProposalMode = normalizeTaskMemoryProposalMode(saved.taskMemoryProposalMode);
+		const savedTaskMemoryProposalMode = normalizeTaskMemoryProposalMode(saved.taskMemoryProposalMode);
+		next.taskMemoryProposalMode = savedMemoryRulesVersion < MEMORY_RULES_VERSION && savedTaskMemoryProposalMode === 'off'
+			? DEFAULT_SETTINGS.taskMemoryProposalMode
+			: savedTaskMemoryProposalMode;
+		next.autoRefreshEnabled = typeof saved.autoRefreshEnabled === 'boolean'
+			? saved.autoRefreshEnabled
+			: DEFAULT_SETTINGS.autoRefreshEnabled;
+		next.autoRefreshIntervalSeconds = this.normalizeAutoRefreshInterval(saved.autoRefreshIntervalSeconds);
 		return next;
 	}
 
@@ -1181,6 +1251,21 @@ export default class TracekeeperPlugin extends Plugin {
 			return DEFAULT_MCP_PORT;
 		}
 		return parsed;
+	}
+
+	private normalizeAutoRefreshInterval(value: unknown): number {
+		const parsed = typeof value === 'number'
+			? value
+			: typeof value === 'string'
+				? Number.parseInt(value.trim(), 10)
+				: Number.NaN;
+		if (!Number.isFinite(parsed)) {
+			return DEFAULT_AUTO_REFRESH_INTERVAL_SECONDS;
+		}
+		return Math.min(
+			MAX_AUTO_REFRESH_INTERVAL_SECONDS,
+			Math.max(MIN_AUTO_REFRESH_INTERVAL_SECONDS, Math.round(parsed))
+		);
 	}
 
 	private portFromEndpoint(endpoint: string): number | null {
@@ -1240,6 +1325,128 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.saveSettings();
 		new Notice(ui('本地连接令牌已重新生成，请更新已配置的 AI 工具。', 'Local connection token regenerated. Update configured AI tools.'));
 		await this.restartMcpRuntime();
+	}
+
+	async setAutoRefreshEnabled(enabled: boolean): Promise<void> {
+		if (this.settings.autoRefreshEnabled === enabled) {
+			return;
+		}
+		this.settings.autoRefreshEnabled = enabled;
+		await this.saveSettings();
+		this.restartAutoRefresh();
+		if (enabled) {
+			await this.refreshAutoRefreshViews();
+		}
+	}
+
+	async setAutoRefreshIntervalSeconds(value: number): Promise<void> {
+		const nextInterval = this.normalizeAutoRefreshInterval(value);
+		if (this.settings.autoRefreshIntervalSeconds === nextInterval) {
+			return;
+		}
+		this.settings.autoRefreshIntervalSeconds = nextInterval;
+		await this.saveSettings();
+		this.restartAutoRefresh();
+		if (this.settings.autoRefreshEnabled) {
+			await this.refreshAutoRefreshViews();
+		}
+	}
+
+	private registerAutoRefreshEvents(): void {
+		this.registerEvent(this.app.vault.on('create', (file) => {
+			this.scheduleAutoRefreshForFile(file);
+		}));
+		this.registerEvent(this.app.vault.on('modify', (file) => {
+			this.scheduleAutoRefreshForFile(file);
+		}));
+		this.registerEvent(this.app.vault.on('delete', (file) => {
+			this.scheduleAutoRefreshForFile(file);
+		}));
+		this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+			this.scheduleAutoRefreshForFile(file);
+			this.scheduleAutoRefreshForPath(oldPath);
+		}));
+	}
+
+	private restartAutoRefresh(): void {
+		this.stopAutoRefresh();
+		if (!this.settings.autoRefreshEnabled) {
+			return;
+		}
+		const intervalMs = this.normalizeAutoRefreshInterval(this.settings.autoRefreshIntervalSeconds) * 1000;
+		this.autoRefreshIntervalId = window.setInterval(() => {
+			void this.refreshAutoRefreshViews();
+		}, intervalMs);
+	}
+
+	private stopAutoRefresh(): void {
+		if (this.autoRefreshIntervalId !== null) {
+			window.clearInterval(this.autoRefreshIntervalId);
+			this.autoRefreshIntervalId = null;
+		}
+		if (this.autoRefreshDebounceId !== null) {
+			window.clearTimeout(this.autoRefreshDebounceId);
+			this.autoRefreshDebounceId = null;
+		}
+	}
+
+	private scheduleAutoRefreshForFile(file: TAbstractFile): void {
+		this.scheduleAutoRefreshForPath(file.path);
+	}
+
+	private scheduleAutoRefreshForPath(path: string): void {
+		if (!this.settings.autoRefreshEnabled || !this.isAutoRefreshRelevantPath(path) || !this.hasAutoRefreshTargetViews()) {
+			return;
+		}
+		if (this.autoRefreshDebounceId !== null) {
+			window.clearTimeout(this.autoRefreshDebounceId);
+		}
+		this.autoRefreshDebounceId = window.setTimeout(() => {
+			this.autoRefreshDebounceId = null;
+			void this.refreshAutoRefreshViews();
+		}, AUTO_REFRESH_DEBOUNCE_MS);
+	}
+
+	private hasAutoRefreshTargetViews(): boolean {
+		return this.app.workspace.getLeavesOfType(TRACEKEEPER_ACTIVITY_VIEW).length > 0
+			|| this.app.workspace.getLeavesOfType(TRACEKEEPER_REVIEW_QUEUE_VIEW).length > 0;
+	}
+
+	private isAutoRefreshRelevantPath(path: string): boolean {
+		const normalized = path.replace(/\\/g, '/');
+		const relevantDirs = [
+			TRACEKEEPER_REVIEW_QUEUE_DIR,
+			TRACEKEEPER_TASKS_DIR,
+			TRACEKEEPER_SESSIONS_DIR,
+			TRACEKEEPER_CONTEXT_PACKS_DIR,
+			TRACEKEEPER_AGENT_REQUESTS_DIR,
+			TRACEKEEPER_AUDIT_DIR,
+			KNOWLEDGE_GLOBAL_MEMORY_DIR,
+			KNOWLEDGE_PROJECTS_MEMORY_DIR,
+		];
+		return normalized === TRACEKEEPER_AUDIT_LOG_PATH
+			|| relevantDirs.some((dir) => normalized === dir || normalized.startsWith(`${dir}/`));
+	}
+
+	private async refreshAutoRefreshViews(): Promise<void> {
+		if (!this.settings.autoRefreshEnabled || this.autoRefreshInFlight || !this.hasAutoRefreshTargetViews()) {
+			return;
+		}
+		this.autoRefreshInFlight = true;
+		try {
+			const tasks: Array<Promise<void>> = [];
+			if (this.app.workspace.getLeavesOfType(TRACEKEEPER_ACTIVITY_VIEW).length > 0) {
+				tasks.push(this.refreshActivityViews());
+			}
+			if (this.app.workspace.getLeavesOfType(TRACEKEEPER_REVIEW_QUEUE_VIEW).length > 0) {
+				tasks.push(this.refreshReviewQueueViews());
+			}
+			await Promise.all(tasks);
+		} catch (error) {
+			console.error('tracekeeper failed to auto-refresh views', error);
+		} finally {
+			this.autoRefreshInFlight = false;
+		}
 	}
 
 	private async startMcpRuntime(): Promise<void> {
@@ -2004,7 +2211,8 @@ export default class TracekeeperPlugin extends Plugin {
 
 	private async appendProposalStatusAuditEvent(
 		proposal: MemoryProposalRecord,
-		nextStatus: MemoryProposalStatus
+		nextStatus: MemoryProposalStatus,
+		revisionComment?: string
 	): Promise<void> {
 		const now = new Date().toISOString();
 		const event = this.renderProposalStatusAuditEvent(
@@ -2012,7 +2220,8 @@ export default class TracekeeperPlugin extends Plugin {
 			proposal.path,
 			proposal.proposalId,
 			nextStatus,
-			proposal.taskId
+			proposal.taskId,
+			revisionComment
 		);
 		await this.appendToAuditLog(event);
 	}
@@ -2022,7 +2231,8 @@ export default class TracekeeperPlugin extends Plugin {
 		target: string,
 		proposalId: string,
 		nextStatus: MemoryProposalStatus,
-		taskId?: string
+		taskId?: string,
+		revisionComment?: string
 	): string {
 		return (
 			`## ${timestamp}\n` +
@@ -2030,6 +2240,10 @@ export default class TracekeeperPlugin extends Plugin {
 			`actor: user\n` +
 			`target: ${target}\n` +
 			`reason: proposal ${proposalId} marked ${nextStatus}\n` +
+			(revisionComment ? `revision_comment: ${this.escapeAuditValue(revisionComment)}\n` : '') +
+			(nextStatus === 'revision_requested'
+				? `revision_requested_at: ${timestamp}\nrevision_requested_by: user\n`
+				: '') +
 			`task_id: ${taskId || ''}\n` +
 			`timestamp: ${timestamp}\n\n`
 		);
@@ -2210,16 +2424,21 @@ export default class TracekeeperPlugin extends Plugin {
 			recentContextPacks,
 			recentSourceCaptures,
 			recentSourceRequests,
-			recentProposals,
+			reviewQueueItems,
 			recentAuditEvents,
 		] = await Promise.all([
 			this.readRecentAgentTasks(MAX_TASK_ROWS),
 			this.readRecentContextPacks(MAX_ACTIVITY_CONTEXT_PACK_ROWS),
 			this.readRecentSourceCaptures(MAX_ACTIVITY_SOURCE_CAPTURE_ROWS),
 			this.readRecentSourceRequests(MAX_SOURCE_STATUS_ROWS),
-			this.readRecentMemoryProposals(MAX_ACTIVITY_PROPOSAL_ROWS),
+			this.readRecentMemoryProposals(Number.MAX_SAFE_INTEGER),
 			this.readRecentAuditEvents(MAX_AUDIT_ROWS),
 		]);
+		const recentProposals = reviewQueueItems.slice(0, MAX_ACTIVITY_PROPOSAL_ROWS);
+		const reviewQueueItemCount = reviewQueueItems.length;
+		const pendingReviewQueueItemCount = reviewQueueItems.filter((proposal) => proposal.approvalStatus === 'pending').length;
+		const revisionRequestedReviewQueueItemCount = reviewQueueItems.filter((proposal) => proposal.approvalStatus === 'revision_requested').length;
+		const actionableReviewQueueItemCount = pendingReviewQueueItemCount + revisionRequestedReviewQueueItemCount;
 		const latestTask = recentTasks[0] ?? null;
 		const structureStatus = this.getStructureStatus();
 		const taskFolderMissing =
@@ -2254,6 +2473,10 @@ export default class TracekeeperPlugin extends Plugin {
 			recentSourceCaptures,
 			recentSourceRequests,
 			recentProposals,
+			reviewQueueItemCount,
+			pendingReviewQueueItemCount,
+			revisionRequestedReviewQueueItemCount,
+			actionableReviewQueueItemCount,
 			recentAuditEvents,
 			timelineItems,
 			recentAgentCount,
@@ -3406,7 +3629,7 @@ export default class TracekeeperPlugin extends Plugin {
 			capabilities: {},
 			clientInfo: {
 				name: 'tracekeeper-plugin-ui',
-				version: '0.2.1',
+				version: '0.2.2',
 			},
 		}, false);
 		if (!this.isRecord(result)) {
@@ -3986,10 +4209,18 @@ export default class TracekeeperPlugin extends Plugin {
 		const data = parsed.fields;
 		const proposalType = this.firstString(data, ['type']);
 		const normalizedProposalType = proposalType.toLowerCase().replace(/_/g, '-');
-		if (
-			proposalType &&
-			!normalizedProposalType.includes('memory-proposal')
-		) {
+
+		const proposalKind = this.firstString(data, ['proposal_kind', 'proposalKind']);
+		let classification: ReviewQueueItemType | null = null;
+		if (normalizedProposalType.includes('memory-proposal')) {
+			classification = 'memory_proposal';
+		} else if (normalizedProposalType.includes('legacy-migration-review')) {
+			classification = 'legacy_migration_review';
+		} else if (proposalKind) {
+			classification = proposalType ? 'other_review_item' : 'memory_proposal';
+		}
+
+		if (!classification) {
 			return null;
 		}
 
@@ -4002,27 +4233,78 @@ export default class TracekeeperPlugin extends Plugin {
 			created,
 			file.stat?.mtime
 		);
+		const revisionComment = this.readRevisionComment(data);
+		const revisionRequestedAt = this.firstString(data, ['revision_requested_at', 'revisionRequestedAt']);
+		const revisionRequestedBy = this.firstString(data, ['revision_requested_by', 'revisionRequestedBy']);
+		const writebackContent = this.extractMemoryProposalWritebackContent(data, parsed.body);
 
-			return {
-				path: file.path,
-				proposalId,
-				proposalKind: this.firstString(data, ['proposal_kind', 'proposalKind']) || 'unknown',
-				proposedBy: this.firstString(data, ['proposed_by', 'proposedBy']) || 'unknown',
-				relatedProject: this.firstString(data, ['related_project', 'relatedProject', 'project_hint', 'projectHint']) || '',
-				taskId: this.firstString(data, ['task_id', 'taskId']) || '',
-				targetNote: this.firstString(data, ['target_note', 'targetNote']) || '',
+		return {
+			path: file.path,
+			classification,
+			proposalId,
+			proposalKind: proposalKind || classification,
+			proposedBy: this.firstString(data, ['proposed_by', 'proposedBy']) || 'unknown',
+			relatedProject: this.firstString(data, ['related_project', 'relatedProject', 'project_hint', 'projectHint']) || '',
+			taskId: this.firstString(data, ['task_id', 'taskId']) || '',
+			targetNote: this.firstString(data, ['target_note', 'targetNote', 'target_path', 'targetPath']) || '',
 			evidence: this.readStringList(data, ['evidence']),
-			riskLevel: this.firstString(data, ['risk_level', 'riskLevel']) || 'unknown',
+			riskLevel: this.firstString(data, ['risk_level', 'riskLevel', 'risk']) || 'unknown',
 			approvalStatus,
 			created,
 			snippet: this.snippetFromText(parsed.body, proposalId),
+			revisionComment,
+			revisionRequestedAt,
+			revisionRequestedBy,
+			writebackContent,
 			sortTimestamp,
 		};
 	}
 
+	private extractMemoryProposalWritebackContent(data: ParsedRecord, body: string): string {
+		const frontmatterWriteback = this.readMultilineString(data, ['writeback_content', 'writebackContent']);
+		if (frontmatterWriteback) {
+			return frontmatterWriteback.replace(/\\n/g, '\n').trim();
+		}
+		return this.extractSectionText(body, ['Writeback', 'Approved writeback', 'Writeback content']);
+	}
+
+	private extractSectionText(body: string, sectionNames: string[]): string {
+		const normalized = body.replace(/\r\n/g, '\n');
+		const lines = normalized.split('\n');
+		const normalizedSectionNames = new Set(sectionNames.map((name) => name.trim().toLowerCase()));
+
+		const isHeading = (line: string): string | null => {
+			const match = line.match(/^\s*#{2,}\s*(.+?)\s*$/);
+			return match ? match[1].trim().replace(/\s+/g, ' ').toLowerCase() : null;
+		};
+
+		for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+			const heading = isHeading(lines[lineIndex]);
+			if (!heading || !normalizedSectionNames.has(heading)) {
+				continue;
+			}
+
+			const contentLines: string[] = [];
+			for (let nextIndex = lineIndex + 1; nextIndex < lines.length; nextIndex += 1) {
+				if (isHeading(lines[nextIndex])) {
+					break;
+				}
+				contentLines.push(lines[nextIndex]);
+			}
+
+			return contentLines.join('\n').trim();
+		}
+
+		return '';
+	}
+
 	async updateMemoryProposalStatus(
 		proposal: MemoryProposalRecord,
-		nextStatus: MemoryProposalStatus
+		nextStatus: MemoryProposalStatus,
+		options: {
+			clearRevision?: boolean;
+			revisionComment?: string;
+		} = {}
 	): Promise<void> {
 		const file = this.app.vault.getAbstractFileByPath(proposal.path);
 		if (!(file instanceof TFile)) {
@@ -4030,15 +4312,36 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 
 		const normalizedStatus = this.normalizeProposalStatus(nextStatus);
+		const revisionComment = options.revisionComment?.trim();
+		const now = new Date().toISOString();
+
 		await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 			(frontmatter as Record<string, unknown>).approval_status = normalizedStatus;
+			if (normalizedStatus === 'revision_requested') {
+				(frontmatter as Record<string, unknown>).revision_requested_by = 'user';
+				(frontmatter as Record<string, unknown>).revision_requested_at = now;
+				if (revisionComment) {
+					(frontmatter as Record<string, unknown>).revision_comment = this.normalizeFrontmatterRevisionComment(revisionComment);
+				}
+			} else if (options.clearRevision) {
+				delete (frontmatter as Record<string, unknown>).revision_comment;
+				delete (frontmatter as Record<string, unknown>).revisionComment;
+				delete (frontmatter as Record<string, unknown>).revision_requested_by;
+				delete (frontmatter as Record<string, unknown>).revisionRequestedBy;
+				delete (frontmatter as Record<string, unknown>).revision_requested_at;
+				delete (frontmatter as Record<string, unknown>).revisionRequestedAt;
+			}
 		});
 		await this.appendProposalStatusAuditEvent(
 			{
 				...proposal,
 				approvalStatus: normalizedStatus,
+				revisionComment: options.clearRevision ? '' : revisionComment ? revisionComment : proposal.revisionComment,
+				revisionRequestedAt: options.clearRevision ? '' : normalizedStatus === 'revision_requested' ? now : proposal.revisionRequestedAt,
+				revisionRequestedBy: options.clearRevision ? '' : normalizedStatus === 'revision_requested' ? 'user' : proposal.revisionRequestedBy,
 			},
-			normalizedStatus
+			normalizedStatus,
+			revisionComment
 		);
 	}
 
@@ -4292,11 +4595,13 @@ export default class TracekeeperPlugin extends Plugin {
 			startedAt,
 			finishedAt,
 			contextPack: this.firstString(data, ['context_pack', 'contextPack']),
+			sessionNote: this.firstString(data, ['session_note', 'sessionNote']),
 			relatedProject: this.firstString(data, ['related_project', 'relatedProject']),
 			memoryReads: this.readStringList(data, ['memory_reads', 'memoryReads']),
 			memoryWrites: this.readStringList(data, ['memory_writes', 'memoryWrites']),
 			sourceCaptures: this.readStringList(data, ['source_captures', 'sourceCaptures']),
 			proposals: this.readStringList(data, ['proposals']),
+			memoryCandidates: this.readStringList(data, ['memory_candidates', 'memoryCandidates']),
 			snippet: this.snippetFromText(parsed.body, objective || file.basename),
 			sortTimestamp,
 		};
@@ -4527,6 +4832,42 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 
 		return trimmed;
+	}
+
+	private readRevisionComment(values: ParsedRecord): string {
+		return this.readMultilineString(values, ['revision_comment', 'revisionComment']);
+	}
+
+	private readMultilineString(values: ParsedRecord, keys: string[]): string {
+		for (const key of keys) {
+			const value = values[key];
+			if (Array.isArray(value)) {
+				const joined = value.join('\n').trim();
+				if (joined) {
+					return joined;
+				}
+				continue;
+			}
+			if (typeof value === 'string' && value.trim()) {
+				return value.replace(/\\n/g, '\n').trim();
+			}
+		}
+		return '';
+	}
+
+	private normalizeFrontmatterRevisionComment(comment: string): string[] {
+		const normalized = comment.replace(/\r\n/g, '\n').trim();
+		if (!normalized) {
+			return [];
+		}
+		return normalized.split('\n').map((line) => line.trimEnd());
+	}
+
+	private escapeAuditValue(value: string): string {
+		return value
+			.replace(/[\r\n]+/g, '\\n')
+			.replace(/"/g, '\\"')
+			.trim();
 	}
 
 	private readKeyValueRows(lines: string[]): ParsedRecord {
@@ -5267,12 +5608,6 @@ class TracekeeperActivityView extends ItemView {
 				void this.plugin.openInitializeMemoryStructureModal();
 			});
 		}
-		const reviewButton = actions.createEl('button', {
-			text: ui('打开审核列表', 'Open review list'),
-		});
-		reviewButton.addEventListener('click', () => {
-			void this.plugin.openPluginView(TRACEKEEPER_REVIEW_QUEUE_VIEW);
-		});
 		const statusBar = contentEl.createDiv({ cls: 'tracekeeper-status-bar' });
 		this.renderStatusItem(
 			statusBar,
@@ -5282,11 +5617,6 @@ class TracekeeperActivityView extends ItemView {
 		);
 		this.renderStatusItem(statusBar, ui('当前仓库', 'Current repository'), this.formatVaultLabel(snapshot.vaultRoot));
 		this.renderStatusItem(statusBar, ui('刷新时间', 'Last refreshed'), this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt)));
-
-		const metrics = contentEl.createDiv({ cls: 'tracekeeper-metric-grid' });
-		this.renderMetricCard(metrics, ui('待审核', 'Pending review'), String(snapshot.recentProposals.filter((proposal) => proposal.approvalStatus === 'pending').length), ui('需要你确认的记忆更新', 'Memory updates waiting for your review'));
-		this.renderMetricCard(metrics, ui('最近连接', 'Recent connections'), String(snapshot.recentAgentCount), ui('最近出现的 AI 工具', 'Recently seen AI tools'));
-		this.renderMetricCard(metrics, ui('工具使用', 'Tool usage'), String(snapshot.recentToolCallCount), ui('最近连接操作记录', 'Recent connection activity'));
 
 		this.renderMemoryLoopSection(contentEl, snapshot);
 
@@ -5331,39 +5661,55 @@ class TracekeeperActivityView extends ItemView {
 		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
 		header.createEl('h3', { text: ui('记忆闭环', 'Memory loop') });
 		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
+		const reviewButton = actions.createEl('button', {
+			text: snapshot.actionableReviewQueueItemCount > 0
+				? ui(`处理审核 (${snapshot.actionableReviewQueueItemCount})`, `Review items (${snapshot.actionableReviewQueueItemCount})`)
+				: ui(`查看审核列表 (${snapshot.reviewQueueItemCount})`, `Open review list (${snapshot.reviewQueueItemCount})`),
+			cls: [
+				'tracekeeper-review-queue-button',
+				snapshot.actionableReviewQueueItemCount > 0
+					? 'tracekeeper-review-queue-button--action'
+					: '',
+				snapshot.reviewQueueItemCount > 0 && snapshot.actionableReviewQueueItemCount === 0
+					? 'tracekeeper-review-queue-button--has-items'
+					: '',
+			].filter(Boolean).join(' '),
+		});
+		reviewButton.addEventListener('click', () => {
+			void this.plugin.openPluginView(TRACEKEEPER_REVIEW_QUEUE_VIEW);
+		});
 		const recallButton = actions.createEl('button', { text: ui('测试召回', 'Test recall') });
 		recallButton.addEventListener('click', () => {
 			new MemoryRecallPreviewModal(this.app, this.plugin).open();
 		});
-		const reviewButton = actions.createEl('button', { text: ui('处理审核', 'Review items') });
-		reviewButton.addEventListener('click', () => {
-			void this.plugin.openPluginView(TRACEKEEPER_REVIEW_QUEUE_VIEW);
-		});
 
-		const pendingCount = snapshot.recentProposals.filter((proposal) => proposal.approvalStatus === 'pending').length;
 		const latestProposal = snapshot.recentProposals[0] ?? null;
-		const latestRecall = this.latestRecallEvent(snapshot.recentAuditEvents);
+		const summary = card.createDiv({ cls: 'tracekeeper-memory-loop-summary' });
+		summary.createEl('span', { text: ui('待处理审核项', 'Action required') });
+		summary.createEl('strong', { text: String(snapshot.actionableReviewQueueItemCount) });
+		summary.createEl('p', {
+			text: snapshot.actionableReviewQueueItemCount > 0
+				? ui(
+					`待审核 ${snapshot.pendingReviewQueueItemCount} · 需修订 ${snapshot.revisionRequestedReviewQueueItemCount} · 全部 ${snapshot.reviewQueueItemCount}`,
+					`${snapshot.pendingReviewQueueItemCount} pending · ${snapshot.revisionRequestedReviewQueueItemCount} revision requested · ${snapshot.reviewQueueItemCount} total`
+				)
+				: snapshot.reviewQueueItemCount > 0
+					? ui(`暂无待处理项 · 全部 ${snapshot.reviewQueueItemCount}`, `No action needed · ${snapshot.reviewQueueItemCount} total`)
+					: ui('暂无审核项。', 'No review items.'),
+		});
 		const details = card.createDiv({ cls: 'tracekeeper-detail-grid tracekeeper-memory-loop-grid' });
-		this.renderMemoryLoopDetail(details, ui('待审核记忆', 'Pending memories'), String(pendingCount));
 		this.renderMemoryLoopDetail(
 			details,
-			ui('最近记忆提案', 'Latest proposal'),
+			ui('最近审核项', 'Latest review item'),
 			latestProposal
 				? `${latestProposal.proposalKind} • ${this.plugin.formatDisplayTime(latestProposal.sortTimestamp)}`
 				: ui('暂无', 'None')
 		);
 		this.renderMemoryLoopDetail(
 			details,
-			ui('最后一次任务', 'Last task'),
+			ui('最近收尾', 'Latest closeout'),
 			snapshot.latestTask
-				? this.plugin.trimText(snapshot.latestTask.objective || snapshot.latestTask.taskId, 80)
-				: ui('暂无', 'None')
-		);
-		this.renderMemoryLoopDetail(
-			details,
-			ui('最近召回', 'Latest recall'),
-			latestRecall
-				? `${this.plugin.formatToolDisplayName(latestRecall.toolName)} • ${this.plugin.formatDisplayTime(latestRecall.sortTimestamp)}`
+				? this.formatLatestCloseoutStatus(snapshot.latestTask)
 				: ui('暂无', 'None')
 		);
 	}
@@ -5374,11 +5720,31 @@ class TracekeeperActivityView extends ItemView {
 		item.createEl('strong', { text: value || ui('暂无', 'None') });
 	}
 
-	private latestRecallEvent(events: AuditEventRecord[]): AuditEventRecord | null {
-		return events.find((event) => {
-			const tool = event.toolName || event.action;
-			return tool === 'tracekeeper.recall' || tool === 'tracekeeper.project_context' || tool === 'tracekeeper.project_history';
-		}) ?? null;
+	private formatLatestCloseoutStatus(task: AgentTaskRecord): string {
+		const sessionRecorded = Boolean(task.sessionNote);
+		const memoryWriteCount = this.taskDurableMemoryWriteCount(task);
+		const proposalCount = task.proposals.length;
+		if (!sessionRecorded && memoryWriteCount === 0 && proposalCount === 0) {
+			return ui('未收尾', 'Not closed out');
+		}
+		const parts: string[] = [];
+		if (sessionRecorded) {
+			parts.push(ui('已记录会话', 'Session recorded'));
+		}
+		if (memoryWriteCount > 0) {
+			parts.push(ui(`项目记忆 ${memoryWriteCount}`, `${memoryWriteCount} project memory`));
+		}
+		if (proposalCount > 0) {
+			parts.push(ui(`待审核 ${proposalCount}`, `${proposalCount} queued`));
+		}
+		if (parts.length === 1 && sessionRecorded) {
+			return ui('已记录会话，未沉淀记忆', 'Session recorded, no memory saved');
+		}
+		return parts.join(' · ');
+	}
+
+	private taskDurableMemoryWriteCount(task: AgentTaskRecord): number {
+		return task.memoryWrites.filter((path) => path && path !== task.sessionNote).length;
 	}
 
 	private renderStatusItem(container: HTMLElement, label: string, value: string, className = ''): void {
@@ -5491,7 +5857,7 @@ class TracekeeperActivityView extends ItemView {
 	private taskChangeItems(task: AgentTaskRecord): Array<{ label: string; value: number }> {
 		return [
 			{ label: ui('读取记忆', 'Memory reads'), value: task.memoryReads.length },
-			{ label: ui('写入记录', 'Writes'), value: task.memoryWrites.length },
+			{ label: ui('写入记忆', 'Memory writes'), value: this.taskDurableMemoryWriteCount(task) },
 			{ label: ui('捕获资料', 'Source captures'), value: task.sourceCaptures.length },
 			{ label: ui('记忆提案', 'Memory proposals'), value: task.proposals.length },
 		].filter((item) => item.value > 0);
@@ -5590,7 +5956,9 @@ class TracekeeperActivityView extends ItemView {
 }
 
 class TracekeeperReviewQueueView extends ItemView {
-	private activeFilter: MemoryProposalStatus | 'all' = 'pending';
+	private activeFilter: ReviewQueueFilter = 'pending';
+	private isSelectionMode = false;
+	private selectedProposalPaths = new Set<string>();
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -5659,10 +6027,12 @@ class TracekeeperReviewQueueView extends ItemView {
 		});
 
 		if (snapshot.missingReviewQueueFolder) {
+			this.isSelectionMode = false;
+			this.selectedProposalPaths.clear();
 			contentEl.createEl('p', {
 				text: ui(
-					'还没有审核队列。请先初始化知识库文件结构，之后 AI 助手提出的记忆更新会出现在这里。',
-					'No review queue yet. Initialize the Tracekeeper file structure first; proposed memory updates will appear here afterward.'
+					'还没有审核队列。请先初始化知识库文件结构，之后 AI 提交、任务收尾、图谱建议或结构迁移冲突会出现在这里。',
+					'No review queue yet. Initialize the Tracekeeper file structure first; AI submissions, task closeouts, graph suggestions, or structure-migration conflicts will appear here afterward.'
 				),
 				cls: 'tracekeeper-view__description',
 			});
@@ -5670,42 +6040,55 @@ class TracekeeperReviewQueueView extends ItemView {
 		}
 
 		if (snapshot.proposals.length === 0) {
+			this.isSelectionMode = false;
+			this.selectedProposalPaths.clear();
 			this.renderEmptyState(
 				contentEl,
-				ui('还没有待审核的记忆更新。', 'No memory updates waiting for review yet.'),
+				ui('还没有待审核项。', 'No review items waiting yet.'),
 				ui(
-					'审核队列只显示需要你确认的提案。建议模式只返回候选内容，不会写入队列；项目记忆如果设置为自动保存，也不会出现在这里。',
-					'The review queue only shows proposals that need your confirmation. Suggest mode only returns candidates and does not write queue files; project memory set to auto-save will not appear here.'
+					'AI 提交、任务收尾、图谱建议或结构迁移冲突产生需要确认的候选项后，会显示在这里。',
+					'Items appear here after an AI submission, task closeout, graph suggestion, or structure-migration conflict needs confirmation.'
 				)
 			);
 			return;
 		}
 
-		const counts = this.countByStatus(snapshot.proposals);
+		const selectionButton = actions.createEl('button', {
+			text: this.isSelectionMode ? ui('退出选择', 'Exit select') : ui('批量选择', 'Select'),
+			cls: this.isSelectionMode ? 'mod-warning' : '',
+		});
+		selectionButton.addEventListener('click', () => {
+			this.isSelectionMode = !this.isSelectionMode;
+			this.selectedProposalPaths.clear();
+			void this.render(snapshot);
+		});
+
+		const counts = this.countByFilter(snapshot.proposals);
 		const tabs = contentEl.createDiv({ cls: 'tracekeeper-filter-tabs' });
 		for (const filter of REVIEW_QUEUE_FILTERS) {
-			const label = filter === 'all' ? ui('全部', 'All') : memoryProposalStatusLabel(filter);
-			const count = filter === 'all' ? snapshot.proposals.length : counts[filter] || 0;
+			const label = reviewQueueFilterLabel(filter);
+			const count = filter === 'all' ? counts.all : counts[filter];
 			const button = tabs.createEl('button', {
 				text: `${label} (${count})`,
 				cls: this.activeFilter === filter ? 'is-active' : '',
 			});
 			button.addEventListener('click', () => {
 				this.activeFilter = filter;
+				this.selectedProposalPaths.clear();
 				void this.render(snapshot);
 			});
 		}
 
 		const visibleProposals = snapshot.proposals.filter((proposal) =>
-			this.activeFilter === 'all' ? true : proposal.approvalStatus === this.activeFilter
+			isReviewQueueFilterMatch(proposal.approvalStatus, this.activeFilter)
 		);
-		this.renderBatchActions(contentEl, visibleProposals, snapshot.proposals);
+		this.renderSelectionControls(contentEl, visibleProposals);
 		const grid = contentEl.createDiv({ cls: 'tracekeeper-proposal-grid' });
 		if (visibleProposals.length === 0) {
 			this.renderEmptyState(
 				grid,
 				ui('当前筛选下没有内容。', 'No items match this filter.'),
-				ui('切换筛选，或等待 AI 助手提出新的记忆更新。', 'Switch filters or wait for your AI assistant to propose a new memory update.')
+				ui('切换筛选，或等待 AI 助手提出新的审核项。', 'Switch filters or wait for your AI assistant to propose a new review item.')
 			);
 			return;
 		}
@@ -5738,51 +6121,68 @@ class TracekeeperReviewQueueView extends ItemView {
 		return grouped;
 	}
 
-	private countByStatus(proposals: MemoryProposalRecord[]): Record<MemoryProposalStatus, number> {
-		const counts: Record<MemoryProposalStatus, number> = {
+	private countByFilter(proposals: MemoryProposalRecord[]): Record<ReviewQueueFilter, number> {
+		const counts: Record<ReviewQueueFilter, number> = {
 			pending: 0,
-			approved: 0,
-			rejected: 0,
-			deferred: 0,
 			revision_requested: 0,
-			applied: 0,
+			all: proposals.length,
 		};
 		for (const proposal of proposals) {
-			counts[proposal.approvalStatus] += 1;
+			if (isReviewQueuePendingStatus(proposal.approvalStatus)) {
+				counts.pending += 1;
+			}
+			if (isReviewQueueRevisionRequestedStatus(proposal.approvalStatus)) {
+				counts.revision_requested += 1;
+			}
 		}
 		return counts;
 	}
 
-	private renderBatchActions(container: HTMLElement, visibleProposals: MemoryProposalRecord[], allProposals: MemoryProposalRecord[]): void {
-		const pending = visibleProposals.filter((proposal) => proposal.approvalStatus === 'pending');
-		const processed = allProposals.filter((proposal) =>
-			proposal.approvalStatus !== 'pending' && proposal.approvalStatus !== 'approved'
-		);
-		if (pending.length === 0 && processed.length === 0) {
+	private getSelectedVisibleProposals(visibleProposals: MemoryProposalRecord[]): MemoryProposalRecord[] {
+		return visibleProposals.filter((proposal) => this.selectedProposalPaths.has(proposal.path));
+	}
+
+	private updateProposalSelection(proposalPath: string, isSelected: boolean): void {
+		if (isSelected) {
+			this.selectedProposalPaths.add(proposalPath);
 			return;
 		}
+		this.selectedProposalPaths.delete(proposalPath);
+	}
+
+	private renderSelectionControls(container: HTMLElement, visibleProposals: MemoryProposalRecord[]): void {
+		if (!this.isSelectionMode) {
+			return;
+		}
+
+		const selected = this.getSelectedVisibleProposals(visibleProposals);
+		const pending = selected.filter((proposal) => isReviewQueuePendingStatus(proposal.approvalStatus));
+		const archiveCandidates = selected.filter((proposal) => isReviewQueueArchiveCandidate(proposal));
+
 		const toolbar = container.createDiv({ cls: 'tracekeeper-batch-toolbar' });
+		const countText = selected.length === 1 ? ui('已选择 1 项', 'Selected 1 item') : ui(`已选择 ${selected.length} 项`, `Selected ${selected.length} items`);
+		toolbar.createEl('span', { text: countText, cls: 'tracekeeper-badge tracekeeper-badge--muted' });
+
+		if (pending.length === 0 && archiveCandidates.length === 0) {
+			return;
+		}
+
 		if (pending.length > 0) {
 			const reject = toolbar.createEl('button', {
-				text: ui(`批量拒绝 (${pending.length})`, `Reject visible (${pending.length})`),
+				text: ui(`批量拒绝 (${pending.length})`, `Reject selected (${pending.length})`),
 				cls: 'mod-warning',
 			});
 			reject.addEventListener('click', () => {
 				void this.batchUpdate(pending, 'rejected');
 			});
-			const defer = toolbar.createEl('button', {
-				text: ui(`批量暂缓 (${pending.length})`, `Defer visible (${pending.length})`),
-			});
-			defer.addEventListener('click', () => {
-				void this.batchUpdate(pending, 'deferred');
-			});
 		}
-		if (processed.length > 0) {
+
+		if (archiveCandidates.length > 0) {
 			const archive = toolbar.createEl('button', {
-				text: ui(`归档已处理 (${processed.length})`, `Archive processed (${processed.length})`),
+				text: ui(`归档 (${archiveCandidates.length})`, `Archive selected (${archiveCandidates.length})`),
 			});
 			archive.addEventListener('click', () => {
-				void this.batchArchive(processed);
+				void this.batchArchive(archiveCandidates);
 			});
 		}
 	}
@@ -5790,17 +6190,31 @@ class TracekeeperReviewQueueView extends ItemView {
 	private groupProposalWorkbenchItems(proposals: MemoryProposalRecord[]): Array<{ label: string; items: MemoryProposalRecord[] }> {
 		const groups = new Map<string, MemoryProposalRecord[]>();
 		for (const proposal of proposals) {
-			const label = [
+			const labelParts = [
+				this.reviewQueueItemTypeLabel(proposal.classification),
 				memoryProposalStatusLabel(proposal.approvalStatus),
-				proposal.relatedProject || ui('未关联项目', 'No project'),
-				proposal.taskId ? `${ui('任务', 'Task')} ${proposal.taskId}` : ui('无任务', 'No task'),
-				proposal.proposalKind || ui('未分类', 'Uncategorized'),
-			].join(' · ');
+			];
+			if (this.isMeaningfulReviewQueueValue(proposal.relatedProject)) {
+				labelParts.push(proposal.relatedProject);
+			}
+			const label = labelParts.join(' · ');
 			const items = groups.get(label) || [];
 			items.push(proposal);
 			groups.set(label, items);
 		}
 		return Array.from(groups.entries()).map(([label, items]) => ({ label, items }));
+	}
+
+	private reviewQueueItemTypeLabel(classification: ReviewQueueItemType): string {
+		switch (classification) {
+			case 'memory_proposal':
+				return ui('记忆提案', 'Memory proposal');
+			case 'legacy_migration_review':
+				return ui('结构迁移审核', 'Legacy migration review');
+			case 'other_review_item':
+			default:
+				return ui('其他审核项', 'Other review item');
+		}
 	}
 
 	private async batchUpdate(proposals: MemoryProposalRecord[], status: MemoryProposalStatus): Promise<void> {
@@ -5812,6 +6226,7 @@ class TracekeeperReviewQueueView extends ItemView {
 				`已更新 ${proposals.length} 条审核项。`,
 				`Updated ${proposals.length} review items.`
 			));
+			this.selectedProposalPaths.clear();
 			await this.refresh();
 		} catch (error) {
 			console.error('tracekeeper failed to batch update proposals', error);
@@ -5823,6 +6238,7 @@ class TracekeeperReviewQueueView extends ItemView {
 		try {
 			const moved = await this.plugin.archiveMemoryProposals(proposals);
 			new Notice(ui(`已归档 ${moved} 条审核项。`, `Archived ${moved} review items.`));
+			this.selectedProposalPaths.clear();
 			await this.refresh();
 		} catch (error) {
 			console.error('tracekeeper failed to archive proposals', error);
@@ -5832,32 +6248,187 @@ class TracekeeperReviewQueueView extends ItemView {
 
 	private renderProposalCard(container: HTMLElement, proposal: MemoryProposalRecord): void {
 		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-proposal-card' });
-		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
-		header.createEl('strong', { text: proposal.proposalId || ui('未命名记忆更新', 'Untitled memory update') });
-		const badges = header.createDiv({ cls: 'tracekeeper-badge-row' });
-		badges.createEl('span', { text: proposal.proposalKind, cls: 'tracekeeper-badge' });
-		badges.createEl('span', { text: this.plugin.formatRiskLabel(proposal.riskLevel), cls: `tracekeeper-badge tracekeeper-badge--risk-${proposal.riskLevel.toLowerCase()}` });
-		badges.createEl('span', { text: memoryProposalStatusLabel(proposal.approvalStatus), cls: 'tracekeeper-badge' });
+		const header = card.createDiv({ cls: 'tracekeeper-card__header tracekeeper-proposal-card__header' });
+		const title = header.createDiv({ cls: 'tracekeeper-proposal-card__title' });
 
-		const facts = card.createDiv({ cls: 'tracekeeper-detail-grid' });
-		this.renderDetail(facts, ui('项目', 'Project'), proposal.relatedProject || ui('未关联', 'Not linked'));
-		this.renderDetail(facts, ui('目标笔记', 'Target note'), proposal.targetNote || ui('未指定', 'Not specified'));
-		this.renderDetail(facts, ui('任务', 'Task'), proposal.taskId || ui('无', 'None'));
-		this.renderDetail(facts, ui('证据摘要', 'Evidence'), proposal.evidence.length ? this.plugin.trimText(proposal.evidence.join(', '), 120) : ui('无', 'None'));
-		this.renderDetail(facts, ui('创建时间', 'Created'), proposal.created || ui('未知', 'Unknown'));
-		this.renderDetail(facts, ui('提出来源', 'Proposed by'), proposal.proposedBy || 'unknown');
-		if (proposal.snippet) {
-			card.createEl('p', { text: this.plugin.trimText(proposal.snippet, 180), cls: 'tracekeeper-view__description' });
+		if (this.isSelectionMode) {
+			const checkboxContainer = title.createDiv({ cls: 'tracekeeper-proposal-select' });
+			const checkbox = document.createElement('input');
+			checkbox.type = 'checkbox';
+			checkbox.checked = this.selectedProposalPaths.has(proposal.path);
+			checkbox.addEventListener('change', () => {
+				this.updateProposalSelection(proposal.path, checkbox.checked);
+				void this.refresh();
+			});
+			checkboxContainer.appendChild(checkbox);
 		}
-		card.createEl('small', { text: `${ui('文件', 'File')}: ${proposal.path}` });
+
+		const titleBody = title.createDiv({ cls: 'tracekeeper-proposal-card__title-body' });
+		titleBody.createEl('span', {
+			text: this.reviewQueueItemTypeLabel(proposal.classification),
+			cls: 'tracekeeper-proposal-card__eyebrow',
+		});
+		titleBody.createEl('h4', { text: this.reviewQueueCardTitle(proposal) });
+		titleBody.createEl('small', {
+			text: this.reviewQueueCardSubject(proposal),
+			cls: 'tracekeeper-proposal-card__subject',
+		});
+
+		const badges = header.createDiv({ cls: 'tracekeeper-badge-row tracekeeper-proposal-card__badges' });
+		badges.createEl('span', { text: memoryProposalStatusLabel(proposal.approvalStatus), cls: 'tracekeeper-badge' });
+		if (this.isMeaningfulReviewQueueValue(proposal.riskLevel)) {
+			badges.createEl('span', {
+				text: this.plugin.formatRiskLabel(proposal.riskLevel),
+				cls: `tracekeeper-badge tracekeeper-badge--risk-${proposal.riskLevel.toLowerCase()}`,
+			});
+		}
+
+		const summary = card.createDiv({ cls: 'tracekeeper-proposal-card__summary' });
+		summary.createEl('span', { text: ui('主要原因', 'Main reason') });
+		summary.createEl('strong', { text: this.reviewQueueCardReason(proposal) });
+
+		const context = card.createDiv({ cls: 'tracekeeper-detail-grid tracekeeper-proposal-card__context' });
+		let contextItemCount = 0;
+		contextItemCount += this.renderOptionalReviewDetail(context, ui('项目', 'Project'), proposal.relatedProject) ? 1 : 0;
+		contextItemCount += this.renderOptionalReviewDetail(context, ui('任务', 'Task'), proposal.taskId) ? 1 : 0;
+		contextItemCount += this.renderOptionalReviewDetail(context, ui('提出来源', 'Proposed by'), proposal.proposedBy) ? 1 : 0;
+		contextItemCount += this.renderOptionalReviewDetail(context, ui('创建时间', 'Created'), proposal.created) ? 1 : 0;
+		if (proposal.evidence.length > 0) {
+			contextItemCount += this.renderOptionalReviewDetail(
+				context,
+				ui('证据', 'Evidence'),
+				ui(`${proposal.evidence.length} 条`, `${proposal.evidence.length} refs`)
+			) ? 1 : 0;
+		}
+		if (contextItemCount === 0) {
+			context.remove();
+		}
+
+		if (proposal.classification === 'memory_proposal') {
+			const writebackPanel = card.createDiv({ cls: 'tracekeeper-detail-panel' });
+			writebackPanel.createEl('strong', { text: ui('写回内容摘要', 'Writeback summary') });
+			const summary = proposal.writebackContent
+				? this.plugin.trimText(proposal.writebackContent, 500)
+			: ui('无可用写回内容', 'No writeback content available');
+			writebackPanel.createEl('pre', { text: summary, cls: 'tracekeeper-code-block' });
+		}
 
 		if (proposal.evidence.length > 0) {
 			const detailPanel = card.createDiv({ cls: 'tracekeeper-detail-panel' });
 			detailPanel.createEl('strong', { text: ui('证据引用', 'Evidence refs') });
 			detailPanel.createEl('div', { text: proposal.evidence.join(', ') });
 		}
+		if (proposal.approvalStatus === 'revision_requested' && proposal.revisionComment) {
+			const revisionPanel = card.createDiv({ cls: 'tracekeeper-revision-comment' });
+			revisionPanel.createEl('strong', { text: ui('修订说明', 'Revision comment') });
+			revisionPanel.createEl('pre', {
+				text: proposal.revisionComment,
+				cls: 'tracekeeper-revision-comment__content',
+			});
+			if (proposal.revisionRequestedAt || proposal.revisionRequestedBy) {
+				const by = proposal.revisionRequestedBy || ui('用户', 'User');
+				const at = proposal.revisionRequestedAt || ui('未知时间', 'Unknown time');
+				revisionPanel.createEl('small', {
+					text: `${ui('由', 'By')}: ${by} • ${ui('时间', 'Time')}: ${at}`,
+					cls: 'tracekeeper-view__description',
+				});
+			}
+		}
+
+		const technical = card.createDiv({ cls: 'tracekeeper-proposal-card__technical' });
+		const queuePath = technical.createEl('small', {
+			text: `${ui('审核文件', 'Queue file')}: ${this.compactReviewQueuePath(proposal.path)}`,
+		});
+		queuePath.title = proposal.path;
 
 		this.renderProposalActions(card, proposal);
+	}
+
+	private reviewQueueCardTitle(proposal: MemoryProposalRecord): string {
+		switch (proposal.classification) {
+			case 'memory_proposal':
+				return ui('记忆写入提案', 'Memory writeback proposal');
+			case 'legacy_migration_review':
+				return ui('结构迁移冲突', 'Structure migration conflict');
+			case 'other_review_item':
+			default:
+				return ui('待确认审核项', 'Review item');
+		}
+	}
+
+	private reviewQueueCardSubject(proposal: MemoryProposalRecord): string {
+		if (this.isMeaningfulReviewQueueValue(proposal.targetNote)) {
+			return proposal.targetNote;
+		}
+		if (this.isMeaningfulReviewQueueValue(proposal.relatedProject)) {
+			return proposal.relatedProject;
+		}
+		if (this.isMeaningfulReviewQueueValue(proposal.proposalId)) {
+			return proposal.proposalId;
+		}
+		return this.compactReviewQueuePath(proposal.path);
+	}
+
+	private reviewQueueCardReason(proposal: MemoryProposalRecord): string {
+		const explicitReason = this.extractReviewQueueReason(proposal.snippet);
+		if (explicitReason) {
+			return this.localizeKnownReviewQueueReason(explicitReason);
+		}
+
+		switch (proposal.classification) {
+			case 'memory_proposal':
+				return ui('AI 提议写入长期记忆，需要审核确认。', 'AI proposed a durable memory update for review.');
+			case 'legacy_migration_review':
+				return ui('结构迁移发现需要人工确认的差异。', 'Structure migration found a difference that needs review.');
+			case 'other_review_item':
+			default:
+				return ui('该项等待你确认处理结果。', 'This item is waiting for confirmation.');
+		}
+	}
+
+	private extractReviewQueueReason(snippet: string): string {
+		const normalized = snippet.replace(/\r\n/g, '\n').trim();
+		if (!normalized) {
+			return '';
+		}
+		const reasonMatch = normalized.match(/(?:^|\n)\s*-\s*Reason:\s*(.+?)(?:\n|$)/i);
+		if (reasonMatch?.[1]) {
+			return reasonMatch[1].trim();
+		}
+		return normalized.replace(/^[-\s]+/, '').trim();
+	}
+
+	private localizeKnownReviewQueueReason(reason: string): string {
+		const normalized = reason.trim().replace(/\.$/, '').toLowerCase();
+		if (normalized === 'target already exists with different content') {
+			return ui('目标笔记已存在不同内容。', 'Target already exists with different content.');
+		}
+		return reason;
+	}
+
+	private compactReviewQueuePath(path: string): string {
+		const normalized = path.replace(/\\/g, '/');
+		const prefix = `${REVIEW_QUEUE_PATH}/`;
+		if (normalized.startsWith(prefix)) {
+			return normalized.slice(prefix.length);
+		}
+		return normalized;
+	}
+
+	private isMeaningfulReviewQueueValue(value: string): boolean {
+		const normalized = value.trim().toLowerCase();
+		return Boolean(
+			normalized &&
+			!['unknown', 'none', 'not linked', 'not specified', '无', '未知', '未关联', '未指定'].includes(normalized)
+		);
+	}
+
+	private renderOptionalReviewDetail(container: HTMLElement, label: string, value: string): boolean {
+		if (!this.isMeaningfulReviewQueueValue(value)) {
+			return false;
+		}
+		this.renderDetail(container, label, value);
+		return true;
 	}
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
@@ -5867,28 +6438,46 @@ class TracekeeperReviewQueueView extends ItemView {
 	}
 
 	private renderProposalActions(card: HTMLElement, proposal: MemoryProposalRecord): void {
+		const actionRow = card.createDiv({ cls: 'tracekeeper-action-row' });
+		const open = actionRow.createEl('button', {
+			text: ui('打开文件', 'Open file'),
+		});
+		open.addEventListener('click', () => {
+			void this.openReviewQueueItem(proposal);
+		});
+
 		if (proposal.approvalStatus === 'pending') {
-			const actionRow = card.createDiv({ cls: 'tracekeeper-action-row' });
+			const isMemoryProposal = proposal.classification === 'memory_proposal';
+			const hasWritebackInputs = Boolean(
+				proposal.targetNote.trim() && proposal.writebackContent.trim()
+			);
+			const approveLabel = isMemoryProposal
+				? ui('批准并写入', 'Approve and write')
+				: ui('确认', 'Confirm');
 			const approve = actionRow.createEl('button', {
-				text: ui('批准', 'Approve'),
-				cls: 'mod-cta',
+				text: approveLabel,
+				cls: isMemoryProposal ? 'mod-cta' : 'tracekeeper-confirm-button',
 			});
+			if (isMemoryProposal && !hasWritebackInputs) {
+				approve.disabled = true;
+			}
 			const reject = actionRow.createEl('button', {
 				text: ui('拒绝', 'Reject'),
 				cls: 'mod-warning',
 			});
-			const defer = actionRow.createEl('button', {
-				text: ui('暂缓', 'Defer'),
-			});
 			const requestRevision = actionRow.createEl('button', {
-				text: ui('要求修订', 'Request revision'),
+				text: ui('修订', 'Revise'),
+				cls: 'tracekeeper-revision-button',
 			});
 
-			const actionButtons = [approve, reject, defer, requestRevision];
-			const updateStatus = async (status: MemoryProposalStatus) => {
+			const actionButtons = [approve, reject, requestRevision];
+			const setActionButtonsDisabled = (disabled: boolean): void => {
 				for (const button of actionButtons) {
-					button.setAttribute('disabled', 'true');
+					button.disabled = disabled;
 				}
+			};
+			const updateStatus = async (status: MemoryProposalStatus) => {
+				setActionButtonsDisabled(true);
 				try {
 					await this.plugin.updateMemoryProposalStatus(proposal, status);
 					new Notice(ui(
@@ -5901,33 +6490,253 @@ class TracekeeperReviewQueueView extends ItemView {
 					new Notice(ui('更新审核状态失败。', 'Failed to update review status.'));
 				} finally {
 					for (const button of actionButtons) {
-						button.removeAttribute('disabled');
+						if (!isMemoryProposal || button !== approve || hasWritebackInputs) {
+							button.disabled = false;
+						}
+					}
+				}
+			};
+			const approveAndWrite = async () => {
+				setActionButtonsDisabled(true);
+				try {
+					await this.plugin.updateMemoryProposalStatus(proposal, 'approved');
+					try {
+						await this.plugin.applyApprovedWriteback(proposal);
+						new Notice(ui('已批准并写入。', 'Approved and writeback applied.'));
+					} catch (error) {
+						console.error('tracekeeper failed to apply memory proposal writeback', error);
+						new Notice(ui('写回失败，请稍后重试。', 'Writeback failed. Please retry.'));
+					}
+					await this.refresh();
+				} catch (error) {
+					console.error('tracekeeper failed to approve and writeback review item', error);
+					new Notice(ui('批准失败。', 'Failed to approve proposal.'));
+				} finally {
+					setActionButtonsDisabled(false);
+					if (isMemoryProposal && !hasWritebackInputs) {
+						approve.disabled = true;
 					}
 				}
 			};
 
-			approve.addEventListener('click', () => void updateStatus('approved'));
+			approve.addEventListener('click', () => void (isMemoryProposal ? approveAndWrite() : updateStatus('approved')));
 			reject.addEventListener('click', () => void updateStatus('rejected'));
-			defer.addEventListener('click', () => void updateStatus('deferred'));
-			requestRevision.addEventListener('click', () => void updateStatus('revision_requested'));
-		} else if (proposal.approvalStatus === 'approved') {
-			const actionRow = card.createDiv({ cls: 'tracekeeper-action-row' });
-			const apply = actionRow.createEl('button', {
-				text: ui('应用已批准写回', 'Apply approved writeback'),
-				cls: 'mod-cta',
-			});
-			apply.addEventListener('click', () => {
-				new ApprovedWritebackApplyModal(this.app, this.plugin, proposal, () => {
+			requestRevision.addEventListener('click', () => {
+				new ReviewQueueRequestRevisionModal(this.app, this.plugin, proposal, () => {
 					void this.refresh();
 				}).open();
 			});
+		} else if (proposal.approvalStatus === 'revision_requested') {
+			const editRevision = actionRow.createEl('button', {
+				text: proposal.revisionComment
+					? ui('编辑修订说明', 'Edit revision comment')
+					: ui('补充修订说明', 'Add revision comment'),
+			});
+			const cancelRevision = actionRow.createEl('button', {
+				text: ui('取消修订', 'Cancel revision'),
+			});
+			editRevision.addEventListener('click', () => {
+				new ReviewQueueRequestRevisionModal(this.app, this.plugin, proposal, () => {
+					void this.refresh();
+				}).open();
+			});
+			cancelRevision.addEventListener('click', () => {
+				void (async () => {
+					editRevision.disabled = true;
+					cancelRevision.disabled = true;
+					try {
+						await this.plugin.updateMemoryProposalStatus(proposal, 'pending', {
+							clearRevision: true,
+						});
+						new Notice(ui('已取消修订，回到待审核。', 'Revision canceled; moved back to pending.'));
+						await this.refresh();
+					} catch (error) {
+						console.error('tracekeeper failed to cancel revision request', error);
+						new Notice(ui('取消修订失败。', 'Failed to cancel revision.'));
+						editRevision.disabled = false;
+						cancelRevision.disabled = false;
+					}
+				})();
+			});
+		} else if (proposal.approvalStatus === 'approved' && proposal.classification === 'memory_proposal') {
+			const apply = actionRow.createEl('button', {
+				text: ui('继续写入', 'Continue writeback'),
+				cls: 'mod-cta',
+			});
+			if (!proposal.targetNote || !proposal.writebackContent) {
+				apply.disabled = true;
+			}
+			apply.addEventListener('click', () => {
+				void (async () => {
+					apply.disabled = true;
+					try {
+						await this.plugin.applyApprovedWriteback(proposal);
+						new Notice(ui('已应用写回。', 'Approved writeback applied.'));
+						await this.refresh();
+					} catch (error) {
+						console.error('tracekeeper failed to apply approved writeback', error);
+						new Notice(ui('应用写回失败。', 'Failed to apply writeback.'));
+						await this.refresh();
+					}
+				})();
+			});
 		}
+	}
+
+	private async openReviewQueueItem(proposal: MemoryProposalRecord): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(proposal.path);
+		if (!(file instanceof TFile)) {
+			new Notice(ui('没有找到审核项文件。', 'Review item file was not found.'));
+			return;
+		}
+		await this.app.workspace.getLeaf(false).openFile(file);
 	}
 
 	private renderEmptyState(container: HTMLElement, title: string, detail: string): void {
 		const empty = container.createDiv({ cls: 'tracekeeper-empty-state' });
 		empty.createEl('strong', { text: title });
 		empty.createEl('p', { text: detail });
+	}
+}
+
+class ReviewQueueRequestRevisionModal extends Modal {
+	private comment = '';
+	private readonly editingExistingRevision: boolean;
+	private submitting = false;
+	private submitButton: HTMLButtonElement | null = null;
+	private statusText: HTMLElement | null = null;
+
+	constructor(
+		app: App,
+		private plugin: TracekeeperPlugin,
+		private proposal: MemoryProposalRecord,
+		private onUpdated: () => Promise<void> | void
+	) {
+		super(app);
+		this.comment = proposal.revisionComment;
+		this.editingExistingRevision = proposal.approvalStatus === 'revision_requested';
+	}
+
+	onOpen(): void {
+		void super.onOpen();
+		this.titleEl.setText(this.editingExistingRevision
+			? ui('编辑修订说明', 'Edit revision comment')
+			: ui('要求修订', 'Request revision'));
+		this.render();
+	}
+
+	private render(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('tracekeeper-review-revision-modal');
+
+		contentEl.createEl('p', {
+			text: this.editingExistingRevision
+				? ui(
+					'补充或修改需要调整的内容，供后续 Agent 理解问题并重新生成提案。',
+					'Add or edit what should change so the next Agent can understand the issue and revise the proposal.'
+				)
+				: ui(
+					'请说明需要修改的内容或发现的问题。提交后该提案将标记为“需修订”。',
+					'Describe what should be changed. Submitting will mark this proposal as Revision requested.'
+				),
+			cls: 'tracekeeper-view__description',
+		});
+
+		const help = contentEl.createDiv({ cls: 'tracekeeper-review-revision-modal__help' });
+		help.createEl('strong', { text: ui('修订说明', 'Revision comment') });
+		help.createEl('small', { text: ui('支持多行输入，至少填写一行内容。', 'Supports multiline input; at least one line is required.') });
+
+		const textarea = contentEl.createEl('textarea', {
+			text: this.comment,
+			cls: 'tracekeeper-review-revision-modal__textarea',
+		});
+		textarea.value = this.comment;
+		textarea.rows = 8;
+		textarea.addEventListener('input', () => {
+			this.comment = textarea.value;
+			this.updateSubmitState();
+		});
+
+		this.statusText = contentEl.createEl('p', {
+			text: ui('请先填写修订说明。', 'Please enter a revision comment.'),
+			cls: 'tracekeeper-view__description',
+		});
+
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
+		cancel.addEventListener('click', () => this.close());
+		const submit = actions.createEl('button', {
+			text: this.getSubmitLabel(),
+			cls: 'mod-cta',
+		});
+		this.submitButton = submit;
+		this.updateSubmitState();
+		submit.addEventListener('click', () => {
+			void (async () => {
+				await this.submit();
+			})();
+		});
+	}
+
+	private updateSubmitState(): void {
+		const hasComment = this.comment.trim().length > 0;
+		if (this.submitButton) {
+			this.submitButton.disabled = this.submitting || !hasComment;
+			this.submitButton.setText(
+				hasComment
+					? this.getSubmitLabel()
+					: ui('请输入修订说明', 'Enter revision comment')
+			);
+		}
+		if (this.statusText) {
+			this.statusText.setText(
+				hasComment
+					? this.getReadyStatusText()
+					: ui('请先填写修订说明。', 'Please enter a revision comment.')
+			);
+		}
+	}
+
+	private getSubmitLabel(): string {
+		return this.editingExistingRevision
+			? ui('保存修订说明', 'Save revision comment')
+			: ui('提交修订说明', 'Submit revision');
+	}
+
+	private getReadyStatusText(): string {
+		return this.editingExistingRevision
+			? ui('保存后会更新该项的修订说明。', "Save to update this item's revision comment.")
+			: ui('提交后会将该项标记为“需修订”。', 'Submit to mark this item as Revision requested.');
+	}
+
+	private async submit(): Promise<void> {
+		const normalizedComment = this.comment.trim();
+		if (!normalizedComment) {
+			this.updateSubmitState();
+			return;
+		}
+		if (!this.submitButton) {
+			return;
+		}
+
+		this.submitting = true;
+		this.submitButton.disabled = true;
+		this.submitButton.setText(ui('提交中...', 'Submitting...'));
+
+		try {
+			await this.plugin.updateMemoryProposalStatus(this.proposal, 'revision_requested', {
+				revisionComment: normalizedComment,
+			});
+			new Notice(ui('已提交修订说明。', 'Revision comment submitted.'));
+			await this.onUpdated();
+			this.close();
+		} catch (error) {
+			console.error('tracekeeper failed to request revision', error);
+			this.submitting = false;
+			new Notice(ui('提交修订说明失败。', 'Failed to submit revision comment.'));
+			this.updateSubmitState();
+		}
 	}
 }
 
@@ -7098,8 +7907,8 @@ class TracekeeperPermissionPolicyView extends ItemView {
 		source.createEl('h3', { text: ui('使用提示', 'Tip') });
 		source.createEl('p', {
 			text: ui(
-				'如果不确定某条记忆是否应该保存，请选择“要求修订”或“暂缓”，不要直接批准。',
-				'If you are unsure whether a memory should be saved, choose request revision or defer instead of approving it.'
+				'如果不确定某条记忆是否应该保存，请选择“修订”，不要直接批准。',
+				'If you are unsure whether a memory should be saved, choose revise instead of approving it.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
@@ -7131,6 +7940,7 @@ class TracekeeperSettingTab extends PluginSettingTab {
 		this.renderConnectionInfoSection(containerEl, snapshot);
 		this.renderTokenSection(containerEl);
 		this.renderAgentClientConfigSection(containerEl, snapshot);
+		this.renderViewRefreshSection(containerEl);
 		this.renderMemoryRulesSection(containerEl);
 		this.renderAdvancedMaintenanceSection(containerEl);
 	}
@@ -7222,6 +8032,59 @@ class TracekeeperSettingTab extends PluginSettingTab {
 		});
 	}
 
+	private renderViewRefreshSection(container: HTMLElement): void {
+		const section = this.createSection(
+			container,
+			ui('视图刷新', 'View refresh'),
+			ui(
+				'活动页和审核队列打开时会自动同步最新任务、记忆和审核状态。',
+				'When activity or review queue views are open, Tracekeeper keeps task, memory, and review status in sync.'
+			)
+		);
+		new Setting(section)
+			.setName(ui('自动刷新', 'Auto refresh'))
+			.setDesc(ui(
+				'开启后定时刷新，并在 Tracekeeper 相关文件变化时自动刷新。',
+				'Refreshes on a timer and after Tracekeeper-related file changes.'
+			))
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.autoRefreshEnabled)
+					.onChange((value: boolean) => {
+						void this.plugin.setAutoRefreshEnabled(value)
+							.then(() => this.renderSettings())
+							.catch((error) => {
+								console.error('tracekeeper failed to update auto refresh setting', error);
+							});
+					})
+			);
+		new Setting(section)
+			.setName(ui('刷新间隔', 'Refresh interval'))
+			.setDesc(ui(
+				`当前为 ${this.plugin.settings.autoRefreshIntervalSeconds} 秒；文件变化会额外触发即时刷新。`,
+				`Current interval is ${this.plugin.settings.autoRefreshIntervalSeconds} seconds; file changes also trigger a near-immediate refresh.`
+			))
+			.addDropdown((dropdown) => {
+				const intervals = Array.from(new Set([
+					...AUTO_REFRESH_INTERVAL_OPTIONS,
+					this.plugin.settings.autoRefreshIntervalSeconds,
+				])).sort((a, b) => a - b);
+				for (const seconds of intervals) {
+					dropdown.addOption(String(seconds), ui(`${seconds} 秒`, `${seconds}s`));
+				}
+				dropdown
+					.setValue(String(this.plugin.settings.autoRefreshIntervalSeconds))
+					.onChange((value: string) => {
+						const parsed = Number.parseInt(value, 10);
+						void this.plugin.setAutoRefreshIntervalSeconds(parsed)
+							.then(() => this.renderSettings())
+							.catch((error) => {
+								console.error('tracekeeper failed to update auto refresh interval', error);
+							});
+					});
+			});
+	}
+
 	private renderMemoryRulesSection(container: HTMLElement): void {
 		const section = this.createSection(
 			container,
@@ -7273,8 +8136,8 @@ class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('任务结束记忆提案', 'Task closeout memory proposals'))
 			.setDesc(ui(
-				'自动按上面的记忆规则保存或进入审核队列；审核会统一进入审核队列；忽略不生成提案。',
-				'Auto follows the memory rules above to save or queue updates; Review sends updates to the review queue; Ignore creates no proposals.'
+				'自动会让项目记忆按规则保存、全局记忆进入审核队列；审核会统一进入审核队列；忽略不生成提案。',
+				'Auto saves project memory by rule and sends global memory to the review queue; Review sends all updates to the review queue; Ignore creates no proposals.'
 			))
 			.addDropdown((dropdown) => {
 				for (const mode of TASK_MEMORY_PROPOSAL_MODES) {

@@ -2,6 +2,22 @@
 
 All notable changes to Tracekeeper will be documented in this file.
 
+## [0.2.2] - Review Queue and Memory Closeout Polish
+
+### Added
+
+- Automatic refresh for the Agent Activity and Review Queue views while they are open.
+- Task closeout memory status reporting for empty, queued, auto-saved, mixed, and ignored closeouts.
+- Start-task closeout contract guidance so agents know which durable fields to submit at task end.
+
+### Changed
+
+- Review Queue now shows all queue item types, not only memory proposals.
+- Review Queue cards and actions are simplified for one-pass user confirmation.
+- Project memory closeout defaults to auto-save by rule, while global memory remains review-gated.
+- Project history recall now finds auto-saved project memory using token-based query matching.
+- Project memory candidates now expose concrete project memory directories instead of a generic memory root.
+
 ## [0.2.1] - Obsidian Memory Workflow
 
 First public release in the 0.2 series. Version 0.2.0 was skipped as an internal stabilization point; 0.2.1 is the reviewed release candidate for the Obsidian Memory workflow.

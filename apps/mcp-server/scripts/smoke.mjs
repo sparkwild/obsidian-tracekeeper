@@ -326,7 +326,7 @@ async function main() {
 			capabilities: {},
 			clientInfo: {
 				name: 'tracekeeper-smoke',
-				version: '0.2.1',
+				version: '0.2.2',
 			},
 		});
 		assert.equal(initialize.capabilities.tools.listChanged, false);
@@ -495,6 +495,12 @@ async function main() {
 		assert.ok(startTask.path, 'start_task should return task path');
 		assert.ok(Array.isArray(startTask.next_actions_for_agent), 'start_task should return next actions for agents');
 		assert.ok(startTask.next_actions_for_agent.some((entry) => entry.includes('scope="project"')));
+		assert.equal(startTask.closeout_contract?.required_tool, 'tracekeeper.finish_task');
+		assert.equal(startTask.closeout_contract?.default_mode, 'auto_propose');
+		assert.ok(
+			startTask.closeout_contract?.fields?.includes('solution_changes'),
+			'start_task should return closeout fields for agents'
+		);
 		assert.equal(startTask.recommended_recall?.tool, 'tracekeeper.recall');
 		assert.equal(startTask.recommended_recall?.arguments?.scope, 'project');
 		assert.equal(startTask.recommended_recall?.arguments?.project_hint, 'demo');
@@ -656,22 +662,65 @@ async function main() {
 				task_id: taskId,
 				summary: 'Smoke task finish session.',
 				outcomes: ['Complete smoke validation'],
-				next_actions: ['Run lint and distill'],
 			},
 		}));
 		assert.equal(finishTask.ok, true);
 		assert.equal(finishTask.read_only, false);
-		assert.equal(finishTask.review_proposal_mode, 'off');
-		assert.equal(finishTask.proposal_count, undefined);
-		assert.equal(finishTask.proposals, undefined);
+		assert.equal(finishTask.review_proposal_mode, 'auto_propose');
+		assert.equal(finishTask.memory_closeout_status, 'empty');
+		assert.match(finishTask.memory_closeout_summary, /No durable closeout memory candidates/);
+		assert.equal(finishTask.proposal_count, 0);
+		assert.deepEqual(finishTask.proposals, []);
+		assert.equal(finishTask.auto_applied_count, 0);
+		assert.deepEqual(finishTask.auto_applied_memory_updates, []);
 		assert.equal(finishTask.suggestion_count, undefined);
 		assert.equal(finishTask.suggested_memory_updates, undefined);
 		assert.ok(Array.isArray(finishTask.next_actions_for_agent));
-		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('no memory suggestions')));
+		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('no durable closeout memory candidates')));
 		assert.ok(fs.existsSync(path.join(vaultRoot, finishTask.path)));
 		taskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
 		assert.ok(taskText.includes('status: completed') || taskText.includes('status: "completed"'));
 		assert.ok(taskText.includes(finishTask.path));
+
+		const queueCountBeforeDefaultAuto = countReviewQueueFiles(vaultRoot);
+		const defaultAutoFinish = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: {
+				task_id: `${taskId}-default-auto`,
+				summary: 'Smoke finish task with default project auto memory.',
+				outcomes: ['Default auto closeout validated'],
+				decisions: ['Default closeout should auto-save project memory'],
+				project_hint: 'demo',
+				memory_scope: 'project',
+				related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
+				related_sources: ['01_knowledge/sources/local-source.md'],
+			},
+		}));
+		assert.equal(defaultAutoFinish.ok, true);
+		assert.equal(defaultAutoFinish.review_proposal_mode, 'auto_propose');
+		assert.equal(defaultAutoFinish.memory_closeout_status, 'auto_saved');
+		assert.equal(defaultAutoFinish.proposal_count, 0);
+		assert.equal(defaultAutoFinish.auto_applied_count, 1);
+		assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeDefaultAuto);
+		const defaultAutoMemoryPath = defaultAutoFinish.auto_applied_memory_updates?.[0]?.path;
+		assert.equal(defaultAutoMemoryPath, '01_knowledge/memory/projects/demo/memory.md');
+
+		const queueCountBeforeDefaultGlobal = countReviewQueueFiles(vaultRoot);
+		const defaultGlobalFinish = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: {
+				task_id: `${taskId}-default-global`,
+				summary: 'Smoke finish task with default global review.',
+				preferences: ['User prefers durable global preferences to stay review-gated'],
+				memory_scope: 'global',
+			},
+		}));
+		assert.equal(defaultGlobalFinish.ok, true);
+		assert.equal(defaultGlobalFinish.review_proposal_mode, 'auto_propose');
+		assert.equal(defaultGlobalFinish.memory_closeout_status, 'queued');
+		assert.equal(defaultGlobalFinish.proposal_count, 1);
+		assert.equal(defaultGlobalFinish.auto_applied_count, 0);
+		assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeDefaultGlobal + 1);
 
 		const projectContext = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.recall',
@@ -731,6 +780,25 @@ async function main() {
 		);
 		assert.ok(projectHistory.scope === 'project_history' || (projectHistory.scope && projectHistory.scope.scope === 'project_history'));
 
+		const projectHistoryMemory = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.recall',
+			arguments: {
+				scope: 'project_history',
+				query: 'Default closeout auto-save project memory',
+				project_hint: 'demo',
+				max_items: 5,
+			},
+		}));
+		const projectHistoryMemoryEntries = projectHistoryMemory.entries || projectHistoryMemory.matches || [];
+		assert.ok(
+			projectHistoryMemoryEntries.some((entry) => entry.path === defaultAutoMemoryPath),
+			'project_history query should include auto-saved project memory'
+		);
+		assert.ok(
+			projectHistoryMemory.candidates.includes('01_knowledge/memory/projects/demo'),
+			'project_history candidates should include the concrete project memory directory'
+		);
+
 		const queueCountBeforeSuggest = countReviewQueueFiles(vaultRoot);
 		const finishWithSuggestions = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.finish_task',
@@ -750,6 +818,7 @@ async function main() {
 		assert.equal(finishWithSuggestions.ok, true);
 		assert.equal(finishWithSuggestions.read_only, false);
 		assert.equal(finishWithSuggestions.review_proposal_mode, 'suggest');
+		assert.equal(finishWithSuggestions.memory_closeout_status, 'ignored');
 		assert.equal(finishWithSuggestions.proposal_count, undefined);
 		assert.equal(finishWithSuggestions.proposals, undefined);
 		assert.equal(finishWithSuggestions.suggestion_count, 6);
@@ -782,6 +851,7 @@ async function main() {
 		assert.equal(finishWithReviewQueue.ok, true);
 		assert.equal(finishWithReviewQueue.read_only, false);
 		assert.equal(finishWithReviewQueue.review_proposal_mode, 'review_queue');
+		assert.equal(finishWithReviewQueue.memory_closeout_status, 'queued');
 		assert.equal(finishWithReviewQueue.suggestion_count, undefined);
 		assert.equal(finishWithReviewQueue.suggested_memory_updates, undefined);
 		assert.equal(finishWithReviewQueue.proposal_count, 6);
@@ -803,20 +873,22 @@ async function main() {
 				preferences: ['Favor local vault-first memory'],
 				memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
 				review_proposal_mode: 'auto_propose',
+				related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
+				related_sources: ['01_knowledge/sources/local-source.md'],
 			},
 		}));
 		assert.equal(finishWithProposals.ok, true);
 		assert.equal(finishWithProposals.read_only, false);
 		assert.equal(finishWithProposals.review_proposal_mode, 'auto_propose');
+		assert.equal(finishWithProposals.memory_closeout_status, 'auto_saved');
 		assert.equal(finishWithProposals.suggestion_count, undefined);
 		assert.equal(finishWithProposals.suggested_memory_updates, undefined);
-		assert.equal(finishWithProposals.proposal_count, 6);
-		assert.ok(Array.isArray(finishWithProposals.proposals));
-		assert.equal(finishWithProposals.proposals.length, 6);
-		for (const proposal of finishWithProposals.proposals) {
-			assert.ok(fs.existsSync(path.join(vaultRoot, proposal.path)));
-		}
-		const kinds = finishWithProposals.proposals.map((proposal) => proposal.kind).sort();
+		assert.equal(finishWithProposals.proposal_count, 0);
+		assert.deepEqual(finishWithProposals.proposals, []);
+		assert.equal(finishWithProposals.auto_applied_count, 6);
+		assert.ok(Array.isArray(finishWithProposals.auto_applied_memory_updates));
+		assert.equal(finishWithProposals.auto_applied_memory_updates.length, 6);
+		const kinds = finishWithProposals.auto_applied_memory_updates.map((update) => update.kind).sort();
 		assert.ok(kinds.includes('task_decision'));
 		assert.ok(kinds.includes('solution_change'));
 		assert.ok(kinds.includes('lesson_learned'));
@@ -837,15 +909,18 @@ async function main() {
 				preferences: ['Favor local vault-first memory'],
 				memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
 				review_proposal_mode: 'auto_propose',
+				related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
+				related_sources: ['01_knowledge/sources/local-source.md'],
 			},
 		}));
-		assert.equal(retryFinishWithProposals.proposal_count, 6);
+		assert.equal(retryFinishWithProposals.proposal_count, 0);
+		assert.equal(retryFinishWithProposals.auto_applied_count, 6);
 		assert.deepEqual(
-			retryFinishWithProposals.proposals.map((proposal) => proposal.path).sort(),
-			finishWithProposals.proposals.map((proposal) => proposal.path).sort(),
-			'auto_propose retry should reuse existing finish_task proposals'
+			retryFinishWithProposals.auto_applied_memory_updates.map((update) => `${update.kind}:${update.path}`).sort(),
+			finishWithProposals.auto_applied_memory_updates.map((update) => `${update.kind}:${update.path}`).sort(),
+			'auto_propose retry should reuse existing finish_task memory targets'
 		);
-		assert.equal(countReviewQueueFiles(vaultRoot), queueCountAfterAutoPropose, 'auto_propose retry should not duplicate proposals');
+		assert.equal(countReviewQueueFiles(vaultRoot), queueCountAfterAutoPropose, 'auto_propose retry should not create Review Queue proposals');
 
 		const distillSession = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.distill_session',
@@ -998,6 +1073,7 @@ async function main() {
 			}));
 			assert.equal(autoFinish.ok, true);
 			assert.equal(autoFinish.review_proposal_mode, 'auto_propose');
+			assert.equal(autoFinish.memory_closeout_status, 'auto_saved');
 			assert.equal(autoFinish.proposal_count, 0);
 			assert.equal(autoFinish.auto_applied_count, 6);
 			assert.equal(countReviewQueueFiles(vaultRoot), autoFinishQueueBefore);
@@ -1027,6 +1103,7 @@ async function main() {
 				},
 			}));
 			assert.equal(autoFinishBridgeFallback.ok, true);
+			assert.equal(autoFinishBridgeFallback.memory_closeout_status, 'queued');
 			assert.equal(autoFinishBridgeFallback.proposal_count, 6);
 			assert.equal(autoFinishBridgeFallback.auto_applied_count, 0);
 			assert.equal(autoFinishBridgeFallback.missing_wiki_bridge, true);

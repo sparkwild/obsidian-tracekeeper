@@ -50,6 +50,8 @@ When the task produced durable knowledge, include focused closeout fields:
 - `preferences`
 - `memory_candidates`
 
+`tracekeeper.start_task` returns a `closeout_contract` that lists these fields. Treat it as the task-closeout checklist, not as optional documentation.
+
 For project memory, also pass `project_hint` and `related_wiki` when you know the topic page. Valid project auto-save requires a Wiki bridge under `01_knowledge/wiki/...`; otherwise Tracekeeper falls back to Review Queue.
 
 Set `review_proposal_mode` intentionally:
@@ -60,7 +62,7 @@ Set `review_proposal_mode` intentionally:
 
 `suggest` remains accepted for compatibility and returns `suggested_memory_updates` without creating Review Queue files.
 
-`finish_task` returns `next_actions_for_agent` so agents can tell whether closeout memory was ignored, suggested only, queued for review, or auto-saved as project memory.
+If omitted, `review_proposal_mode` defaults to `auto_propose`. `finish_task` returns `memory_closeout_status`, `memory_closeout_summary`, and `next_actions_for_agent` so agents can tell whether closeout memory was empty, ignored, queued for review, auto-saved as project memory, or mixed.
 
 ## Review Boundary
 
