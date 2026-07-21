@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a reproducible problem in Obswiki
+about: Report a reproducible problem in Tracekeeper
 title: "[Bug] "
 labels: bug
 assignees: ""
@@ -11,9 +11,10 @@ assignees: ""
 ## Environment
 
 - Obsidian version:
-- Obswiki version:
+- Tracekeeper version:
 - Plugin install mode: manual / development
-- MCP transport: URL / SSE / stdio / not configured
+- MCP connection: Streamable HTTP / not configured
+- Agent client, if relevant:
 
 ## Steps to Reproduce
 

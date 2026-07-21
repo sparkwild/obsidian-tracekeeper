@@ -4,6 +4,8 @@
 
 Tracekeeper is currently maintained on the `main` branch.
 
+The technical trust zones, permission classes, and filesystem boundaries are documented in [Security and Privacy Architecture](./docs/security/INDEX.md).
+
 ## Reporting A Vulnerability
 
 Please do not open a public issue for sensitive security problems.

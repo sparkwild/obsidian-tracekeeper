@@ -57,7 +57,7 @@ Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian i
 
 AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and submit memory updates according to your memory rules. Global memory goes to review by default; project memory can auto-save as an append-only project note when you enable that rule.
 
-For shared use across Codex, Claude, OpenClaw, and other MCP clients, use the same pattern: start a task, recall only project-scoped context, finish the task, and decide whether closeout memories should be handled automatically, reviewed, or ignored. Tracekeeper keeps the public MCP surface small so agents can choose the right action quickly. Recall results include compact excerpts, match reasons, and graph links so agents only read full notes when needed. See [Agent MCP usage](./docs/AGENT_MCP_USAGE.md).
+For shared use across Codex, Claude, OpenClaw, and other MCP clients, use the same pattern: start a task, recall the narrowest useful context, finish the task, and decide whether closeout memories should be handled automatically, reviewed, or ignored. Tracekeeper keeps the public MCP surface small so agents can choose the right action quickly. Recall results include compact excerpts, match reasons, and graph links so agents only read full notes when needed. See the [Agent Workflow Contract](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md).
 
 The connection is local-first:
 
@@ -117,6 +117,16 @@ MCP writes are intentionally narrow:
 - delete, rename, bulk rewrite, and system command execution are not available MCP actions
 
 User-confirmed client configuration is the only expected write outside the active vault. Tracekeeper previews the target configuration and creates a backup before changing supported AI tool config files.
+
+## Documentation
+
+- [Documentation index](./docs/INDEX.md)
+- [Product contract](./docs/product/INDEX.md)
+- [Architecture](./docs/architecture/INDEX.md)
+- [Agent Workflow Contract](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md)
+- [Security and privacy architecture](./docs/security/INDEX.md)
+- [Engineering and release guide](./docs/engineering/INDEX.md)
+- [Current implementation status](./docs/status/INDEX.md)
 
 ## License
 

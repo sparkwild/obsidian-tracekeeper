@@ -57,7 +57,7 @@ Tracekeeper 在桌面端 Obsidian 开启时提供本机 Streamable HTTP MCP Runt
 
 AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 vault 上下文、构建 context pack、记录有限范围内的工作笔记，并按你的记忆规则提交更新。全局记忆默认进入审核队列；项目记忆可以按规则自动追加保存到项目记忆笔记。
 
-Codex、Claude、OpenClaw 等 MCP 客户端应使用同一套流程：开始任务、只读取项目范围内的上下文、结束任务，并决定任务收尾记忆自动处理、进入审核，还是忽略。召回结果会包含精简摘要、命中原因和图谱链接，Agent 只有在摘要不够时才需要读取完整笔记。参见 [Agent MCP usage](./docs/AGENT_MCP_USAGE.md)。
+Codex、Claude、OpenClaw 等 MCP 客户端应使用同一套流程：开始任务、召回最小必要范围的上下文、结束任务，并决定任务收尾记忆自动处理、进入审核，还是忽略。召回结果会包含精简摘要、命中原因和图谱链接，Agent 只有在摘要不够时才需要读取完整笔记。参见 [Agent 工作流契约](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md)。
 
 连接是 local-first 的：
 
@@ -117,6 +117,16 @@ MCP 写入范围被刻意限制：
 - MCP 不提供删除、重命名、批量重写和系统命令执行能力
 
 用户确认的客户端配置是预期中唯一可能写到 active vault 外的操作。Tracekeeper 会先展示目标配置和变更预览，并在修改支持的 AI 工具配置文件前创建备份。
+
+## 项目文档
+
+- [文档总索引](./docs/INDEX.md)
+- [产品契约](./docs/product/INDEX.md)
+- [系统架构](./docs/architecture/INDEX.md)
+- [Agent 工作流契约](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md)
+- [安全与隐私架构](./docs/security/INDEX.md)
+- [工程与发布指南](./docs/engineering/INDEX.md)
+- [当前实现状态](./docs/status/INDEX.md)
 
 ## 许可证
 

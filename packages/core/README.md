@@ -2,6 +2,8 @@
 
 This package implements the shared TypeScript runtime for local Obsidian vault processing.
 
+See the canonical [system architecture](../../docs/architecture/INDEX.md) and [security model](../../docs/security/INDEX.md) for cross-module ownership and trust boundaries.
+
 ## Features
 
 - Markdown / frontmatter parsing (`src/markdown.ts`)
