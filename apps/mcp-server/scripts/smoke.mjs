@@ -89,6 +89,8 @@ class McpTestClient {
 			defaultVaultRoot: this.vaultRoot,
 			vaultConfigDir: this.vaultConfigDir,
 			memoryRules: this.options.memoryRules,
+			contentLanguage: this.options.contentLanguage,
+			contentLanguageSource: this.options.contentLanguageSource,
 		});
 		const status = await this.runtime.start();
 		this.endpoint = `${status.endpoint}?token=${encodeURIComponent(this.token)}`;
@@ -387,6 +389,8 @@ async function main() {
 		}));
 		assert.equal(status.ok, true);
 		assert.equal(typeof status.counts.notes === 'number', true);
+		assert.equal(status.content_language, 'en');
+		assert.equal(status.content_language_source, 'fallback');
 		const graphHealth = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.graph_health',
 			arguments: {},
@@ -497,6 +501,8 @@ async function main() {
 		assert.ok(startTask.next_actions_for_agent.some((entry) => entry.includes('scope="project"')));
 		assert.equal(startTask.closeout_contract?.required_tool, 'tracekeeper.finish_task');
 		assert.equal(startTask.closeout_contract?.default_mode, 'auto_propose');
+		assert.equal(startTask.content_language, 'en');
+		assert.equal(startTask.closeout_contract?.content_language, 'en');
 		assert.ok(
 			startTask.closeout_contract?.fields?.includes('solution_changes'),
 			'start_task should return closeout fields for agents'
@@ -667,6 +673,7 @@ async function main() {
 		assert.equal(finishTask.ok, true);
 		assert.equal(finishTask.read_only, false);
 		assert.equal(finishTask.review_proposal_mode, 'auto_propose');
+		assert.equal(finishTask.content_language, 'en');
 		assert.equal(finishTask.memory_closeout_status, 'empty');
 		assert.match(finishTask.memory_closeout_summary, /No durable closeout memory candidates/);
 		assert.equal(finishTask.proposal_count, 0);
@@ -681,6 +688,57 @@ async function main() {
 		taskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
 		assert.ok(taskText.includes('status: completed') || taskText.includes('status: "completed"'));
 		assert.ok(taskText.includes(finishTask.path));
+
+		const zhClient = new McpTestClient(vaultRoot, vaultConfigDir, {
+			contentLanguage: 'zh-CN',
+			contentLanguageSource: 'setting',
+		});
+		try {
+			await zhClient.start();
+			await zhClient.call('initialize', {
+				protocolVersion: '2025-06-18',
+				capabilities: {},
+				clientInfo: {
+					name: 'tracekeeper-smoke-zh',
+					version: '0.2.3',
+				},
+			});
+			const zhStatus = buildStructured(await zhClient.call('tools/call', {
+				name: 'tracekeeper.status',
+				arguments: {},
+			}));
+			assert.equal(zhStatus.content_language, 'zh-CN');
+			assert.equal(zhStatus.content_language_source, 'setting');
+			const zhStart = buildStructured(await zhClient.call('tools/call', {
+				name: 'tracekeeper.start_task',
+				arguments: {
+					goal: '中文内容语言烟测',
+					project_hint: 'demo',
+				},
+			}));
+			assert.equal(zhStart.content_language, 'zh-CN');
+			assert.equal(zhStart.closeout_contract?.content_language, 'zh-CN');
+			const zhTaskText = fs.readFileSync(path.join(vaultRoot, zhStart.path), 'utf8');
+			assert.ok(zhTaskText.includes('# Agent 任务'));
+			assert.ok(zhTaskText.includes('## 目标'));
+			const zhFinish = buildStructured(await zhClient.call('tools/call', {
+				name: 'tracekeeper.finish_task',
+				arguments: {
+					task_id: zhStart.task_id,
+					summary: '中文收尾内容保持原文。',
+					outcomes: ['验证中文包装'],
+				},
+			}));
+			assert.equal(zhFinish.content_language, 'zh-CN');
+			assert.match(zhFinish.memory_closeout_summary, /没有提交可长期沉淀/);
+			const zhSessionText = fs.readFileSync(path.join(vaultRoot, zhFinish.path), 'utf8');
+			assert.ok(zhSessionText.includes('# 任务会话记录'));
+			assert.ok(zhSessionText.includes('## 摘要'));
+			assert.ok(zhSessionText.includes('中文收尾内容保持原文。'));
+			await zhClient.deleteSession();
+		} finally {
+			await zhClient.close().catch(() => {});
+		}
 
 		const queueCountBeforeDefaultAuto = countReviewQueueFiles(vaultRoot);
 		const defaultAutoFinish = buildStructured(await client.call('tools/call', {
@@ -761,7 +819,7 @@ async function main() {
 			arguments: {
 				scope: 'project_history',
 				project_hint: 'demo',
-				max_items: 5,
+				max_items: 20,
 			},
 		}));
 		assert.equal(projectHistory.ok, true);

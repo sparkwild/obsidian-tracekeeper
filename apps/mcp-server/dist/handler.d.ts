@@ -14,6 +14,8 @@ export interface McpJsonRpcHandlerOptions {
     vaultConfigDir?: string;
     graphProfile?: unknown;
     memoryRules?: ToolInvocationContext['memoryRules'];
+    contentLanguage?: unknown;
+    contentLanguageSource?: unknown;
     runtimeVersion?: string;
     transport?: string;
 }
@@ -22,6 +24,8 @@ export declare class McpJsonRpcHandler {
     private vaultConfigDir?;
     private graphProfile?;
     private memoryRules?;
+    private contentLanguage?;
+    private contentLanguageSource?;
     private runtimeVersion;
     private transport;
     constructor(options?: McpJsonRpcHandlerOptions);

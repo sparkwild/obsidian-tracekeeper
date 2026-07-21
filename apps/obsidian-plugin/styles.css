@@ -406,8 +406,8 @@
 
 .tracekeeper-proposal-card__eyebrow,
 .tracekeeper-proposal-card__subject,
-.tracekeeper-proposal-card__summary span,
-.tracekeeper-proposal-card__technical small {
+.tracekeeper-review-focus-panel span,
+.tracekeeper-review-focus-item span {
 	color: var(--text-muted);
 	font-size: 12px;
 }
@@ -718,31 +718,59 @@ button.tracekeeper-revision-button:disabled {
 	margin-top: 0;
 }
 
-.tracekeeper-proposal-card__summary {
+.tracekeeper-review-target-grid {
 	display: grid;
-	gap: 3px;
-	padding: 8px 10px;
-	border-left: 3px solid var(--interactive-accent);
+	grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.7fr);
+	gap: 8px;
+}
+
+.tracekeeper-review-focus-item,
+.tracekeeper-review-focus-panel {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
 	background: var(--background-primary);
 }
 
-.tracekeeper-proposal-card__summary strong {
-	font-size: 14px;
-	line-height: 1.45;
+.tracekeeper-review-focus-item strong,
+.tracekeeper-review-focus-panel strong {
 	overflow-wrap: anywhere;
 }
 
-.tracekeeper-proposal-card__context {
-	margin: 0;
+.tracekeeper-review-focus-panel--change {
+	border-left: 4px solid var(--interactive-accent);
 }
 
-.tracekeeper-proposal-card__technical {
+.tracekeeper-review-focus-panel--reason {
+	border-left: 4px solid var(--background-modifier-border-hover);
+}
+
+.tracekeeper-review-change-preview {
+	box-sizing: border-box;
+	width: 100%;
+	max-height: 220px;
+	margin: 2px 0 0;
+	padding: 10px;
+	overflow: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-review-change-preview--empty {
+	color: var(--text-warning);
+}
+
+.tracekeeper-review-source-line {
 	min-width: 0;
-	padding-top: 2px;
-}
-
-.tracekeeper-proposal-card__technical small {
-	display: block;
+	color: var(--text-muted);
+	font-size: 12px;
 	overflow-wrap: anywhere;
 }
 
@@ -1197,6 +1225,10 @@ button.tracekeeper-review-queue-button--action:focus {
 
 	.tracekeeper-issue-row,
 	.tracekeeper-graph-candidate-row {
+		grid-template-columns: 1fr;
+	}
+
+	.tracekeeper-review-target-grid {
 		grid-template-columns: 1fr;
 	}
 

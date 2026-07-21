@@ -75,6 +75,8 @@ export interface McpJsonRpcHandlerOptions {
 	vaultConfigDir?: string;
 	graphProfile?: unknown;
 	memoryRules?: ToolInvocationContext['memoryRules'];
+	contentLanguage?: unknown;
+	contentLanguageSource?: unknown;
 	runtimeVersion?: string;
 	transport?: string;
 }
@@ -84,6 +86,8 @@ export class McpJsonRpcHandler {
 	private vaultConfigDir?: string;
 	private graphProfile?: unknown;
 	private memoryRules?: ToolInvocationContext['memoryRules'];
+	private contentLanguage?: unknown;
+	private contentLanguageSource?: unknown;
 	private runtimeVersion: string;
 	private transport: string;
 
@@ -92,6 +96,8 @@ export class McpJsonRpcHandler {
 		this.vaultConfigDir = options.vaultConfigDir;
 		this.graphProfile = options.graphProfile;
 		this.memoryRules = options.memoryRules;
+		this.contentLanguage = options.contentLanguage;
+		this.contentLanguageSource = options.contentLanguageSource;
 		this.runtimeVersion = options.runtimeVersion || MCP_SERVER_VERSION;
 		this.transport = options.transport || STREAMABLE_HTTP_TRANSPORT;
 	}
@@ -191,6 +197,8 @@ export class McpJsonRpcHandler {
 			vaultConfigDir: this.vaultConfigDir,
 			graphProfile: this.graphProfile,
 			memoryRules: this.memoryRules,
+			contentLanguage: this.contentLanguage,
+			contentLanguageSource: this.contentLanguageSource,
 			agentId: state.agentId,
 			sessionId: state.sessionId,
 			clientName: state.clientName,

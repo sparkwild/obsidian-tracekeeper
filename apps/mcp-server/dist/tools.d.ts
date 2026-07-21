@@ -9,6 +9,8 @@ interface ToolContext {
     vaultConfigDir?: string;
     graphProfile?: unknown;
     memoryRules?: MemoryRulesContext;
+    contentLanguage?: unknown;
+    contentLanguageSource?: unknown;
 }
 export interface ToolInvocationContext extends ToolContext {
     agentId?: string;

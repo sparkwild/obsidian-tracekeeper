@@ -39,6 +39,11 @@ function parseArgs(argv) {
             index += 1;
             continue;
         }
+        if ((value === '--content-language' || value === '--contentLanguage') && next) {
+            result.contentLanguage = next;
+            index += 1;
+            continue;
+        }
         if (value === '--allow-missing-token-for-dev') {
             result.allowMissingTokenForDev = true;
         }

@@ -10,6 +10,8 @@ export interface StreamableHttpRuntimeOptions {
     vaultConfigDir?: string;
     graphProfile?: unknown;
     memoryRules?: NonNullable<ConstructorParameters<typeof McpJsonRpcHandler>[0]>['memoryRules'];
+    contentLanguage?: unknown;
+    contentLanguageSource?: unknown;
     runtimeVersion?: string;
 }
 export interface StreamableHttpRuntimeStatus {

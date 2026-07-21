@@ -65,6 +65,30 @@ const MAX_SOURCE_EXCERPT_LENGTH = 1000;
 const MAX_RECALL_EXCERPT_LENGTH = 480;
 const MAX_RECALL_GRAPH_LINKS = 8;
 const DEFAULT_FINISH_TASK_REVIEW_MODE = 'auto_propose';
+function normalizeContentLanguage(value) {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return normalized === 'zh' || normalized.startsWith('zh-') || normalized.startsWith('zh_') ? 'zh-CN' : 'en';
+}
+function normalizeContentLanguageSource(value) {
+    switch (value) {
+        case 'setting':
+        case 'obsidian':
+        case 'navigator':
+        case 'fallback':
+            return value;
+        default:
+            return 'fallback';
+    }
+}
+function contentLanguageFromContext(context) {
+    return normalizeContentLanguage(context.contentLanguage);
+}
+function contentLanguageSourceFromContext(context) {
+    return normalizeContentLanguageSource(context.contentLanguageSource);
+}
+function contentText(context, zh, en) {
+    return contentLanguageFromContext(context) === 'zh-CN' ? zh : en;
+}
 const READ_ONLY_TOOL_NAMES = new Set([
     'tracekeeper.status',
     'tracekeeper.graph_health',
@@ -1063,12 +1087,15 @@ function createFinishTaskProposal(vaultRoot, taskId, sessionNotePath, proposalKi
     const now = new Date().toISOString();
     const filename = buildSafeFilename(`finish-task-${proposalKind}-${taskId}-${crypto.randomUUID()}`, 'proposal', context);
     const evidence = buildFinishTaskProposalEvidence(taskId, sessionNotePath, projectHint, proposalKind, reviewProposalMode);
+    const writebackContent = normalizedValues.map((item) => `- ${item}`).join('\n');
+    const writebackTarget = resolveAutoMemoryTarget(vaultRoot, proposalKind, '', projectHint, context, memoryScope);
     const body = [
-        '## Finish Task Proposal Source',
+        contentText(context, '## 任务收尾提案来源', '## Finish Task Proposal Source'),
         `- tool_name: tracekeeper.finish_task`,
         `- task_id: ${taskId}`,
         `- session_note: ${sessionNotePath}`,
         `- memory_scope: ${memoryScope}`,
+        writebackTarget ? `- target_note: ${writebackTarget.targetNote}` : '',
         projectHint ? `- project_hint: ${projectHint}` : '',
         relatedWiki.length ? `- related_wiki: ${JSON.stringify(relatedWiki)}` : '',
         relatedSources.length ? `- related_sources: ${JSON.stringify(relatedSources)}` : '',
@@ -1080,7 +1107,10 @@ function createFinishTaskProposal(vaultRoot, taskId, sessionNotePath, proposalKi
         `- evidence: ${evidence}`,
         '',
         `## ${label}`,
-        ...values.map((item) => `- ${item}`),
+        writebackContent,
+        '',
+        contentText(context, '## 写回内容', '## Writeback'),
+        writebackContent,
     ].filter(Boolean).join('\n');
     return buildAndWriteNote(vaultRoot, 'tracekeeper.finish_task', MEMORY_PROPOSAL_DIR, filename, {
         tool: 'tracekeeper.finish_task',
@@ -1088,7 +1118,7 @@ function createFinishTaskProposal(vaultRoot, taskId, sessionNotePath, proposalKi
         title: `${label} ${taskId}`,
         proposal_kind: proposalKind,
         status: 'pending',
-        target_note: null,
+        target_note: writebackTarget?.targetNote || null,
         risk_level: 'medium',
         proposal_source_tool: 'tracekeeper.finish_task',
         proposal_source_task_id: taskId,
@@ -1109,12 +1139,12 @@ function buildFinishTaskProposals(vaultRoot, taskId, sessionNotePath, proposalMo
         return { proposals: [], suggestedMemoryUpdates: [], autoAppliedMemoryUpdates: [], hasMissingWikiBridge: false };
     }
     const groups = [
-        { kind: 'task_decision', label: 'Task Decisions', values: closeout.decisions },
-        { kind: 'solution_change', label: 'Solution Changes', values: closeout.solution_changes },
-        { kind: 'lesson_learned', label: 'Lessons', values: closeout.lessons },
-        { kind: 'user_preference', label: 'User Preferences', values: closeout.preferences },
-        { kind: 'project_next_action', label: 'Project Next Actions', values: closeout.next_actions },
-        { kind: 'memory_candidate', label: 'Memory Candidates', values: closeout.memory_candidates },
+        { kind: 'task_decision', label: contentText(context, '任务决策', 'Task Decisions'), values: closeout.decisions },
+        { kind: 'solution_change', label: contentText(context, '方案调整', 'Solution Changes'), values: closeout.solution_changes },
+        { kind: 'lesson_learned', label: contentText(context, '经验教训', 'Lessons'), values: closeout.lessons },
+        { kind: 'user_preference', label: contentText(context, '用户偏好', 'User Preferences'), values: closeout.preferences },
+        { kind: 'project_next_action', label: contentText(context, '项目下一步', 'Project Next Actions'), values: closeout.next_actions },
+        { kind: 'memory_candidate', label: contentText(context, '记忆候选', 'Memory Candidates'), values: closeout.memory_candidates },
     ];
     const proposals = [];
     const suggestedMemoryUpdates = [];
@@ -1481,7 +1511,7 @@ function extractMarkdownSection(body, allowedHeadings) {
 function buildWritebackPlan(proposal) {
     const frontmatterWriteback = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['writeback_content', 'writebackContent']));
     const writebackContent = frontmatterWriteback ||
-        extractMarkdownSection(proposal.body, ['writeback', 'approved writeback', 'writeback content']);
+        extractMarkdownSection(proposal.body, ['writeback', 'approved writeback', 'writeback content', '写回', '已批准写回', '写回内容']);
     if (proposal.approvalStatus !== 'approved') {
         return {
             proposal,
@@ -1869,17 +1899,18 @@ function ensureProjectMemoryIndex(vaultRoot, targetRelativePath, input) {
     }
     const displayName = input.projectHint || projectSlug;
     const relatedWikiLinks = dedupeAndNormalizeList(input.relatedWiki || []).map((link) => `- [[${link.replace(/\.md$/i, '')}]]`);
+    const title = contentText(input.context, `项目记忆：${displayName}`, `Project memory: ${displayName}`);
     const markdown = buildMarkdownNote({
         type: 'project_memory_index',
-        title: `Project memory: ${displayName}`,
+        title,
         project_hint: input.projectHint || projectSlug,
         related_wiki: input.relatedWiki || [],
         created_at: new Date().toISOString(),
     }, [
-        `# Project memory: ${displayName}`,
+        `# ${title}`,
         '',
-        '## Related wiki',
-        ...(relatedWikiLinks.length > 0 ? relatedWikiLinks : ['- (none)']),
+        contentText(input.context, '## 相关 Wiki', '## Related wiki'),
+        ...(relatedWikiLinks.length > 0 ? relatedWikiLinks : [contentText(input.context, '- （无）', '- (none)')]),
     ].join('\n'));
     fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
     fs.writeFileSync(absolutePath, markdown, 'utf8');
@@ -1911,10 +1942,10 @@ function buildAutoMemoryWriteBlock(input, signature) {
         `- created_at: ${new Date().toISOString()}`,
         `- content_signature: ${signature}`,
         '',
-        '### Graph links',
-        ...(graphLinks.length > 0 ? graphLinks.map((link) => `- ${link}`) : ['- (none)']),
+        contentText(input.context, '### 图谱链接', '### Graph links'),
+        ...(graphLinks.length > 0 ? graphLinks.map((link) => `- ${link}`) : [contentText(input.context, '- （无）', '- (none)')]),
         '',
-        '### Memory update',
+        contentText(input.context, '### 记忆更新', '### Memory update'),
         input.content.trim(),
         '',
         `^${blockId}`,
@@ -1967,15 +1998,18 @@ function appendAutoMemoryWrite(vaultRoot, input) {
     }
     else {
         fs.mkdirSync(path.dirname(target.absolutePath), { recursive: true });
+        const title = input.projectHint
+            ? contentText(input.context, `项目记忆：${input.projectHint}`, `Project memory: ${input.projectHint}`)
+            : contentText(input.context, 'Tracekeeper 记忆', 'Tracekeeper memory');
         const markdown = buildMarkdownNote({
             type: 'memory',
-            title: input.projectHint ? `Project memory: ${input.projectHint}` : 'Tracekeeper memory',
+            title,
             project_hint: input.projectHint || null,
             memory_scope: input.memoryScope,
             related_wiki: input.relatedWiki || [],
             related_sources: input.relatedSources || [],
             created_at: new Date().toISOString(),
-        }, [`# ${input.projectHint ? `Project memory: ${input.projectHint}` : 'Tracekeeper memory'}`, '', block].join('\n'));
+        }, [`# ${title}`, '', block].join('\n'));
         fs.writeFileSync(target.absolutePath, markdown, 'utf8');
     }
     const audit = appendAuditEvent(vaultRoot, {
@@ -2085,12 +2119,12 @@ function createAgentTaskRecord(vaultRoot, input) {
     const now = new Date().toISOString();
     const clientName = input.client || input.context.clientName || '';
     const body = [
-        '# Agent Task',
+        contentText(input.context, '# Agent 任务', '# Agent Task'),
         '',
-        '## Objective',
+        contentText(input.context, '## 目标', '## Objective'),
         input.goal,
         '',
-        '## Context Pack Summary',
+        contentText(input.context, '## 上下文包摘要', '## Context Pack Summary'),
         `- query: ${input.contextPack.query}`,
         `- generated_at: ${input.contextPack.generatedAt}`,
         `- relevant_notes: ${input.contextPack.relevantNotes.length}`,
@@ -3456,7 +3490,7 @@ function markDeprecatedToolResult(toolName, result) {
         replacement_tool: replacement,
     });
 }
-function buildRecommendedRecall(goal, projectHint) {
+function buildRecommendedRecall(goal, projectHint, context) {
     const scope = projectHint ? 'project' : 'global';
     const args = {
         query: goal,
@@ -3470,14 +3504,16 @@ function buildRecommendedRecall(goal, projectHint) {
         tool: 'tracekeeper.recall',
         arguments: args,
         reason: projectHint
-            ? 'Use project-scoped recall before reading individual notes.'
-            : 'Use global recall first, then narrow with project_hint when a project is known.',
+            ? contentText(context, '读取单篇笔记前，先使用项目级召回。', 'Use project-scoped recall before reading individual notes.')
+            : contentText(context, '先使用全局召回；已知项目后再用 project_hint 缩小范围。', 'Use global recall first, then narrow with project_hint when a project is known.'),
     };
 }
 function buildCloseoutContract(context) {
     return {
         required_tool: 'tracekeeper.finish_task',
         default_mode: defaultReviewProposalMode(context),
+        content_language: contentLanguageFromContext(context),
+        content_language_source: contentLanguageSourceFromContext(context),
         fields: [
             'summary',
             'outcomes',
@@ -3492,15 +3528,15 @@ function buildCloseoutContract(context) {
         note: 'At task closeout, include durable decisions, solution changes, lessons, user preferences, next actions, and memory candidates when present.',
     };
 }
-function buildStartTaskNextActions(projectHint) {
+function buildStartTaskNextActions(projectHint, context) {
     const actions = [
-        'Call tracekeeper.recall before reading individual notes.',
-        'Use tracekeeper.read_note only when a recall excerpt is not enough.',
-        'Call tracekeeper.finish_task once at the end with decisions, solution changes, lessons, preferences, next actions, and memory candidates.',
+        contentText(context, '读取单篇笔记前，先调用 tracekeeper.recall。', 'Call tracekeeper.recall before reading individual notes.'),
+        contentText(context, '只有召回摘要不够时，再使用 tracekeeper.read_note。', 'Use tracekeeper.read_note only when a recall excerpt is not enough.'),
+        contentText(context, '任务结束时调用一次 tracekeeper.finish_task，提交决策、方案调整、经验、偏好、下一步和记忆候选。', 'Call tracekeeper.finish_task once at the end with decisions, solution changes, lessons, preferences, next actions, and memory candidates.'),
     ];
     if (projectHint) {
-        actions.unshift('Use scope="project" with the same project_hint for targeted recall.');
-        actions.splice(2, 0, 'Use scope="project_history" when continuity from earlier sessions is needed.');
+        actions.unshift(contentText(context, '使用相同 project_hint 和 scope="project" 做定向召回。', 'Use scope="project" with the same project_hint for targeted recall.'));
+        actions.splice(2, 0, contentText(context, '需要承接历史任务时，使用 scope="project_history"。', 'Use scope="project_history" when continuity from earlier sessions is needed.'));
     }
     return actions;
 }
@@ -3512,6 +3548,8 @@ function handleStatus(rawArgs, context) {
         read_only: true,
         vault_root: vaultRoot,
         scanned_at: scan.scannedAt,
+        content_language: contentLanguageFromContext(context),
+        content_language_source: contentLanguageSourceFromContext(context),
         counts: {
             notes: scan.notes.length,
             errors: scan.errors.length,
@@ -3582,6 +3620,8 @@ function handleStartTask(rawArgs, context) {
         client: client || null,
         project_hint: projectHint || null,
         vault_root: vaultRoot,
+        content_language: contentLanguageFromContext(context),
+        content_language_source: contentLanguageSourceFromContext(context),
         context_pack_summary: {
             query: contextPack.query,
             generated_at: contextPack.generatedAt,
@@ -3594,9 +3634,9 @@ function handleStartTask(rawArgs, context) {
         recent_sessions: buildRecentSessions(scan.notes),
         user_preferences: buildUserPreferences(scan),
         recommended_next_tool: 'tracekeeper.recall',
-        recommended_recall: buildRecommendedRecall(goal, projectHint),
+        recommended_recall: buildRecommendedRecall(goal, projectHint, context),
         closeout_contract: buildCloseoutContract(context),
-        next_actions_for_agent: buildStartTaskNextActions(projectHint),
+        next_actions_for_agent: buildStartTaskNextActions(projectHint, context),
     };
 }
 function handleRecall(rawArgs, context) {
@@ -3816,34 +3856,35 @@ function resolveSourceInput(request, vaultRoot, context) {
         warnings: ['using request-provided text for analysis'],
     };
 }
-function buildSourceNoteContent(request, mode, sourceText, analysis, resolvedSourcePath) {
-    const section = ['## Source note', `- request_path: ${request.path}`, `- mode: ${mode}`, `- source_kind: ${request.sourceKind || 'unknown'}`];
+function buildSourceNoteContent(request, mode, sourceText, analysis, context, resolvedSourcePath) {
+    void sourceText;
+    const section = [contentText(context, '## 来源笔记', '## Source note'), `- request_path: ${request.path}`, `- mode: ${mode}`, `- source_kind: ${request.sourceKind || 'unknown'}`];
     section.push(`- analysis_mode: ${request.analysisMode || 'default'}`);
     if (resolvedSourcePath) {
         section.push(`- resolved_source_path: ${resolvedSourcePath}`);
     }
     section.push('');
-    section.push('## Source summary');
+    section.push(contentText(context, '## 来源摘要', '## Source summary'));
     section.push(analysis.summary);
     section.push('');
-    section.push('## Evidence scaffold');
+    section.push(contentText(context, '## 证据脚手架', '## Evidence scaffold'));
     for (const item of analysis.evidenceScaffolds) {
         section.push(`- ${item}`);
     }
     section.push('');
-    section.push('## Claim scaffold');
+    section.push(contentText(context, '## 论断脚手架', '## Claim scaffold'));
     for (const item of analysis.claimScaffolds) {
         section.push(`- ${item}`);
     }
     section.push('');
-    section.push('## Source excerpt');
+    section.push(contentText(context, '## 来源摘录', '## Source excerpt'));
     section.push(analysis.excerpt);
     return section.join('\n');
 }
-function buildReportContent(request, mode, sourceText, analysis, sourceNotePath, warnings) {
-    const sourceContent = `\n## Source\n\n${sourceText.slice(0, MAX_SOURCE_EXCERPT_LENGTH)}\n`;
+function buildReportContent(request, mode, sourceText, analysis, sourceNotePath, warnings, context) {
+    const sourceContent = `\n${contentText(context, '## 来源', '## Source')}\n\n${sourceText.slice(0, MAX_SOURCE_EXCERPT_LENGTH)}\n`;
     const section = [
-        '## Source Analysis Report',
+        contentText(context, '## 来源分析报告', '## Source Analysis Report'),
         `- source: ${request.source}`,
         `- request_path: ${request.path}`,
         `- source_kind: ${request.sourceKind || 'unknown'}`,
@@ -3857,16 +3898,16 @@ function buildReportContent(request, mode, sourceText, analysis, sourceNotePath,
         section.push(`- warnings: ${JSON.stringify(warnings)}`);
     }
     section.push('');
-    section.push('## Summary');
+    section.push(contentText(context, '## 摘要', '## Summary'));
     section.push(analysis.summary);
     section.push('');
-    section.push('## Excerpt');
+    section.push(contentText(context, '## 摘录', '## Excerpt'));
     section.push(`\n${analysis.excerpt}\n`);
     section.push('');
-    section.push('## Evidence scaffold');
+    section.push(contentText(context, '## 证据脚手架', '## Evidence scaffold'));
     section.push(...analysis.evidenceScaffolds.map((entry) => `- ${entry}`));
     section.push('');
-    section.push('## Claim scaffold');
+    section.push(contentText(context, '## 论断脚手架', '## Claim scaffold'));
     section.push(...analysis.claimScaffolds.map((entry) => `- ${entry}`));
     section.push('');
     section.push(sourceContent);
@@ -3920,7 +3961,7 @@ function handleAnalyzeSourceRequest(rawArgs, context, sourceToolName = 'tracekee
             mode,
             created_at: now,
             task_id: taskId,
-        }, buildSourceNoteContent(request, mode, sourceText, analysis, resolvedSourcePath), taskId, context, { target_type: 'source', mode, request_path: request.path });
+        }, buildSourceNoteContent(request, mode, sourceText, analysis, context, resolvedSourcePath), taskId, context, { target_type: 'source', mode, request_path: request.path });
         const reportFilename = buildSafeFilename(`${runToken}-report`, 'source-report', context);
         const report = buildAndWriteNote(vaultRoot, sourceToolName, SOURCE_ANALYSIS_REPORT_DIR, reportFilename, {
             tool: sourceToolName,
@@ -3933,7 +3974,7 @@ function handleAnalyzeSourceRequest(rawArgs, context, sourceToolName = 'tracekee
             source_note: sourceNote.path,
             created_at: now,
             task_id: taskId,
-        }, buildReportContent(request, mode, sourceText, analysis, sourceNote.path, warnings), taskId, context, { target_type: 'source_analysis_report', request_path: request.path });
+        }, buildReportContent(request, mode, sourceText, analysis, sourceNote.path, warnings, context), taskId, context, { target_type: 'source_analysis_report', request_path: request.path });
         const proposalPaths = analysis.proposalDrafts.map((entry) => {
             const proposalNote = buildAndWriteNote(vaultRoot, sourceToolName, MEMORY_PROPOSAL_DIR, buildSafeFilename(`proposal-${runToken}-${entry.proposalKind}`, entry.proposalKind, context), {
                 tool: sourceToolName,
@@ -3947,7 +3988,7 @@ function handleAnalyzeSourceRequest(rawArgs, context, sourceToolName = 'tracekee
                 risk_level: entry.riskLevel || null,
                 created_at: now,
                 task_id: taskId,
-            }, `## Source analysis proposal\n\n- evidence: ${entry.evidence}\n\n${entry.content}\n`, taskId, context, {
+            }, `${contentText(context, '## 来源分析提案', '## Source analysis proposal')}\n\n- evidence: ${entry.evidence}\n\n${contentText(context, '## 写回内容', '## Writeback')}\n${entry.content}\n`, taskId, context, {
                 target_type: 'memory_proposal',
                 proposal_kind: entry.proposalKind,
                 request_path: request.path,
@@ -4282,7 +4323,7 @@ function handleCaptureSource(rawArgs, context) {
         { label: 'content', value: sourceText },
         { label: 'title', value: title },
     ]);
-    let body = `## Source capture\n\n`;
+    let body = `${contentText(context, '## 来源捕获', '## Source capture')}\n\n`;
     if (mode === 'external_reference') {
         body += `- mode: external_reference\n- source: ${source}\n`;
         if (sourceKind) {
@@ -4366,7 +4407,7 @@ function handleProposeMemory(rawArgs, context) {
                 proposalKind,
                 targetNote: autoTarget.targetNote,
                 allowedDir: autoTarget.allowedDir,
-                title: title || `Memory update: ${proposalKind}`,
+                title: title || contentText(context, `记忆更新：${proposalKind}`, `Memory update: ${proposalKind}`),
                 content,
                 taskId,
                 context,
@@ -4406,7 +4447,7 @@ function handleProposeMemory(rawArgs, context) {
         }
     }
     const body = [
-        '## Proposal',
+        contentText(context, '## 记忆提案', '## Proposal'),
         `- status: pending`,
         `- proposal_kind: ${proposalKind}`,
         evidence ? `- evidence: ${evidence}` : '',
@@ -4421,12 +4462,13 @@ function handleProposeMemory(rawArgs, context) {
         bridgeMetadata.missing_wiki_bridge ? '- missing_wiki_bridge: true' : '',
         bridgeMetadata.missing_related_wiki.length ? `- missing_related_wiki: ${JSON.stringify(bridgeMetadata.missing_related_wiki)}` : '',
         '',
+        contentText(context, '## 写回内容', '## Writeback'),
         content,
     ].filter(Boolean).join('\n');
     const note = buildAndWriteNote(vaultRoot, 'tracekeeper.propose_memory', MEMORY_PROPOSAL_DIR, filename, {
         tool: 'tracekeeper.propose_memory',
         type: 'memory_proposal',
-        title: title || `proposal_${proposalKind}_${now}`,
+        title: title || contentText(context, `记忆提案：${proposalKind}`, `Memory proposal: ${proposalKind}`),
         proposal_kind: proposalKind,
         status: 'pending',
         target_note: targetNote || null,
@@ -4498,32 +4540,32 @@ function handleBuildContextPack(rawArgs, context) {
     const now = new Date().toISOString();
     const filename = buildSafeFilename(rawArgs.filename, 'context_pack', context);
     const contextMarkdown = [
-        '# Context Pack',
+        contentText(context, '# 上下文包', '# Context Pack'),
         `- query: ${contextPack.query}`,
         `- task_id: ${taskId || 'unset'}`,
         `- generated_at: ${contextPack.generatedAt}`,
         `- candidate_limit: ${candidateLimit}`,
         `- stale_after_days: ${staleAfterDays}`,
         '',
-        '## Relevant Notes',
+        contentText(context, '## 相关笔记', '## Relevant Notes'),
         ...contextPack.relevantNotes.map((entry) => `- ${entry.relativePath} | score: ${entry.score} | title: ${entry.title}`),
         '',
-        '## Source Candidates',
+        contentText(context, '## 来源候选', '## Source Candidates'),
         ...contextPack.sourceCandidates.map((entry) => `- ${entry.note} (${entry.reason})`),
         '',
-        '## Evidence Candidates',
+        contentText(context, '## 证据候选', '## Evidence Candidates'),
         ...contextPack.evidenceCandidates.map((entry) => {
             const marker = entry.blockId ? `#${entry.blockId}` : '';
             return `- ${entry.note} ${marker}`.trim();
         }),
         '',
-        '## Gaps',
+        contentText(context, '## 缺口', '## Gaps'),
         ...contextPack.gaps.map((entry) => `- ${entry}`),
         '',
-        '## Stale Warnings',
+        contentText(context, '## 过期提醒', '## Stale Warnings'),
         ...contextPack.staleWarnings.map((entry) => `- ${entry}`),
         '',
-        '## Scan Errors',
+        contentText(context, '## 扫描错误', '## Scan Errors'),
         ...contextPack.scanErrors.map((entry) => `- ${entry.path}: ${entry.error}`),
     ].join('\n');
     assertNoSensitiveText([
@@ -4634,80 +4676,80 @@ function buildGraphSummary(graphHealth) {
         recommendations: graphHealth.recommendations,
     };
 }
-function buildSessionNoteBody(summary, outcomes, nextActions) {
+function buildSessionNoteBody(context, summary, outcomes, nextActions) {
     const lines = [
-        '# Task Session Note',
+        contentText(context, '# 任务会话记录', '# Task Session Note'),
         `- created_at: ${new Date().toISOString()}`,
         '',
-        '## Summary',
+        contentText(context, '## 摘要', '## Summary'),
         summary,
         '',
-        '## Outcomes',
+        contentText(context, '## 结果', '## Outcomes'),
         ...formatListMarkdown(outcomes).split('\n'),
         '',
-        '## Next Actions',
+        contentText(context, '## 下一步', '## Next Actions'),
         ...formatListMarkdown(nextActions).split('\n'),
     ].join('\n');
     return lines.trim();
 }
-function buildSessionNoteBodyWithCloseout(summary, outcomes, nextActions, decisions, solutionChanges, lessons, preferences, memoryCandidates) {
+function buildSessionNoteBodyWithCloseout(context, summary, outcomes, nextActions, decisions, solutionChanges, lessons, preferences, memoryCandidates) {
     const lines = [
-        '# Task Session Note',
+        contentText(context, '# 任务会话记录', '# Task Session Note'),
         `- created_at: ${new Date().toISOString()}`,
         '',
-        '## Summary',
+        contentText(context, '## 摘要', '## Summary'),
         summary,
         '',
-        '## Outcomes',
+        contentText(context, '## 结果', '## Outcomes'),
         ...formatListMarkdown(outcomes).split('\n'),
         '',
-        '## Next Actions',
+        contentText(context, '## 下一步', '## Next Actions'),
         ...formatListMarkdown(nextActions).split('\n'),
         '',
-        '## Decisions',
+        contentText(context, '## 决策', '## Decisions'),
         ...formatListMarkdown(decisions).split('\n'),
         '',
-        '## Solution Changes',
+        contentText(context, '## 方案调整', '## Solution Changes'),
         ...formatListMarkdown(solutionChanges).split('\n'),
         '',
-        '## Lessons',
+        contentText(context, '## 经验教训', '## Lessons'),
         ...formatListMarkdown(lessons).split('\n'),
         '',
-        '## Preferences',
+        contentText(context, '## 偏好', '## Preferences'),
         ...formatListMarkdown(preferences).split('\n'),
         '',
-        '## Memory Candidates',
+        contentText(context, '## 记忆候选', '## Memory Candidates'),
         ...formatListMarkdown(memoryCandidates).split('\n'),
     ].join('\n');
     return lines.trim();
 }
-function buildFinishTaskNextActions(reviewProposalMode, proposalResult, projectHint, hasCloseoutCandidates) {
+function buildFinishTaskNextActions(context, reviewProposalMode, proposalResult, projectHint, hasCloseoutCandidates) {
     const actions = [];
     if (!hasCloseoutCandidates) {
-        actions.push('Task session was recorded; no durable closeout memory candidates were submitted. If decisions, solution changes, lessons, preferences, or next actions matter, call tracekeeper.finish_task again with those fields.');
+        actions.push(contentText(context, '任务会话已记录；没有提交可长期沉淀的收尾记忆候选。如果决策、方案调整、经验、偏好或下一步很重要，请再次调用 tracekeeper.finish_task 并填写这些字段。', 'Task session was recorded; no durable closeout memory candidates were submitted. If decisions, solution changes, lessons, preferences, or next actions matter, call tracekeeper.finish_task again with those fields.'));
     }
     if (reviewProposalMode === 'off') {
-        actions.push('Task session was recorded; no memory suggestions or Review Queue proposals were created.');
+        actions.push(contentText(context, '任务会话已记录；当前模式不会创建记忆建议或审核队列提案。', 'Task session was recorded; no memory suggestions or Review Queue proposals were created.'));
     }
     if (reviewProposalMode === 'suggest') {
-        actions.push('Review suggested_memory_updates in this response; nothing was written to the Review Queue.');
+        actions.push(contentText(context, '请查看本次响应中的 suggested_memory_updates；没有写入审核队列。', 'Review suggested_memory_updates in this response; nothing was written to the Review Queue.'));
     }
     if (reviewProposalMode === 'review_queue' || reviewProposalMode === 'auto_propose') {
         if (proposalResult.proposals.length > 0) {
-            actions.push('Review queued proposals in Obsidian before durable memory writeback.');
+            actions.push(contentText(context, '请在 Obsidian 审核队列中确认提案后再写入长期记忆。', 'Review queued proposals in Obsidian before durable memory writeback.'));
         }
         if (proposalResult.autoAppliedMemoryUpdates.length > 0) {
-            actions.push('Project memory was auto-saved as append-only project memory according to the user rule.');
+            actions.push(contentText(context, '项目记忆已按用户规则追加保存。', 'Project memory was auto-saved as append-only project memory according to the user rule.'));
         }
         if (proposalResult.hasMissingWikiBridge) {
-            actions.push('Some project memory candidates need a related_wiki bridge before automatic project memory save.');
+            actions.push(contentText(context, '部分项目记忆候选缺少 related_wiki 桥接关系，因此需要先审核。', 'Some project memory candidates need a related_wiki bridge before automatic project memory save.'));
         }
         if (actions.length === 0) {
-            actions.push('Task session was recorded; no closeout memory candidates were produced.');
+            actions.push(contentText(context, '任务会话已记录；没有产生收尾记忆候选。', 'Task session was recorded; no closeout memory candidates were produced.'));
         }
     }
     if (projectHint) {
-        actions.push('For the next related session, call tracekeeper.recall with scope="project_history" and the same project_hint.');
+        actions.push(contentText(context, '下一次相关任务开始时，请用相同 project_hint 调用 tracekeeper.recall，并设置 scope="project_history"。', 'For the next related session, call tracekeeper.recall with scope="project_history" and the same project_hint.'));
     }
     return actions;
 }
@@ -4741,51 +4783,55 @@ function resolveMemoryCloseoutStatus(reviewProposalMode, proposalResult, hasClos
     }
     return 'empty';
 }
-function buildMemoryCloseoutSummary(status, proposalResult) {
+function buildMemoryCloseoutSummary(context, status, proposalResult) {
     const queued = proposalResult.proposals.length;
     const autoSaved = proposalResult.autoAppliedMemoryUpdates.length;
     switch (status) {
         case 'auto_saved':
-            return `${autoSaved} project memory update(s) were auto-saved.`;
+            return contentText(context, `已自动保存 ${autoSaved} 条项目记忆更新。`, `${autoSaved} project memory update(s) were auto-saved.`);
         case 'queued':
-            return `${queued} memory candidate(s) were sent to the Review Queue.`;
+            return contentText(context, `${queued} 条记忆候选已进入审核队列。`, `${queued} memory candidate(s) were sent to the Review Queue.`);
         case 'mixed':
-            return `${autoSaved} project memory update(s) were auto-saved and ${queued} candidate(s) were sent to the Review Queue.`;
+            return contentText(context, `已自动保存 ${autoSaved} 条项目记忆更新，另有 ${queued} 条候选进入审核队列。`, `${autoSaved} project memory update(s) were auto-saved and ${queued} candidate(s) were sent to the Review Queue.`);
         case 'ignored':
-            return 'Closeout memory candidates were recorded in the session but not queued or written by the selected mode.';
+            return contentText(context, '收尾记忆候选已记录在会话中，但当前模式没有入队或写入。', 'Closeout memory candidates were recorded in the session but not queued or written by the selected mode.');
         case 'empty':
         default:
-            return 'No durable closeout memory candidates were submitted.';
+            return contentText(context, '没有提交可长期沉淀的收尾记忆候选。', 'No durable closeout memory candidates were submitted.');
     }
 }
-function buildSessionNoteBodyWithDistill(summary, outcomes, nextActions, decisions, possiblePreferences) {
+function buildSessionNoteBodyWithDistill(context, summary, outcomes, nextActions, decisions, possiblePreferences) {
     const lines = [
-        '# Distilled Session Note',
+        contentText(context, '# 会话提炼记录', '# Distilled Session Note'),
         `- created_at: ${new Date().toISOString()}`,
         '',
-        '## Summary',
+        contentText(context, '## 摘要', '## Summary'),
         summary,
         '',
-        '## Outcomes',
+        contentText(context, '## 结果', '## Outcomes'),
         ...formatListMarkdown(outcomes).split('\n'),
         '',
-        '## Next Actions',
+        contentText(context, '## 下一步', '## Next Actions'),
         ...formatListMarkdown(nextActions).split('\n'),
         '',
-        '## Decisions',
+        contentText(context, '## 决策', '## Decisions'),
         ...formatListMarkdown(decisions).split('\n'),
         '',
-        '## Possible Preferences',
+        contentText(context, '## 可能偏好', '## Possible Preferences'),
         ...formatListMarkdown(possiblePreferences).split('\n'),
     ].join('\n');
     return lines.trim();
 }
 function createDistillProposal(vaultRoot, taskId, proposalKind, kindLabel, contentItems, projectHint, context) {
+    const writebackContent = contentItems.map((item) => `- ${item}`).join('\n');
     const body = [
-        `## Distilled ${kindLabel}`,
-        ...contentItems.map((item) => `- ${item}`),
+        contentText(context, `## 提炼内容：${kindLabel}`, `## Distilled ${kindLabel}`),
+        writebackContent,
         '',
         `- task_id: ${taskId}`,
+        '',
+        contentText(context, '## 写回内容', '## Writeback'),
+        writebackContent,
     ].join('\n');
     const now = new Date().toISOString();
     const filenameToken = `${proposalKind}-${taskId}-${now.replace(/[:.]/g, '-')}-${crypto.randomUUID().slice(0, 8)}`;
@@ -4834,7 +4880,7 @@ function handleFinishTask(rawArgs, context) {
         nextActions,
         memoryCandidates,
     });
-    const body = buildSessionNoteBodyWithCloseout(summary, outcomes, nextActions, decisions, solutionChanges, lessons, preferences, memoryCandidates);
+    const body = buildSessionNoteBodyWithCloseout(context, summary, outcomes, nextActions, decisions, solutionChanges, lessons, preferences, memoryCandidates);
     assertNoSensitiveText([
         { label: 'summary', value: summary },
         { label: 'outcomes', value: outcomes.join('\n') },
@@ -4852,7 +4898,7 @@ function handleFinishTask(rawArgs, context) {
     const note = buildAndWriteNote(vaultRoot, 'tracekeeper.finish_task', SESSION_NOTE_DIR, filename, {
         tool: 'tracekeeper.finish_task',
         type: 'session_note',
-        title: `Task ${taskId} finish note`,
+        title: contentText(context, `任务 ${taskId} 收尾记录`, `Task ${taskId} finish note`),
         task_id: taskId,
         client: client || null,
         project_hint: projectHint || null,
@@ -4898,28 +4944,28 @@ function handleFinishTask(rawArgs, context) {
         memory_writes: [note.path, ...autoWritePaths],
         proposals: proposalPaths,
     }, [
-        '## Completion Summary',
+        contentText(context, '## 完成摘要', '## Completion Summary'),
         summary,
         '',
-        '## Outcomes',
+        contentText(context, '## 结果', '## Outcomes'),
         ...formatListMarkdown(outcomes).split('\n'),
         '',
-        '## Next Actions',
+        contentText(context, '## 下一步', '## Next Actions'),
         ...formatListMarkdown(nextActions).split('\n'),
         '',
-        '## Decisions',
+        contentText(context, '## 决策', '## Decisions'),
         ...formatListMarkdown(decisions).split('\n'),
         '',
-        '## Solution Changes',
+        contentText(context, '## 方案调整', '## Solution Changes'),
         ...formatListMarkdown(solutionChanges).split('\n'),
         '',
-        '## Lessons',
+        contentText(context, '## 经验教训', '## Lessons'),
         ...formatListMarkdown(lessons).split('\n'),
         '',
-        '## Preferences',
+        contentText(context, '## 偏好', '## Preferences'),
         ...formatListMarkdown(preferences).split('\n'),
         '',
-        '## Memory Candidates',
+        contentText(context, '## 记忆候选', '## Memory Candidates'),
         ...formatListMarkdown(memoryCandidates).split('\n'),
     ].join('\n'));
     const response = {
@@ -4930,6 +4976,8 @@ function handleFinishTask(rawArgs, context) {
         path: note.path,
         audit_path: note.audit_path,
         review_proposal_mode: reviewProposalMode,
+        content_language: contentLanguageFromContext(context),
+        content_language_source: contentLanguageSourceFromContext(context),
         outcome_count: outcomes.length,
         next_action_count: nextActions.length,
         memory_scope: resolveMemoryScope('session_finish', '', projectHint, memoryScopeValue),
@@ -4940,8 +4988,8 @@ function handleFinishTask(rawArgs, context) {
         missing_graph_bridges: architectureStatus.missing_graph_bridges,
         missing_wiki_bridge: proposalResult.hasMissingWikiBridge,
         memory_closeout_status: memoryCloseoutStatus,
-        memory_closeout_summary: buildMemoryCloseoutSummary(memoryCloseoutStatus, proposalResult),
-        next_actions_for_agent: buildFinishTaskNextActions(reviewProposalMode, proposalResult, projectHint, hasCloseoutCandidates),
+        memory_closeout_summary: buildMemoryCloseoutSummary(context, memoryCloseoutStatus, proposalResult),
+        next_actions_for_agent: buildFinishTaskNextActions(context, reviewProposalMode, proposalResult, projectHint, hasCloseoutCandidates),
     };
     if (reviewProposalMode === 'auto_propose' || reviewProposalMode === 'review_queue') {
         response.proposal_count = proposalResult.proposals.length;
@@ -4985,11 +5033,11 @@ function handleDistillSession(rawArgs, context) {
         { label: 'outcomes', value: outcomes.join('\n') },
         { label: 'project_hint', value: projectHint },
     ]);
-    const body = buildSessionNoteBodyWithDistill(summary, outcomes, nextActions, decisions, possiblePreferences);
+    const body = buildSessionNoteBodyWithDistill(context, summary, outcomes, nextActions, decisions, possiblePreferences);
     const note = buildAndWriteNote(vaultRoot, 'tracekeeper.distill_session', SESSION_NOTE_DIR, filename, {
         tool: 'tracekeeper.distill_session',
         type: 'session_note',
-        title: `Task ${taskId} distill note`,
+        title: contentText(context, `任务 ${taskId} 提炼记录`, `Task ${taskId} distill note`),
         task_id: taskId,
         project_hint: projectHint || null,
         related_project: projectHint || null,

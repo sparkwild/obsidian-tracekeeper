@@ -8,6 +8,7 @@ interface ServerArgs {
 	token?: string;
 	allowMissingTokenForDev?: boolean;
 	graphProfile?: string;
+	contentLanguage?: string;
 }
 
 function parseArgs(argv: string[]): ServerArgs {
@@ -45,6 +46,11 @@ function parseArgs(argv: string[]): ServerArgs {
 		}
 		if ((value === '--graph-profile' || value === '--graphProfile') && next) {
 			result.graphProfile = next;
+			index += 1;
+			continue;
+		}
+		if ((value === '--content-language' || value === '--contentLanguage') && next) {
+			result.contentLanguage = next;
 			index += 1;
 			continue;
 		}

@@ -63,6 +63,8 @@ class StreamableHttpMcpRuntime {
             vaultConfigDir: options.vaultConfigDir,
             graphProfile: options.graphProfile,
             memoryRules: options.memoryRules,
+            contentLanguage: options.contentLanguage,
+            contentLanguageSource: options.contentLanguageSource,
             runtimeVersion: this.runtimeVersion,
             transport: handler_1.STREAMABLE_HTTP_TRANSPORT,
         });

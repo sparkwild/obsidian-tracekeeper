@@ -63,46 +63,19 @@ const TRACEKEEPER_RUNTIME_STATUS_VIEW = 'tracekeeper-runtime-status';
 const TRACEKEEPER_PERMISSION_POLICY_VIEW = 'tracekeeper-permission-policy';
 const TRACEKEEPER_GRAPH_HEALTH_VIEW = 'tracekeeper-graph-health';
 const LEGACY_AGENT_CONNECTIONS_VIEW = 'tracekeeper-agent-connections';
-const CONTROL_FILES: Array<{ path: string; content: string }> = [
-	{
-		path: TRACEKEEPER_SYSTEM_PATH,
-		content: '# System Control\n\nObsidian-native memory system control defaults for Tracekeeper.\n',
-	},
-	{
-		path: TRACEKEEPER_MEMORY_POLICY_PATH,
-		content: '# Memory Policy\n\n- Writing is permissioned.\n- Vault scope: vault-root only.\n',
-	},
-	{
-		path: TRACEKEEPER_PERMISSIONS_PATH,
-		content: '# Permissions\n\n- Default: read-only for automation.\n- User confirmation required for memory writes.\n',
-	},
-];
-const KNOWLEDGE_ENTRY_FILES: Array<{ path: string; content: string }> = [
-	{
-		path: KNOWLEDGE_INDEX_PATH,
-		content: '# Knowledge Index\n\n- [[memory/index|Memory]]\n- [[wiki/index|Wiki]]\n- [[sources/index|Sources]]\n',
-	},
-	{
-		path: KNOWLEDGE_MEMORY_INDEX_PATH,
-		content: '# Memory Index\n\n- [[projects/index|Project memory]]\n',
-	},
-	{
-		path: KNOWLEDGE_PROJECTS_INDEX_PATH,
-		content: '# Project Memory Index\n\nProject-level memory indexes live here.\n',
-	},
-	{
-		path: KNOWLEDGE_WIKI_INDEX_PATH,
-		content: '# Wiki Index\n\n- [[hubs/index|Hubs]]\n',
-	},
-	{
-		path: KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
-		content: '# Wiki Hubs\n\nCreate topic hubs here and link related memory from each hub.\n',
-	},
-	{
-		path: KNOWLEDGE_SOURCES_INDEX_PATH,
-		content: '# Sources Index\n\nSource notes and captured references live here.\n',
-	},
-];
+const CONTROL_FILE_PATHS = [
+	TRACEKEEPER_SYSTEM_PATH,
+	TRACEKEEPER_MEMORY_POLICY_PATH,
+	TRACEKEEPER_PERMISSIONS_PATH,
+] as const;
+const KNOWLEDGE_ENTRY_FILE_PATHS = [
+	KNOWLEDGE_INDEX_PATH,
+	KNOWLEDGE_MEMORY_INDEX_PATH,
+	KNOWLEDGE_PROJECTS_INDEX_PATH,
+	KNOWLEDGE_WIKI_INDEX_PATH,
+	KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
+	KNOWLEDGE_SOURCES_INDEX_PATH,
+] as const;
 const CONTROL_PATHS = {
 	root: TRACEKEEPER_CONTROL_DIR,
 	auditLog: TRACEKEEPER_AUDIT_LOG_PATH,
@@ -119,7 +92,7 @@ const BASE_STRUCTURE_FOLDERS: string[] = [
 	REVIEW_QUEUE_PATH,
 	TRACEKEEPER_WORK_DIR,
 	ARCHIVE_ROOT,
-	...KNOWLEDGE_ENTRY_FILES.map((file) => vaultParentFolder(file.path)).filter(Boolean),
+	...KNOWLEDGE_ENTRY_FILE_PATHS.map((path) => vaultParentFolder(path)).filter(Boolean),
 ];
 const MAX_TASK_SNIPPET_LENGTH = 160;
 const MAX_TASK_ROWS = 6;
@@ -151,6 +124,20 @@ const AUTO_REFRESH_INTERVAL_OPTIONS = [10, 15, 30, 60] as const;
 const MEMORY_RECALL_SCOPES = ['global', 'project', 'project_history'] as const;
 
 type TracekeeperRecallScope = typeof MEMORY_RECALL_SCOPES[number];
+type NoteContentLanguageSetting = 'auto' | 'zh-CN' | 'en';
+type ResolvedNoteContentLanguage = 'zh-CN' | 'en';
+type NoteContentLanguageSource = 'setting' | 'obsidian' | 'navigator' | 'fallback';
+
+interface BaseStructureFile {
+	path: string;
+	content: string;
+}
+
+interface ResolvedNoteContentLanguageSetting {
+	language: ResolvedNoteContentLanguage;
+	source: NoteContentLanguageSource;
+}
+
 const isChineseLanguage = (language: string): boolean => {
 	const normalized = language.toLowerCase();
 	return normalized === 'zh' || normalized.startsWith('zh-') || normalized.startsWith('zh_');
@@ -158,10 +145,94 @@ const isChineseLanguage = (language: string): boolean => {
 const ui = (zh: string, en: string): string => (isChineseLanguage(getLanguage()) ? zh : en);
 const localizedText = (text: LocalizedText): string => ui(text.zh, text.en);
 const pluginDisplayName = (): string => ui(PLUGIN_DISPLAY_NAME_ZH, PLUGIN_DISPLAY_NAME_EN);
+const noteContentText = (language: ResolvedNoteContentLanguage, zh: string, en: string): string =>
+	language === 'zh-CN' ? zh : en;
 
 interface LocalizedText {
 	zh: string;
 	en: string;
+}
+
+function buildControlFiles(language: ResolvedNoteContentLanguage): BaseStructureFile[] {
+	return [
+		{
+			path: TRACEKEEPER_SYSTEM_PATH,
+			content: noteContentText(
+				language,
+				'# 系统控制\n\nTracekeeper 的 Obsidian 原生记忆系统控制默认值。\n',
+				'# System Control\n\nObsidian-native memory system control defaults for Tracekeeper.\n'
+			),
+		},
+		{
+			path: TRACEKEEPER_MEMORY_POLICY_PATH,
+			content: noteContentText(
+				language,
+				'# 记忆规则\n\n- 写入需要权限控制。\n- 知识库范围：仅当前 vault 根目录。\n',
+				'# Memory Policy\n\n- Writing is permissioned.\n- Vault scope: vault-root only.\n'
+			),
+		},
+		{
+			path: TRACEKEEPER_PERMISSIONS_PATH,
+			content: noteContentText(
+				language,
+				'# 权限\n\n- 默认：自动化只读。\n- 写入记忆需要用户确认。\n',
+				'# Permissions\n\n- Default: read-only for automation.\n- User confirmation required for memory writes.\n'
+			),
+		},
+	];
+}
+
+function buildKnowledgeEntryFiles(language: ResolvedNoteContentLanguage): BaseStructureFile[] {
+	return [
+		{
+			path: KNOWLEDGE_INDEX_PATH,
+			content: noteContentText(
+				language,
+				'# 知识库入口\n\n- [[memory/index|记忆]]\n- [[wiki/index|Wiki]]\n- [[sources/index|来源]]\n',
+				'# Knowledge Index\n\n- [[memory/index|Memory]]\n- [[wiki/index|Wiki]]\n- [[sources/index|Sources]]\n'
+			),
+		},
+		{
+			path: KNOWLEDGE_MEMORY_INDEX_PATH,
+			content: noteContentText(
+				language,
+				'# 记忆入口\n\n- [[projects/index|项目记忆]]\n',
+				'# Memory Index\n\n- [[projects/index|Project memory]]\n'
+			),
+		},
+		{
+			path: KNOWLEDGE_PROJECTS_INDEX_PATH,
+			content: noteContentText(
+				language,
+				'# 项目记忆入口\n\n项目级记忆索引放在这里。\n',
+				'# Project Memory Index\n\nProject-level memory indexes live here.\n'
+			),
+		},
+		{
+			path: KNOWLEDGE_WIKI_INDEX_PATH,
+			content: noteContentText(
+				language,
+				'# Wiki 入口\n\n- [[hubs/index|主题中心]]\n',
+				'# Wiki Index\n\n- [[hubs/index|Hubs]]\n'
+			),
+		},
+		{
+			path: KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
+			content: noteContentText(
+				language,
+				'# 主题中心\n\n在这里创建主题 hub，并从每个 hub 链接相关记忆。\n',
+				'# Wiki Hubs\n\nCreate topic hubs here and link related memory from each hub.\n'
+			),
+		},
+		{
+			path: KNOWLEDGE_SOURCES_INDEX_PATH,
+			content: noteContentText(
+				language,
+				'# 来源入口\n\n来源笔记和捕获的参考资料放在这里。\n',
+				'# Sources Index\n\nSource notes and captured references live here.\n'
+			),
+		},
+	];
 }
 
 type McpCapabilityRisk = 'read-only' | 'low-risk-write' | 'review-gated-write' | 'optional-write';
@@ -596,6 +667,7 @@ type TaskMemoryProposalMode = 'off' | 'suggest' | 'review_queue' | 'auto_propose
 const GRAPH_PROFILES: GraphProfile[] = ['off', 'advisory', 'strict'];
 const MEMORY_PROPOSAL_RULES: MemoryProposalRule[] = ['auto_write', 'review_queue', 'disabled'];
 const TASK_MEMORY_PROPOSAL_MODES: TaskMemoryProposalMode[] = ['auto_propose', 'review_queue', 'off'];
+const NOTE_CONTENT_LANGUAGES: NoteContentLanguageSetting[] = ['auto', 'zh-CN', 'en'];
 const MEMORY_RULES_VERSION = 3;
 
 const normalizeGraphProfileValue = (value: unknown): GraphProfile => {
@@ -656,6 +728,26 @@ const taskMemoryProposalModeLabel = (mode: TaskMemoryProposalMode): string => {
 		case 'off':
 		default:
 			return ui('忽略', 'Ignore');
+	}
+};
+
+const normalizeNoteContentLanguage = (value: unknown): NoteContentLanguageSetting => {
+	const normalized = typeof value === 'string' ? value.trim() : '';
+	if (normalized === 'zh-CN' || normalized === 'en' || normalized === 'auto') {
+		return normalized;
+	}
+	return 'auto';
+};
+
+const noteContentLanguageLabel = (language: NoteContentLanguageSetting): string => {
+	switch (language) {
+		case 'zh-CN':
+			return ui('中文', 'Chinese');
+		case 'en':
+			return ui('English', 'English');
+		case 'auto':
+		default:
+			return ui('自动（跟随 Obsidian）', 'Auto (follow Obsidian)');
 	}
 };
 
@@ -799,10 +891,10 @@ const RUNTIME_LOG_FILTERS: RuntimeLogFilter[] = [
 ];
 
 const RUNTIME_LOG_CLEANUP_OPTIONS: RuntimeLogCleanupScope[] = [
+	'all',
 	'older-than-week',
 	'older-than-month',
 	'older-than-three-months',
-	'all',
 ];
 
 interface RuntimeLogItem {
@@ -911,6 +1003,17 @@ interface AgentConnectionRecord {
 	runtimeVersion: string;
 	permissionProfile: string;
 	sortTimestamp: number;
+}
+
+interface ReviewQueueDisplaySummary {
+	actionTitle: string;
+	actionDetail: string;
+	targetFile: string;
+	targetPosition: string;
+	changePreview: string;
+	reason: string;
+	sourceLine: string;
+	hasWritebackContent: boolean;
 }
 
 interface AgentToolCallRecord {
@@ -1029,6 +1132,7 @@ interface TracekeeperSettings {
 	globalMemoryRule: MemoryProposalRule;
 	projectMemoryRule: MemoryProposalRule;
 	taskMemoryProposalMode: TaskMemoryProposalMode;
+	noteContentLanguage: NoteContentLanguageSetting;
 	autoRefreshEnabled: boolean;
 	autoRefreshIntervalSeconds: number;
 }
@@ -1044,6 +1148,7 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 	globalMemoryRule: 'review_queue',
 	projectMemoryRule: 'auto_write',
 	taskMemoryProposalMode: 'auto_propose',
+	noteContentLanguage: 'auto',
 	autoRefreshEnabled: true,
 	autoRefreshIntervalSeconds: DEFAULT_AUTO_REFRESH_INTERVAL_SECONDS,
 };
@@ -1226,6 +1331,7 @@ export default class TracekeeperPlugin extends Plugin {
 		next.taskMemoryProposalMode = savedMemoryRulesVersion < MEMORY_RULES_VERSION && savedTaskMemoryProposalMode === 'off'
 			? DEFAULT_SETTINGS.taskMemoryProposalMode
 			: savedTaskMemoryProposalMode;
+		next.noteContentLanguage = normalizeNoteContentLanguage(saved.noteContentLanguage);
 		next.autoRefreshEnabled = typeof saved.autoRefreshEnabled === 'boolean'
 			? saved.autoRefreshEnabled
 			: DEFAULT_SETTINGS.autoRefreshEnabled;
@@ -1266,6 +1372,38 @@ export default class TracekeeperPlugin extends Plugin {
 			MAX_AUTO_REFRESH_INTERVAL_SECONDS,
 			Math.max(MIN_AUTO_REFRESH_INTERVAL_SECONDS, Math.round(parsed))
 		);
+	}
+
+	resolveNoteContentLanguage(): ResolvedNoteContentLanguageSetting {
+		if (this.settings.noteContentLanguage === 'zh-CN' || this.settings.noteContentLanguage === 'en') {
+			return {
+				language: this.settings.noteContentLanguage,
+				source: 'setting',
+			};
+		}
+
+		const obsidianLanguage = getLanguage();
+		if (obsidianLanguage) {
+			return {
+				language: isChineseLanguage(obsidianLanguage) ? 'zh-CN' : 'en',
+				source: 'obsidian',
+			};
+		}
+
+		const navigatorLanguage = typeof navigator !== 'undefined' && typeof navigator.language === 'string'
+			? navigator.language
+			: '';
+		if (navigatorLanguage) {
+			return {
+				language: isChineseLanguage(navigatorLanguage) ? 'zh-CN' : 'en',
+				source: 'navigator',
+			};
+		}
+
+		return {
+			language: 'en',
+			source: 'fallback',
+		};
 	}
 
 	private portFromEndpoint(endpoint: string): number | null {
@@ -1350,6 +1488,16 @@ export default class TracekeeperPlugin extends Plugin {
 		if (this.settings.autoRefreshEnabled) {
 			await this.refreshAutoRefreshViews();
 		}
+	}
+
+	async setNoteContentLanguage(value: unknown): Promise<void> {
+		const nextLanguage = normalizeNoteContentLanguage(value);
+		if (this.settings.noteContentLanguage === nextLanguage) {
+			return;
+		}
+		this.settings.noteContentLanguage = nextLanguage;
+		await this.saveSettings();
+		await this.restartMcpRuntime();
 	}
 
 	private registerAutoRefreshEvents(): void {
@@ -1456,6 +1604,7 @@ export default class TracekeeperPlugin extends Plugin {
 			return;
 		}
 		const vaultRoot = this.getVaultRoot();
+		const noteContentLanguage = this.resolveNoteContentLanguage();
 		const runtimeOptions: StreamableHttpRuntimeOptionsWithGraphProfile = {
 			host: DEFAULT_MCP_HOST,
 			port: this.settings.mcpPort,
@@ -1463,6 +1612,8 @@ export default class TracekeeperPlugin extends Plugin {
 			token: this.settings.runtimeToken,
 			defaultVaultRoot: vaultRoot,
 			vaultConfigDir: this.app.vault.configDir,
+			contentLanguage: noteContentLanguage.language,
+			contentLanguageSource: noteContentLanguage.source,
 			graphProfile: this.settings.graphProfile,
 			memoryRules: {
 				globalMemoryRule: this.settings.globalMemoryRule,
@@ -1535,9 +1686,9 @@ export default class TracekeeperPlugin extends Plugin {
 			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditLog) === null;
 
 		const filesToCreate: string[] = [];
-		for (const controlFile of [...CONTROL_FILES, ...KNOWLEDGE_ENTRY_FILES]) {
-			if (!this.app.vault.getAbstractFileByPath(controlFile.path)) {
-				filesToCreate.push(controlFile.path);
+		for (const filePath of [...CONTROL_FILE_PATHS, ...KNOWLEDGE_ENTRY_FILE_PATHS]) {
+			if (!this.app.vault.getAbstractFileByPath(filePath)) {
+				filesToCreate.push(filePath);
 			}
 		}
 		if (missingAuditLog && !filesToCreate.includes(CONTROL_PATHS.auditLog)) {
@@ -1724,7 +1875,7 @@ export default class TracekeeperPlugin extends Plugin {
 	getStructureStatus(): TracekeeperStructureStatus {
 		const plan = this.buildInitializationPlan();
 		const totalFolders = this.getNormalizedFolderPlan().length;
-		const expectedFiles = new Set([...CONTROL_FILES, ...KNOWLEDGE_ENTRY_FILES].map((file) => file.path));
+		const expectedFiles = new Set<string>([...CONTROL_FILE_PATHS, ...KNOWLEDGE_ENTRY_FILE_PATHS]);
 		expectedFiles.add(CONTROL_PATHS.auditLog);
 		const missingCount = plan.foldersToCreate.length + plan.filesToCreate.length;
 		const totalCount = totalFolders + expectedFiles.size;
@@ -1862,7 +2013,12 @@ export default class TracekeeperPlugin extends Plugin {
 				await this.ensureFolderExists(folder);
 			}
 
-			for (const controlFile of [...CONTROL_FILES, ...KNOWLEDGE_ENTRY_FILES].filter((file) =>
+			const contentLanguage = this.resolveNoteContentLanguage().language;
+			const baseFiles = [
+				...buildControlFiles(contentLanguage),
+				...buildKnowledgeEntryFiles(contentLanguage),
+			];
+			for (const controlFile of baseFiles.filter((file) =>
 				plan.filesToCreate.includes(file.path)
 			)) {
 				await this.ensureFileDoesNotExist(controlFile.path, controlFile.content);
@@ -2196,7 +2352,7 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private buildAuditLogHeader(): string {
-		return '# Audit Log\n\n';
+		return noteContentText(this.resolveNoteContentLanguage().language, '# 审计日志\n\n', '# Audit Log\n\n');
 	}
 
 	private async appendAuditEvent(plan: MemoryInitializationPlan): Promise<void> {
@@ -2454,14 +2610,10 @@ export default class TracekeeperPlugin extends Plugin {
 			recentAuditEvents,
 			recentToolCallRecords
 		).length;
-		const timelineItems = this.buildActivityTimelineItems({
-			tasks: recentTasks,
-			contextPacks: recentContextPacks,
-			sourceCaptures: recentSourceCaptures,
-			sourceRequests: recentSourceRequests,
-			proposals: recentProposals,
-			auditEvents: recentAuditEvents,
-		}).slice(0, ACTIVITY_TIMELINE_PREVIEW_ROWS);
+		const timelineItems = recentAuditEvents
+			.filter((event) => !this.isConnectionAuditEvent(event))
+			.map((event) => this.toActivityTimelineAuditItem(event))
+			.slice(0, ACTIVITY_TIMELINE_PREVIEW_ROWS);
 
 		return {
 			runtimeStatus: this.getRuntimeViewStatus(),
@@ -2826,11 +2978,7 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private toActivityTimelineAuditItem(event: AuditEventRecord): ActivityTimelineItem {
-		const isConnection =
-			event.eventType === 'connection' ||
-			event.eventType === 'agent-connection-event' ||
-			event.action === 'connection' ||
-			event.action === 'mcp.initialize';
+		const isConnection = this.isConnectionAuditEvent(event);
 		const isStructureEvent = event.action === 'structure.repair' || event.action === 'legacy_structure.migrate' || event.action === 'legacy_structure.cleanup';
 		const agentLabel = this.formatAgentDisplayName(event.clientName, event.agentId);
 		return {
@@ -4265,7 +4413,7 @@ export default class TracekeeperPlugin extends Plugin {
 		if (frontmatterWriteback) {
 			return frontmatterWriteback.replace(/\\n/g, '\n').trim();
 		}
-		return this.extractSectionText(body, ['Writeback', 'Approved writeback', 'Writeback content']);
+		return this.extractSectionText(body, ['Writeback', 'Approved writeback', 'Writeback content', '写回', '已批准写回', '写回内容']);
 	}
 
 	private extractSectionText(body: string, sectionNames: string[]): string {
@@ -5645,8 +5793,8 @@ class TracekeeperActivityView extends ItemView {
 		if (timelineItems.length === 0) {
 			this.renderEmptyState(
 				timeline,
-				ui('还没有可展示的活动。', 'No activity to display yet.'),
-				ui('从 AI 助手开始一次任务后，这里会按时间显示任务、来源、审核和写回记录。', 'Start a task from your AI assistant to show task, source, review, and writeback records here over time.')
+				ui('还没有运行日志。', 'No runtime logs yet.'),
+				ui('AI 工具调用、配置和错误记录会显示在这里。', 'AI tool calls, config, and error records appear here.')
 			);
 		} else {
 			const list = timeline.createDiv({ cls: 'tracekeeper-timeline' });
@@ -5707,10 +5855,10 @@ class TracekeeperActivityView extends ItemView {
 		);
 		this.renderMemoryLoopDetail(
 			details,
-			ui('最近收尾', 'Latest closeout'),
+			ui('任务结束记录', 'Task completion record'),
 			snapshot.latestTask
 				? this.formatLatestCloseoutStatus(snapshot.latestTask)
-				: ui('暂无', 'None')
+				: ui('暂无任务记录', 'No task records')
 		);
 	}
 
@@ -5725,20 +5873,20 @@ class TracekeeperActivityView extends ItemView {
 		const memoryWriteCount = this.taskDurableMemoryWriteCount(task);
 		const proposalCount = task.proposals.length;
 		if (!sessionRecorded && memoryWriteCount === 0 && proposalCount === 0) {
-			return ui('未收尾', 'Not closed out');
+			return ui('未保存结束记录', 'No completion record saved');
 		}
 		const parts: string[] = [];
 		if (sessionRecorded) {
-			parts.push(ui('已记录会话', 'Session recorded'));
+			parts.push(ui('已保存会话记录', 'Session saved'));
 		}
 		if (memoryWriteCount > 0) {
-			parts.push(ui(`项目记忆 ${memoryWriteCount}`, `${memoryWriteCount} project memory`));
+			parts.push(ui(`已保存项目记忆 ${memoryWriteCount}`, `${memoryWriteCount} project memory saved`));
 		}
 		if (proposalCount > 0) {
-			parts.push(ui(`待审核 ${proposalCount}`, `${proposalCount} queued`));
+			parts.push(ui(`待确认记忆 ${proposalCount}`, `${proposalCount} memory updates pending`));
 		}
 		if (parts.length === 1 && sessionRecorded) {
-			return ui('已记录会话，未沉淀记忆', 'Session recorded, no memory saved');
+			return ui('已保存会话记录，暂无记忆更新', 'Session saved, no memory update');
 		}
 		return parts.join(' · ');
 	}
@@ -6247,6 +6395,7 @@ class TracekeeperReviewQueueView extends ItemView {
 	}
 
 	private renderProposalCard(container: HTMLElement, proposal: MemoryProposalRecord): void {
+		const display = this.buildReviewQueueDisplaySummary(proposal);
 		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-proposal-card' });
 		const header = card.createDiv({ cls: 'tracekeeper-card__header tracekeeper-proposal-card__header' });
 		const title = header.createDiv({ cls: 'tracekeeper-proposal-card__title' });
@@ -6268,9 +6417,9 @@ class TracekeeperReviewQueueView extends ItemView {
 			text: this.reviewQueueItemTypeLabel(proposal.classification),
 			cls: 'tracekeeper-proposal-card__eyebrow',
 		});
-		titleBody.createEl('h4', { text: this.reviewQueueCardTitle(proposal) });
+		titleBody.createEl('h4', { text: display.actionTitle });
 		titleBody.createEl('small', {
-			text: this.reviewQueueCardSubject(proposal),
+			text: display.actionDetail,
 			cls: 'tracekeeper-proposal-card__subject',
 		});
 
@@ -6283,41 +6432,21 @@ class TracekeeperReviewQueueView extends ItemView {
 			});
 		}
 
-		const summary = card.createDiv({ cls: 'tracekeeper-proposal-card__summary' });
-		summary.createEl('span', { text: ui('主要原因', 'Main reason') });
-		summary.createEl('strong', { text: this.reviewQueueCardReason(proposal) });
+		const targetGrid = card.createDiv({ cls: 'tracekeeper-review-target-grid' });
+		this.renderReviewQueueFocusItem(targetGrid, ui('目标文件', 'Target file'), display.targetFile);
+		this.renderReviewQueueFocusItem(targetGrid, ui('修改位置', 'Position'), display.targetPosition);
 
-		const context = card.createDiv({ cls: 'tracekeeper-detail-grid tracekeeper-proposal-card__context' });
-		let contextItemCount = 0;
-		contextItemCount += this.renderOptionalReviewDetail(context, ui('项目', 'Project'), proposal.relatedProject) ? 1 : 0;
-		contextItemCount += this.renderOptionalReviewDetail(context, ui('任务', 'Task'), proposal.taskId) ? 1 : 0;
-		contextItemCount += this.renderOptionalReviewDetail(context, ui('提出来源', 'Proposed by'), proposal.proposedBy) ? 1 : 0;
-		contextItemCount += this.renderOptionalReviewDetail(context, ui('创建时间', 'Created'), proposal.created) ? 1 : 0;
-		if (proposal.evidence.length > 0) {
-			contextItemCount += this.renderOptionalReviewDetail(
-				context,
-				ui('证据', 'Evidence'),
-				ui(`${proposal.evidence.length} 条`, `${proposal.evidence.length} refs`)
-			) ? 1 : 0;
-		}
-		if (contextItemCount === 0) {
-			context.remove();
-		}
+		const changePanel = card.createDiv({ cls: 'tracekeeper-review-focus-panel tracekeeper-review-focus-panel--change' });
+		changePanel.createEl('span', { text: ui('要修改什么', 'Proposed change') });
+		changePanel.createEl('pre', {
+			text: display.changePreview,
+			cls: display.hasWritebackContent ? 'tracekeeper-review-change-preview' : 'tracekeeper-review-change-preview tracekeeper-review-change-preview--empty',
+		});
 
-		if (proposal.classification === 'memory_proposal') {
-			const writebackPanel = card.createDiv({ cls: 'tracekeeper-detail-panel' });
-			writebackPanel.createEl('strong', { text: ui('写回内容摘要', 'Writeback summary') });
-			const summary = proposal.writebackContent
-				? this.plugin.trimText(proposal.writebackContent, 500)
-			: ui('无可用写回内容', 'No writeback content available');
-			writebackPanel.createEl('pre', { text: summary, cls: 'tracekeeper-code-block' });
-		}
+		const reasonPanel = card.createDiv({ cls: 'tracekeeper-review-focus-panel tracekeeper-review-focus-panel--reason' });
+		reasonPanel.createEl('span', { text: ui('为什么修改', 'Reason') });
+		reasonPanel.createEl('strong', { text: display.reason });
 
-		if (proposal.evidence.length > 0) {
-			const detailPanel = card.createDiv({ cls: 'tracekeeper-detail-panel' });
-			detailPanel.createEl('strong', { text: ui('证据引用', 'Evidence refs') });
-			detailPanel.createEl('div', { text: proposal.evidence.join(', ') });
-		}
 		if (proposal.approvalStatus === 'revision_requested' && proposal.revisionComment) {
 			const revisionPanel = card.createDiv({ cls: 'tracekeeper-revision-comment' });
 			revisionPanel.createEl('strong', { text: ui('修订说明', 'Revision comment') });
@@ -6335,54 +6464,150 @@ class TracekeeperReviewQueueView extends ItemView {
 			}
 		}
 
-		const technical = card.createDiv({ cls: 'tracekeeper-proposal-card__technical' });
-		const queuePath = technical.createEl('small', {
-			text: `${ui('审核文件', 'Queue file')}: ${this.compactReviewQueuePath(proposal.path)}`,
-		});
-		queuePath.title = proposal.path;
+		const source = card.createDiv({ cls: 'tracekeeper-review-source-line' });
+		source.createEl('small', { text: display.sourceLine });
 
 		this.renderProposalActions(card, proposal);
 	}
 
-	private reviewQueueCardTitle(proposal: MemoryProposalRecord): string {
+	private renderReviewQueueFocusItem(container: HTMLElement, label: string, value: string): void {
+		const item = container.createDiv({ cls: 'tracekeeper-review-focus-item' });
+		item.createEl('span', { text: label });
+		item.createEl('strong', { text: value });
+	}
+
+	private buildReviewQueueDisplaySummary(proposal: MemoryProposalRecord): ReviewQueueDisplaySummary {
+		const targetFile = this.reviewQueueTargetFile(proposal);
+		const targetPosition = this.reviewQueueTargetPosition(proposal);
+		const reason = this.reviewQueueCardReason(proposal);
+		const evidenceCount = proposal.evidence.length;
+		const sourceParts = [
+			this.isMeaningfulReviewQueueValue(proposal.relatedProject) ? `${ui('项目', 'Project')}: ${proposal.relatedProject}` : '',
+			this.isMeaningfulReviewQueueValue(proposal.taskId) ? `${ui('任务', 'Task')}: ${proposal.taskId}` : '',
+			evidenceCount > 0 ? ui(`证据 ${evidenceCount} 条`, `${evidenceCount} evidence refs`) : '',
+			`${ui('审核文件', 'Queue file')}: ${this.compactReviewQueuePath(proposal.path)}`,
+		].filter(Boolean);
+
 		switch (proposal.classification) {
-			case 'memory_proposal':
-				return ui('记忆写入提案', 'Memory writeback proposal');
+			case 'memory_proposal': {
+				const hasWritebackContent = proposal.writebackContent.trim().length > 0;
+				return {
+					actionTitle: ui('写入一条记忆', 'Write one memory update'),
+					actionDetail: hasWritebackContent
+						? ui('Agent 建议把下面内容写入目标笔记。', 'The agent wants to write the content below into the target note.')
+						: ui('这个提案缺少可写入内容，建议要求修订。', 'This proposal has no writable content; request a revision.'),
+					targetFile,
+					targetPosition,
+					changePreview: hasWritebackContent
+						? this.plugin.trimText(proposal.writebackContent, 700)
+						: ui('没有可写入内容。请点击“修订”，让 Agent 补充要写入的具体内容。', 'No writable content. Click Revise and ask the agent to provide the exact content to write.'),
+					reason,
+					sourceLine: sourceParts.join(' · '),
+					hasWritebackContent,
+				};
+			}
 			case 'legacy_migration_review':
-				return ui('结构迁移冲突', 'Structure migration conflict');
+				return {
+					actionTitle: ui('确认结构迁移差异', 'Confirm structure migration difference'),
+					actionDetail: ui('Tracekeeper 发现旧目录迁移到目标笔记时存在内容差异。', 'Tracekeeper found a content difference while migrating legacy notes.'),
+					targetFile,
+					targetPosition,
+					changePreview: this.reviewQueueMigrationPreview(proposal),
+					reason,
+					sourceLine: sourceParts.join(' · '),
+					hasWritebackContent: true,
+				};
 			case 'other_review_item':
 			default:
-				return ui('待确认审核项', 'Review item');
+				return {
+					actionTitle: ui('确认审核项', 'Confirm review item'),
+					actionDetail: ui('该项需要你确认处理结果。', 'This item needs your confirmation.'),
+					targetFile,
+					targetPosition,
+					changePreview: this.plugin.trimText(proposal.snippet, 700) || ui('没有摘要。', 'No summary.'),
+					reason,
+					sourceLine: sourceParts.join(' · '),
+					hasWritebackContent: true,
+				};
 		}
 	}
 
-	private reviewQueueCardSubject(proposal: MemoryProposalRecord): string {
+	private reviewQueueTargetFile(proposal: MemoryProposalRecord): string {
 		if (this.isMeaningfulReviewQueueValue(proposal.targetNote)) {
 			return proposal.targetNote;
 		}
-		if (this.isMeaningfulReviewQueueValue(proposal.relatedProject)) {
-			return proposal.relatedProject;
-		}
-		if (this.isMeaningfulReviewQueueValue(proposal.proposalId)) {
-			return proposal.proposalId;
+		if (proposal.classification === 'memory_proposal') {
+			return ui('未指定目标笔记', 'No target note specified');
 		}
 		return this.compactReviewQueuePath(proposal.path);
 	}
 
+	private reviewQueueTargetPosition(proposal: MemoryProposalRecord): string {
+		if (proposal.classification === 'memory_proposal') {
+			return this.isMeaningfulReviewQueueValue(proposal.targetNote)
+				? ui('追加到目标笔记末尾', 'Append to the end of the target note')
+				: ui('无法写入：缺少目标笔记', 'Cannot write: target note is missing');
+		}
+		if (proposal.classification === 'legacy_migration_review') {
+			return ui('目标笔记现有内容，需要人工确认差异', 'Existing target note content; confirm the difference manually');
+		}
+		return ui('审核文件中记录的位置', 'Position recorded in the review file');
+	}
+
+	private reviewQueueMigrationPreview(proposal: MemoryProposalRecord): string {
+		const reason = this.reviewQueueCardReason(proposal);
+		if (reason) {
+			return ui(
+				`检查目标笔记和迁移来源的差异。确认后只会标记该审核项已处理，不会自动覆盖目标笔记。\n\n${reason}`,
+				`Check the difference between the target note and migrated source. Confirming only marks this item handled; it will not overwrite the target note.\n\n${reason}`
+			);
+		}
+		return ui(
+			'检查目标笔记和迁移来源的差异。确认后只会标记该审核项已处理，不会自动覆盖目标笔记。',
+			'Check the difference between the target note and migrated source. Confirming only marks this item handled; it will not overwrite the target note.'
+		);
+	}
+
 	private reviewQueueCardReason(proposal: MemoryProposalRecord): string {
+		if (proposal.classification === 'memory_proposal') {
+			const kindLabel = this.reviewQueueProposalKindLabel(proposal.proposalKind);
+			return ui(
+				`任务结束时，Agent 提取了${kindLabel}，认为这部分内容值得保存，方便后续任务召回。`,
+				`At task closeout, the agent extracted ${kindLabel} and marked it worth saving for future recall.`
+			);
+		}
+
 		const explicitReason = this.extractReviewQueueReason(proposal.snippet);
 		if (explicitReason) {
 			return this.localizeKnownReviewQueueReason(explicitReason);
 		}
 
 		switch (proposal.classification) {
-			case 'memory_proposal':
-				return ui('AI 提议写入长期记忆，需要审核确认。', 'AI proposed a durable memory update for review.');
 			case 'legacy_migration_review':
 				return ui('结构迁移发现需要人工确认的差异。', 'Structure migration found a difference that needs review.');
 			case 'other_review_item':
 			default:
 				return ui('该项等待你确认处理结果。', 'This item is waiting for confirmation.');
+		}
+	}
+
+	private reviewQueueProposalKindLabel(kind: string): string {
+		const normalized = kind.trim().toLowerCase().replace(/-/g, '_');
+		switch (normalized) {
+			case 'task_decision':
+				return ui('任务决策', 'a task decision');
+			case 'solution_change':
+				return ui('方案调整', 'a solution change');
+			case 'lesson_learned':
+				return ui('经验教训', 'a lesson learned');
+			case 'user_preference':
+				return ui('用户偏好', 'a user preference');
+			case 'project_next_action':
+				return ui('项目下一步', 'a project next action');
+			case 'memory_candidate':
+				return ui('记忆候选', 'a memory candidate');
+			default:
+				return ui('记忆候选', 'a memory candidate');
 		}
 	}
 
@@ -6421,20 +6646,6 @@ class TracekeeperReviewQueueView extends ItemView {
 			normalized &&
 			!['unknown', 'none', 'not linked', 'not specified', '无', '未知', '未关联', '未指定'].includes(normalized)
 		);
-	}
-
-	private renderOptionalReviewDetail(container: HTMLElement, label: string, value: string): boolean {
-		if (!this.isMeaningfulReviewQueueValue(value)) {
-			return false;
-		}
-		this.renderDetail(container, label, value);
-		return true;
-	}
-
-	private renderDetail(container: HTMLElement, label: string, value: string): void {
-		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
-		item.createEl('strong', { text: value });
 	}
 
 	private renderProposalActions(card: HTMLElement, proposal: MemoryProposalRecord): void {
@@ -7941,6 +8152,7 @@ class TracekeeperSettingTab extends PluginSettingTab {
 		this.renderTokenSection(containerEl);
 		this.renderAgentClientConfigSection(containerEl, snapshot);
 		this.renderViewRefreshSection(containerEl);
+		this.renderNoteContentSection(containerEl);
 		this.renderMemoryRulesSection(containerEl);
 		this.renderAdvancedMaintenanceSection(containerEl);
 	}
@@ -8080,6 +8292,38 @@ class TracekeeperSettingTab extends PluginSettingTab {
 							.then(() => this.renderSettings())
 							.catch((error) => {
 								console.error('tracekeeper failed to update auto refresh interval', error);
+							});
+					});
+			});
+	}
+
+	private renderNoteContentSection(container: HTMLElement): void {
+		const resolved = this.plugin.resolveNoteContentLanguage();
+		const section = this.createSection(
+			container,
+			ui('笔记内容', 'Note content'),
+			ui(
+				`控制 Tracekeeper 新生成笔记的标题和说明语言；当前生效：${resolved.language}。不会翻译用户或 Agent 提交的正文。`,
+				`Controls headings and helper text in newly generated Tracekeeper notes; active: ${resolved.language}. User and agent-submitted content is not translated.`
+			)
+		);
+		new Setting(section)
+			.setName(ui('笔记内容语言', 'Note content language'))
+			.setDesc(ui(
+				'自动会优先跟随 Obsidian 语言，也可以固定为中文或英文。',
+				'Auto follows Obsidian language first, or you can pin Chinese or English.'
+			))
+			.addDropdown((dropdown) => {
+				for (const language of NOTE_CONTENT_LANGUAGES) {
+					dropdown.addOption(language, noteContentLanguageLabel(language));
+				}
+				dropdown
+					.setValue(this.plugin.settings.noteContentLanguage)
+					.onChange((value: string) => {
+						void this.plugin.setNoteContentLanguage(value)
+							.then(() => this.renderSettings())
+							.catch((error) => {
+								console.error('tracekeeper failed to update note content language', error);
 							});
 					});
 			});
