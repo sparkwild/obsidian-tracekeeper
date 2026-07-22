@@ -1,0 +1,42 @@
+[
+	{
+		"id": "mcp-unreachable", "class": "tracked_task", "kind": "failure_recovery", "prompt": "继续项目架构工作，但本地 Tracekeeper MCP 端点不可达。", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": [], "forbidden_tools": ["tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": [], "argument_rules": [], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": ["assume_connection_ready"], "required_reports": ["mcp_unreachable"], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	},
+	{
+		"id": "tool-unavailable", "class": "tracked_task", "kind": "failure_recovery", "prompt": "继续项目工作，但客户端返回 tracekeeper.start_task tool not available。",
+		"expected": { "required_tools": ["tracekeeper.start_task"], "forbidden_tools": ["tracekeeper.recall", "tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": ["invent_tool_result"], "required_reports": ["tool_unavailable"], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	},
+	{
+		"id": "permission-denied-finish", "class": "tracked_task", "kind": "failure_recovery", "prompt": "完成一个已跟踪任务，但只读 principal 对 finish_task 返回 permission denied。", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"] }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": ["retry_permission_escalation"], "required_reports": ["permission_denied"], "closeout_report": { "required": true, "allowed_statuses": ["requires_user_action"], "match_finish_result": true } }
+	},
+	{
+		"id": "recall-zero-match", "class": "recall_only", "kind": "failure_recovery", "prompt": "查询以前的增量索引结论，但 recall 返回零命中。", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.recall"], "forbidden_tools": ["tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.recall"], "argument_rules": [{ "tool": "tracekeeper.recall", "required": ["query", "scope"] }], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": ["read_entire_vault"], "required_reports": ["zero_match"], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	},
+	{
+		"id": "project-scope-uncertain", "class": "recall_only", "kind": "failure_recovery", "prompt": "查找以前的命名约定，但不能确定属于哪个项目。",
+		"expected": { "required_tools": ["tracekeeper.recall"], "forbidden_tools": ["tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.recall"], "argument_rules": [{ "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "global" } }], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": ["invent_project_scope"], "required_reports": ["scope_uncertain"], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	},
+	{
+		"id": "index-rebuilding", "class": "recall_only", "kind": "failure_recovery", "prompt": "查询项目历史，但 recall 报告 KnowledgeIndex 正在 rebuilding。", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.recall"], "forbidden_tools": ["tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.recall"], "argument_rules": [{ "tool": "tracekeeper.recall", "required": ["query", "scope"] }], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": ["claim_complete_recall"], "required_reports": ["index_rebuilding"], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	},
+	{
+		"id": "task-id-lost", "class": "tracked_task", "kind": "failure_recovery", "prompt": "任务已 start 和 recall，但 Agent 丢失了返回的 task_id。", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall"], "forbidden_tools": ["tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"] }], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": ["guess_task_id"], "required_reports": ["task_id_missing"], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	},
+	{
+		"id": "finish-idempotency-conflict", "class": "tracked_task", "kind": "failure_recovery", "prompt": "finish_task 返回相同 idempotency key 的不同请求冲突。", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"] }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": ["retry_finish_with_changed_payload"], "required_reports": ["idempotency_conflict"], "closeout_report": { "required": true, "allowed_statuses": ["requires_user_action"], "match_finish_result": true } }
+	},
+	{
+		"id": "proposal-unapproved", "class": "tracked_task", "kind": "failure_recovery", "prompt": "任务收尾产生审核队列提案，但提案尚未批准。", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"] }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": ["claim_durable_memory"], "required_reports": ["proposal_not_applied"], "closeout_report": { "required": true, "allowed_statuses": ["queued"], "match_finish_result": true } }
+	},
+	{
+		"id": "missing-wiki-bridge", "class": "tracked_task", "kind": "failure_recovery", "prompt": "项目记忆候选因缺少 Wiki bridge 被送入审核队列。", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"] }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": ["claim_auto_saved"], "required_reports": ["missing_wiki_bridge"], "closeout_report": { "required": true, "allowed_statuses": ["queued"], "match_finish_result": true } }
+	}
+]

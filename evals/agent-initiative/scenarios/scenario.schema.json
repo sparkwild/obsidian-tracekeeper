@@ -1,0 +1,70 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://tracekeeper.local/evals/agent-initiative/scenario.schema.json",
+	"title": "Tracekeeper Agent initiative scenario",
+	"type": "object",
+	"additionalProperties": false,
+	"required": ["id", "class", "kind", "prompt", "expected"],
+	"properties": {
+		"id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+		"class": { "enum": ["no_track", "recall_only", "tracked_task"] },
+		"kind": { "enum": ["positive", "negative", "failure_recovery", "forbidden"] },
+		"prompt": { "type": "string", "minLength": 1 },
+		"project_hint": { "type": "string", "minLength": 1 },
+		"expected": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"required_tools",
+				"forbidden_tools",
+				"ordered_subsequence",
+				"argument_rules",
+				"same_task_id",
+				"finish_exactly_once",
+				"forbidden_behaviors",
+				"required_reports",
+				"closeout_report"
+			],
+			"properties": {
+				"required_tools": { "$ref": "#/$defs/stringArray" },
+				"forbidden_tools": { "$ref": "#/$defs/stringArray" },
+				"ordered_subsequence": { "$ref": "#/$defs/stringArray" },
+				"argument_rules": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["tool", "required"],
+						"properties": {
+							"tool": { "type": "string", "minLength": 1 },
+							"occurrence": { "enum": ["first", "last"] },
+							"required": { "$ref": "#/$defs/stringArray" },
+							"equals": { "type": "object" }
+						}
+					}
+				},
+				"same_task_id": { "type": "boolean" },
+				"finish_exactly_once": { "type": "boolean" },
+				"forbidden_behaviors": { "$ref": "#/$defs/stringArray" },
+				"required_reports": { "$ref": "#/$defs/stringArray" },
+				"closeout_report": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["required", "allowed_statuses", "match_finish_result"],
+					"properties": {
+						"required": { "type": "boolean" },
+						"allowed_statuses": { "$ref": "#/$defs/stringArray" },
+						"match_finish_result": { "type": "boolean" }
+					}
+				}
+			}
+		}
+	},
+	"$defs": {
+		"stringArray": {
+			"type": "array",
+			"uniqueItems": true,
+			"items": { "type": "string", "minLength": 1 }
+		}
+	}
+}

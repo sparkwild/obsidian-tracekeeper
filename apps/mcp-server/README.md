@@ -10,7 +10,7 @@ Shared contracts:
 
 ## Protocol Surface
 
-The runtime supports `initialize`, `tools/list`, `tools/call`, `resources/list`, and `prompts/list`. `tools/list` exposes the focused surface defined in the [Agent Workflow Contract](../../docs/architecture/AGENT_WORKFLOW_CONTRACT.md). Compatibility handlers remain available for older callers but are not advertised as workflow choices.
+The runtime supports MCP `2025-06-18` and `2025-11-25` over Streamable HTTP. It implements `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`. After initialization, clients send the negotiated `Mcp-Protocol-Version` with each session request. `tools/list` exposes only the authenticated principal's permitted focused surface, while call dispatch repeats the same capability check. Compatibility handlers remain available for older callers but are not advertised as workflow choices.
 
 ## Security Posture
 
@@ -46,4 +46,4 @@ npm run test
 npm run smoke
 ```
 
-The smoke suite uses a temporary non-network vault fixture and covers authentication, origins, sessions, protocol discovery, scoped recall, safe reads, bounded writes, task closeout, source requests, Review Queue flow, and approved writeback.
+The smoke suite uses a temporary non-network vault fixture and covers authentication, origins, sessions, both protocol versions, capability-filtered tools/resources/prompts, output schemas, structured actions, instruction isolation, scoped recall, safe reads, bounded writes, task closeout, source requests, Review Queue flow, and approved writeback.

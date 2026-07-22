@@ -43,21 +43,21 @@ The target first-run experience is one recoverable setup flow:
 6. Reload the Agent client when required.
 7. Verify connection, permissions, and a test recall.
 8. Perform a first project-scoped recall so the user sees the value immediately.
+9. For a workflow-capable Agent, observe one same-principal `start -> recall -> finish` sequence.
 
 The flow must expose progress and allow resuming after a restart. It must not silently write client configuration or pretend that a Skill was installed when the client has no supported installation mechanism.
 
-The current implementation persists this sequence as a resumable settings workflow. Client configuration, Skill confirmation, restart, connection verification, and first recall are separate states. Connection success requires audit evidence from the selected client's credential principal; first recall requires a successful external `tracekeeper.recall` with at least one match. A plugin-internal preview cannot complete either step.
+The current implementation persists this sequence as a resumable settings workflow. Bundle availability, copying, user confirmation, file verification, client reload, connection verification, first recall, tracked-workflow observation, and update availability are separate evidence states. Connection success requires audit evidence from the selected client's credential principal; first recall requires a successful external `tracekeeper.recall` with at least one match. A plugin-internal preview or user confirmation cannot complete either step, and a recall by itself does not prove that a Skill triggered automatically.
 
-Each managed Agent profile owns an independent local credential. Rotating one profile invalidates only that Agent's prior connection and returns its onboarding state to configuration/restart verification; other Agent connections remain available.
+Each managed Agent client owns an independent local credential and a local capability profile. Profiles are convenience presets for the tools that one credential may discover and call; they are not team roles or hosted RBAC. Changing a profile resets the affected client's connection and workflow evidence without changing another Agent. Rotating one credential likewise invalidates only that Agent's prior connection.
 
-A repository-hosted companion Skill is available at `skills/tracekeeper/SKILL.md`. The community-plugin build embeds that same file into `main.js`; onboarding can therefore copy the canonical Skill content even when the user installed Tracekeeper without cloning this repository.
-It teaches `start_task -> recall -> finish_task` workflows, review boundaries, and approved writeback habits.
-It does not grant permissions or define MCP runtime internals.
-Automatic Skill installation is not claimed: the current UI provides client-sensitive instructions, copies the embedded canonical Skill, and asks the user to confirm installation or mounting for the selected Agent. It does not silently write outside the vault or into client-owned directories. Client-specific automation gaps are tracked in the [status snapshot](../status/INDEX.md).
+A repository-hosted companion Skill bundle lives under `skills/tracekeeper/`. Its short `SKILL.md`, focused references, manifest, and flattened compatibility artifact are generated and verified together, then embedded into the community-plugin build. The Skill classifies work as `no_track`, `recall_only`, or `tracked_task`; it teaches proactive recall, exactly-once tracked closeout, recovery, review boundaries, and instruction isolation. It does not grant permissions or define MCP runtime internals.
+
+For a supported local client profile, the plugin can detect, preview, and install or update the complete Skill bundle only after explicit confirmation. The operation verifies bundle hashes, rechecks the previewed files, creates a backup for replaced files, and refuses to overwrite user-modified content. Other clients receive the flattened copy-only artifact and honest manual guidance. Copying, self-attestation, verified files, client reload, MCP connection, recall, and a complete tracked workflow remain distinct evidence.
 
 ### Start, recall, and finish work
 
-For meaningful work, the Agent records a bounded task, recalls only the relevant project or project history, reads full notes only when excerpts are insufficient, and closes the task with outcomes and durable memory candidates. The exact behavior is defined in the [Agent Workflow Contract](../architecture/AGENT_WORKFLOW_CONTRACT.md).
+For meaningful work, the Agent records a bounded task, recalls only the relevant project or project history, reads full notes only when excerpts are insufficient, and closes the task with outcomes and durable memory candidates. A history question can use recall without creating a task, while greetings and simple transformations create neither tasks nor recall noise. The exact behavior is defined in the [Agent Workflow Contract](../architecture/AGENT_WORKFLOW_CONTRACT.md).
 
 ### Review durable changes
 
@@ -84,7 +84,7 @@ The Agent must not:
 
 ## Product Surfaces
 
-The plugin's human-facing surfaces cover activity, source status, Review Queue, memory inspection, runtime logs and status, permission policy, graph health, and settings. New surfaces should strengthen visibility or control inside Obsidian rather than create a parallel knowledge application.
+The plugin's human-facing surfaces cover activity, local Agent-workflow diagnostics, source status, Review Queue, memory inspection, runtime logs and status, permission policy, graph health, and settings. Diagnostics distinguish connection from observed recall and tracked use, but only summarize calls that reached Tracekeeper; they do not claim a production missed-call rate or upload telemetry. New surfaces should strengthen visibility or control inside Obsidian rather than create a parallel knowledge application.
 
 ## Non-Goals
 

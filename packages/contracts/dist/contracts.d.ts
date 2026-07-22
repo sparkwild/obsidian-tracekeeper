@@ -1,14 +1,19 @@
 export type ToolVisibility = 'public' | 'compatibility' | 'internal';
 export type ToolRisk = 'read-only' | 'low-risk-write' | 'review-gated-write';
+export type ToolEffect = 'read' | 'append' | 'bounded-update' | 'review-gated';
+export type ToolIdempotency = 'natural' | 'keyed' | 'none';
+export type ToolWorld = 'closed';
+export type ToolWorkflowRole = 'observe' | 'recall' | 'task-start' | 'task-finish' | 'review' | 'source' | 'memory';
 export type ToolCapability = 'vault.read' | 'vault.write' | 'memory.propose' | 'memory.apply' | 'memory.review' | 'workflow.manage' | 'review-gated.apply';
 export interface ToolDeprecation {
     readonly replacement: string;
     readonly removalAfter?: string;
 }
-export interface ToolResultSchema {
-    readonly type: string;
+export interface ToolOutputSchema {
+    readonly type: 'object';
     readonly [key: string]: unknown;
 }
+export type ToolResultSchema = ToolOutputSchema;
 export type ToolInputSchema = Record<string, unknown> & {
     readonly type: 'object';
     readonly properties: Record<string, unknown>;
@@ -21,9 +26,14 @@ export interface ToolContract<Name extends string = string> {
     readonly visibility: ToolVisibility;
     readonly capability: ToolCapability;
     readonly risk: ToolRisk;
+    readonly effect: ToolEffect;
+    readonly idempotency: ToolIdempotency;
+    readonly world: ToolWorld;
+    readonly workflowRole: ToolWorkflowRole;
     readonly useCase: string;
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly deprecated?: ToolDeprecation;
     readonly description?: string;
 }
@@ -31,268 +41,383 @@ export type TracekeeperToolName = 'tracekeeper.status' | 'tracekeeper.graph_heal
 export declare const PUBLIC_TOOL_NAME_ORDER: readonly ["tracekeeper.status", "tracekeeper.lint", "tracekeeper.recall", "tracekeeper.read_note", "tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.build_context_pack", "tracekeeper.review_queue", "tracekeeper.apply_approved_writeback", "tracekeeper.source_request", "tracekeeper.capture_source", "tracekeeper.propose_memory"];
 type PublicToolName = (typeof PUBLIC_TOOL_NAME_ORDER)[number];
 export declare const toolContracts: readonly [{
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.status";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "observe";
     readonly useCase: "status";
     readonly description: "[read-only] Quick vault and service summary. Does not read full note content or write files.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }, {
+    readonly deprecated: {
+        readonly replacement: "tracekeeper.lint";
+    };
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.graph_health";
     readonly version: 1;
     readonly visibility: "compatibility";
     readonly capability: "vault.read";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "observe";
     readonly useCase: "graph_health";
     readonly description: "[deprecated] Use tracekeeper.lint for graph checks. This compatibility tool is read-only.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
-    readonly deprecated: {
-        readonly replacement: "tracekeeper.lint";
-    };
 }, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.start_task";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
+    readonly effect: "append";
+    readonly idempotency: "keyed";
+    readonly world: "closed";
+    readonly workflowRole: "task-start";
     readonly useCase: "start_task";
     readonly description: "[low-risk write] Call once when starting meaningful work. Records a bounded task and returns the recommended recall step.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.recall";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "recall";
     readonly useCase: "recall";
     readonly description: "[read-only] Use before read_note to find relevant memory, wiki, and source notes. Supports global, project, and project_history scopes.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }, {
+    readonly deprecated: {
+        readonly replacement: "tracekeeper.recall with scope=\"project\"";
+    };
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.project_context";
     readonly version: 1;
     readonly visibility: "compatibility";
     readonly capability: "vault.read";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "recall";
     readonly useCase: "project_context";
     readonly description: "[deprecated] Use tracekeeper.recall with scope=\"project\". Compatibility tool, read-only.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
-    readonly deprecated: {
-        readonly replacement: "tracekeeper.recall with scope=\"project\"";
-    };
 }, {
+    readonly deprecated: {
+        readonly replacement: "tracekeeper.recall with scope=\"project_history\"";
+    };
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.project_history";
     readonly version: 1;
     readonly visibility: "compatibility";
     readonly capability: "vault.read";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "recall";
     readonly useCase: "project_history";
     readonly description: "[deprecated] Use tracekeeper.recall with scope=\"project_history\". Compatibility tool, read-only.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
-    readonly deprecated: {
-        readonly replacement: "tracekeeper.recall with scope=\"project_history\"";
-    };
 }, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.read_note";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "observe";
     readonly useCase: "read_note";
     readonly description: "[read-only] Read one vault note only after recall excerpts are not enough. Does not write files.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.review_queue";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "memory.review";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "review";
     readonly useCase: "review_queue";
     readonly description: "[read-only] Inspect pending proposals or approved writeback candidates. Does not approve or apply changes.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }, {
+    readonly deprecated: {
+        readonly replacement: "tracekeeper.review_queue with action=\"list_pending\"";
+    };
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.list_review_queue";
     readonly version: 1;
     readonly visibility: "compatibility";
     readonly capability: "memory.review";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "review";
     readonly useCase: "review_queue";
     readonly description: "[deprecated] Use tracekeeper.review_queue with action=\"list_pending\". Compatibility tool, read-only.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
-    readonly deprecated: {
-        readonly replacement: "tracekeeper.review_queue with action=\"list_pending\"";
-    };
 }, {
+    readonly deprecated: {
+        readonly replacement: "tracekeeper.source_request with action=\"list\"";
+    };
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.list_source_requests";
     readonly version: 1;
     readonly visibility: "compatibility";
     readonly capability: "vault.read";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "source";
     readonly useCase: "source_request";
     readonly description: "[deprecated] Use tracekeeper.source_request with action=\"list\". Compatibility tool, read-only.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
-    readonly deprecated: {
-        readonly replacement: "tracekeeper.source_request with action=\"list\"";
-    };
 }, {
+    readonly deprecated: {
+        readonly replacement: "tracekeeper.review_queue with action=\"list_approved\"";
+    };
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.list_approved_writebacks";
     readonly version: 1;
     readonly visibility: "compatibility";
     readonly capability: "memory.review";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "review";
     readonly useCase: "review_queue";
     readonly description: "[deprecated] Use tracekeeper.review_queue with action=\"list_approved\". Compatibility tool, read-only.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
-    readonly deprecated: {
-        readonly replacement: "tracekeeper.review_queue with action=\"list_approved\"";
-    };
 }, {
+    readonly deprecated: {
+        readonly replacement: "Obsidian runtime log view";
+    };
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.audit_recent";
     readonly version: 1;
     readonly visibility: "compatibility";
     readonly capability: "vault.read";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "observe";
     readonly useCase: "audit_recent";
     readonly description: "[deprecated] Prefer the Obsidian runtime log view. Compatibility tool, read-only.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
-    readonly deprecated: {
-        readonly replacement: "Obsidian runtime log view";
-    };
 }, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.source_request";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "vault.write";
     readonly risk: "low-risk-write";
+    readonly effect: "bounded-update";
+    readonly idempotency: "none";
+    readonly world: "closed";
+    readonly workflowRole: "source";
     readonly useCase: "source_request";
     readonly description: "[read-only | low-risk write] List source requests or analyze one existing request. Does not fetch network content.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }, {
+    readonly deprecated: {
+        readonly replacement: "tracekeeper.source_request with action=\"analyze\"";
+    };
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.analyze_source_request";
     readonly version: 1;
     readonly visibility: "compatibility";
     readonly capability: "vault.write";
     readonly risk: "low-risk-write";
+    readonly effect: "bounded-update";
+    readonly idempotency: "none";
+    readonly world: "closed";
+    readonly workflowRole: "source";
     readonly useCase: "source_request";
     readonly description: "[deprecated] Use tracekeeper.source_request with action=\"analyze\". Compatibility tool, low-risk write.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
-    readonly deprecated: {
-        readonly replacement: "tracekeeper.source_request with action=\"analyze\"";
-    };
 }, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.apply_approved_writeback";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "memory.apply";
     readonly risk: "review-gated-write";
+    readonly effect: "review-gated";
+    readonly idempotency: "keyed";
+    readonly world: "closed";
+    readonly workflowRole: "review";
     readonly useCase: "apply_approved_writeback";
     readonly description: "[review-gated apply] Use only after the user approves a Review Queue proposal. Appends approved content to the target note.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.build_context_pack";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
+    readonly effect: "bounded-update";
+    readonly idempotency: "none";
+    readonly world: "closed";
+    readonly workflowRole: "memory";
     readonly useCase: "build_context_pack";
     readonly description: "[read-only | optional write] Build a compact context pack from recall results. Writes an artifact only when write=true.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.lint";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "observe";
     readonly useCase: "lint";
     readonly description: "[read-only] Run the single vault check entry for structure, links, sources, claims, and graph health.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.finish_task";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
+    readonly effect: "append";
+    readonly idempotency: "keyed";
+    readonly world: "closed";
+    readonly workflowRole: "task-finish";
     readonly useCase: "finish_task";
     readonly description: "[low-risk write] Required once at task closeout. Record the session and submit durable decisions, solution changes, lessons, preferences, next actions, and memory candidates according to memory rules.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }, {
+    readonly deprecated: {
+        readonly replacement: "tracekeeper.finish_task";
+    };
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.distill_session";
     readonly version: 1;
     readonly visibility: "compatibility";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
+    readonly effect: "append";
+    readonly idempotency: "none";
+    readonly world: "closed";
+    readonly workflowRole: "task-finish";
     readonly useCase: "finish_task";
     readonly description: "[deprecated] Use tracekeeper.finish_task. Compatibility tool for older session distillation flows.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
-    readonly deprecated: {
-        readonly replacement: "tracekeeper.finish_task";
-    };
 }, {
+    readonly deprecated: {
+        readonly replacement: "tracekeeper.build_context_pack with write=true";
+    };
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.write_context_pack";
     readonly version: 1;
     readonly visibility: "compatibility";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
+    readonly effect: "bounded-update";
+    readonly idempotency: "none";
+    readonly world: "closed";
+    readonly workflowRole: "memory";
     readonly useCase: "build_context_pack";
     readonly description: "[deprecated] Use tracekeeper.build_context_pack with write=true. Compatibility tool, low-risk write.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
-    readonly deprecated: {
-        readonly replacement: "tracekeeper.build_context_pack with write=true";
-    };
 }, {
+    readonly deprecated: {
+        readonly replacement: "tracekeeper.finish_task";
+    };
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.write_session_note";
     readonly version: 1;
     readonly visibility: "compatibility";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
+    readonly effect: "bounded-update";
+    readonly idempotency: "none";
+    readonly world: "closed";
+    readonly workflowRole: "task-finish";
     readonly useCase: "finish_task";
     readonly description: "[deprecated] Use tracekeeper.finish_task. Compatibility tool, low-risk write.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
-    readonly deprecated: {
-        readonly replacement: "tracekeeper.finish_task";
-    };
 }, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.capture_source";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "vault.write";
     readonly risk: "low-risk-write";
+    readonly effect: "bounded-update";
+    readonly idempotency: "none";
+    readonly world: "closed";
+    readonly workflowRole: "source";
     readonly useCase: "capture_source";
     readonly description: "[low-risk write] Save user-provided source metadata or content under sources. Does not fetch external content.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.propose_memory";
     readonly version: 1;
     readonly visibility: "public";
     readonly capability: "memory.propose";
     readonly risk: "low-risk-write";
+    readonly effect: "bounded-update";
+    readonly idempotency: "none";
+    readonly world: "closed";
+    readonly workflowRole: "memory";
     readonly useCase: "propose_memory";
     readonly description: "[low-risk write] Submit a memory update through Tracekeeper rules. Global memory stays review-gated by default.";
     readonly inputSchema: ToolInputSchema;
-    readonly resultSchema: ToolResultSchema;
 }];
 type ContractByName = {
     readonly [K in TracekeeperToolName]: ToolContract<K>;

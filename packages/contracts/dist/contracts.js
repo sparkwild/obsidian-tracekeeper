@@ -5,10 +5,17 @@ exports.isPublicTool = isPublicTool;
 exports.isCompatibilityTool = isCompatibilityTool;
 exports.getContractByName = getContractByName;
 exports.getContractNamesByVisibility = getContractNamesByVisibility;
+const result_schemas_1 = require("./result-schemas");
 const vaultRootProperty = {
     type: 'string',
     description: 'Vault root path. If omitted, uses server configured --vault-root.',
 };
+function withResultSchema(schema) {
+    return {
+        outputSchema: schema,
+        resultSchema: schema,
+    };
+}
 function withVaultRoot(properties, required = []) {
     return {
         type: 'object',
@@ -20,11 +27,6 @@ function withVaultRoot(properties, required = []) {
         ...(required.length > 0 ? { required } : {}),
     };
 }
-const RESULT_SCHEMA_BASE = {
-    type: 'object',
-    additionalProperties: true,
-    description: 'MCP tool result payload.',
-};
 exports.PUBLIC_TOOL_NAME_ORDER = [
     'tracekeeper.status',
     'tracekeeper.lint',
@@ -104,10 +106,14 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'vault.read',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'observe',
         useCase: 'status',
         description: '[read-only] Quick vault and service summary. Does not read full note content or write files.',
         inputSchema: withVaultRoot({}),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.graph_health',
@@ -115,6 +121,10 @@ exports.toolContracts = [
         visibility: 'compatibility',
         capability: 'vault.read',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'observe',
         useCase: 'graph_health',
         description: '[deprecated] Use tracekeeper.lint for graph checks. This compatibility tool is read-only.',
         inputSchema: withVaultRoot({
@@ -125,7 +135,7 @@ exports.toolContracts = [
                 description: 'Graph checking mode. Defaults to the server graphProfile setting.',
             },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
         deprecated: {
             replacement: 'tracekeeper.lint',
         },
@@ -136,6 +146,10 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'workflow.manage',
         risk: 'low-risk-write',
+        effect: 'append',
+        idempotency: 'keyed',
+        world: 'closed',
+        workflowRole: 'task-start',
         useCase: 'start_task',
         description: '[low-risk write] Call once when starting meaningful work. Records a bounded task and returns the recommended recall step.',
         inputSchema: withVaultRoot({
@@ -147,7 +161,7 @@ exports.toolContracts = [
                 description: 'Optional stable retry key. Reusing it with different arguments is rejected.',
             },
         }, ['goal']),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.START_TASK_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.recall',
@@ -155,6 +169,10 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'vault.read',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'recall',
         useCase: 'recall',
         description: '[read-only] Use before read_note to find relevant memory, wiki, and source notes. Supports global, project, and project_history scopes.',
         inputSchema: withVaultRoot({
@@ -171,7 +189,7 @@ exports.toolContracts = [
             project_path: { type: 'string', description: 'Alias of repo_path for workspace/project path matching.' },
             max_items: { type: 'integer', description: 'Maximum number of matches to return.' },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.RECALL_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.project_context',
@@ -179,6 +197,10 @@ exports.toolContracts = [
         visibility: 'compatibility',
         capability: 'vault.read',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'recall',
         useCase: 'project_context',
         description: '[deprecated] Use tracekeeper.recall with scope="project". Compatibility tool, read-only.',
         inputSchema: withVaultRoot({
@@ -190,7 +212,7 @@ exports.toolContracts = [
             project_path: { type: 'string', description: 'Alias of repo_path for workspace/project path matching.' },
             max_items: { type: 'integer', description: 'Maximum number of matches to return.' },
         }, ['query']),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
         deprecated: {
             replacement: 'tracekeeper.recall with scope="project"',
         },
@@ -201,6 +223,10 @@ exports.toolContracts = [
         visibility: 'compatibility',
         capability: 'vault.read',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'recall',
         useCase: 'project_history',
         description: '[deprecated] Use tracekeeper.recall with scope="project_history". Compatibility tool, read-only.',
         inputSchema: withVaultRoot({
@@ -212,7 +238,7 @@ exports.toolContracts = [
             query: { type: 'string', description: 'Optional query filter.' },
             max_items: { type: 'integer', description: 'Maximum number of entries to return.' },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
         deprecated: {
             replacement: 'tracekeeper.recall with scope="project_history"',
         },
@@ -223,12 +249,20 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'vault.read',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'observe',
         useCase: 'read_note',
         description: '[read-only] Read one vault note only after recall excerpts are not enough. Does not write files.',
         inputSchema: withVaultRoot({
             path: { type: 'string', description: 'Vault-relative note path.' },
+            recall_id: {
+                type: 'string',
+                description: 'Optional recall correlation id returned by tracekeeper.recall.',
+            },
         }, ['path']),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.review_queue',
@@ -236,6 +270,10 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'memory.review',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'review',
         useCase: 'review_queue',
         description: '[read-only] Inspect pending proposals or approved writeback candidates. Does not approve or apply changes.',
         inputSchema: withVaultRoot({
@@ -251,7 +289,7 @@ exports.toolContracts = [
             max_items: { type: 'integer', description: 'Maximum number of entries to return.' },
             limit: { type: 'integer', description: 'Alias of max_items.' },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.list_review_queue',
@@ -259,12 +297,16 @@ exports.toolContracts = [
         visibility: 'compatibility',
         capability: 'memory.review',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'review',
         useCase: 'review_queue',
         description: '[deprecated] Use tracekeeper.review_queue with action="list_pending". Compatibility tool, read-only.',
         inputSchema: withVaultRoot({
             max_items: { type: 'integer', description: 'Maximum number of pending entries.' },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
         deprecated: {
             replacement: 'tracekeeper.review_queue with action="list_pending"',
         },
@@ -275,6 +317,10 @@ exports.toolContracts = [
         visibility: 'compatibility',
         capability: 'vault.read',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'source',
         useCase: 'source_request',
         description: '[deprecated] Use tracekeeper.source_request with action="list". Compatibility tool, read-only.',
         inputSchema: withVaultRoot({
@@ -282,7 +328,7 @@ exports.toolContracts = [
             status: { type: 'string', description: 'Optional status filter, defaults to pending.' },
             source_kind: { type: 'string', description: 'Optional source kind filter.' },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
         deprecated: {
             replacement: 'tracekeeper.source_request with action="list"',
         },
@@ -293,6 +339,10 @@ exports.toolContracts = [
         visibility: 'compatibility',
         capability: 'memory.review',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'review',
         useCase: 'review_queue',
         description: '[deprecated] Use tracekeeper.review_queue with action="list_approved". Compatibility tool, read-only.',
         inputSchema: withVaultRoot({
@@ -300,7 +350,7 @@ exports.toolContracts = [
             max_items: { type: 'integer', description: 'Maximum number of approved writebacks to return.' },
             limit: { type: 'integer', description: 'Alias of max_items.' },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
         deprecated: {
             replacement: 'tracekeeper.review_queue with action="list_approved"',
         },
@@ -311,12 +361,16 @@ exports.toolContracts = [
         visibility: 'compatibility',
         capability: 'vault.read',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'observe',
         useCase: 'audit_recent',
         description: '[deprecated] Prefer the Obsidian runtime log view. Compatibility tool, read-only.',
         inputSchema: withVaultRoot({
             max_items: { type: 'integer', description: 'Maximum number of parsed sections.' },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
         deprecated: {
             replacement: 'Obsidian runtime log view',
         },
@@ -327,6 +381,10 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'vault.write',
         risk: 'low-risk-write',
+        effect: 'bounded-update',
+        idempotency: 'none',
+        world: 'closed',
+        workflowRole: 'source',
         useCase: 'source_request',
         description: '[read-only | low-risk write] List source requests or analyze one existing request. Does not fetch network content.',
         inputSchema: withVaultRoot({
@@ -350,7 +408,7 @@ exports.toolContracts = [
             status: { type: 'string', description: 'Optional status filter when listing, defaults to pending.' },
             source_kind: { type: 'string', description: 'Optional source kind filter when listing.' },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.analyze_source_request',
@@ -358,6 +416,10 @@ exports.toolContracts = [
         visibility: 'compatibility',
         capability: 'vault.write',
         risk: 'low-risk-write',
+        effect: 'bounded-update',
+        idempotency: 'none',
+        world: 'closed',
+        workflowRole: 'source',
         useCase: 'source_request',
         description: '[deprecated] Use tracekeeper.source_request with action="analyze". Compatibility tool, low-risk write.',
         inputSchema: withVaultRoot({
@@ -370,7 +432,7 @@ exports.toolContracts = [
             },
             force_reprocess: { type: 'boolean', description: 'Process request even if status is not pending.' },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
         deprecated: {
             replacement: 'tracekeeper.source_request with action="analyze"',
         },
@@ -381,6 +443,10 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'memory.apply',
         risk: 'review-gated-write',
+        effect: 'review-gated',
+        idempotency: 'keyed',
+        world: 'closed',
+        workflowRole: 'review',
         useCase: 'apply_approved_writeback',
         description: '[review-gated apply] Use only after the user approves a Review Queue proposal. Appends approved content to the target note.',
         inputSchema: withVaultRoot({
@@ -390,7 +456,7 @@ exports.toolContracts = [
             task_id: { type: 'string', description: 'Optional task id to update with the applied writeback target.' },
             dry_run: { type: 'boolean', description: 'When true, return the writeback plan without modifying files.' },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.build_context_pack',
@@ -398,6 +464,10 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'workflow.manage',
         risk: 'low-risk-write',
+        effect: 'bounded-update',
+        idempotency: 'none',
+        world: 'closed',
+        workflowRole: 'memory',
         useCase: 'build_context_pack',
         description: '[read-only | optional write] Build a compact context pack from recall results. Writes an artifact only when write=true.',
         inputSchema: withVaultRoot({
@@ -409,7 +479,7 @@ exports.toolContracts = [
             filename: { type: 'string', description: 'Optional file stem.' },
             title: { type: 'string', description: 'Optional note title when writing markdown artifact.' },
         }, ['query']),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.lint',
@@ -417,6 +487,10 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'vault.read',
         risk: 'read-only',
+        effect: 'read',
+        idempotency: 'natural',
+        world: 'closed',
+        workflowRole: 'observe',
         useCase: 'lint',
         description: '[read-only] Run the single vault check entry for structure, links, sources, claims, and graph health.',
         inputSchema: withVaultRoot({
@@ -427,7 +501,7 @@ exports.toolContracts = [
                 description: 'Graph checking mode. Defaults to the server graphProfile setting.',
             },
         }),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.finish_task',
@@ -435,6 +509,10 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'workflow.manage',
         risk: 'low-risk-write',
+        effect: 'append',
+        idempotency: 'keyed',
+        world: 'closed',
+        workflowRole: 'task-finish',
         useCase: 'finish_task',
         description: '[low-risk write] Required once at task closeout. Record the session and submit durable decisions, solution changes, lessons, preferences, next actions, and memory candidates according to memory rules.',
         inputSchema: withVaultRoot({
@@ -487,7 +565,7 @@ exports.toolContracts = [
                 description: 'Optional stable retry key. Reusing it with different closeout content is rejected.',
             },
         }, ['task_id', 'summary']),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.FINISH_TASK_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.distill_session',
@@ -495,6 +573,10 @@ exports.toolContracts = [
         visibility: 'compatibility',
         capability: 'workflow.manage',
         risk: 'low-risk-write',
+        effect: 'append',
+        idempotency: 'none',
+        world: 'closed',
+        workflowRole: 'task-finish',
         useCase: 'finish_task',
         description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool for older session distillation flows.',
         inputSchema: withVaultRoot({
@@ -519,7 +601,7 @@ exports.toolContracts = [
             project_hint: { type: 'string', description: 'Optional project hint.' },
             filename: { type: 'string', description: 'Optional file stem.' },
         }, ['task_id', 'summary']),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
         deprecated: {
             replacement: 'tracekeeper.finish_task',
         },
@@ -530,6 +612,10 @@ exports.toolContracts = [
         visibility: 'compatibility',
         capability: 'workflow.manage',
         risk: 'low-risk-write',
+        effect: 'bounded-update',
+        idempotency: 'none',
+        world: 'closed',
+        workflowRole: 'memory',
         useCase: 'build_context_pack',
         description: '[deprecated] Use tracekeeper.build_context_pack with write=true. Compatibility tool, low-risk write.',
         inputSchema: withVaultRoot({
@@ -538,7 +624,7 @@ exports.toolContracts = [
             content: { type: 'string', description: 'Context pack markdown/text content.' },
             task_id: { type: 'string', description: 'Optional task id for traceability.' },
         }, ['content']),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
         deprecated: {
             replacement: 'tracekeeper.build_context_pack with write=true',
         },
@@ -549,6 +635,10 @@ exports.toolContracts = [
         visibility: 'compatibility',
         capability: 'workflow.manage',
         risk: 'low-risk-write',
+        effect: 'bounded-update',
+        idempotency: 'none',
+        world: 'closed',
+        workflowRole: 'task-finish',
         useCase: 'finish_task',
         description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool, low-risk write.',
         inputSchema: withVaultRoot({
@@ -556,7 +646,7 @@ exports.toolContracts = [
             content: { type: 'string', description: 'Session content.' },
             task_id: { type: 'string', description: 'Optional task id for traceability.' },
         }, ['content']),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
         deprecated: {
             replacement: 'tracekeeper.finish_task',
         },
@@ -567,6 +657,10 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'vault.write',
         risk: 'low-risk-write',
+        effect: 'bounded-update',
+        idempotency: 'none',
+        world: 'closed',
+        workflowRole: 'source',
         useCase: 'capture_source',
         description: '[low-risk write] Save user-provided source metadata or content under sources. Does not fetch external content.',
         inputSchema: withVaultRoot({
@@ -585,7 +679,7 @@ exports.toolContracts = [
             content: { type: 'string', description: 'Required when mode is extracted_snapshot or local_copy.' },
             text: { type: 'string', description: 'Alias of content for compatibility.' },
         }, ['source', 'mode']),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.propose_memory',
@@ -593,6 +687,10 @@ exports.toolContracts = [
         visibility: 'public',
         capability: 'memory.propose',
         risk: 'low-risk-write',
+        effect: 'bounded-update',
+        idempotency: 'none',
+        world: 'closed',
+        workflowRole: 'memory',
         useCase: 'propose_memory',
         description: '[low-risk write] Submit a memory update through Tracekeeper rules. Global memory stays review-gated by default.',
         inputSchema: withVaultRoot({
@@ -615,7 +713,7 @@ exports.toolContracts = [
             filename: { type: 'string', description: 'Optional file stem. If omitted, auto-generates one.' },
             title: { type: 'string', description: 'Optional proposal title.' },
         }, ['proposal_kind', 'content']),
-        resultSchema: RESULT_SCHEMA_BASE,
+        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
     },
 ];
 const contractMap = new Map();

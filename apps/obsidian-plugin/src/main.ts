@@ -53,17 +53,20 @@ import {
 } from './features/recall/recall-view-model';
 import { ObsidianKnowledgeIndexAdapter } from './knowledge-index-adapter';
 import { ObsidianVaultRepository } from './adapters/obsidian-vault-repository';
-import type { ToolCapability } from '@tracekeeper/contracts';
 import {
 	DEFAULT_ONBOARDING_SETTINGS,
 	OnboardingSettingsState,
 	findOnboardingRecallEvidence,
+	findOnboardingTrackedWorkflowEvidence,
 	hasOnboardingConnectionEvidence,
 	markAgentRestartDone,
 	markClientConfigured,
 	markConnectionVerified,
 	markFirstRecallDone,
-	markSkillSetupDone,
+	markSkillCopied,
+	markSkillFileVerified,
+	markSkillUserConfirmed,
+	markTrackedWorkflowObserved,
 	normalizeOnboardingSettingsState,
 	OnboardingProgressContext,
 	resetOnboardingState,
@@ -81,11 +84,30 @@ import {
 	type ClientConfigChangeAction,
 	type ClientConfigChangePlan,
 } from './adapters/client-config-adapter';
-import { rotateClientRuntimeCredential } from './features/settings/runtime-credentials';
+import {
+	ClientSkillAdapter,
+	ClientSkillPlanConflictError,
+	buildClientSkillProfile,
+	type ClientSkillProfile,
+	type SkillInstallAction,
+	type SkillInstallPlan,
+	type SkillInstallResult,
+	type SkillInstallState,
+} from './adapters/client-skill-adapter';
+import { TRACEKEEPER_SKILL_BUNDLE } from './features/skill-installation/skill-bundle';
+import { buildSkillInstallAuditEntry } from './features/skill-installation/skill-install-audit';
+import {
+	capabilitiesForRuntimeProfile,
+	normalizeRuntimeCredentialProfileAndCapabilities,
+	runtimeCapabilitiesToPublicTools,
+	rotateClientRuntimeCredential,
+	type RuntimeCredentialCapabilityProfile,
+} from './features/settings/runtime-credentials';
 import {
 	findOnboardingRuntimePrincipal,
 	onboardingEvidenceNotBefore,
 	parseOnboardingRecallQuery,
+	clearOnboardingAgentBehaviorEvidence,
 	clearOnboardingClientEvidence,
 	clearOnboardingRuntimeEvidence,
 	resolveOnboardingSelectedClient,
@@ -347,6 +369,7 @@ interface DesktopNodeApi {
 		writeFileSync(path: string, content: string, encoding: 'utf8'): void;
 		mkdirSync(path: string, options: { recursive: boolean }): void;
 		renameSync(oldPath: string, newPath: string): void;
+		rmSync(path: string, options: { recursive?: boolean; force?: boolean }): void;
 	};
 	path: {
 		dirname(path: string): string;
@@ -391,6 +414,7 @@ interface TracekeeperSettings {
 interface StoredRuntimeCredential extends RuntimeCredential {
 	clientId: string;
 	createdAt: string;
+	capabilityProfile?: RuntimeCredentialCapabilityProfile;
 }
 
 const DEFAULT_SETTINGS: TracekeeperSettings = {
@@ -421,6 +445,7 @@ export default class TracekeeperPlugin extends Plugin {
 	private vaultRepository!: ObsidianVaultRepository;
 	private knowledgeIndex: ObsidianKnowledgeIndexAdapter | null = null;
 	private clientConfigAdapter: ClientConfigAdapter | null = null;
+	private clientSkillAdapter: ClientSkillAdapter | null = null;
 	private legacyMigrationController!: LegacyMigrationController;
 	private activityDataController!: ActivityDataController;
 	private activityRecordRepository!: ActivityRecordRepository;
@@ -502,6 +527,13 @@ export default class TracekeeperPlugin extends Plugin {
 				fs: desktopApi.fs,
 				path: desktopApi.path,
 				getConnectionUrl: (clientId) => this.getMcpConnectionUrl(clientId),
+			})
+			: null;
+		this.clientSkillAdapter = desktopApi
+			? new ClientSkillAdapter({
+				fs: desktopApi.fs,
+				path: desktopApi.path,
+				bundle: TRACEKEEPER_SKILL_BUNDLE,
 			})
 			: null;
 		this.vaultRepository = new ObsidianVaultRepository(this.app.vault);
@@ -638,6 +670,7 @@ export default class TracekeeperPlugin extends Plugin {
 	onunload(): void {
 		this.stopAutoRefresh();
 		this.clientConfigAdapter = null;
+		this.clientSkillAdapter = null;
 		this.knowledgeIndex = null;
 		void this.stopMcpRuntime();
 	}
@@ -699,29 +732,31 @@ export default class TracekeeperPlugin extends Plugin {
 				if (!id || !clientId || !token || credentials.has(clientId)) {
 					continue;
 				}
-				const allowedCapabilities = new Set<ToolCapability | '*'>([
-					'*', 'vault.read', 'vault.write', 'memory.propose', 'memory.apply', 'memory.review', 'workflow.manage', 'review-gated.apply',
-				]);
-				const capabilities: Array<ToolCapability | '*'> = Array.isArray(entry.capabilities)
-					? entry.capabilities.filter((value): value is ToolCapability | '*' =>
-						typeof value === 'string' && allowedCapabilities.has(value as ToolCapability | '*'))
-					: ['*'];
+				const normalized = normalizeRuntimeCredentialProfileAndCapabilities(entry);
 				credentials.set(clientId, {
 					id,
 					clientId,
 					token,
-					capabilities: capabilities.length > 0 ? capabilities : ['*'],
+					capabilities: normalized.capabilities,
+					capabilityProfile: normalized.profile,
 					createdAt: this.normalizeTimestamp(entry.createdAt),
 				});
 			}
 		}
 
 		const now = new Date().toISOString();
+		const legacyFallback = normalizeRuntimeCredentialProfileAndCapabilities({
+			capabilities: ['*'],
+		});
+		const managedDefault = normalizeRuntimeCredentialProfileAndCapabilities({
+			capabilityProfile: 'knowledge_assistant',
+		});
 		credentials.set('legacy', {
 			id: 'legacy-shared-token',
 			clientId: 'legacy',
 			token: legacyToken,
-			capabilities: ['*'],
+			capabilities: legacyFallback.capabilities,
+			capabilityProfile: legacyFallback.profile,
 			createdAt: this.normalizeTimestamp(credentials.get('legacy')?.createdAt) || now,
 		});
 		for (const clientId of MANAGED_AGENT_CLIENT_IDS) {
@@ -730,7 +765,8 @@ export default class TracekeeperPlugin extends Plugin {
 					id: `client-${clientId}`,
 					clientId,
 					token: this.generateRuntimeToken(),
-					capabilities: ['*'],
+					capabilities: managedDefault.capabilities,
+					capabilityProfile: managedDefault.profile,
 					createdAt: now,
 				});
 			}
@@ -883,13 +919,7 @@ export default class TracekeeperPlugin extends Plugin {
 			createdAt
 		);
 		if (this.settings.onboarding.selectedClientId === clientId) {
-			this.settings.onboarding.clientConfiguredAt = '';
-			this.settings.onboarding.agentRestartCompletedAt = '';
-			this.settings.onboarding.connectionVerifiedAt = '';
-			this.settings.onboarding.firstRecallCompletedAt = '';
-			this.settings.onboarding.firstRecallMatchedCount = 0;
-			this.settings.onboarding.firstRecallQuery = '';
-			this.settings.onboarding.lastUpdatedAt = createdAt;
+			this.settings.onboarding = clearOnboardingRuntimeEvidence(this.settings.onboarding, createdAt);
 		}
 		await this.saveSettings();
 		new Notice(ui(
@@ -897,6 +927,54 @@ export default class TracekeeperPlugin extends Plugin {
 			'The previous credential for this Agent was revoked. Update its connection config; other Agents are unaffected.'
 		));
 		await this.restartMcpRuntime();
+	}
+
+	async setRuntimeCredentialProfile(
+		clientId: string,
+		profile: RuntimeCredentialCapabilityProfile
+	): Promise<void> {
+		if (!MANAGED_AGENT_CLIENT_IDS.includes(clientId as typeof MANAGED_AGENT_CLIENT_IDS[number])) {
+			throw new Error(`Unknown managed Agent client: ${clientId}`);
+		}
+		if (profile === 'custom') {
+			throw new Error('Custom capability sets are preserved but are not editable from this preset selector.');
+		}
+		const createdAt = new Date().toISOString();
+		let updated = false;
+		const original = this.settings.runtimeCredentials.find((credential) => credential.clientId === clientId);
+		if (!original) {
+			throw new Error(`Missing runtime credential for managed client: ${clientId}`);
+		}
+		const normalizedOriginal = normalizeRuntimeCredentialProfileAndCapabilities(original);
+		const nextCapabilities = capabilitiesForRuntimeProfile(profile, normalizedOriginal.capabilities);
+		const hasSameCapabilities = nextCapabilities.length === normalizedOriginal.capabilities.length
+			&& nextCapabilities.every((capability, index) => capability === normalizedOriginal.capabilities[index]);
+		if (normalizedOriginal.profile === profile && hasSameCapabilities) {
+			return;
+		}
+		this.settings.runtimeCredentials = this.settings.runtimeCredentials.map((credential) => {
+			if (credential.clientId !== clientId) {
+				return credential;
+			}
+			updated = true;
+			return {
+				...credential,
+				capabilityProfile: profile,
+				capabilities: nextCapabilities,
+			};
+		});
+		if (!updated) {
+			throw new Error(`Missing runtime credential for managed client: ${clientId}`);
+		}
+		if (this.settings.onboarding.selectedClientId === clientId) {
+			this.settings.onboarding = clearOnboardingAgentBehaviorEvidence(this.settings.onboarding, createdAt);
+		}
+		await this.saveSettings();
+		await this.restartMcpRuntime();
+		new Notice(ui(
+			'该 Agent 的能力预设已更新，请重新连接或重启客户端。',
+			'Agent capability profile updated. Reconnect or restart the client.'
+		));
 	}
 
 	async setAutoRefreshEnabled(enabled: boolean): Promise<void> {
@@ -1566,6 +1644,10 @@ export default class TracekeeperPlugin extends Plugin {
 	private buildClientConfigs(): GeneratedClientConfig[] {
 		return this.getClientProfiles().map((profile) => {
 			const status = this.readClientConfigStatus(profile);
+			const runtimeCredential = this.settings.runtimeCredentials.find((credential) => credential.clientId === profile.id);
+			const normalizedRuntimeCredential = normalizeRuntimeCredentialProfileAndCapabilities(runtimeCredential ?? {});
+			const runtimeCapabilities = normalizedRuntimeCredential.capabilities;
+			const runtimeProfile = normalizedRuntimeCredential.profile;
 			return {
 				clientId: profile.id,
 				displayName: profile.displayName,
@@ -1579,6 +1661,9 @@ export default class TracekeeperPlugin extends Plugin {
 				configState: status.state,
 				configStatusLabel: status.label,
 				configStatusDetail: status.detail,
+				runtimeCapabilityProfile: runtimeProfile,
+				runtimeCapabilities,
+				runtimePublicTools: runtimeCapabilitiesToPublicTools(runtimeCapabilities),
 			};
 		});
 	}
@@ -1689,6 +1774,7 @@ export default class TracekeeperPlugin extends Plugin {
 				clientId: selectedClient.clientId,
 				configState: selectedClient.configState,
 			} : null,
+			skillInstallState: this.getSkillInstallState(this.settings.onboarding.selectedClientId),
 			onboarding: this.settings.onboarding,
 		});
 	}
@@ -1733,11 +1819,26 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	async markOnboardingSkillSetup(): Promise<void> {
-		if (this.settings.onboarding.skillSetupCompletedAt) {
+		if (this.settings.onboarding.skillUserConfirmedAt) {
 			return;
 		}
-		this.settings.onboarding = markSkillSetupDone(this.settings.onboarding);
+		this.settings.onboarding = markSkillUserConfirmed(this.settings.onboarding);
 		await this.persistOnboardingState();
+	}
+
+	async markOnboardingSkillCopied(): Promise<void> {
+		if (!this.settings.onboarding.skillCopiedAt) {
+			this.settings.onboarding = markSkillCopied(this.settings.onboarding);
+			await this.persistOnboardingState();
+		}
+	}
+
+	async copyTracekeeperSkillFallback(): Promise<void> {
+		await this.copyToClipboard(
+			TRACEKEEPER_SKILL_BUNDLE.flattened,
+			ui('Tracekeeper 单文件兼容 Skill 已复制。', 'Tracekeeper flattened compatibility Skill copied.')
+		);
+		await this.markOnboardingSkillCopied();
 	}
 
 	async markOnboardingAgentRestart(): Promise<void> {
@@ -1785,6 +1886,27 @@ export default class TracekeeperPlugin extends Plugin {
 			));
 		}
 		await this.markOnboardingFirstRecall(parseOnboardingRecallQuery(recall.argsSummary), recall.matchedCount);
+	}
+
+	async verifyOnboardingTrackedWorkflow(): Promise<void> {
+		const principalId = findOnboardingRuntimePrincipal(
+			this.settings.runtimeCredentials,
+			this.settings.onboarding.selectedClientId
+		);
+		const snapshot = await this.loadAgentConnectionsSnapshot();
+		const evidence = findOnboardingTrackedWorkflowEvidence(
+			snapshot.recentToolCalls,
+			principalId,
+			onboardingEvidenceNotBefore(this.settings.onboarding)
+		);
+		if (!evidence) {
+			throw new Error(ui(
+				'尚未发现同一 Agent 的 start → recall → finish 成功序列。首次 Recall 不能证明 Skill 自动触发。',
+				'No successful start → recall → finish sequence was found for the same agent. A first recall does not prove automatic Skill triggering.'
+			));
+		}
+		this.settings.onboarding = markTrackedWorkflowObserved(this.settings.onboarding, evidence.taskId);
+		await this.persistOnboardingState();
 	}
 
 	private async markOnboardingFirstRecall(query: string, resultCount: number): Promise<void> {
@@ -1992,6 +2114,93 @@ export default class TracekeeperPlugin extends Plugin {
 		return this.requireClientConfigAdapter(config).previewChange(config, action);
 	}
 
+	getSkillInstallState(clientId: string): SkillInstallState {
+		const profile = this.getClientSkillProfile(clientId);
+		if (!this.clientSkillAdapter) {
+			return {
+				clientId,
+				targetDirectory: profile.targetDirectory,
+				state: 'unavailable',
+				fileVerified: false,
+				updateAvailable: false,
+				installedVersion: '',
+				expectedVersion: TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version,
+				detail: ui('当前环境仅支持复制 Skill。', 'This environment supports copy-only Skill setup.'),
+			};
+		}
+		try {
+			return this.clientSkillAdapter.detect(profile);
+		} catch (error) {
+			console.error('tracekeeper failed to detect client Skill', error);
+			return {
+				clientId,
+				targetDirectory: profile.targetDirectory,
+				state: 'unavailable',
+				fileVerified: false,
+				updateAvailable: false,
+				installedVersion: '',
+				expectedVersion: TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version,
+				detail: ui('无法读取 Skill 目录。', 'Cannot read the Skill directory.'),
+			};
+		}
+	}
+
+	prepareSkillInstall(clientId: string, action: Extract<SkillInstallAction, 'install' | 'update'>): SkillInstallPlan {
+		const adapter = this.requireClientSkillAdapter();
+		const profile = this.getClientSkillProfile(clientId);
+		return action === 'install' ? adapter.previewInstall(profile) : adapter.previewUpdate(profile);
+	}
+
+	async confirmSkillInstall(
+		planId: string,
+		action: Extract<SkillInstallAction, 'install' | 'update'>,
+		clientId: string
+	): Promise<SkillInstallResult> {
+		try {
+			const adapter = this.requireClientSkillAdapter();
+			const result = action === 'install'
+				? adapter.confirmInstall(planId)
+				: adapter.confirmUpdate(planId);
+			this.settings.onboarding = markSkillFileVerified(this.settings.onboarding, result.bundleHash);
+			this.settings.onboarding.agentRestartCompletedAt = '';
+			this.settings.onboarding.connectionVerifiedAt = '';
+			this.settings.onboarding.firstRecallCompletedAt = '';
+			this.settings.onboarding.firstRecallMatchedCount = 0;
+			this.settings.onboarding.firstRecallQuery = '';
+			this.settings.onboarding.trackedWorkflowObservedAt = '';
+			this.settings.onboarding.trackedWorkflowTaskId = '';
+			await this.persistOnboardingState();
+			await this.appendToAuditLog(buildSkillInstallAuditEntry({
+				action,
+				clientId: result.clientId,
+				bundleHash: result.bundleHash,
+				backupCreated: result.backupDirectory !== '',
+				result: 'success',
+			}));
+			new Notice(action === 'install'
+				? ui('Skill bundle 已安装。请重启客户端。', 'Skill bundle installed. Restart the client.')
+				: ui('Skill bundle 已更新。请重启客户端。', 'Skill bundle updated. Restart the client.'));
+			return result;
+		} catch (error) {
+			console.error('tracekeeper failed to install client Skill', error);
+			try {
+				await this.appendToAuditLog(buildSkillInstallAuditEntry({
+					action,
+					clientId,
+					bundleHash: TRACEKEEPER_SKILL_BUNDLE.manifest.bundle_hash,
+					backupCreated: false,
+					result: 'failed',
+				}));
+			} catch (auditError) {
+				console.error('tracekeeper failed to audit client Skill failure', auditError);
+			}
+			new Notice(error instanceof ClientSkillPlanConflictError
+				? ui('Skill 在预览后已变化，或包含用户修改。请重新检测和预览。', 'Skill changed after preview or contains user modifications. Detect and preview again.')
+				: ui('Skill 写入失败。', 'Failed to write Skill.'));
+			throw error;
+		}
+	}
+
 	async applyClientConfig(config: GeneratedClientConfig, planId: string): Promise<void> {
 		try {
 			const result = this.requireClientConfigAdapter(config).applyConfirmedChange(planId);
@@ -2060,6 +2269,24 @@ export default class TracekeeperPlugin extends Plugin {
 			throw new Error(`Client auto-configuration is not supported for ${config.clientId}.`);
 		}
 		return this.clientConfigAdapter;
+	}
+
+	private getClientSkillProfile(clientId: string): ClientSkillProfile {
+		const desktopApi = this.getDesktopNodeApi();
+		const client = this.getClientProfiles().find((profile) => profile.id === clientId);
+		return buildClientSkillProfile(
+			clientId,
+			client?.displayName || clientId,
+			desktopApi?.os.homedir(),
+			desktopApi?.path.join.bind(desktopApi.path) || ((...parts) => parts.join('/'))
+		);
+	}
+
+	private requireClientSkillAdapter(): ClientSkillAdapter {
+		if (!this.clientSkillAdapter) {
+			throw new Error('Managed Skill installation is unavailable in this environment.');
+		}
+		return this.clientSkillAdapter;
 	}
 
 	private async appendClientConfigAuditEvent(

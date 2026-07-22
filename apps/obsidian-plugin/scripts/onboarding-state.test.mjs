@@ -10,65 +10,57 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-onboarding-t
 const output = path.join(tempRoot, 'onboarding-state.mjs');
 
 try {
-	await build({
-		entryPoints: [path.resolve('src/features/onboarding/onboarding-state.ts')],
-		outfile: output,
-		bundle: true,
-		platform: 'node',
-		format: 'esm',
-		logLevel: 'silent',
-	});
+	await build({ entryPoints: [path.resolve('src/features/onboarding/onboarding-state.ts')], outfile: output, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent' });
 	const stateModule = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
-	const state = stateModule.normalizeOnboardingSettingsState({ selectedClientId: 'codex' });
-	const context = {
-		vaultReady: true,
-		runtimeRunning: true,
-		clientConfigured: true,
-		skillSetupConfirmed: true,
-		agentRestartConfirmed: true,
-		connectionVerified: false,
-		firstRecallCompleted: false,
-	};
+	const legacyTime = '2026-07-22T00:00:00.000Z';
+	const legacy = stateModule.normalizeOnboardingSettingsState({ selectedClientId: 'codex', skillSetupCompletedAt: legacyTime });
+	assert.equal(legacy.skillUserConfirmedAt, legacyTime);
+	assert.equal(legacy.skillFileVerifiedAt, '');
 
-	assert.equal(stateModule.getNextOnboardingStep(state, context), 'connection_verification');
-	assert.equal(stateModule.hasOnboardingRecallResult(state), false);
-	const configuredOnly = stateModule.markClientConfigured(state, 'codex');
-	assert.equal(stateModule.getNextOnboardingStep(configuredOnly, context), 'connection_verification');
+	let state = stateModule.normalizeOnboardingSettingsState({ selectedClientId: 'codex' });
+	state = stateModule.markSkillCopied(state);
+	assert.ok(state.skillCopiedAt);
+	state = stateModule.markSkillUserConfirmed(state);
+	assert.ok(state.skillUserConfirmedAt);
+	assert.equal(state.skillFileVerifiedAt, '');
+	state = stateModule.markSkillFileVerified(state, 'sha256:bundle');
+	assert.equal(state.skillVerifiedBundleHash, 'sha256:bundle');
+	assert.ok(state.skillFileVerifiedAt);
+	state = stateModule.markSkillUpdateAvailable(state, true);
+	assert.ok(state.skillUpdateAvailableAt);
+	assert.equal(state.skillFileVerifiedAt, '');
 
-	const connected = stateModule.markConnectionVerified(configuredOnly);
-	const connectedContext = { ...context, connectionVerified: true };
-	assert.equal(stateModule.getNextOnboardingStep(connected, connectedContext), 'first_recall');
+	const tracked = stateModule.findOnboardingTrackedWorkflowEvidence([
+		{ principalId: 'client-codex', taskId: 'task-7', toolName: 'tracekeeper.start_task', resultStatus: 'success', resultSummary: 'opaque', argsSummary: '{}', sortTimestamp: 10 },
+		{ principalId: 'client-codex', toolName: 'tracekeeper.recall', resultStatus: 'success', resultSummary: 'matched_count=2', argsSummary: '{}', sortTimestamp: 20 },
+		{ principalId: 'client-codex', taskId: 'task-7', toolName: 'tracekeeper.finish_task', resultStatus: 'success', resultSummary: 'opaque', argsSummary: '{}', sortTimestamp: 30 },
+	], 'client-codex', 0);
+	assert.equal(tracked?.taskId, 'task-7');
+	assert.equal(stateModule.findOnboardingTrackedWorkflowEvidence([
+		{ principalId: 'client-codex', taskId: 'task-7', toolName: 'tracekeeper.start_task', resultStatus: 'success', resultSummary: 'opaque', argsSummary: '{}', sortTimestamp: 10 },
+		{ principalId: 'client-codex', toolName: 'tracekeeper.recall', resultStatus: 'success', resultSummary: 'matched_count=2', argsSummary: '{}', sortTimestamp: 20 },
+		{ principalId: 'client-codex', taskId: 'other', toolName: 'tracekeeper.finish_task', resultStatus: 'success', resultSummary: 'task_id=task-7', argsSummary: '{"task_id":"task-7"}', sortTimestamp: 30 },
+	], 'client-codex', 0), null);
+	assert.equal(stateModule.findOnboardingTrackedWorkflowEvidence([
+		{ principalId: 'client-codex', toolName: 'tracekeeper.start_task', resultStatus: 'success', resultSummary: 'task_id=task-legacy', argsSummary: '{}', sortTimestamp: 10 },
+		{ principalId: 'client-codex', toolName: 'tracekeeper.recall', resultStatus: 'success', resultSummary: 'matched_count=1', argsSummary: '{}', sortTimestamp: 20 },
+		{ principalId: 'client-codex', toolName: 'tracekeeper.finish_task', resultStatus: 'success', resultSummary: 'ok=true', argsSummary: '{"task_id":"task-legacy"}', sortTimestamp: 30 },
+	], 'client-codex', 0)?.taskId, 'task-legacy');
 
-	const zeroMatch = stateModule.markFirstRecallDone(connected, 0, 'missing');
-	assert.equal(zeroMatch, connected);
-	assert.equal(stateModule.hasOnboardingRecallResult(zeroMatch), false);
-
-	const recalled = stateModule.markFirstRecallDone(connected, 2, 'tracekeeper');
-	assert.equal(stateModule.hasOnboardingRecallResult(recalled), true);
-	assert.equal(
-		stateModule.getNextOnboardingStep(recalled, { ...connectedContext, firstRecallCompleted: true }),
-		'complete'
-	);
-
-	const reset = stateModule.resetOnboardingState();
-	assert.equal(reset.selectedClientId, 'codex');
-	assert.equal(reset.connectionVerifiedAt, '');
-	assert.equal(reset.firstRecallMatchedCount, 0);
-	assert.equal(stateModule.hasOnboardingConnectionEvidence([
-		{ principalId: 'client-codex', transport: 'obsidian-direct', sortTimestamp: 20 },
-		{ principalId: 'legacy-shared-token', transport: 'streamable-http', sortTimestamp: 20 },
-	], 'client-codex', 10), false);
+	const recall = stateModule.findOnboardingRecallEvidence([
+		{ principalId: 'client-codex', toolName: 'tracekeeper.recall', resultStatus: 'success', resultSummary: 'matched_count=3', argsSummary: '{}', sortTimestamp: 20 },
+	], 'client-codex', 10);
+	assert.equal(recall?.matchedCount, 3);
 	assert.equal(stateModule.hasOnboardingConnectionEvidence([
 		{ principalId: 'client-codex', transport: 'streamable-http', sortTimestamp: 20 },
 	], 'client-codex', 10), true);
-	assert.equal(stateModule.findOnboardingRecallEvidence([
-		{ principalId: 'client-codex', toolName: 'tracekeeper.recall', resultStatus: 'success', resultSummary: 'matched_count=0', argsSummary: '{}', sortTimestamp: 20 },
-	], 'client-codex', 10), null);
-	const recallEvidence = stateModule.findOnboardingRecallEvidence([
-		{ principalId: 'client-codex', toolName: 'tracekeeper.recall', resultStatus: 'success', resultSummary: 'ok=true | matched_count=3', argsSummary: '{"query":"tracekeeper"}', sortTimestamp: 20 },
-	], 'client-codex', 10);
-	assert.equal(recallEvidence?.matchedCount, 3);
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 14 })}\n`);
+
+	const observed = stateModule.markTrackedWorkflowObserved(state, 'task-7');
+	assert.equal(observed.trackedWorkflowTaskId, 'task-7');
+	const reset = stateModule.resetOnboardingState();
+	assert.equal(reset.skillUserConfirmedAt, '');
+	assert.equal(reset.trackedWorkflowObservedAt, '');
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 19 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

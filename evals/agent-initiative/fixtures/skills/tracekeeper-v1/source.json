@@ -1,0 +1,12 @@
+{
+	"fixture_id": "tracekeeper-skill-v1-git-snapshot",
+	"fixture_path": "evals/agent-initiative/fixtures/skills/tracekeeper-v1/SKILL.md",
+	"fixture_sha256": "ea6a5f1b14d992ab3ba41cfdc5a459292d3d875277d8f5a80eb0e530c105ef88",
+	"source": {
+		"repository_path": "skills/tracekeeper/SKILL.md",
+		"git_commit": "5114bfe37216816f45de5b575e8aada5b0897ca9",
+		"git_blob_sha1": "fd78ad6d8e9c36ba7ecca78f688b4858db6bd779",
+		"extraction_command": "git show 5114bfe37216816f45de5b575e8aada5b0897ca9:skills/tracekeeper/SKILL.md"
+	},
+	"note": "Exact byte fixture for the historical Phase 0 Skill v1 baseline; do not refresh it from the live Skill."
+}

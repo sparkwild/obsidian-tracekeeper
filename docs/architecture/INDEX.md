@@ -28,13 +28,23 @@ Desktop Obsidian owns the production runtime lifecycle. The standalone MCP proce
 | --- | --- | --- |
 | `apps/obsidian-plugin` | Composition root, Obsidian Vault/event adapters, runtime lifecycle, native views, onboarding, review actions, client configuration | Contracts, MCP runtime, core primitives, Obsidian API |
 | `apps/mcp-server` | Standalone Node composition and cross-layer smoke tests | MCP runtime and core primitives |
-| `packages/contracts` | Public/compatibility tool names, visibility, capability, risk, input schema, and deprecation metadata | No workspace package |
-| `packages/mcp-runtime` | Streamable HTTP transport, authenticated sessions, application tool adapter, operation recovery, and capability enforcement | Contracts and core |
+| `packages/contracts` | Public/compatibility tool names, visibility, capability, effect, idempotency, workflow role, input/output schema, and deprecation metadata | No workspace package |
+| `packages/mcp-runtime` | Streamable HTTP transport, protocol surfaces, authenticated sessions, structured actions/results, application tool adapter, operation recovery, and capability enforcement | Contracts and core |
 | `packages/core` | Markdown parsing, rebuildable knowledge index, scanning, recall, context packs, graph health, lint, paths, safety, and operation journal | Node filesystem only in its Node adapters |
 | `skills/tracekeeper` | Companion Skill guidance for Agent invocation and closeout habits | MCP runtime enforcement, path safety, write approvals |
 | Vault | Control files, work traces, durable knowledge, sources, proposals, and archive | User's local filesystem and Obsidian |
 
 Shared rules belong in the lowest reusable owner. UI code should not reimplement path safety or knowledge rules, and the core package should not know about Obsidian views or Agent client configuration.
+
+### Agent interaction contract
+
+The [Agent Workflow Contract](AGENT_WORKFLOW_CONTRACT.md) defines three modes: `no_track`, `recall_only`, and `tracked_task`. The companion Skill owns mode selection and Agent habits; the Runtime never trusts the Skill for authorization.
+
+Public tool definitions are derived from one contract registry. `tools/list` preserves deterministic order, filters definitions by the authenticated principal's capabilities, and exposes accurate annotations plus `outputSchema`. Tool calls use the same capability evaluator. Every result provides validated `structuredContent` and an equivalent compact JSON text representation for clients with incomplete structured-result support.
+
+Core workflow results return structured Agent actions with stable action ids, timing, reason codes, required capabilities, and executable arguments. Compatibility prose remains derived from the structured result. `start_task` returns a real task handle and scoped recall action; `recall` returns bounded follow-up actions; `finish_task` returns a canonical memory closeout state and never asks an already completed task to finish again.
+
+Recall matches and correlated note reads carry a `recall_id`, a content-origin classification, and `instruction_trust: data_only`. These fields make the instruction boundary explicit: recalled Vault content may inform the task but cannot redefine system instructions, permissions, review gates, or the active task identity.
 
 ### Vault repository boundary
 
@@ -131,9 +141,11 @@ Task, session, source-analysis, context-pack, request, and proposal records are 
 
 Project auto-save retains content signatures. `start_task`, `finish_task`, and approved writeback additionally use stable operation identities, payload-hash idempotency checks, atomic replacement, and per-operation journals under `00_tracekeeper/control/operations/`. Journal execution uses an in-process queue plus a vault-local process lock and atomic initial claim, preventing the plugin runtime and standalone development runtime from executing the same idempotency key concurrently. Runtime startup resumes known unfinished operations by rolling them forward, exposes recovered/failed/skipped counts to Connection Status, and never rolls user-visible Markdown back over a later edit.
 
-### Client configuration
+### Vault-outside client integration
 
-Client configuration is the only expected write outside the active vault. It is owned by the Obsidian plugin, never by MCP tools. Supported automatic changes must:
+Client configuration and explicitly confirmed Skill installation are the only expected writes outside the active vault. They are owned by the Obsidian plugin, never by MCP tools.
+
+Supported automatic client-configuration changes must:
 
 1. show the target and intended Tracekeeper-only change;
 2. create a short-lived preview plan containing the target, original-content hash, intended change, and expiry;
@@ -144,6 +156,10 @@ Client configuration is the only expected write outside the active vault. It is 
 7. record a local audit event without persisting credentials.
 
 Codex and Claude Desktop currently support automatic configuration when the desktop filesystem API is available. Claude Code, Cursor, and custom clients receive copyable configuration. Each profile receives an independent credential principal so authorization and audit do not trust the client-reported name. The settings UI can rotate one client credential without invalidating the others. The legacy shared token remains a compatibility credential during migration.
+
+The complete companion Skill bundle is embedded from canonical repository sources. A managed Skill installation must show a short-lived file plan, require user confirmation, recheck original hashes, stage replacement files, back up changed originals, roll back partial failure, and refuse automatic overwrite when the installed bundle has user modifications. Install audit records contain only the action, client id, bundle hash, backup-created flag, result, and timestamp. Unsupported clients receive the flattened compatibility artifact for manual installation.
+
+Managed credentials may use local capability profiles such as knowledge assistance, research, review, or maintenance. A profile is only a preset over Runtime capabilities and visible public tools. It does not create users, teams, remote policy, or a second authorization model; the credential capability list remains the enforceable fact.
 
 ## Permissions And Review
 
@@ -168,6 +184,14 @@ Agent clients initiate task execution, source submission/analysis, context-pack 
 Do not duplicate the Agent's operational workflow as a second set of plugin commands. A plugin action is appropriate when it requires local human context or confirmation.
 
 Streamable HTTP is the supported client transport. Tracekeeper does not publish SSE or stdio client profiles, and clients should connect to the Obsidian-hosted URL rather than a repository checkout.
+
+The Runtime negotiates the supported MCP protocol versions `2025-06-18` and `2025-11-25`. After initialization, each HTTP request must carry the negotiated `Mcp-Protocol-Version` and the current session id. Declared server capabilities are complete: tools support list/call, five fixed `tracekeeper://` resources support list/read, and four capability-filtered workflow prompts support list/get. Resources resolve only fixed Vault-relative targets; prompts are user-invoked templates and never grant permission or force automatic tool selection. Tracekeeper's knowledge-work task remains distinct from the MCP asynchronous Tasks utility.
+
+## Local Workflow Diagnostics
+
+Tool-call audit records may include bounded workflow metadata such as contract/result versions, mode, task/recall/action ids, snapshot generation, scope confidence, matched count, and canonical closeout state. They do not contain complete prompts, note bodies, credentials, or full tool results.
+
+The Activity view aggregates recent local audit events into start-to-recall, recall-to-read, and start-to-finish ratios, active or aged workflows, zero-match recalls, permission denials, closeout distribution, duration percentiles, and recently active principals. It also exposes the bundled Skill version and a copyable command for the repository-local deterministic initiative Eval. These metrics cover only calls that reached Tracekeeper, shrink when audit history is cleaned, remain on the user's machine, and are diagnostics rather than a missed-call denominator or performance score.
 
 ## Lint And Graph Health
 

@@ -13,16 +13,48 @@ const {
 	getContractByName,
 	isPublicTool,
 	isCompatibilityTool,
+	AGENT_ACTION_KINDS,
+	AGENT_ACTION_TIMINGS,
+	AGENT_ACTION_REASON_CODES,
+	AGENT_ACTION_SCHEMA,
+	GENERIC_TOOL_OUTPUT_SCHEMA,
+	START_TASK_OUTPUT_SCHEMA,
+	RECALL_OUTPUT_SCHEMA,
+	FINISH_TASK_OUTPUT_SCHEMA,
 } = contracts;
+
+const VALID_EFFECTS = new Set(['read', 'append', 'bounded-update', 'review-gated']);
+const VALID_IDEMPOTENCY = new Set(['natural', 'keyed', 'none']);
+const VALID_WORLD = new Set(['closed']);
+const VALID_WORKFLOW_ROLES = new Set(['observe', 'recall', 'task-start', 'task-finish', 'review', 'source', 'memory']);
+const EXPECTED_NONE_IDEMPOTENCY_TOOLS = new Set([
+	'tracekeeper.source_request',
+	'tracekeeper.analyze_source_request',
+	'tracekeeper.build_context_pack',
+	'tracekeeper.distill_session',
+	'tracekeeper.write_context_pack',
+	'tracekeeper.write_session_note',
+	'tracekeeper.capture_source',
+	'tracekeeper.propose_memory',
+]);
+const EXPECTED_KEYED_IDEMPOTENCY_TOOLS = new Set([
+	'tracekeeper.start_task',
+	'tracekeeper.finish_task',
+	'tracekeeper.apply_approved_writeback',
+]);
+
+const publicNameSet = new Set(PUBLIC_TOOL_NAME_ORDER);
+let visibilityMissing = 0;
+const toolNameSet = new Set();
+const actualNoneIdempotencyTools = new Set();
+const actualKeyedIdempotencyTools = new Set();
 
 assert(Array.isArray(toolContracts), 'toolContracts should be an array');
 assert(toolContracts.length > 0, 'toolContracts should not be empty');
 
-const publicNameSet = new Set(PUBLIC_TOOL_NAME_ORDER);
-const byName = new Map();
-let visibilityMissing = 0;
-
 for (const contract of toolContracts) {
+	assert(!toolNameSet.has(contract.name), `tool name should be unique: ${contract.name}`);
+	toolNameSet.add(contract.name);
 	assert(typeof contract.name === 'string' && contract.name.length > 0, 'tool contract missing name');
 	assert(contract.version > 0, `tool contract ${contract.name} missing valid version`);
 	assert(['public', 'compatibility', 'internal'].includes(contract.visibility), `tool contract ${contract.name} has invalid visibility`);
@@ -36,19 +68,35 @@ for (const contract of toolContracts) {
 		['read-only', 'low-risk-write', 'review-gated-write'].includes(contract.risk),
 		`tool contract ${contract.name} has invalid risk`,
 	);
+	assert(VALID_EFFECTS.has(contract.effect), `tool contract ${contract.name} has invalid effect`);
+	assert(VALID_IDEMPOTENCY.has(contract.idempotency), `tool contract ${contract.name} has invalid idempotency`);
+	assert(VALID_WORLD.has(contract.world), `tool contract ${contract.name} has invalid world`);
+	assert(
+		VALID_WORKFLOW_ROLES.has(contract.workflowRole),
+		`tool contract ${contract.name} has invalid workflowRole`,
+	);
 	assert(typeof contract.useCase === 'string' && contract.useCase.length > 0, `tool contract ${contract.name} missing useCase`);
 	assert(contract.inputSchema && contract.inputSchema.type === 'object', `tool contract ${contract.name} missing input schema`);
-	assert(contract.resultSchema && contract.resultSchema.type, `tool contract ${contract.name} missing result schema`);
-	if (contract.deprecated) {
-		assert(
-			typeof contract.deprecated.replacement === 'string' && contract.deprecated.replacement.length > 0,
-			`tool contract ${contract.name} has invalid deprecation replacement`,
-		);
+	assert(contract.outputSchema && contract.outputSchema.type === 'object', `tool contract ${contract.name} missing output schema`);
+	assert.deepStrictEqual(contract.outputSchema, contract.resultSchema, `tool contract ${contract.name} resultSchema must alias outputSchema`);
+	if (contract.idempotency === 'none') {
+		actualNoneIdempotencyTools.add(contract.name);
+	} else if (contract.idempotency === 'keyed') {
+		actualKeyedIdempotencyTools.add(contract.name);
 	}
-	byName.set(contract.name, contract);
 }
 
-assert.equal(byName.size, toolContracts.length, 'tool names must be unique');
+assert.strictEqual(toolNameSet.size, toolContracts.length, 'all tool names should be unique');
+assert.deepStrictEqual(
+	Array.from(actualNoneIdempotencyTools).sort(),
+	Array.from(EXPECTED_NONE_IDEMPOTENCY_TOOLS).sort(),
+	'none idempotency tools should be exact',
+);
+assert.deepStrictEqual(
+	Array.from(actualKeyedIdempotencyTools).sort(),
+	Array.from(EXPECTED_KEYED_IDEMPOTENCY_TOOLS).sort(),
+	'keyed idempotency tools should be exact',
+);
 
 assert.deepStrictEqual(
 	PUBLIC_TOOL_NAME_ORDER.length,
@@ -58,13 +106,11 @@ assert.deepStrictEqual(
 for (const publicName of PUBLIC_TOOL_NAME_ORDER) {
 	const contract = getContractByName(publicName);
 	assert(contract, `public tool must have a contract: ${publicName}`);
-	assert.strictEqual(
-		contract.visibility,
-		'public',
-		`public tool ${publicName} must be marked as visibility public`,
-	);
+	assert.strictEqual(contract.visibility, 'public', `public tool ${publicName} must be marked as visibility public`);
 	assert(isPublicTool(publicName), `public tool should be recognized by isPublicTool: ${publicName}`);
 	assert(!isCompatibilityTool(publicName), `public tool should not be compatibility: ${publicName}`);
+	assert.strictEqual(contract.world, 'closed', `public tool should be closed world: ${publicName}`);
+	assert(contract.outputSchema && typeof contract.outputSchema === 'object', `public tool ${publicName} needs output schema`);
 }
 
 for (const contract of toolContracts) {
@@ -76,6 +122,7 @@ for (const contract of toolContracts) {
 			`deprecated tool should be compatibility: ${contract.name}`,
 		);
 		const replacement = contract.deprecated.replacement;
+		assert(typeof replacement === 'string' && replacement.length > 0, `deprecated replacement must be a string: ${contract.name}`);
 		if (replacement.startsWith('tracekeeper.')) {
 			const match = replacement.match(/^(tracekeeper\.[a-z_]+)/);
 			assert(match, `deprecated replacement missing valid public tool: ${replacement}`);
@@ -84,8 +131,10 @@ for (const contract of toolContracts) {
 			assert(replacementContract, `deprecated tool ${contract.name} replacement must resolve to known contract: ${replacement}`);
 			assert.strictEqual(replacementContract.visibility, 'public', `deprecated replacement must be public: ${replacement}`);
 		}
+	} else {
+		assert(contract.visibility !== 'compatibility', `non-deprecated tool should not be compatibility: ${contract.name}`);
 	}
-	if (publicNameSet.has(contract.name)) {
+	if (isPublic) {
 		assert.strictEqual(contract.visibility, 'public', `public tool list has non-public contract: ${contract.name}`);
 	} else if (!contract.deprecated) {
 		visibilityMissing += 1;
@@ -94,8 +143,41 @@ for (const contract of toolContracts) {
 
 assert.strictEqual(visibilityMissing, 0, 'non-public tools without deprecated contract should be explicit internal tools');
 
-assert.strictEqual(isPublicTool('tracekeeper.recall'), true, 'tracekeeper.recall should be public');
-assert.strictEqual(isCompatibilityTool('tracekeeper.graph_health'), true, 'legacy graph_health should be compatibility');
+assert.deepStrictEqual(START_TASK_OUTPUT_SCHEMA, getContractByName('tracekeeper.start_task').outputSchema, 'start_task output schema must use START_TASK_OUTPUT_SCHEMA');
+assert.deepStrictEqual(RECALL_OUTPUT_SCHEMA, getContractByName('tracekeeper.recall').outputSchema, 'recall output schema must use RECALL_OUTPUT_SCHEMA');
+assert.deepStrictEqual(FINISH_TASK_OUTPUT_SCHEMA, getContractByName('tracekeeper.finish_task').outputSchema, 'finish_task output schema must use FINISH_TASK_OUTPUT_SCHEMA');
+
+for (const contract of toolContracts) {
+	if (contract.name === 'tracekeeper.start_task' || contract.name === 'tracekeeper.recall' || contract.name === 'tracekeeper.finish_task') {
+		continue;
+	}
+	assert.deepStrictEqual(contract.outputSchema, GENERIC_TOOL_OUTPUT_SCHEMA, `${contract.name} non-core tool should use generic output schema`);
+}
+
+assert(Array.isArray(AGENT_ACTION_KINDS), 'AGENT_ACTION_KINDS should be an array');
+assert(AGENT_ACTION_KINDS.includes('tool_call'), 'agent action kind should include tool_call');
+assert(AGENT_ACTION_KINDS.includes('user_review'), 'agent action kind should include user_review');
+assert(AGENT_ACTION_KINDS.includes('report_status'), 'agent action kind should include report_status');
+assert(AGENT_ACTION_KINDS.includes('stop'), 'agent action kind should include stop');
+
+assert(Array.isArray(AGENT_ACTION_TIMINGS), 'AGENT_ACTION_TIMINGS should be an array');
+assert(AGENT_ACTION_TIMINGS.includes('immediate'), 'action timing should include immediate');
+assert(AGENT_ACTION_TIMINGS.includes('if_context_insufficient'), 'action timing should include if_context_insufficient');
+assert(AGENT_ACTION_TIMINGS.includes('at_task_closeout'), 'action timing should include at_task_closeout');
+
+assert(Array.isArray(AGENT_ACTION_REASON_CODES), 'AGENT_ACTION_REASON_CODES should be an array');
+for (const reasonCode of ['TASK_CONTEXT_REQUIRED', 'TASK_CLOSEOUT_REQUIRED', 'RECALL_EXCERPT_MAY_BE_INSUFFICIENT']) {
+	assert(AGENT_ACTION_REASON_CODES.includes(reasonCode), `agent action reason codes should include ${reasonCode}`);
+}
+assert(AGENT_ACTION_REASON_CODES.includes('MEMORY_REVIEW_REQUIRED'), 'agent action reason codes should include MEMORY_REVIEW_REQUIRED');
+
+assert(Array.isArray(AGENT_ACTION_SCHEMA.required), 'AGENT_ACTION_SCHEMA should have required list');
+for (const requiredField of ['action_id', 'kind', 'priority', 'required', 'timing', 'reason_code', 'reason']) {
+	assert(AGENT_ACTION_SCHEMA.required.includes(requiredField), `agent action schema should require ${requiredField}`);
+}
+
+assert.strictEqual(AGENT_ACTION_SCHEMA.type, 'object', 'AGENT_ACTION_SCHEMA should be object schema');
+assert(AGENT_ACTION_SCHEMA.properties && typeof AGENT_ACTION_SCHEMA.properties === 'object', 'AGENT_ACTION_SCHEMA should define properties');
 
 console.log(
 	`ok: validated ${toolContracts.length} contracts, ${PUBLIC_TOOL_NAME_ORDER.length} public in ordered list and ${visibilityMissing} internal tools`,

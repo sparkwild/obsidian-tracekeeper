@@ -46,7 +46,7 @@ Tracekeeper 会把 AI 给出的整理结果当成候选记忆提案。你可以�
 
 1. 像平时一样在 Obsidian 中记录和收集资料。
 2. 启用 Tracekeeper，并打开 **设置 -> 第三方插件 -> Tracekeeper**。
-3. 在可恢复的 **首次安装引导** 中选择 Agent，预览或复制它的独立连接配置，复制插件内置的配套 Skill，并在客户端中安装或挂载。
+3. 在可恢复的 **首次安装引导** 中选择 Agent，预览或复制它的独立连接配置；受支持客户端可预览安装完整 Skill bundle，其他客户端可复制单文件兼容 Skill。
 4. 按提示重启 Agent，让它调用 Tracekeeper，再由插件核验该客户端留下的真实连接证据。
 5. 让这个 Agent 执行一次至少命中一条笔记的窄范围 `tracekeeper.recall`，随后在设置中核验首次召回证据。
 6. 在 **Review Queue** 中查看需要审核的记忆、wiki、图谱或迁移候选项。
@@ -54,11 +54,11 @@ Tracekeeper 会把 AI 给出的整理结果当成候选记忆提案。你可以�
 
 ## Agent 与 MCP 连接
 
-Tracekeeper 在桌面端 Obsidian 开启时提供本机 Streamable HTTP MCP Runtime。Runtime 默认绑定 loopback 地址，并为每个受管理的 Agent 客户端生成独立的 credential principal；连接 URL 中的凭据只代表对应客户端。设置页可以单独轮换一个客户端凭据而不影响其他 Agent，旧版共享 token 仍保留迁移兼容。
+Tracekeeper 在桌面端 Obsidian 开启时提供本机 Streamable HTTP MCP Runtime。Runtime 默认绑定 loopback 地址，并为每个受管理的 Agent 客户端生成独立的 credential principal；本地 capability profile 决定该凭据能够发现和调用哪些公开工具，它只是预设，不是团队 RBAC。设置页可以单独轮换一个客户端凭据而不影响其他 Agent，旧版共享 token 仍保留迁移兼容。
 
 AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 vault 上下文、构建 context pack、记录有限范围内的工作笔记，并按你的记忆规则提交更新。全局记忆默认进入审核队列；项目记忆可以按规则自动追加保存到项目记忆笔记。
 
-Codex、Claude、Cursor 等 MCP 客户端应使用同一套流程：开始任务、召回最小必要范围的上下文、结束任务，并决定任务收尾记忆自动处理、进入审核，还是忽略。仓库内的配套 Skill 负责教授这套主动调用习惯，但不会保存 token、授予权限或复制 MCP 实现。召回结果会包含精简摘要、命中原因和图谱链接，Agent 只有在摘要不够时才需要读取完整笔记。参见 [Agent 工作流契约](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md)。
+Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选择 `no_track`、`recall_only` 或 `tracked_task`；tracked 工作只启动一次、使用返回的 task id、召回最小必要上下文并只结束一次。它不会保存 token、授予权限或复制 MCP 实现。召回内容会明确标记为知识数据而非指令，结构化 MCP action 则减少客户端二次猜测。参见 [Agent 工作流契约](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md)。
 
 连接是 local-first 的：
 

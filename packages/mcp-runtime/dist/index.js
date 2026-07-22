@@ -18,3 +18,4 @@ __exportStar(require("./protocol"), exports);
 __exportStar(require("./tools"), exports);
 __exportStar(require("./handler"), exports);
 __exportStar(require("./http-runtime"), exports);
+__exportStar(require("./result-validation"), exports);

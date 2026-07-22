@@ -5,6 +5,7 @@ import type { AgentActivitySnapshot, AgentTaskRecord } from './activity-model';
 import { MemoryRecallPreviewModal } from '../recall/memory-recall-preview-modal';
 import { pluginDisplayName, ui } from '../../ui/localization';
 import { trimText } from '../shared/markdown-record-parser';
+import { TRACEKEEPER_SKILL_BUNDLE } from '../skill-installation/skill-bundle';
 import {
 	TRACEKEEPER_ACTIVITY_VIEW,
 	TRACEKEEPER_REVIEW_QUEUE_VIEW,
@@ -91,6 +92,7 @@ export class TracekeeperActivityView extends ItemView {
 		this.renderStatusItem(statusBar, ui('刷新时间', 'Last refreshed'), this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt)));
 
 		this.renderMemoryLoopSection(contentEl, snapshot);
+		this.renderWorkflowDiagnosticsSection(contentEl, snapshot.workflowDiagnostics);
 
 		const currentSection = contentEl.createDiv({ cls: 'tracekeeper-card' });
 		currentSection.createEl('h3', { text: ui('最后一次执行的任务', 'Last task') });
@@ -183,6 +185,135 @@ export class TracekeeperActivityView extends ItemView {
 			snapshot.latestTask
 				? this.formatLatestCloseoutStatus(snapshot.latestTask)
 				: ui('暂无任务记录', 'No task records')
+		);
+	}
+
+	private renderWorkflowDiagnosticsSection(container: HTMLElement, diagnostics: AgentActivitySnapshot['workflowDiagnostics']): void {
+		const card = container.createDiv({ cls: 'tracekeeper-card' });
+		card.createEl('h3', { text: ui('工作流诊断', 'Workflow diagnostics') });
+
+		const metrics = card.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderMetricCard(
+			metrics,
+			ui('活跃工作流', 'Active workflows'),
+			String(diagnostics.activeWorkflowCount),
+			diagnostics.agedWorkflowCount > 0
+				? ui(
+					`${diagnostics.agedWorkflowCount} 条工作流已超过 24 小时未结束`,
+					`${diagnostics.agedWorkflowCount} workflows have remained unfinished for 24h+`
+				)
+				: ui('无超时工作流', 'No aged workflows (24h+)')
+		);
+		this.renderMetricCard(
+			metrics,
+			ui('Start→Recall 成功率', 'Start→Recall'),
+			this.formatWorkflowRatio(diagnostics.startToRecallCount, diagnostics.successfulStartCount),
+			ui('成功 Start 中到达 Recall 的比例', 'Share of successful starts that reached recall')
+		);
+		this.renderMetricCard(
+			metrics,
+			ui('Recall→Read 成功率', 'Recall→Read'),
+			this.formatWorkflowRatio(diagnostics.recallToReadCount, diagnostics.successfulRecallCount),
+			ui('成功 Recall 中继续读取完整笔记的比例', 'Share of successful recalls followed by read note')
+		);
+		this.renderMetricCard(
+			metrics,
+			ui('Start→Finish 成功率', 'Start→Finish'),
+			this.formatWorkflowRatio(diagnostics.startToFinishCount, diagnostics.successfulStartCount),
+			ui('成功 Start 中完成 tracked closeout 的比例', 'Share of successful starts with tracked closeout')
+		);
+		this.renderMetricCard(
+			metrics,
+			ui('零命中 Recall', 'Zero-match recall'),
+			String(diagnostics.zeroMatchRecallCount),
+			diagnostics.zeroMatchRecallCount > 0
+				? ui('有些召回未命中结果', 'Some recalls returned no matches')
+				: ui('无零命中召回', 'No zero-match recalls')
+		);
+		this.renderMetricCard(
+			metrics,
+			ui('权限拒绝', 'Permission denied'),
+			String(diagnostics.permissionDeniedCount),
+			ui('来自工具调用的失败次数', 'Tool-call failures from permission checks')
+		);
+
+		const detailSection = card.createDiv({ cls: 'tracekeeper-detail-grid tracekeeper-memory-loop-grid' });
+		this.renderWorkflowDiagnosticsDetail(detailSection, diagnostics);
+		this.renderMetricCard(
+			detailSection,
+			ui('内置 Skill', 'Bundled Skill'),
+			`v${TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version}`,
+			ui('安装、更新与行为证据请在设置页查看', 'See Settings for install, update, and behavior evidence')
+		);
+		this.renderMetricCard(
+			detailSection,
+			ui('持续时间 P50/P95', 'Duration P50/P95'),
+			diagnostics.durationP50Ms === null || diagnostics.durationP95Ms === null
+				? ui('暂无', 'No data')
+				: `${diagnostics.durationP50Ms}ms / ${diagnostics.durationP95Ms}ms`,
+			diagnostics.durationP50Ms === null || diagnostics.durationP95Ms === null
+				? ui('无可用耗时样本', 'No duration samples')
+				: ui('基于最近审计事件', 'From recent audit events')
+		);
+
+		const evalRow = card.createDiv({ cls: 'tracekeeper-action-row' });
+		const evalDescription = evalRow.createDiv();
+		evalDescription.createEl('strong', { text: ui('本地主动性 Eval', 'Local initiative Eval') });
+		evalDescription.createEl('div', {
+			text: ui(
+				'仓库检出环境可运行 npm run eval:agent-initiative:test；评测不会读取真实 Vault。',
+				'In a repository checkout, run npm run eval:agent-initiative:test; it does not read the real Vault.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+		const copyEval = evalRow.createEl('button', { text: ui('复制命令', 'Copy command') });
+		copyEval.addEventListener('click', () => {
+			void this.plugin.copyToClipboard(
+				'npm run eval:agent-initiative:test',
+				ui('本地 Eval 命令已复制。', 'Local Eval command copied.')
+			).catch((error) => {
+				console.error('tracekeeper failed to copy local Eval command', error);
+				new Notice(ui('复制本地 Eval 命令失败。', 'Failed to copy the local Eval command.'));
+			});
+		});
+
+		card.createEl('p', {
+			text: ui(
+				'仅统计真实调用 Tracekeeper 的本地审计事件，不能代表漏调用率；清理审计会缩短历史。数据不会上传，这些指标只用于诊断，不用于用户绩效评分。',
+				'Only locally audited Tracekeeper calls are counted, so this is not a missed-call rate. Audit cleanup shortens history. Nothing is uploaded, and these diagnostics are not user performance scoring.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+	}
+
+	private formatWorkflowRatio(completed: number, eligible: number): string {
+		if (eligible === 0) return ui('暂无', 'No data');
+		return `${Math.round((completed / eligible) * 100)}% (${completed}/${eligible})`;
+	}
+
+	private renderWorkflowDiagnosticsDetail(container: HTMLElement, diagnostics: AgentActivitySnapshot['workflowDiagnostics']): void {
+		const closeout = diagnostics.closeoutStatusDistribution;
+		const entries = Object.entries(closeout)
+			.filter(([, count]) => count > 0)
+			.sort(([left], [right]) => left.localeCompare(right));
+		if (entries.length > 0) {
+			const detail = container.createDiv({ cls: 'tracekeeper-memory-loop-summary' });
+			detail.createEl('span', { text: ui('Finish 关闭状态', 'Finish closeout status') });
+			if (entries.length > 0) {
+				detail.createEl('p', {
+					text: entries.map(([status, count]) => `${status}: ${count}`).join(' · '),
+					cls: 'tracekeeper-view__description',
+				});
+			}
+		}
+
+		this.renderMetricCard(
+			container,
+			ui('近期 principal', 'Recent principals'),
+			String(diagnostics.recentPrincipals.length),
+			diagnostics.recentPrincipals.length > 0
+				? diagnostics.recentPrincipals.join(' · ')
+				: ui('暂无', 'None')
 		);
 	}
 

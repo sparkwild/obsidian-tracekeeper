@@ -8,32 +8,13 @@ import { build } from 'esbuild';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-onboarding-acceptance-'));
 
-const readFile = (relativePath) => {
-	const absolute = path.resolve(relativePath);
-	return fs.readFileSync(absolute, 'utf8');
-};
-
 try {
 	const stateBundle = path.join(tempRoot, 'onboarding-state.bundle.mjs');
 	const viewModelBundle = path.join(tempRoot, 'onboarding-view-model.bundle.mjs');
 	const pluginBundle = path.join(tempRoot, 'main.bundle.mjs');
-
-	await build({
-		entryPoints: [path.resolve('src/features/onboarding/onboarding-state.ts')],
-		outfile: stateBundle,
-		bundle: true,
-		platform: 'node',
-		format: 'esm',
-		logLevel: 'silent',
-	});
-	await build({
-		entryPoints: [path.resolve('src/features/onboarding/onboarding-view-model.ts')],
-		outfile: viewModelBundle,
-		bundle: true,
-		platform: 'node',
-		format: 'esm',
-		logLevel: 'silent',
-	});
+	const embeddedBundleOutput = path.join(tempRoot, 'skill-bundle.mjs');
+	await build({ entryPoints: [path.resolve('src/features/onboarding/onboarding-state.ts')], outfile: stateBundle, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent' });
+	await build({ entryPoints: [path.resolve('src/features/onboarding/onboarding-view-model.ts')], outfile: viewModelBundle, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent' });
 	await build({
 		entryPoints: [path.resolve('src/main.ts')],
 		outfile: pluginBundle,
@@ -43,156 +24,85 @@ try {
 		target: ['es2018'],
 		external: ['obsidian'],
 		logLevel: 'silent',
-		loader: { '.md': 'text' },
+		loader: { '.md': 'text', '.json': 'text' },
+	});
+	await build({
+		entryPoints: [path.resolve('src/features/skill-installation/skill-bundle.ts')],
+		outfile: embeddedBundleOutput,
+		bundle: true,
+		platform: 'node',
+		format: 'esm',
+		logLevel: 'silent',
+		loader: { '.md': 'text', '.json': 'text' },
 	});
 
 	const onboardingState = await import(`${pathToFileURL(stateBundle).href}?test=${Date.now()}`);
 	const onboardingViewModel = await import(`${pathToFileURL(viewModelBundle).href}?test=${Date.now()}`);
-	const pluginMainSource = readFile('src/features/settings/tracekeeper-setting-tab.ts');
-	const pluginBuildSource = readFile('scripts/build.mjs');
-	const pluginBundleSource = readFile(pluginBundle);
-	const skillSource = readFile(path.join('..', '..', 'skills', 'tracekeeper', 'SKILL.md'));
+	const embeddedBundle = await import(`${pathToFileURL(embeddedBundleOutput).href}?test=${Date.now()}`);
+	const settingsSource = fs.readFileSync('src/features/settings/tracekeeper-setting-tab.ts', 'utf8');
+	const buildSource = fs.readFileSync('scripts/build.mjs', 'utf8');
+	const skillBundleSource = fs.readFileSync('src/features/skill-installation/skill-bundle.ts', 'utf8');
+	const pluginBundleSource = fs.readFileSync(pluginBundle, 'utf8');
 
 	assert.equal(onboardingState.ONBOARDING_STEP_SEQUENCE[3], 'skill_setup');
 	assert.equal(onboardingState.ONBOARDING_STEP_SEQUENCE[4], 'agent_restart');
-	assert.ok(onboardingState.ONBOARDING_STEP_SEQUENCE.includes('connection_verification'));
-	assert.ok(onboardingState.ONBOARDING_STEP_SEQUENCE.includes('first_recall'));
+	const migrated = onboardingState.normalizeOnboardingSettingsState({
+		selectedClientId: 'codex',
+		skillSetupCompletedAt: '2026-07-22T00:00:00.000Z',
+	});
+	assert.equal(migrated.skillUserConfirmedAt, '2026-07-22T00:00:00.000Z');
+	assert.equal(migrated.skillFileVerifiedAt, '');
 
-	const baseState = onboardingState.DEFAULT_ONBOARDING_SETTINGS;
-	const baseContext = {
-		vaultReady: true,
-		runtimeRunning: true,
-		clientConfigured: false,
-		skillSetupConfirmed: false,
-		agentRestartConfirmed: false,
-		connectionVerified: false,
-		firstRecallCompleted: false,
+	const evidenceState = {
+		...migrated,
+		skillUserConfirmedAt: '',
+		skillSetupCompletedAt: '',
+		agentRestartCompletedAt: '2026-07-22T00:00:01.000Z',
+		connectionVerifiedAt: '2026-07-22T00:00:02.000Z',
+		firstRecallCompletedAt: '2026-07-22T00:00:03.000Z',
+		firstRecallMatchedCount: 2,
 	};
-
-	assert.equal(onboardingState.getNextOnboardingStep(baseState, baseContext), 'client_configuration');
-	assert.ok(onboardingState.markFirstRecallDone(baseState, 0, 'tracekeeper') === baseState);
-
-	const configured = onboardingState.markClientConfigured(baseState, 'codex');
-	const contextWithClient = { ...baseContext, clientConfigured: true };
-	assert.equal(onboardingState.getNextOnboardingStep(configured, contextWithClient), 'skill_setup');
-
-	const skillDone = onboardingState.markSkillSetupDone(configured);
-	assert.equal(onboardingState.getNextOnboardingStep(skillDone, { ...contextWithClient, skillSetupConfirmed: true }), 'agent_restart');
-
-	const restarted = onboardingState.markAgentRestartDone(skillDone);
-	assert.equal(
-		onboardingState.getNextOnboardingStep(
-			restarted,
-			{ ...contextWithClient, skillSetupConfirmed: true, agentRestartConfirmed: true }
-		),
-		'connection_verification'
-	);
-
-	assert.equal(
-		onboardingState.hasOnboardingConnectionEvidence(
-			[{ principalId: 'client-codex', transport: 'obsidian-direct', sortTimestamp: 200 }],
-			'client-codex',
-			0
-		),
-		false
-	);
-	assert.equal(
-		onboardingState.hasOnboardingConnectionEvidence(
-			[{ principalId: 'client-codex', transport: 'streamable-http', sortTimestamp: 20 }],
-			'client-codex',
-			30
-		),
-		false
-	);
-	assert.equal(
-		onboardingState.hasOnboardingConnectionEvidence(
-			[{ principalId: 'client-codex', transport: 'streamable-http', sortTimestamp: 200 }],
-			'client-codex',
-			30
-		),
-		true
-	);
-
-	assert.equal(
-		onboardingState.findOnboardingRecallEvidence(
-			[
-				{
-					principalId: 'client-codex',
-					toolName: 'tracekeeper.recall',
-					resultStatus: 'success',
-					resultSummary: 'matched_count=0',
-					argsSummary: '{"query":"tracekeeper"}',
-					sortTimestamp: 200,
-				},
-			],
-			'client-codex',
-			30
-		),
-		null
-	);
-
-	const recallEvidence = onboardingState.findOnboardingRecallEvidence(
-		[
-			{
-				principalId: 'client-codex',
-				toolName: 'tracekeeper.recall',
-				resultStatus: 'success',
-				resultSummary: 'ok=true | matched_count=2',
-				argsSummary: '{"query":"tracekeeper"}',
-				sortTimestamp: 200,
-			},
-		],
-		'client-codex',
-		30
-	);
-	assert.equal(recallEvidence?.matchedCount, 2);
-
-	const connected = onboardingState.markConnectionVerified(restarted);
-	const firstRecallState = onboardingState.markFirstRecallDone(connected, 2, 'tracekeeper');
-	const completedContext = {
-		vaultReady: true,
-		runtimeRunning: true,
-		clientConfigured: true,
-		skillSetupConfirmed: true,
-		agentRestartConfirmed: true,
-		connectionVerified: true,
-		firstRecallCompleted: true,
-	};
-	assert.equal(onboardingState.getNextOnboardingStep(firstRecallState, completedContext), 'complete');
-	assert.equal(onboardingState.hasOnboardingRecallResult(firstRecallState), true);
-
-	const fromViewModel = onboardingViewModel.buildOnboardingContext({
+	const context = onboardingViewModel.buildOnboardingContext({
 		vaultReady: true,
 		runtimeState: 'running',
 		runtimeEnabled: true,
-		onboarding: firstRecallState,
 		selectedClient: { clientId: 'codex', configState: 'configured' },
+		skillInstallState: { state: 'installed', fileVerified: true, updateAvailable: false },
+		onboarding: evidenceState,
 	});
-	assert.equal(fromViewModel.firstRecallCompleted, true);
-	assert.equal(fromViewModel.connectionVerified, true);
+	assert.equal(context.skillFileVerified, true);
+	assert.equal(context.skillUserConfirmed, false);
+	assert.equal(context.recallObserved, true);
+	assert.equal(context.trackedWorkflowObserved, false);
+	assert.equal(onboardingState.getNextOnboardingStep(evidenceState, context), 'complete');
 
-	const fallbackClientSelection = onboardingViewModel.resolveOnboardingSelectedClient(
-		{ ...firstRecallState, selectedClientId: 'legacy' },
-		[{ clientId: 'codex', configState: 'configured' }, { clientId: 'cursor' }],
-		'2026-07-22T00:00:00.000Z'
-	);
-	assert.equal(fallbackClientSelection.selectedClientId, 'codex');
-	assert.equal(fallbackClientSelection.state.selectedClientId, 'codex');
-	assert.equal(fallbackClientSelection.state.lastUpdatedAt, '2026-07-22T00:00:00.000Z');
+	assert.ok(buildSource.includes('checkTracekeeperSkillBundle'));
+	assert.ok(buildSource.includes("'.json': 'text'"));
+	assert.ok(skillBundleSource.includes('references/workflow-state-machine.md'));
+	assert.ok(skillBundleSource.includes('references/failure-recovery.md'));
+	assert.ok(skillBundleSource.includes('references/closeout-fields.md'));
+	assert.ok(skillBundleSource.includes('references/instruction-isolation.md'));
+	assert.ok(skillBundleSource.includes('dist/tracekeeper.flattened.md'));
+	assert.ok(skillBundleSource.includes('manifest.json'));
+	assert.equal(/skills\/tracekeeper\/SKILL\.md['"]/.test(settingsSource), false);
+	assert.ok(settingsSource.includes('SkillInstallPreviewModal'));
+	assert.ok(settingsSource.includes('not file verification'));
+	assert.ok(settingsSource.includes('Does not prove automatic Skill triggering'));
+	assert.ok(settingsSource.includes('Local single-user default profile (not team RBAC)'));
 
-	assert.ok(/import tracekeeperSkillContent from ['"]\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/skills\/tracekeeper\/SKILL\.md['"]/.test(pluginMainSource));
-	assert.ok(/loader:\s*\{\s*['"]\.md['"]\s*:\s*['"]text['"]\s*\}/m.test(pluginBuildSource));
-	assert.ok(skillSource.includes('## Golden Workflow（执行顺序）'));
-	assert.ok(skillSource.includes('Never expose, copy, or persist MCP token/secret values.'));
-	assert.ok(pluginBundleSource.includes('Tracekeeper Agent Skill'));
-	assert.ok(pluginBundleSource.includes('Never expose, copy, or persist MCP token/secret values.'));
-	assert.ok(pluginMainSource.includes('This step does not write into client directories.'));
-	assert.ok(pluginMainSource.includes('Copy the content into a tracekeeper/SKILL.md file in a personal or project Skills directory that Codex can discover.'));
-	assert.ok(/Copy and install it through the selected client\\'s supported Skill, rules, or persistent workflow-instruction mechanism/.test(pluginMainSource));
-	assert.ok(pluginMainSource.includes('Confirm Skill setup'));
-	assert.ok(pluginMainSource.includes('Skill setup is done'));
+	assert.ok(pluginBundleSource.includes('tracekeeper-skill-bundle-v'));
+	assert.ok(pluginBundleSource.includes('"format_version": 1'));
+	assert.ok(pluginBundleSource.includes('Workflow State Machine'));
+	assert.ok(pluginBundleSource.includes('Failure Recovery'));
+	assert.ok(pluginBundleSource.includes('Instruction Isolation'));
+	assert.ok(pluginBundleSource.includes('Generated by scripts/build_tracekeeper_skill.mjs'));
+	assert.ok(pluginBundleSource.includes('skill_version'));
+	assert.ok(pluginBundleSource.includes('2.0.0'));
+	for (const content of Object.values(embeddedBundle.TRACEKEEPER_SKILL_BUNDLE.installFiles)) {
+		assert.equal(/(?:sk-[A-Za-z0-9_-]{12,}|api_key\s*[:=]\s*[A-Za-z0-9._-]{12,})/i.test(content), false);
+	}
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 33 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 29 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

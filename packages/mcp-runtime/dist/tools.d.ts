@@ -47,6 +47,7 @@ interface ToolCallAuditEventInput {
     runtimeVersion?: string;
     argsSummary: string;
     resultSummary: string;
+    workflowMetadata?: Record<string, unknown>;
 }
 export declare function appendConnectionAuditEvent(vaultRoot: string, input: ConnectionAuditEventInput): {
     path: string;
@@ -54,7 +55,7 @@ export declare function appendConnectionAuditEvent(vaultRoot: string, input: Con
 export declare function recordToolCallAuditEvent(vaultRoot: string, input: ToolCallAuditEventInput): {
     path: string;
 };
-export declare function toolDefinitions(): McpToolDefinition[];
+export declare function toolDefinitions(capabilities?: readonly string[]): McpToolDefinition[];
 export declare function toolPrompts(): McpPrompt[];
 export declare function callTool(name: string, rawParams: unknown, context?: ToolInvocationContext): Promise<McpStructuredToolResult>;
 export interface OperationRecoveryReport {

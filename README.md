@@ -46,7 +46,7 @@ Tracekeeper treats every AI suggestion as a candidate memory proposal. You can i
 
 1. Write and collect notes in Obsidian as usual.
 2. Enable Tracekeeper and open **Settings -> Community plugins -> Tracekeeper**.
-3. Continue the resumable **Onboarding** section: choose a client, preview or copy its independent connection, copy the Skill embedded in the plugin, and install or mount it in the client.
+3. Continue the resumable **Onboarding** section: choose a client, preview or copy its independent connection, then preview a supported managed Skill install or copy the flattened compatibility Skill.
 4. Restart the Agent when requested, ask it to call Tracekeeper, and verify the recorded connection evidence.
 5. Ask that Agent to run a narrow `tracekeeper.recall` with at least one match, then verify the first-recall evidence in settings.
 6. Review proposed memory, wiki, graph, or migration items in the **Review Queue**.
@@ -54,11 +54,11 @@ Tracekeeper treats every AI suggestion as a candidate memory proposal. You can i
 
 ## Agent And MCP Connection
 
-Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian is open. The Runtime binds to loopback by default and gives each managed Agent client an independent credential principal in its connection URL. Settings can rotate one client credential without interrupting the others. A legacy shared token remains for compatibility.
+Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian is open. The Runtime binds to loopback by default and gives each managed Agent client an independent credential principal in its connection URL. Local capability profiles control which public tools that principal can discover and call; they are presets, not team RBAC. Settings can rotate one client credential without interrupting the others. A legacy shared token remains for compatibility.
 
 AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and submit memory updates according to your memory rules. Global memory goes to review by default; project memory can auto-save as an append-only project note when you enable that rule.
 
-For shared use across Codex, Claude, OpenClaw, and other MCP clients, use the same pattern: start a task, recall the narrowest useful context, finish the task, and decide whether closeout memories should be handled automatically, reviewed, or ignored. Tracekeeper keeps the public MCP surface small so agents can choose the right action quickly. Recall results include compact excerpts, match reasons, and graph links so agents only read full notes when needed. See the [Agent Workflow Contract](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md).
+For shared use across Codex, Claude, OpenClaw, and other MCP clients, the companion Skill selects `no_track`, `recall_only`, or `tracked_task`. Tracked work starts once, recalls the narrowest useful context, finishes once with the returned task id, and reports whether closeout memory was saved, queued, suggested, or blocked. Recall results label Vault content as knowledge data rather than instructions, and structured MCP actions reduce client-side guesswork. See the [Agent Workflow Contract](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md).
 
 The connection is local-first:
 

@@ -1,8 +1,13 @@
 export {
 	ToolVisibility,
 	ToolRisk,
+	ToolEffect,
+	ToolIdempotency,
+	ToolWorld,
+	ToolWorkflowRole,
 	ToolCapability,
 	ToolDeprecation,
+	ToolOutputSchema,
 	ToolResultSchema,
 	ToolInputSchema,
 	ToolContract,
@@ -16,3 +21,25 @@ export {
 	isPublicTool,
 	isCompatibilityTool,
 } from './contracts';
+
+export {
+	AgentAction,
+	AgentActionKind,
+	AgentActionTiming,
+	AgentActionReasonCode,
+	AGENT_ACTION_KINDS,
+	AGENT_ACTION_TIMINGS,
+	AGENT_ACTION_REASON_CODES,
+	AGENT_ACTION_SCHEMA,
+} from './action-envelope';
+
+export {
+	SCHEMA_VERSION,
+	COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA,
+	COMMON_TOOL_FAILURE_OUTPUT_SCHEMA,
+	GENERIC_TOOL_OUTPUT_SCHEMA,
+	FINISH_TASK_OUTPUT_SCHEMA,
+	RECALL_OUTPUT_SCHEMA,
+	START_TASK_OUTPUT_SCHEMA,
+	JsonSchema2020,
+} from './result-schemas';

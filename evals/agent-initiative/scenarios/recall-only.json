@@ -1,0 +1,26 @@
+[
+	{
+		"id": "why-architecture-choice", "class": "recall_only", "kind": "positive", "prompt": "上次为什么决定让 VaultRepository 成为生产写入边界？", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.recall"], "forbidden_tools": ["tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.recall"], "argument_rules": [{ "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	},
+	{
+		"id": "project-naming-convention", "class": "recall_only", "kind": "positive", "prompt": "这个项目以前约定的 operation id 命名方式是什么？", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.recall"], "forbidden_tools": ["tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.recall"], "argument_rules": [{ "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	},
+	{
+		"id": "user-preference-lookup", "class": "recall_only", "kind": "positive", "prompt": "用户之前对自动写长期记忆有什么偏好？",
+		"expected": { "required_tools": ["tracekeeper.recall"], "forbidden_tools": ["tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.recall"], "argument_rules": [{ "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "global" } }], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	},
+	{
+		"id": "knowledge-topic-query", "class": "recall_only", "kind": "positive", "prompt": "查一下知识库里关于 optimistic concurrency 的已有结论。",
+		"expected": { "required_tools": ["tracekeeper.recall"], "forbidden_tools": ["tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.recall"], "argument_rules": [{ "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "global" } }], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	},
+	{
+		"id": "compare-prior-proposals", "class": "recall_only", "kind": "positive", "prompt": "比较这个项目以前两次索引方案的主要差异。", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.recall"], "forbidden_tools": ["tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.recall"], "argument_rules": [{ "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	},
+	{
+		"id": "find-related-sources", "class": "recall_only", "kind": "positive", "prompt": "找出以前记录的 Vault write recovery 相关来源。", "project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.recall"], "forbidden_tools": ["tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.recall"], "argument_rules": [{ "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }], "same_task_id": false, "finish_exactly_once": false, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": false, "allowed_statuses": [], "match_finish_result": false } }
+	}
+]

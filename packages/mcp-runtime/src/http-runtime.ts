@@ -426,6 +426,29 @@ export class StreamableHttpMcpRuntime {
 			this.writeJson(response, 403, this.errorResponse(null, -32003, 'MCP session belongs to another credential principal.'), request);
 			return null;
 		}
+		const requestedProtocolVersion = this.firstHeaderValue(request.headers['mcp-protocol-version']);
+		if (session.protocolVersion && !requestedProtocolVersion) {
+			this.writeJson(
+				response,
+				400,
+				this.errorResponse(null, -32000, 'Missing Mcp-Protocol-Version header.'),
+				request
+			);
+			return null;
+		}
+		if (
+			requestedProtocolVersion
+			&& session.protocolVersion
+			&& requestedProtocolVersion !== session.protocolVersion
+		) {
+			this.writeJson(
+				response,
+				400,
+				this.errorResponse(null, -32000, 'Mcp-Protocol-Version does not match the initialized session.'),
+				request
+			);
+			return null;
+		}
 		return session;
 	}
 
@@ -573,7 +596,10 @@ export class StreamableHttpMcpRuntime {
 			response.setHeader('Access-Control-Allow-Origin', origin);
 			response.setHeader('Vary', 'Origin');
 		}
-		response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, Mcp-Session-Id');
+		response.setHeader(
+			'Access-Control-Allow-Headers',
+			'Content-Type, Accept, Authorization, Mcp-Session-Id, MCP-Protocol-Version',
+		);
 		response.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
 		response.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
 	}

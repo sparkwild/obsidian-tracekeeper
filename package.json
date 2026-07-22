@@ -12,6 +12,9 @@
 	],
 	"scripts": {
 		"community:check": "node ./scripts/check_community_plugin.mjs",
+		"eval:agent-initiative": "node ./evals/agent-initiative/evaluator/run-eval.mjs --check-baseline",
+		"eval:agent-initiative:compare": "node ./evals/agent-initiative/evaluator/run-eval.mjs --compare --check-baseline --strict",
+		"eval:agent-initiative:test": "node --test ./evals/agent-initiative/evaluator/*.test.mjs",
 		"agent:ecosystem": "node ./scripts/check_agent_ecosystem.mjs",
 		"agent:ecosystem:test": "node --test ./scripts/check_agent_ecosystem.test.mjs",
 		"architecture:check": "node ./scripts/check_architecture_boundaries.mjs && node --test ./scripts/check_architecture_boundaries.test.mjs",

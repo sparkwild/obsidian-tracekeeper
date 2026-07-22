@@ -20,6 +20,7 @@ obsidian-tracekeeper/
 │  ├─ core/              shared vault, index, journal, and knowledge primitives
 │  └─ mcp-runtime/       MCP transport, auth, sessions, and tool application adapter
 ├─ skills/tracekeeper/   companion Agent workflow guidance
+├─ evals/agent-initiative/ deterministic local Skill-policy characterization
 ├─ docs/                 canonical product and engineering documentation
 ├─ scripts/              repository verification
 └─ package.json          workspace commands and version coordination
@@ -42,7 +43,7 @@ npm run verify
 ```
 
 The gate runs community metadata checks, TypeScript checks, builds, tests, plugin packaging, and `git diff --check`.
-`npm run agent:ecosystem` and its fixture tests are part of this verification lane; they check that the companion Skill keeps alignment with the Agent workflow contract, is embedded into the plugin onboarding bundle from its canonical source, and that ecosystem docs references are consistent.
+`npm run agent:ecosystem` and its fixture tests are part of this verification lane; they rebuild the manifest and flattened artifact, verify source and bundle hashes, check contract semantics and unsafe examples, and prove that the plugin embeds the complete bundle with installation safety controls and distinct evidence states.
 
 The release workflow also rebuilds and checks tracked package artifacts with `git diff --exit-code`; generated `dist/` output must match its TypeScript source on a clean checkout.
 
@@ -54,18 +55,22 @@ Narrower commands are useful while iterating:
 npm run community:check
 npm run agent:ecosystem
 npm run architecture:check
+npm run eval:agent-initiative:test
+npm run eval:agent-initiative:compare
 npm run typecheck
 npm run build
 npm run test
 npm run package
 ```
 
-The plugin workspace has pure feature tests plus onboarding acceptance, client-configuration preview/CAS, and asynchronous index-adapter checks. The onboarding acceptance check builds the plugin and verifies canonical Skill embedding, staged setup, external connection evidence, and first-recall evidence. Core tests cover operation recovery, cross-process journal locking/atomic claim, and incremental index events; MCP tests cover contracts, HTTP/auth/session/stream/request limits, split UTF-8 bodies, snapshot injection, task idempotency, repository-backed closeout, concurrent audit append, and writeback recovery. Rendered Obsidian UI changes still require relevant desktop verification.
+The Agent-initiative Eval uses 37 bilingual deterministic scenarios and a frozen historical Skill fixture. It is a static policy characterization, not an observed LLM success rate and not a production missed-call metric.
+
+The plugin workspace has pure feature tests plus onboarding acceptance, client-configuration preview/CAS, complete Skill-bundle install/update/rollback, local capability profiles, workflow diagnostics, and asynchronous index-adapter checks. Onboarding acceptance verifies bundle distribution, distinct setup evidence, external connection evidence, recall evidence, and same-principal tracked-workflow evidence. Core tests cover operation recovery, cross-process journal locking/atomic claim, and incremental index events; MCP tests cover contracts, output validation, protocol-version matrices, tools/resources/prompts, HTTP/auth/session/stream/request limits, snapshot injection, instruction isolation, task idempotency, repository-backed closeout, concurrent audit append, and writeback recovery. Rendered Obsidian UI changes still require relevant desktop verification.
 
 ## Pull Requests
 
 - Keep changes focused and explain user-visible behavior.
-- Identify changes to vault paths, MCP tools, permissions, review state, or client configuration explicitly.
+- Identify changes to vault paths, MCP tools, permissions, review state, client configuration, or companion Skill installation explicitly.
 - State the validation commands and manual Obsidian flows run.
 - Do not test against a real user vault unless the task explicitly authorizes it; use temporary fixtures.
 - Update the owning contract and status snapshot when behavior or architecture changes.

@@ -1,0 +1,49 @@
+{
+	"baseline_id": "current-skill-v1-static-characterization",
+	"kind": "static_skill_characterization",
+	"tracekeeper_version": "0.2.3",
+	"skill_path": "evals/agent-initiative/fixtures/skills/tracekeeper-v1/SKILL.md",
+	"skill_sha256": "ea6a5f1b14d992ab3ba41cfdc5a459292d3d875277d8f5a80eb0e530c105ef88",
+	"scenario_count": 37,
+	"trace_generator": "evals/agent-initiative/evaluator/current-skill-v1.mjs",
+	"fixture_source": {
+		"metadata_path": "evals/agent-initiative/fixtures/skills/tracekeeper-v1/source.json",
+		"repository_path": "skills/tracekeeper/SKILL.md",
+		"git_commit": "5114bfe37216816f45de5b575e8aada5b0897ca9",
+		"git_blob_sha1": "fd78ad6d8e9c36ba7ecca78f688b4858db6bd779"
+	},
+	"claims": [
+		"This is a deterministic characterization of the frozen Skill v1 fixture, not an observed LLM result.",
+		"The fixture is an exact byte snapshot of the recorded Git blob and no longer depends on the live Skill path.",
+		"Skill v1 defines tracked task and no-track guidance but does not define recall_only as a distinct mode."
+	],
+	"known_gaps": [
+		"recall_only classification",
+		"explicit zero-match recovery",
+		"index-rebuilding recovery",
+		"lost task_id recovery",
+		"finish idempotency conflict guidance",
+		"explicit prompt-injection handling"
+	],
+	"expected_report": {
+		"average_score": 83.11,
+		"passed_count": 23,
+		"failed_scenario_ids": [
+			"recall-zero-match",
+			"project-scope-uncertain",
+			"index-rebuilding",
+			"task-id-lost",
+			"finish-idempotency-conflict",
+			"missing-wiki-bridge",
+			"prompt-injection-bypass",
+			"unapproved-writeback",
+			"why-architecture-choice",
+			"project-naming-convention",
+			"user-preference-lookup",
+			"knowledge-topic-query",
+			"compare-prior-proposals",
+			"find-related-sources"
+		],
+		"report_sha256": "808e87b58f786b2e7e56671865015621d1aba030ef9ebf66526deb06d0ce27bf"
+	}
+}

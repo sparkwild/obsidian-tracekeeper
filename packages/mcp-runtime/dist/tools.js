@@ -45,6 +45,7 @@ const crypto = __importStar(require("node:crypto"));
 const core_1 = require("@tracekeeper/core");
 const contracts_1 = require("@tracekeeper/contracts");
 const protocol_1 = require("./protocol");
+const result_validation_1 = require("./result-validation");
 const safety_1 = require("./safety");
 const apply_approved_writeback_1 = require("./application/apply-approved-writeback");
 const REVIEW_QUEUE_PREFIX = core_1.TRACEKEEPER_REVIEW_QUEUE_DIR;
@@ -207,12 +208,72 @@ function summarizeToolPayload(payload, isError) {
     const base = summaryParts.length > 0 ? summaryParts.join(' | ') : 'Tracekeeper MCP tool completed.';
     return truncateSummaryText([base, ...nextActions].join('\n'));
 }
+function buildWorkflowAuditMetadata(toolName, args, payload) {
+    if (!(0, protocol_1.isRecord)(payload)) {
+        return {};
+    }
+    const workflow = (0, protocol_1.isRecord)(payload.workflow) ? payload.workflow : {};
+    const recall = (0, protocol_1.isRecord)(payload.recall) ? payload.recall : {};
+    const nextAction = Array.isArray(payload.next_actions) && (0, protocol_1.isRecord)(payload.next_actions[0])
+        ? payload.next_actions[0]
+        : {};
+    const taskId = typeof payload.task_id === 'string'
+        ? payload.task_id
+        : typeof workflow.task_id === 'string'
+            ? workflow.task_id
+            : typeof args.task_id === 'string'
+                ? args.task_id
+                : '';
+    const recallId = typeof recall.recall_id === 'string'
+        ? recall.recall_id
+        : typeof payload.recall_id === 'string'
+            ? payload.recall_id
+            : typeof args.recall_id === 'string'
+                ? args.recall_id
+                : '';
+    const workflowMode = typeof workflow.mode === 'string'
+        ? workflow.mode
+        : toolName === 'tracekeeper.recall'
+            ? 'recall_only_or_tracked'
+            : '';
+    return {
+        workflow_contract_version: contracts_1.SCHEMA_VERSION,
+        result_schema_version: typeof payload.schema_version === 'number' ? payload.schema_version : undefined,
+        workflow_mode: workflowMode || undefined,
+        workflow_id: taskId || recallId || undefined,
+        task_id: taskId || undefined,
+        recall_id: recallId || undefined,
+        action_id: typeof nextAction.action_id === 'string' ? nextAction.action_id : undefined,
+        action_reason_code: typeof nextAction.reason_code === 'string' ? nextAction.reason_code : undefined,
+        snapshot_generation: typeof recall.snapshot_generation === 'number'
+            ? recall.snapshot_generation
+            : typeof payload.snapshot_generation === 'number'
+                ? payload.snapshot_generation
+                : undefined,
+        scope_mode: typeof recall.scope === 'string'
+            ? recall.scope
+            : typeof payload.scope_mode === 'string'
+                ? payload.scope_mode
+                : undefined,
+        scope_confidence: typeof recall.scope_confidence === 'number' ? recall.scope_confidence : undefined,
+        matched_count: typeof recall.matched_count === 'number'
+            ? recall.matched_count
+            : typeof payload.matched_count === 'number'
+                ? payload.matched_count
+                : undefined,
+        memory_closeout_status: typeof payload.memory_closeout_state === 'string'
+            ? payload.memory_closeout_state
+            : typeof payload.memory_closeout_status === 'string'
+                ? payload.memory_closeout_status
+                : undefined,
+    };
+}
 function toolResult(payload, isError = false) {
     return {
         content: [
             {
                 type: 'text',
-                text: summarizeToolPayload(payload, isError),
+                text: JSON.stringify(payload) ?? 'null',
             },
         ],
         structuredContent: payload,
@@ -221,6 +282,361 @@ function toolResult(payload, isError = false) {
 }
 function toolError(message) {
     return toolResult({ ok: false, error: message }, true);
+}
+function hasCredentialCapability(context, capability) {
+    const capabilities = context.credentialCapabilities;
+    return Boolean(capabilities?.includes('*') || capabilities?.includes(capability));
+}
+function actionBaseId(payload, fallback) {
+    for (const key of ['operation_id', 'recall_id', 'task_id']) {
+        const value = payload[key];
+        if (typeof value === 'string' && value.trim()) {
+            return value.trim();
+        }
+    }
+    return fallback;
+}
+function buildStartTaskActions(payload, context) {
+    const actions = [];
+    const baseId = actionBaseId(payload, 'start-task');
+    const recommendedRecall = (0, protocol_1.isRecord)(payload.recommended_recall) ? payload.recommended_recall : null;
+    const recallArguments = recommendedRecall && (0, protocol_1.isRecord)(recommendedRecall.arguments)
+        ? recommendedRecall.arguments
+        : null;
+    if (recallArguments && hasCredentialCapability(context, 'vault.read')) {
+        actions.push({
+            action_id: `${baseId}:recall`,
+            kind: 'tool_call',
+            tool: 'tracekeeper.recall',
+            arguments: recallArguments,
+            priority: 100,
+            required: true,
+            timing: 'immediate',
+            reason_code: 'TASK_CONTEXT_REQUIRED',
+            reason: 'Recall scoped local context before reading individual notes.',
+            capability_required: 'vault.read',
+        });
+    }
+    else if (!hasCredentialCapability(context, 'vault.read')) {
+        actions.push({
+            action_id: `${baseId}:recall-unavailable`,
+            kind: 'report_status',
+            priority: 100,
+            required: true,
+            timing: 'immediate',
+            reason_code: 'PERMISSION_DENIED',
+            reason: 'This principal cannot recall local context; continue without claiming that memory was loaded.',
+        });
+    }
+    if (hasCredentialCapability(context, 'workflow.manage') && typeof payload.task_id === 'string') {
+        actions.push({
+            action_id: `${baseId}:finish`,
+            kind: 'tool_call',
+            tool: 'tracekeeper.finish_task',
+            arguments: { task_id: payload.task_id },
+            priority: 90,
+            required: true,
+            timing: 'at_task_closeout',
+            reason_code: 'TASK_CLOSEOUT_REQUIRED',
+            reason: 'Close the tracked task exactly once with a useful summary and durable closeout fields.',
+            capability_required: 'workflow.manage',
+        });
+    }
+    return actions;
+}
+function firstRecallMatchPath(matches) {
+    for (const match of matches) {
+        if (!(0, protocol_1.isRecord)(match)) {
+            continue;
+        }
+        for (const key of ['path', 'note_path']) {
+            const value = match[key];
+            if (typeof value === 'string' && value.trim()) {
+                return value.trim();
+            }
+        }
+    }
+    return '';
+}
+function buildRecallActions(payload, context, recallId, scope, matches) {
+    if (payload.index_state === 'rebuilding') {
+        return [{
+                action_id: `${recallId}:index-rebuilding`,
+                kind: 'stop',
+                priority: 100,
+                required: true,
+                timing: 'immediate',
+                reason_code: 'INDEX_REBUILDING',
+                reason: 'The local index is rebuilding; use the returned snapshot only as provisional context and retry later.',
+            }];
+    }
+    if (payload.uncertain === true) {
+        return [{
+                action_id: `${recallId}:scope-uncertain`,
+                kind: 'stop',
+                priority: 100,
+                required: true,
+                timing: 'immediate',
+                reason_code: 'PROJECT_SCOPE_UNCERTAIN',
+                reason: 'Project scope is uncertain; inspect the returned candidates and ask for a narrower project hint instead of guessing.',
+            }];
+    }
+    if (matches.length === 0) {
+        const query = typeof payload.query === 'string' ? payload.query : '';
+        if (scope !== 'global' && query && hasCredentialCapability(context, 'vault.read')) {
+            return [{
+                    action_id: `${recallId}:broaden`,
+                    kind: 'tool_call',
+                    tool: 'tracekeeper.recall',
+                    arguments: { query, scope: 'global', max_items: payload.max_items ?? 6 },
+                    priority: 80,
+                    required: false,
+                    timing: 'immediate',
+                    reason_code: 'RECALL_ZERO_MATCH',
+                    reason: 'No scoped result matched; broaden once to global recall without loading the whole Vault.',
+                    capability_required: 'vault.read',
+                }];
+        }
+        return [{
+                action_id: `${recallId}:no-match`,
+                kind: 'stop',
+                priority: 80,
+                required: true,
+                timing: 'immediate',
+                reason_code: 'RECALL_ZERO_MATCH',
+                reason: 'No local knowledge matched; continue without claiming prior context was found.',
+            }];
+    }
+    const pathValue = firstRecallMatchPath(matches);
+    if (!pathValue || !hasCredentialCapability(context, 'vault.read')) {
+        return [];
+    }
+    return [{
+            action_id: `${recallId}:read-top-note`,
+            kind: 'tool_call',
+            tool: 'tracekeeper.read_note',
+            arguments: { path: pathValue, recall_id: recallId },
+            priority: 60,
+            required: false,
+            timing: 'if_context_insufficient',
+            reason_code: 'RECALL_EXCERPT_MAY_BE_INSUFFICIENT',
+            reason: 'Read the highest-ranked note only if its bounded excerpt is insufficient.',
+            capability_required: 'vault.read',
+        }];
+}
+function canonicalMemoryCloseoutStatus(payload) {
+    const state = payload.memory_closeout_state;
+    if (state === 'no_candidates' ||
+        state === 'disabled' ||
+        state === 'suggested' ||
+        state === 'queued_for_review' ||
+        state === 'partially_auto_saved' ||
+        state === 'auto_saved' ||
+        state === 'requires_wiki_bridge' ||
+        state === 'conflict') {
+        return state;
+    }
+    switch (payload.memory_closeout_status) {
+        case 'auto_saved':
+            return 'auto_saved';
+        case 'queued':
+            return 'queued_for_review';
+        case 'mixed':
+            return 'partially_auto_saved';
+        case 'empty':
+            return 'no_candidates';
+        case 'ignored':
+        default:
+            return 'disabled';
+    }
+}
+function buildFinishTaskActions(payload) {
+    const baseId = actionBaseId(payload, 'finish-task');
+    const memoryStatus = canonicalMemoryCloseoutStatus(payload);
+    if (memoryStatus === 'queued_for_review' ||
+        memoryStatus === 'partially_auto_saved' ||
+        memoryStatus === 'requires_wiki_bridge') {
+        return [{
+                action_id: `${baseId}:report-review`,
+                kind: 'user_review',
+                priority: 100,
+                required: true,
+                timing: 'immediate',
+                reason_code: 'MEMORY_REVIEW_REQUIRED',
+                reason: 'Report that durable memory candidates await review in Obsidian; do not call finish_task again.',
+            }];
+    }
+    return [{
+            action_id: `${baseId}:report`,
+            kind: 'report_status',
+            priority: 100,
+            required: true,
+            timing: 'immediate',
+            reason_code: 'MEMORY_RECORDED',
+            reason: 'Report the returned memory closeout status and do not call finish_task again.',
+        }];
+}
+function classifyToolError(message) {
+    if (/lacks capability|permission denied/i.test(message)) {
+        return { code: 'PERMISSION_DENIED', retryable: false, reasonCode: 'PERMISSION_DENIED' };
+    }
+    if (/already completed/i.test(message)) {
+        return { code: 'FINISH_ALREADY_COMPLETED', retryable: false, reasonCode: 'FINISH_ALREADY_COMPLETED' };
+    }
+    if (/idempotency.*conflict|different .*hash/i.test(message)) {
+        return { code: 'IDEMPOTENCY_CONFLICT', retryable: false, reasonCode: 'IDEMPOTENCY_CONFLICT' };
+    }
+    if (/unknown tool|tool not available/i.test(message)) {
+        return { code: 'TOOL_UNAVAILABLE', retryable: true, reasonCode: 'TOOL_UNAVAILABLE' };
+    }
+    return { code: 'INVALID_REQUEST', retryable: false };
+}
+function safeToolErrorDescription(code) {
+    switch (code) {
+        case 'PERMISSION_DENIED':
+            return 'The current principal is not allowed to perform this action.';
+        case 'FINISH_ALREADY_COMPLETED':
+            return 'The tracked task is already closed and must not be finished again.';
+        case 'IDEMPOTENCY_CONFLICT':
+            return 'The retry key conflicts with an existing operation; preserve the original result.';
+        case 'TOOL_UNAVAILABLE':
+            return 'The requested Tracekeeper tool is not available in this connection.';
+        default:
+            return 'The Tracekeeper request was rejected; inspect the legacy error field for local diagnostics.';
+    }
+}
+function decorateToolResult(toolName, result, context) {
+    const payload = (0, protocol_1.isRecord)(result.structuredContent) ? result.structuredContent : {};
+    if (isToolResultFailure(result)) {
+        const message = typeof payload.error === 'string' ? payload.error : 'Tracekeeper tool call failed.';
+        const classified = classifyToolError(message);
+        const safeMessage = safeToolErrorDescription(classified.code);
+        const recoveryActions = classified.reasonCode
+            ? [{
+                    action_id: `${toolName}:error:${classified.code.toLowerCase()}`,
+                    kind: classified.code === 'PERMISSION_DENIED' ? 'report_status' : 'stop',
+                    priority: 100,
+                    required: true,
+                    timing: 'immediate',
+                    reason_code: classified.reasonCode,
+                    reason: safeMessage,
+                }]
+            : [];
+        return toolResult({
+            ...payload,
+            schema_version: contracts_1.SCHEMA_VERSION,
+            ok: false,
+            tool: toolName,
+            error: message,
+            error_detail: {
+                code: classified.code,
+                message: safeMessage,
+                retryable: classified.retryable,
+                recovery_actions: recoveryActions,
+            },
+        }, true);
+    }
+    const decorated = {
+        ...payload,
+        schema_version: contracts_1.SCHEMA_VERSION,
+        ok: true,
+        tool: toolName,
+    };
+    if (toolName === 'tracekeeper.start_task') {
+        decorated.workflow = {
+            mode: 'tracked_task',
+            state: 'started',
+            task_id: payload.task_id,
+            operation_id: payload.operation_id,
+        };
+        decorated.next_actions = buildStartTaskActions(decorated, context);
+    }
+    if (toolName === 'tracekeeper.recall') {
+        const scope = payload.scope_mode === 'project' || payload.scope_mode === 'project_history'
+            ? payload.scope_mode
+            : 'global';
+        const matches = Array.isArray(payload.matches)
+            ? payload.matches
+            : Array.isArray(payload.entries)
+                ? payload.entries
+                : [];
+        const recallSeed = JSON.stringify({
+            scope,
+            query: payload.query ?? '',
+            snapshot_generation: payload.snapshot_generation ?? null,
+            paths: matches.map((entry) => (0, protocol_1.isRecord)(entry) ? entry.path ?? entry.note_path ?? '' : ''),
+        });
+        const recallId = `recall_${crypto.createHash('sha256').update(recallSeed).digest('hex').slice(0, 16)}`;
+        decorated.recall = {
+            recall_id: recallId,
+            scope,
+            scope_confidence: payload.uncertain === true ? 0.25 : 1,
+            query: typeof payload.query === 'string' ? payload.query : '',
+            matched_count: matches.length,
+            snapshot_generation: typeof payload.snapshot_generation === 'number'
+                ? payload.snapshot_generation
+                : null,
+            index_state: typeof payload.index_state === 'string' ? payload.index_state : 'unknown',
+            snapshot_warning: typeof payload.snapshot_warning === 'string' ? payload.snapshot_warning : null,
+        };
+        decorated.matches = matches;
+        decorated.next_actions = buildRecallActions(decorated, context, recallId, scope, matches);
+    }
+    if (toolName === 'tracekeeper.finish_task') {
+        const memoryStatus = canonicalMemoryCloseoutStatus(payload);
+        decorated.memory_closeout_state = memoryStatus;
+        decorated.workflow = {
+            mode: 'tracked_task',
+            state: 'finished',
+            task_id: payload.task_id,
+            operation_id: payload.operation_id,
+        };
+        decorated.memory = {
+            status: memoryStatus,
+            proposal_count: typeof payload.proposal_count === 'number' ? payload.proposal_count : 0,
+            auto_applied_count: typeof payload.auto_applied_count === 'number' ? payload.auto_applied_count : 0,
+            action_required: memoryStatus === 'queued_for_review' ||
+                memoryStatus === 'partially_auto_saved' ||
+                memoryStatus === 'requires_wiki_bridge',
+        };
+        decorated.next_actions = buildFinishTaskActions(decorated);
+    }
+    return toolResult(decorated);
+}
+function validateToolResult(toolName, result) {
+    const contract = TOOL_CONTRACT_BY_NAME.get(toolName);
+    if (!contract) {
+        return result;
+    }
+    const validation = (0, result_validation_1.validateStructuredContent)(result.structuredContent, contract.outputSchema);
+    if (validation.valid) {
+        return result;
+    }
+    const payload = (0, protocol_1.isRecord)(result.structuredContent) ? result.structuredContent : {};
+    const recoveryMetadata = {};
+    for (const key of ['operation_id', 'idempotency_key', 'task_id', 'path', 'task_path', 'audit_path', 'proposal_path']) {
+        const value = payload[key];
+        if (typeof value === 'string' && value.trim()) {
+            recoveryMetadata[key] = value;
+        }
+    }
+    const message = `Tracekeeper produced a result that does not match the ${toolName} output contract.`;
+    return toolResult({
+        ...recoveryMetadata,
+        schema_version: contracts_1.SCHEMA_VERSION,
+        ok: false,
+        tool: toolName,
+        execution_status: isToolResultFailure(result) ? 'failed' : 'succeeded',
+        contract_status: 'invalid',
+        error: message,
+        error_detail: {
+            code: 'INTERNAL_CONTRACT_ERROR',
+            message,
+            retryable: false,
+            recovery_actions: [],
+            diagnostics: validation.errors.slice(0, 5),
+        },
+    }, true);
 }
 function vaultRootFromArgs(args, context) {
     if (args.vaultRoot !== undefined) {
@@ -867,8 +1283,11 @@ function buildProjectHistoryEntries(matches, query = '') {
         path: note.relativePath,
         title: note.title,
         type: note.type,
+        note_type: note.type ?? null,
         scope: 'project_history',
         modifiedAt: note.modifiedAt,
+        content_origin: recallContentOrigin(note.relativePath, note.type),
+        instruction_trust: 'data_only',
         task_id: readFrontmatterString(note.frontmatter, ['task_id', 'taskId']),
         project_hint: readFrontmatterString(note.frontmatter, ['project_hint', 'related_project', 'project']),
         why_matched: buildProjectHistoryWhy(note, query),
@@ -1019,11 +1438,25 @@ function buildRecallWhyMatched(match, scope) {
     const reasonText = match.score_reason.slice(0, 2).join('; ');
     return [scopeLabel, tokenText ? `matched tokens: ${tokenText}` : '', reasonText].filter(Boolean).join(' - ');
 }
+function recallContentOrigin(relativePath, noteType) {
+    const normalizedPath = relativePath.replace(/\\/g, '/').replace(/^\.\//, '');
+    const normalizedType = (noteType ?? '').trim().toLowerCase();
+    if (normalizedPath === core_1.KNOWLEDGE_SOURCES_DIR ||
+        normalizedPath.startsWith(`${core_1.KNOWLEDGE_SOURCES_DIR}/`) ||
+        normalizedType.includes('source')) {
+        return 'captured_source';
+    }
+    if (normalizedPath === core_1.TRACEKEEPER_ROOT || normalizedPath.startsWith(`${core_1.TRACEKEEPER_ROOT}/`)) {
+        return 'tracekeeper_generated';
+    }
+    return 'vault_note';
+}
 function buildRecallEntry(match, scope) {
     return {
         path: match.note.relativePath,
         title: match.note.title,
         type: match.note.type,
+        note_type: match.note.type ?? null,
         scope,
         score: match.score,
         raw_score: match.raw_score,
@@ -1031,6 +1464,8 @@ function buildRecallEntry(match, scope) {
         score_reason: match.score_reason,
         why_matched: buildRecallWhyMatched(match, scope),
         excerpt: compactNoteText(match.note.content),
+        content_origin: recallContentOrigin(match.note.relativePath, match.note.type),
+        instruction_trust: 'data_only',
         graph_links: buildRecallGraphLinks(match.note),
     };
 }
@@ -3065,6 +3500,7 @@ function recordToolCallAuditEvent(vaultRoot, input) {
         argsSummary: input.argsSummary,
         metadata: {
             result_summary: input.resultSummary,
+            ...input.workflowMetadata,
         },
     });
 }
@@ -3093,6 +3529,7 @@ async function recordToolCallAuditEventAsync(vaultRoot, input, context) {
         argsSummary: input.argsSummary,
         metadata: {
             result_summary: input.resultSummary,
+            ...input.workflowMetadata,
         },
     }, context);
 }
@@ -3135,12 +3572,17 @@ function buildFixPlanSummary(issues) {
     }
     return summary;
 }
-function toolDefinitions() {
+function toolDefinitions(capabilities) {
     const definitions = [];
     for (const toolName of contracts_1.PUBLIC_TOOL_NAME_ORDER) {
         const contract = TOOL_CONTRACT_BY_NAME.get(toolName);
         if (!contract || contract.visibility !== 'public') {
             throw new Error(`Missing public tool contract or visibility for ${toolName}`);
+        }
+        if (capabilities &&
+            !capabilities.includes('*') &&
+            !capabilities.includes(contract.capability)) {
+            continue;
         }
         definitions.push({
             name: contract.name,
@@ -3154,29 +3596,95 @@ function toolDefinitions() {
                     ? { additionalProperties: contract.inputSchema.additionalProperties }
                     : {}),
             },
-            annotations: contract.risk === 'read-only'
-                ? { readOnlyHint: true }
-                : { destructiveHint: true },
+            outputSchema: contract.outputSchema,
+            annotations: {
+                readOnlyHint: contract.effect === 'read',
+                destructiveHint: false,
+                idempotentHint: contract.idempotency !== 'none',
+                openWorldHint: contract.world !== 'closed',
+            },
         });
     }
     return definitions;
 }
 function toolPrompts() {
     return [
-        { name: 'Tracekeeper Start Task', title: 'Tracekeeper Start Task', description: 'Start a task with a read-only context summary.' },
-        { name: 'Tracekeeper Recall Memory', title: 'Tracekeeper Recall Memory', description: 'Generate matching notes for fast recall.' },
+        {
+            name: 'Tracekeeper Start Task',
+            title: 'Tracekeeper Start Task',
+            description: 'Start a task with a bounded context summary.',
+            arguments: [
+                {
+                    name: 'goal',
+                    description: 'One-sentence task goal.',
+                    required: true,
+                },
+                {
+                    name: 'project_hint',
+                    description: 'Optional project hint for project-scoped recall.',
+                },
+            ],
+        },
+        {
+            name: 'Tracekeeper Recall Memory',
+            title: 'Tracekeeper Recall Memory',
+            description: 'Generate matching notes for fast recall.',
+            arguments: [
+                {
+                    name: 'query',
+                    description: 'Primary recall query text.',
+                    required: true,
+                },
+                {
+                    name: 'scope',
+                    description: 'Scope for recall: global, project, or project_history.',
+                },
+                {
+                    name: 'project_hint',
+                    description: 'Optional project hint when scope is project.',
+                },
+            ],
+        },
+        {
+            name: 'Tracekeeper Task Closeout',
+            title: 'Tracekeeper Task Closeout',
+            description: 'Close a previously started tracked task exactly once.',
+            arguments: [
+                {
+                    name: 'task_id',
+                    description: 'The real task id returned by tracekeeper.start_task.',
+                    required: true,
+                },
+                {
+                    name: 'summary',
+                    description: 'Concise task outcome summary.',
+                    required: true,
+                },
+            ],
+        },
+        {
+            name: 'Tracekeeper Review Pending Memory',
+            title: 'Tracekeeper Review Pending Memory',
+            description: 'Inspect pending memory proposals without approving or applying them.',
+            arguments: [
+                {
+                    name: 'project_hint',
+                    description: 'Optional project hint for explaining the review scope.',
+                },
+            ],
+        },
     ];
 }
 async function callTool(name, rawParams, context = {}) {
-    if (!(0, protocol_1.isRecord)(rawParams)) {
-        return toolError('Tool arguments must be an object.');
-    }
     const requestName = typeof name === 'string' ? name.trim() : '';
     if (!requestName) {
         return toolError('Tool name is required.');
     }
     if (!isToolName(requestName)) {
         return toolError(`Unknown tool: ${requestName}`);
+    }
+    if (!(0, protocol_1.isRecord)(rawParams)) {
+        return validateToolResult(requestName, decorateToolResult(requestName, toolError('Tool arguments must be an object.'), context));
     }
     const args = rawParams;
     const startTime = Date.now();
@@ -3200,7 +3708,9 @@ async function callTool(name, rawParams, context = {}) {
         const result = await handler(args, context);
         toolResult = toolResultWithError(result);
         toolResult = markDeprecatedToolResult(requestName, toolResult);
+        toolResult = decorateToolResult(requestName, toolResult, context);
         status = isToolResultFailure(toolResult) ? 'failed' : 'success';
+        toolResult = validateToolResult(requestName, toolResult);
     }
     catch (error) {
         if (error instanceof safety_1.ToolInputError || error instanceof core_1.VaultPathError) {
@@ -3212,6 +3722,8 @@ async function callTool(name, rawParams, context = {}) {
         else {
             toolResult = toolError(toErrorMessage(error));
         }
+        toolResult = decorateToolResult(requestName, toolResult, context);
+        toolResult = validateToolResult(requestName, toolResult);
         status = 'failed';
     }
     finally {
@@ -3231,6 +3743,7 @@ async function callTool(name, rawParams, context = {}) {
                     runtimeVersion: context.runtimeVersion,
                     argsSummary,
                     resultSummary: summarizeToolPayload(toolResult.structuredContent, isToolResultFailure(toolResult)),
+                    workflowMetadata: buildWorkflowAuditMetadata(toolName, args, toolResult.structuredContent),
                 }, context);
             }
             catch {
@@ -3593,6 +4106,7 @@ function handleRecall(rawArgs, context) {
 async function handleReadNote(rawArgs, context) {
     const vaultRoot = vaultRootFromArgs(rawArgs, context);
     const notePath = coerceNonEmptyString(rawArgs.path, true, 'path');
+    const recallId = coerceOptionalString(rawArgs.recall_id);
     const safePath = (0, safety_1.relativeFromAbsolute)(vaultRoot, (0, safety_1.resolveSafeNotePath)(vaultRoot, notePath, pathSafetyOptions(context)));
     let data;
     if (context.vaultRepository) {
@@ -3613,6 +4127,9 @@ async function handleReadNote(rawArgs, context) {
         path: data.path,
         title: parsed.title || path.basename(data.path),
         mime_type: data.path.endsWith('.txt') || data.path.endsWith('.text') ? 'text/plain' : 'text/markdown',
+        recall_id: recallId || null,
+        content_origin: recallContentOrigin(data.path, typeof parsed.frontmatter.fields.type === 'string' ? parsed.frontmatter.fields.type : undefined),
+        instruction_trust: 'data_only',
         content: data.text,
         excerpt: parsed.body.slice(0, 1024),
     };
@@ -4767,7 +5284,7 @@ function buildSessionNoteBodyWithCloseout(context, summary, outcomes, nextAction
 function buildFinishTaskNextActions(context, reviewProposalMode, proposalResult, projectHint, hasCloseoutCandidates) {
     const actions = [];
     if (!hasCloseoutCandidates) {
-        actions.push(contentText(context, '任务会话已记录；没有提交可长期沉淀的收尾记忆候选。如果决策、方案调整、经验、偏好或下一步很重要，请再次调用 tracekeeper.finish_task 并填写这些字段。', 'Task session was recorded; no durable closeout memory candidates were submitted. If decisions, solution changes, lessons, preferences, or next actions matter, call tracekeeper.finish_task again with those fields.'));
+        actions.push(contentText(context, '任务会话已记录；没有提交可长期沉淀的收尾记忆候选。如果之后发现遗漏的长期信息，请将其作为新的 tracekeeper.propose_memory 候选提交，不要再次调用 tracekeeper.finish_task。', 'Task session was recorded with no durable closeout memory candidates. If omitted durable information is discovered later, submit it as a new tracekeeper.propose_memory candidate; do not call tracekeeper.finish_task again.'));
     }
     if (reviewProposalMode === 'off') {
         actions.push(contentText(context, '任务会话已记录；当前模式不会创建记忆建议或审核队列提案。', 'Task session was recorded; no memory suggestions or Review Queue proposals were created.'));
@@ -4839,6 +5356,33 @@ function buildMemoryCloseoutSummary(context, status, proposalResult) {
         case 'empty':
         default:
             return contentText(context, '没有提交可长期沉淀的收尾记忆候选。', 'No durable closeout memory candidates were submitted.');
+    }
+}
+function resolveCanonicalMemoryCloseoutStatus(reviewProposalMode, proposalResult, hasCloseoutCandidates, legacyStatus) {
+    if (!hasCloseoutCandidates) {
+        return 'no_candidates';
+    }
+    if (reviewProposalMode === 'off') {
+        return 'disabled';
+    }
+    if (reviewProposalMode === 'suggest') {
+        return 'suggested';
+    }
+    if (proposalResult.hasMissingWikiBridge && proposalResult.proposals.length > 0) {
+        return 'requires_wiki_bridge';
+    }
+    switch (legacyStatus) {
+        case 'auto_saved':
+            return 'auto_saved';
+        case 'mixed':
+            return 'partially_auto_saved';
+        case 'queued':
+            return 'queued_for_review';
+        case 'ignored':
+            return 'disabled';
+        case 'empty':
+        default:
+            return 'no_candidates';
     }
 }
 function buildSessionNoteBodyWithDistill(context, summary, outcomes, nextActions, decisions, possiblePreferences) {
@@ -5159,6 +5703,7 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         memory_candidates: input.memoryCandidates,
     }, context, operationId);
     const memoryCloseoutStatus = resolveMemoryCloseoutStatus(input.reviewProposalMode, proposalResult, input.hasCloseoutCandidates);
+    const memoryCloseoutState = resolveCanonicalMemoryCloseoutStatus(input.reviewProposalMode, proposalResult, input.hasCloseoutCandidates, memoryCloseoutStatus);
     const response = {
         ok: true,
         read_only: false,
@@ -5181,6 +5726,7 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         missing_graph_bridges: input.architectureStatus.missing_graph_bridges,
         missing_wiki_bridge: proposalResult.hasMissingWikiBridge,
         memory_closeout_status: memoryCloseoutStatus,
+        memory_closeout_state: memoryCloseoutState,
         memory_closeout_summary: buildMemoryCloseoutSummary(context, memoryCloseoutStatus, proposalResult),
         next_actions_for_agent: buildFinishTaskNextActions(context, input.reviewProposalMode, proposalResult, input.projectHint, input.hasCloseoutCandidates),
     };

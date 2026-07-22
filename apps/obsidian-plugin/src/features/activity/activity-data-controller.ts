@@ -36,6 +36,7 @@ import {
 	type SourceRequestRecord,
 } from './activity-model';
 import { ui } from '../../ui/localization';
+import { buildAgentWorkflowDiagnostics } from './activity-workflow-diagnostics';
 
 type ParsedRecordValue = string | string[];
 type ParsedRecord = Record<string, ParsedRecordValue>;
@@ -111,6 +112,7 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			.filter((event) => !this.isConnectionAuditEvent(event))
 			.map((event) => this.toActivityTimelineAuditItem(event))
 			.slice(0, ACTIVITY_TIMELINE_PREVIEW_ROWS);
+		const workflowDiagnostics = buildAgentWorkflowDiagnostics(recentAuditEvents);
 
 		return {
 			runtimeStatus: this.host.getRuntimeViewStatus(),
@@ -127,6 +129,7 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			revisionRequestedReviewQueueItemCount,
 			actionableReviewQueueItemCount,
 			recentAuditEvents,
+			workflowDiagnostics,
 			timelineItems,
 			recentAgentCount,
 			recentToolCallCount: recentToolCallRecords.length,
@@ -521,9 +524,10 @@ private normalizeAuditToolName(eventType: string, action: string, toolName: stri
 		return normalizedTool;
 	}
 
-toAgentToolCallRecord(event: AuditEventRecord): AgentToolCallRecord {
+	toAgentToolCallRecord(event: AuditEventRecord): AgentToolCallRecord {
 		return {
 			principalId: event.principalId,
+			taskId: event.taskId,
 			agentId: event.agentId || 'unknown',
 			sessionId: event.sessionId || event.agentId || 'unknown',
 			clientName: event.clientName || 'unknown',
@@ -673,6 +677,18 @@ private async readAuditMarkdownFile(file: TFile): Promise<AuditEventRecord[]> {
 					riskLevel: this.host.firstString(data, ['risk_level', 'riskLevel']),
 					argsSummary: this.host.firstString(data, ['args_summary', 'argsSummary']),
 					resultSummary: this.host.firstString(data, ['result_summary', 'resultSummary']),
+					workflowContractVersion: this.host.firstString(data, ['workflow_contract_version', 'workflowContractVersion']),
+					resultSchemaVersion: this.host.firstString(data, ['result_schema_version', 'resultSchemaVersion']),
+					workflowMode: this.host.firstString(data, ['workflow_mode', 'workflowMode']),
+					workflowId: this.host.firstString(data, ['workflow_id', 'workflowId']),
+					recallId: this.host.firstString(data, ['recall_id', 'recallId']),
+					actionId: this.host.firstString(data, ['action_id', 'actionId']),
+					actionReasonCode: this.host.firstString(data, ['action_reason_code', 'actionReasonCode']),
+					snapshotGeneration: this.host.firstString(data, ['snapshot_generation', 'snapshotGeneration']),
+					scopeMode: this.host.firstString(data, ['scope_mode', 'scopeMode']),
+					scopeConfidence: this.host.firstString(data, ['scope_confidence', 'scopeConfidence']),
+					matchedCount: this.host.firstString(data, ['matched_count', 'matchedCount']),
+					memoryCloseoutStatus: this.host.firstString(data, ['memory_closeout_status', 'memoryCloseoutStatus']),
 					transport: this.host.firstString(data, ['transport']),
 					runtimeVersion: this.host.firstString(data, ['runtime_version', 'runtimeVersion']),
 				},
@@ -742,6 +758,18 @@ private parseAuditLogSections(content: string, sourcePath: string): AuditEventRe
 				riskLevel: this.host.firstString(row, ['risk_level', 'riskLevel']),
 				argsSummary: this.host.firstString(row, ['args_summary', 'argsSummary']),
 				resultSummary: this.host.firstString(row, ['result_summary', 'resultSummary']),
+				workflowContractVersion: this.host.firstString(row, ['workflow_contract_version', 'workflowContractVersion']),
+				resultSchemaVersion: this.host.firstString(row, ['result_schema_version', 'resultSchemaVersion']),
+				workflowMode: this.host.firstString(row, ['workflow_mode', 'workflowMode']),
+				workflowId: this.host.firstString(row, ['workflow_id', 'workflowId']),
+				recallId: this.host.firstString(row, ['recall_id', 'recallId']),
+				actionId: this.host.firstString(row, ['action_id', 'actionId']),
+				actionReasonCode: this.host.firstString(row, ['action_reason_code', 'actionReasonCode']),
+				snapshotGeneration: this.host.firstString(row, ['snapshot_generation', 'snapshotGeneration']),
+				scopeMode: this.host.firstString(row, ['scope_mode', 'scopeMode']),
+				scopeConfidence: this.host.firstString(row, ['scope_confidence', 'scopeConfidence']),
+				matchedCount: this.host.firstString(row, ['matched_count', 'matchedCount']),
+				memoryCloseoutStatus: this.host.firstString(row, ['memory_closeout_status', 'memoryCloseoutStatus']),
 				transport: this.host.firstString(row, ['transport']),
 				runtimeVersion: this.host.firstString(row, ['runtime_version', 'runtimeVersion']),
 			});

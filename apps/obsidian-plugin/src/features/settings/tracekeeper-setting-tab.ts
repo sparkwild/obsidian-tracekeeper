@@ -31,7 +31,12 @@ import {
 } from './settings-model';
 import { ui } from '../../ui/localization';
 import { TRACEKEEPER_RUNTIME_LOG_VIEW } from '../../ui/view-types';
-import tracekeeperSkillContent from '../../../../../skills/tracekeeper/SKILL.md';
+import type { SkillInstallState } from '../../adapters/client-skill-adapter';
+import { SkillInstallPreviewModal } from '../skill-installation/skill-install-modals';
+import {
+	type RuntimeCredentialCapabilityProfile,
+	RUNTIME_CREDENTIAL_PRESET_DEFINITIONS,
+} from '../settings/runtime-credentials';
 
 export class TracekeeperSettingTab extends PluginSettingTab {
 	constructor(
@@ -54,11 +59,12 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		const snapshot = await this.plugin.loadAgentConnectionsSnapshot();
 		const vaultReady = this.plugin.isVaultStructureReady();
 		const context = this.plugin.getOnboardingContext(snapshot, vaultReady);
+		const skillInstallState = this.plugin.getSkillInstallState(this.plugin.settings.onboarding.selectedClientId);
 		const nextStep = getNextOnboardingStep(this.plugin.settings.onboarding, context);
 		const { containerEl } = this;
 		containerEl.empty();
 		containerEl.addClass('tracekeeper-settings-root');
-		this.renderOnboardingSection(containerEl, snapshot, context, nextStep);
+		this.renderOnboardingSection(containerEl, snapshot, context, nextStep, skillInstallState);
 		this.renderConnectionInfoSection(containerEl, snapshot);
 		this.renderTokenSection(containerEl);
 		this.renderAgentClientConfigSection(containerEl, snapshot);
@@ -84,7 +90,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		container: HTMLElement,
 		snapshot: AgentConnectionsSnapshot,
 		context: OnboardingProgressContext,
-		nextStep: OnboardingStep
+		nextStep: OnboardingStep,
+		skillInstallState: SkillInstallState
 	): void {
 		const section = this.createSection(
 			container,
@@ -110,6 +117,20 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			text: onboardingContextDescription(context, ui),
 			cls: 'tracekeeper-view__description',
 		});
+		const evidence = section.createDiv({ cls: 'tracekeeper-settings-grid' });
+		const profileLabel = this.plugin.settings.onboarding.selectedClientId === 'codex'
+			? ui('本地单用户默认 Profile（不是团队 RBAC）', 'Local single-user default profile (not team RBAC)')
+			: ui('本地单用户复制 Profile（不是团队 RBAC）', 'Local single-user copy-only profile (not team RBAC)');
+		this.renderSkillEvidence(evidence, ui('Profile', 'Profile'), profileLabel, true);
+		this.renderSkillEvidence(evidence, ui('Bundle 可用', 'Bundle available'), `v${skillInstallState.expectedVersion}`, context.skillAvailable);
+		this.renderSkillEvidence(evidence, ui('已复制', 'Copied'), ui('人工复制事件', 'Manual copy event'), context.skillCopied);
+		this.renderSkillEvidence(evidence, ui('用户确认', 'User confirmed'), ui('人工自证，不等于文件验证', 'Self-attested, not file verification'), context.skillUserConfirmed);
+		this.renderSkillEvidence(evidence, ui('文件验证', 'File verified'), skillInstallState.detail, context.skillFileVerified);
+		this.renderSkillEvidence(evidence, ui('客户端已重载', 'Client reloaded'), ui('人工确认或客户端证据', 'User confirmation or client evidence'), context.clientReloaded);
+		this.renderSkillEvidence(evidence, ui('连接验证', 'Connection verified'), ui('Principal MCP 审计证据', 'Principal MCP audit evidence'), context.connectionVerified);
+		this.renderSkillEvidence(evidence, ui('Recall 已观察', 'Recall observed'), ui('不证明 Skill 自动触发', 'Does not prove automatic Skill triggering'), context.recallObserved);
+		this.renderSkillEvidence(evidence, ui('完整工作流已观察', 'Tracked workflow observed'), ui('同 Principal 的 start → recall → finish', 'Same-principal start → recall → finish'), context.trackedWorkflowObserved);
+		this.renderSkillEvidence(evidence, ui('存在更新', 'Update available'), skillInstallState.detail, context.skillUpdateAvailable, true);
 
 		const actionWrap = section.createDiv({ cls: 'tracekeeper-action-row' });
 		if (nextStep === 'vault_check') {
@@ -171,37 +192,49 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			}
 			if (nextStep === 'skill_setup') {
 				const clientId = this.plugin.settings.onboarding.selectedClientId;
-				const guidance = clientId === 'codex'
-					? ui(
-						'复制后，将内容保存为名为 tracekeeper 的 SKILL.md，并安装到 Codex 可发现的个人或项目 Skills 目录。',
-						'Copy the content into a tracekeeper/SKILL.md file in a personal or project Skills directory that Codex can discover.'
-					)
-					: ui(
-						'复制后，通过所选客户端支持的 Skill、规则或持久工作流说明入口安装；此步骤不会替你写入客户端目录。',
-						'Copy and install it through the selected client\'s supported Skill, rules, or persistent workflow-instruction mechanism. This step does not write into client directories.'
-					);
+				if (clientId === 'codex' && (skillInstallState.state === 'not_installed' || skillInstallState.state === 'update_available')) {
+					const mode = skillInstallState.state === 'update_available' ? 'update' : 'install';
+					new Setting(section)
+						.setName(mode === 'install' ? ui('安装完整 Skill bundle', 'Install complete Skill bundle') : ui('更新完整 Skill bundle', 'Update complete Skill bundle'))
+						.setDesc(ui(
+							`先预览目标目录和文件清单；只有再次确认后才写入。目标：${skillInstallState.targetDirectory || ''}`,
+							`Preview the target directory and files first. Nothing is written until confirmation. Target: ${skillInstallState.targetDirectory || ''}`
+						))
+						.addButton((button) => button
+							.setButtonText(mode === 'install' ? ui('预览安装', 'Preview install') : ui('预览更新', 'Preview update'))
+							.onClick(() => new SkillInstallPreviewModal(this.app, this.plugin, clientId, mode, () => {
+								void this.renderSettings();
+							}).open()));
+				}
+				if (skillInstallState.state === 'modified') {
+					new Setting(section)
+						.setName(ui('检测到用户修改', 'User-modified Skill detected'))
+						.setDesc(ui(
+							'自动覆盖已禁止。请先保留修改、移走现有目录，或手动比较后再安装。',
+							'Automatic overwrite is disabled. Preserve or move the existing directory, or compare it manually before installing.'
+						));
+				}
 				new Setting(section)
-					.setName(ui('获取 Tracekeeper Skill', 'Get Tracekeeper Skill'))
+					.setName(ui('复制单文件兼容 Skill', 'Copy flattened compatibility Skill'))
 					.setDesc(ui(
-						`Skill 已内置于当前插件包。${guidance}`,
-						`The Skill is embedded in this plugin package. ${guidance}`
+						'供不支持目录 Skill 或自动安装的客户端使用。复制事件不证明文件已安装。',
+						'Use for clients without directory Skills or managed installation. Copying does not prove installation.'
 					))
 					.addButton((button) => {
 						button
-							.setButtonText(ui('复制 Skill 内容', 'Copy Skill content'))
+							.setButtonText(ui('复制兼容 Skill', 'Copy compatibility Skill'))
 							.onClick(() => {
-								void this.plugin.copyToClipboard(
-									tracekeeperSkillContent,
-									ui('Tracekeeper Skill 已复制。', 'Tracekeeper Skill copied.')
-								).catch((error) => {
+								void this.plugin.copyTracekeeperSkillFallback()
+									.then(() => this.renderSettings())
+									.catch((error) => {
 									console.error('tracekeeper failed to copy Skill content', error);
 									new Notice(ui('复制 Skill 失败。', 'Failed to copy Skill content.'));
 								});
 							});
 					});
 				new Setting(section)
-					.setName(ui('确认 Skill', 'Confirm Skill setup'))
-					.setDesc(ui('仅在已将复制的 Skill 安装/挂载到目标客户端后确认。', 'Confirm only after the copied Skill has been installed or mounted in the target client.'))
+					.setName(ui('人工确认 Skill', 'User-confirm Skill setup'))
+					.setDesc(ui('仅记录人工确认，不会显示为 file_verified。', 'Records self-attestation only and is never shown as file_verified.'))
 					.addButton((button) => {
 						button
 							.setButtonText(ui('我已完成 Skill 设置', 'Skill setup is done'))
@@ -271,6 +304,14 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 					});
 			});
 		}
+		if (context.recallObserved && !context.trackedWorkflowObserved) {
+			const workflowAction = actionWrap.createEl('button', { text: ui('验证完整 tracked workflow', 'Verify tracked workflow') });
+			workflowAction.addEventListener('click', () => {
+				void this.plugin.verifyOnboardingTrackedWorkflow()
+					.then(() => this.renderSettings())
+					.catch((error) => new Notice(error instanceof Error ? error.message : String(error)));
+			});
+		}
 
 		if (nextStep !== 'complete') {
 			const clear = actionWrap.createEl('button', {
@@ -285,6 +326,25 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 					});
 			});
 		}
+	}
+
+	private renderSkillEvidence(
+		container: HTMLElement,
+		label: string,
+		detail: string,
+		verified: boolean,
+		warningWhenTrue = false
+	): void {
+		const row = container.createDiv({ cls: 'tracekeeper-action-row' });
+		const description = row.createDiv();
+		description.createEl('strong', { text: label });
+		description.createEl('div', { text: detail, cls: 'tracekeeper-view__description' });
+		row.createEl('span', {
+			text: verified ? ui('是', 'Yes') : ui('否', 'No'),
+			cls: `tracekeeper-badge ${verified
+				? warningWhenTrue ? 'tracekeeper-badge--warning' : 'tracekeeper-badge--success'
+				: 'tracekeeper-badge--muted'}`,
+		});
 	}
 
 	private renderConnectionInfoSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
@@ -628,6 +688,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 
 	private renderClientConfigRow(container: HTMLElement, config: GeneratedClientConfig): void {
 		const row = container.createDiv({ cls: 'tracekeeper-settings-client-row' });
+		const runtimeProfile = config.runtimeCapabilityProfile ?? 'custom';
+		const runtimeTools = config.runtimePublicTools ?? [];
 		const info = row.createDiv({ cls: 'tracekeeper-settings-client-row__info' });
 		const title = info.createDiv({ cls: 'tracekeeper-config-row__title' });
 		title.createEl('strong', { text: config.displayName });
@@ -636,6 +698,12 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			cls: `tracekeeper-badge ${clientConfigStatusClass(config.configState)}`,
 		});
 		info.createEl('small', { text: config.configStatusDetail || config.description });
+		info.createEl('small', {
+			text: `${ui('能力预设', 'Capability profile')}: ${this.runtimeProfileLabel(runtimeProfile)}`,
+		});
+		info.createEl('small', {
+			text: `${ui('可调用公开工具', 'Public tools')}: ${runtimeTools.length > 0 ? runtimeTools.join(', ') : ui('未配置', 'Not configured')}`,
+		});
 		const actions = row.createDiv({ cls: 'tracekeeper-settings-client-row__actions tracekeeper-action-row' });
 
 		if (config.configState !== 'configured') {
@@ -685,6 +753,49 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			remove.addEventListener('click', () => {
 				new ClientConfigPreviewModal(this.app, this.plugin, config, 'remove', () => this.display()).open();
 			});
+		}
+		const profileControlWrap = row.createDiv({ cls: 'tracekeeper-action-row' });
+		profileControlWrap.createEl('span', { text: ui('预设', 'Preset') });
+		const profileSelect = profileControlWrap.createEl('select', { cls: 'tracekeeper-capability-preset' });
+		for (const preset of RUNTIME_CREDENTIAL_PRESET_DEFINITIONS) {
+			profileSelect.createEl('option', {
+				value: preset.id,
+				text: this.runtimeProfileLabel(preset.id),
+			});
+		}
+		const customOption = profileSelect.createEl('option', {
+			value: 'custom',
+			text: ui('自定义（保留现有能力，仅展示）', 'Custom (preserved, display only)'),
+		});
+		customOption.disabled = true;
+		profileSelect.value = runtimeProfile;
+		profileSelect.addEventListener('change', () => {
+			const nextProfile = profileSelect.value as RuntimeCredentialCapabilityProfile;
+			if (nextProfile !== runtimeProfile) {
+				void this.plugin.setRuntimeCredentialProfile(config.clientId, nextProfile)
+					.then(() => this.renderSettings())
+					.catch((error) => {
+						console.error('tracekeeper failed to update runtime capability profile', error);
+						new Notice(ui('更新能力预设失败。', 'Failed to update capability profile.'));
+					});
+			}
+		});
+	}
+
+	private runtimeProfileLabel(profile: RuntimeCredentialCapabilityProfile): string {
+		switch (profile) {
+			case 'knowledge_assistant':
+				return ui('知识助手', 'Knowledge assistant');
+			case 'research_agent':
+				return ui('研究代理', 'Research agent');
+			case 'review_agent':
+				return ui('审查代理', 'Review agent');
+			case 'maintenance_agent':
+				return ui('维护代理', 'Maintenance agent');
+			case 'custom':
+				return ui('自定义', 'Custom');
+			default:
+				return profile;
 		}
 	}
 

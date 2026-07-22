@@ -1,3 +1,6 @@
+import type { ToolCapability } from '@tracekeeper/contracts';
+import type { RuntimeCredentialCapabilityProfile } from '../settings/runtime-credentials';
+
 export type ClientConfigState = 'configured' | 'needs_update' | 'not_configured' | 'unavailable';
 
 export type ClientConnectionTransport = 'streamable-http';
@@ -27,6 +30,9 @@ export interface GeneratedClientConfig {
 	configState: ClientConfigState;
 	configStatusLabel: string;
 	configStatusDetail: string;
+	runtimeCapabilityProfile?: RuntimeCredentialCapabilityProfile;
+	runtimeCapabilities?: readonly (ToolCapability | '*')[];
+	runtimePublicTools?: readonly string[];
 }
 
 export interface ClientConfigStatus {

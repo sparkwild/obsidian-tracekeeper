@@ -296,6 +296,10 @@
 	overflow-wrap: anywhere;
 }
 
+.tracekeeper-capability-preset {
+	min-width: 150px;
+}
+
 .tracekeeper-settings-client-row__actions {
 	display: flex;
 	flex-wrap: wrap;

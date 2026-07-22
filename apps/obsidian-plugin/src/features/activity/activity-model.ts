@@ -109,6 +109,34 @@ export interface AuditEventRecord {
 	resultSummary: string;
 	transport: string;
 	runtimeVersion: string;
+	workflowContractVersion: string;
+	resultSchemaVersion: string;
+	workflowMode: string;
+	workflowId: string;
+	recallId: string;
+	actionId: string;
+	actionReasonCode: string;
+	snapshotGeneration: string;
+	scopeMode: string;
+	scopeConfidence: string;
+	matchedCount: string;
+	memoryCloseoutStatus: string;
+}
+
+export interface AgentWorkflowDiagnostics {
+	activeWorkflowCount: number;
+	agedWorkflowCount: number;
+	successfulStartCount: number;
+	successfulRecallCount: number;
+	startToRecallCount: number;
+	recallToReadCount: number;
+	startToFinishCount: number;
+	permissionDeniedCount: number;
+	zeroMatchRecallCount: number;
+	closeoutStatusDistribution: Record<string, number>;
+	durationP50Ms: number | null;
+	durationP95Ms: number | null;
+	recentPrincipals: string[];
 }
 
 export interface ActivityTimelineItem {
@@ -144,6 +172,7 @@ export interface AgentActivitySnapshot {
 	revisionRequestedReviewQueueItemCount: number;
 	actionableReviewQueueItemCount: number;
 	recentAuditEvents: AuditEventRecord[];
+	workflowDiagnostics: AgentWorkflowDiagnostics;
 	timelineItems: ActivityTimelineItem[];
 	recentAgentCount: number;
 	recentToolCallCount: number;
@@ -168,6 +197,7 @@ export interface AgentConnectionRecord {
 
 export interface AgentToolCallRecord {
 	principalId: string;
+	taskId: string;
 	agentId: string;
 	sessionId: string;
 	clientName: string;
