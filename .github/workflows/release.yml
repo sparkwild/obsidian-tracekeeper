@@ -68,6 +68,9 @@ jobs:
       - name: Verify and package
         run: npm run verify
 
+      - name: Check generated package artifacts
+        run: git diff --exit-code -- apps/mcp-server/dist packages/core/dist packages/contracts/dist packages/mcp-runtime/dist
+
       - name: Generate release asset attestations
         uses: actions/attest@v4
         with:

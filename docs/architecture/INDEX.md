@@ -9,8 +9,9 @@ AI Agent
    ▼
 Obsidian-hosted local MCP runtime
    │
-   ├─ MCP tool handlers and permission checks
-   ├─ shared vault/knowledge primitives
+   ├─ contract-driven MCP tools, credentials, and capability checks
+   ├─ application use cases and recoverable write coordination
+   ├─ event-driven KnowledgeIndex snapshot
    ▼
 Active local Obsidian vault
    ▲
@@ -25,13 +26,26 @@ Desktop Obsidian owns the production runtime lifecycle. The standalone MCP proce
 
 | Component | Owns | Depends on |
 | --- | --- | --- |
-| `apps/obsidian-plugin` | Plugin lifecycle, runtime host, settings, native views, review actions, client configuration | MCP runtime and core primitives |
-| `apps/mcp-server` | MCP protocol, public tool surface, tool validation, permission classification, audit summaries | Core primitives and configured vault boundary |
-| `packages/core` | Markdown parsing, vault scanning, recall, context packs, graph health, lint, knowledge paths, and safety helpers | Local filesystem inputs only |
+| `apps/obsidian-plugin` | Composition root, Obsidian Vault/event adapters, runtime lifecycle, native views, onboarding, review actions, client configuration | Contracts, MCP runtime, core primitives, Obsidian API |
+| `apps/mcp-server` | Standalone Node composition and cross-layer smoke tests | MCP runtime and core primitives |
+| `packages/contracts` | Public/compatibility tool names, visibility, capability, risk, input schema, and deprecation metadata | No workspace package |
+| `packages/mcp-runtime` | Streamable HTTP transport, authenticated sessions, application tool adapter, operation recovery, and capability enforcement | Contracts and core |
+| `packages/core` | Markdown parsing, rebuildable knowledge index, scanning, recall, context packs, graph health, lint, paths, safety, and operation journal | Node filesystem only in its Node adapters |
+| `skills/tracekeeper` | Companion Skill guidance for Agent invocation and closeout habits | MCP runtime enforcement, path safety, write approvals |
 | Vault | Control files, work traces, durable knowledge, sources, proposals, and archive | User's local filesystem and Obsidian |
-| Companion Skill | Agent-side invocation policy and workflow adaptation | Public MCP contract; no direct vault authority |
 
 Shared rules belong in the lowest reusable owner. UI code should not reimplement path safety or knowledge rules, and the core package should not know about Obsidian views or Agent client configuration.
+
+### Vault repository boundary
+
+Core defines an asynchronous `VaultRepository` port for safe text reads, create-if-absent, optimistic replacement, and Markdown listing. Two adapters implement that contract:
+
+- `NodeFsVaultRepository` is the standalone/test adapter and performs vault-relative validation, symbolic-link rejection, temporary-file replacement, and file-version checks.
+- `ObsidianVaultRepository` is the production adapter for operations that must remain coordinated with Obsidian's Vault API and file events.
+
+The port does not expose absolute paths. Versions are optimistic concurrency tokens, not a second source of truth. An adapter must reject stale replacement rather than silently overwrite content changed since it was read.
+
+Public note reads, approved writeback, task closeout, and generated task/source/context/session/proposal/audit/memory records use this port in the Obsidian composition. The standalone composition keeps Node adapters and guarded filesystem fallbacks for deterministic temporary-vault tests and compatibility.
 
 ## Vault Architecture
 
@@ -45,6 +59,7 @@ The current architecture version uses three top-level roots:
 │  ├─ permissions.md
 │  ├─ audit_log.md
 │  ├─ audit/
+│  ├─ operations/
 │  └─ dashboards/
 ├─ inbox/
 │  ├─ agent_requests/
@@ -93,13 +108,13 @@ Body wikilinks are the graph contract. Relationship fields such as `related`, `s
 
 ## Read And Recall Flow
 
-1. The MCP runtime resolves and validates the active vault root.
-2. Core scans Markdown notes while excluding the active Obsidian configuration directory and unsafe paths.
-3. `tracekeeper.recall` ranks matching memory, Wiki, source, task, and session context according to the requested scope.
-4. The Agent consumes excerpts, match reasons, and graph links first.
-5. `tracekeeper.read_note` is used only when the complete note is required.
+1. The plugin creates an empty `KnowledgeIndex`, subscribes to Vault events, and rebuilds the first versioned snapshot in the background instead of blocking plugin startup.
+2. Obsidian create, modify, delete, and rename events update only the affected indexed record; events received during rebuild are queued and replayed before the rebuilt generation is considered current.
+3. A tool invocation receives one stable scan snapshot. Ready-state status, recall, start, lint, graph, and context-pack queries do not synchronously rescan the full vault.
+4. `tracekeeper.recall` ranks matching memory, Wiki, source, task, and session context according to the requested scope.
+5. The Agent consumes excerpts, match reasons, and graph links first, then uses `tracekeeper.read_note` only when complete content is required.
 
-Recall currently scans the vault on demand. A future incremental index may optimize this boundary, but it must be reconstructible from Markdown, react to Obsidian file events, and never become a second source of truth.
+The standalone MCP composition retains safe filesystem scanning as a development and recovery fallback. Index results expose `index_state` and snapshot generation. A plugin command can rebuild the index, and Connection Status shows its state, generation, note count, and last rebuild. The index is disposable and rebuildable; Markdown remains the only knowledge authority.
 
 ## Write Flows
 
@@ -114,19 +129,21 @@ Task, session, source-analysis, context-pack, request, and proposal records are 
 - Project auto-save requires a resolvable Wiki bridge; otherwise the candidate enters the Review Queue.
 - Applying an approved proposal appends to the proposal's existing target and updates proposal state.
 
-Idempotent signatures already protect project auto-save from repeated identical entries. As write orchestration grows, explicit operation identifiers, coordinated atomic writes, and a recoverable operation journal should extend this guarantee across multi-file workflows.
+Project auto-save retains content signatures. `start_task`, `finish_task`, and approved writeback additionally use stable operation identities, payload-hash idempotency checks, atomic replacement, and per-operation journals under `00_tracekeeper/control/operations/`. Journal execution uses an in-process queue plus a vault-local process lock and atomic initial claim, preventing the plugin runtime and standalone development runtime from executing the same idempotency key concurrently. Runtime startup resumes known unfinished operations by rolling them forward, exposes recovered/failed/skipped counts to Connection Status, and never rolls user-visible Markdown back over a later edit.
 
 ### Client configuration
 
 Client configuration is the only expected write outside the active vault. It is owned by the Obsidian plugin, never by MCP tools. Supported automatic changes must:
 
 1. show the target and intended Tracekeeper-only change;
-2. require explicit user confirmation;
-3. preserve unrelated MCP server entries;
-4. write a timestamped backup and temporary file before replacement;
-5. record a local audit event without persisting credentials.
+2. create a short-lived preview plan containing the target, original-content hash, intended change, and expiry;
+3. require explicit user confirmation of that plan;
+4. recheck both the file hash and current client credential before commit, requiring a new preview after either changes;
+5. preserve unrelated MCP server entries;
+6. write a timestamped backup and temporary file before replacement;
+7. record a local audit event without persisting credentials.
 
-Codex and Claude Desktop currently support automatic configuration when the desktop filesystem API is available. Claude Code, Cursor, and custom clients receive copyable configuration.
+Codex and Claude Desktop currently support automatic configuration when the desktop filesystem API is available. Claude Code, Cursor, and custom clients receive copyable configuration. Each profile receives an independent credential principal so authorization and audit do not trust the client-reported name. The settings UI can rotate one client credential without invalidating the others. The legacy shared token remains a compatibility credential during migration.
 
 ## Permissions And Review
 

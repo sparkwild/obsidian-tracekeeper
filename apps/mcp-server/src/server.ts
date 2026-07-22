@@ -1,4 +1,4 @@
-import { StreamableHttpMcpRuntime } from './http-runtime';
+import { StreamableHttpMcpRuntime } from '@tracekeeper/mcp-runtime';
 
 interface ServerArgs {
 	defaultVaultRoot?: string;

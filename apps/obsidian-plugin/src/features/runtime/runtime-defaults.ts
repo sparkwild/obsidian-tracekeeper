@@ -1,0 +1,15 @@
+
+
+export const DEFAULT_MCP_PORT = 58437;
+
+export const DEFAULT_MCP_HOST = '127.0.0.1';
+
+export const DEFAULT_MCP_PATH = '/mcp';
+
+export const DEFAULT_MCP_HTTP_ENDPOINT = `http://${DEFAULT_MCP_HOST}:${DEFAULT_MCP_PORT}${DEFAULT_MCP_PATH}`;
+
+export const DEFAULT_MCP_MAX_STREAMS_PER_SESSION = 2;
+
+export const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 30 * 1000;
+
+export const LEGACY_DEFAULT_MCP_HTTP_ENDPOINTS = ['http://127.0.0.1:37241/mcp'];

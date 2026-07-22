@@ -46,7 +46,14 @@ The target first-run experience is one recoverable setup flow:
 
 The flow must expose progress and allow resuming after a restart. It must not silently write client configuration or pretend that a Skill was installed when the client has no supported installation mechanism.
 
-The current implementation provides runtime status, client profiles, configuration preview/backup for supported clients, copyable configuration for others, and test recall. The guided first-run flow and companion Skill distribution are tracked separately in [the status snapshot](../status/INDEX.md).
+The current implementation persists this sequence as a resumable settings workflow. Client configuration, Skill confirmation, restart, connection verification, and first recall are separate states. Connection success requires audit evidence from the selected client's credential principal; first recall requires a successful external `tracekeeper.recall` with at least one match. A plugin-internal preview cannot complete either step.
+
+Each managed Agent profile owns an independent local credential. Rotating one profile invalidates only that Agent's prior connection and returns its onboarding state to configuration/restart verification; other Agent connections remain available.
+
+A repository-hosted companion Skill is available at `skills/tracekeeper/SKILL.md`. The community-plugin build embeds that same file into `main.js`; onboarding can therefore copy the canonical Skill content even when the user installed Tracekeeper without cloning this repository.
+It teaches `start_task -> recall -> finish_task` workflows, review boundaries, and approved writeback habits.
+It does not grant permissions or define MCP runtime internals.
+Automatic Skill installation is not claimed: the current UI provides client-sensitive instructions, copies the embedded canonical Skill, and asks the user to confirm installation or mounting for the selected Agent. It does not silently write outside the vault or into client-owned directories. Client-specific automation gaps are tracked in the [status snapshot](../status/INDEX.md).
 
 ### Start, recall, and finish work
 

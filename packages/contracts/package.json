@@ -1,0 +1,19 @@
+{
+	"name": "@tracekeeper/contracts",
+	"version": "0.2.3",
+	"description": "Typed Tracekeeper MCP tool contracts for public/compatibility API boundaries.",
+	"private": true,
+	"type": "commonjs",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"test": "npm run build && node ./scripts/test.mjs",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/node": "^22.14.0",
+		"typescript": "^5.8.2"
+	},
+	"license": "MIT"
+}

@@ -46,14 +46,15 @@ Tracekeeper treats every AI suggestion as a candidate memory proposal. You can i
 
 1. Write and collect notes in Obsidian as usual.
 2. Enable Tracekeeper and open **Settings -> Community plugins -> Tracekeeper**.
-3. Copy or auto-configure the Agent connection from the **Agent configuration** section.
-4. Ask the AI assistant to summarize, connect, or refine a topic from your vault.
-5. Review proposed memory, wiki, graph, or migration items in the **Review Queue**.
-6. Edit, approve, reject, or request revisions for Review Queue items before they become durable memory.
+3. Continue the resumable **Onboarding** section: choose a client, preview or copy its independent connection, copy the Skill embedded in the plugin, and install or mount it in the client.
+4. Restart the Agent when requested, ask it to call Tracekeeper, and verify the recorded connection evidence.
+5. Ask that Agent to run a narrow `tracekeeper.recall` with at least one match, then verify the first-recall evidence in settings.
+6. Review proposed memory, wiki, graph, or migration items in the **Review Queue**.
+7. Edit, approve, reject, or request revisions for Review Queue items before they become durable memory.
 
 ## Agent And MCP Connection
 
-Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian is open. The Runtime binds to loopback by default and uses a generated local token in the connection URL or bearer token.
+Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian is open. The Runtime binds to loopback by default and gives each managed Agent client an independent credential principal in its connection URL. Settings can rotate one client credential without interrupting the others. A legacy shared token remains for compatibility.
 
 AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and submit memory updates according to your memory rules. Global memory goes to review by default; project memory can auto-save as an append-only project note when you enable that rule.
 
@@ -114,6 +115,8 @@ MCP writes are intentionally narrow:
 - working records are written only to Tracekeeper-controlled vault folders
 - generated records do not overwrite existing notes
 - approved writeback appends to an existing target note from an approved proposal
+- multi-step task and writeback operations are idempotent, journaled, and resumed on runtime startup
+- sessions are principal-bound and subject to request-size, session-count, and idle-time limits
 - delete, rename, bulk rewrite, and system command execution are not available MCP actions
 
 User-confirmed client configuration is the only expected write outside the active vault. Tracekeeper previews the target configuration and creates a backup before changing supported AI tool config files.

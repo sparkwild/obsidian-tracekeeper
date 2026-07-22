@@ -11,6 +11,7 @@ await build({
 	target: ['es2018'],
 	minify: true,
 	sourcemap: false,
+	loader: { '.md': 'text' },
 	external: ['obsidian'],
 	outfile: 'main.js',
 });

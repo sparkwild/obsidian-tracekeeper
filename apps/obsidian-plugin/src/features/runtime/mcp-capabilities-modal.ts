@@ -1,0 +1,255 @@
+import { Modal } from 'obsidian';
+import { toolDefinitions } from '@tracekeeper/mcp-runtime';
+import { getContractByName, type ToolRisk } from '@tracekeeper/contracts';
+import { localizedText, ui, type LocalizedText } from '../../ui/localization';
+
+export interface McpCapabilityLocalization {
+	title: LocalizedText;
+	description: LocalizedText;
+	category: LocalizedText;
+}
+
+export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalization> = {
+	'tracekeeper.status': {
+		title: { zh: '查看状态', en: 'Check status' },
+		description: {
+			zh: '扫描当前知识库，返回基础文件数量、待审核项目、任务和最近活动概览。',
+			en: 'Scans the current vault and returns counts for notes, review items, tasks, and recent activity.',
+		},
+		category: { zh: '概览', en: 'Overview' },
+	},
+	'tracekeeper.graph_health': {
+		title: { zh: '检查知识图谱', en: 'Check graph health' },
+		description: {
+			zh: '分析 wikilink、入口页、hub、孤立节点和未解析链接，帮助判断 Obsidian 图谱结构是否健康。',
+			en: 'Analyzes wikilinks, entry notes, hubs, isolated notes, and unresolved links to assess graph health.',
+		},
+		category: { zh: '维护', en: 'Maintenance' },
+	},
+	'tracekeeper.start_task': {
+		title: { zh: '开始任务', en: 'Start task' },
+		description: {
+			zh: '开始一次 Agent 工作，记录任务并返回下一步建议召回方式。',
+			en: 'Starts an agent task, records it, and returns the recommended recall step.',
+		},
+		category: { zh: '任务', en: 'Task' },
+	},
+	'tracekeeper.recall': {
+		title: { zh: '召回记忆', en: 'Recall memory' },
+		description: {
+			zh: '优先用它查找相关记忆、Wiki 和来源；结果包含摘要、命中原因和图谱链接。',
+			en: 'Use first to find related memory, wiki, and sources; results include excerpts, match reasons, and graph links.',
+		},
+		category: { zh: '检索', en: 'Recall' },
+	},
+	'tracekeeper.project_context': {
+		title: { zh: '项目上下文', en: 'Project context' },
+		description: {
+			zh: '按项目、仓库路径或项目 ID 定向检索，避免无差别加载所有项目记忆。',
+			en: 'Retrieves context scoped by project, repository path, or project id instead of loading every project memory.',
+		},
+		category: { zh: '检索', en: 'Recall' },
+	},
+	'tracekeeper.project_history': {
+		title: { zh: '项目历史', en: 'Project history' },
+		description: {
+			zh: '读取指定项目的历史任务、会话和连续性记录，帮助 Agent 接上之前的工作。',
+			en: 'Reads project-scoped task, session, and continuity records so agents can resume prior work.',
+		},
+		category: { zh: '检索', en: 'Recall' },
+	},
+	'tracekeeper.read_note': {
+		title: { zh: '读取笔记', en: 'Read note' },
+		description: {
+			zh: '在召回摘要不够时，按知识库相对路径读取单篇完整笔记。',
+			en: 'Reads one full note by vault-relative path when recall excerpts are not enough.',
+		},
+		category: { zh: '检索', en: 'Recall' },
+	},
+	'tracekeeper.review_queue': {
+		title: { zh: '查看审核队列', en: 'Review queue' },
+		description: {
+			zh: '查看待审核或已批准的审核项；真正写回仍需要单独的审核后写入动作。',
+			en: 'Lists pending or approved review items; durable writeback still requires the separate review-gated apply action.',
+		},
+		category: { zh: '审核', en: 'Review' },
+	},
+	'tracekeeper.list_review_queue': {
+		title: { zh: '查看审核队列', en: 'List review queue' },
+		description: {
+			zh: '读取等待用户确认的审核项；全局记忆默认需要审核，项目记忆可按规则自动保存。',
+			en: 'Reads review items waiting for confirmation; global memory defaults to review, while project memory can auto-save by rule.',
+		},
+		category: { zh: '审核', en: 'Review' },
+	},
+	'tracekeeper.list_source_requests': {
+		title: { zh: '查看资料请求', en: 'List source requests' },
+		description: {
+			zh: '读取等待 Agent 处理的资料分析请求，用于后续生成来源笔记、分析报告或记忆提案。',
+			en: 'Reads pending source-analysis requests that can later produce source notes, reports, or memory proposals.',
+		},
+		category: { zh: '资料', en: 'Source' },
+	},
+	'tracekeeper.list_approved_writebacks': {
+		title: { zh: '查看已批准写回', en: 'List approved writebacks' },
+		description: {
+			zh: '读取已经通过审核、可以由运行时执行写回的候选提案。',
+			en: 'Reads proposals that have already been approved and are candidates for runtime writeback.',
+		},
+		category: { zh: '审核', en: 'Review' },
+	},
+	'tracekeeper.audit_recent': {
+		title: { zh: '查看审计记录', en: 'Read audit log' },
+		description: {
+			zh: '读取最近的连接、工具调用、配置写入和错误记录，便于排查 Agent 使用情况。',
+			en: 'Reads recent connection, tool-call, config-write, and error records for troubleshooting agent activity.',
+		},
+		category: { zh: '日志', en: 'Log' },
+	},
+	'tracekeeper.analyze_source_request': {
+		title: { zh: '分析资料请求', en: 'Analyze source request' },
+		description: {
+			zh: '处理一条资料请求，生成来源笔记、分析输出、审核提案和审计记录。',
+			en: 'Processes one source request and writes source notes, analysis output, review proposals, and audit entries.',
+		},
+		category: { zh: '资料', en: 'Source' },
+	},
+	'tracekeeper.source_request': {
+		title: { zh: '处理资料请求', en: 'Source requests' },
+		description: {
+			zh: '查看资料请求，或处理一条已有请求；不会主动抓取外部网络内容。',
+			en: 'Lists source requests or analyzes one existing request; it does not fetch external network content.',
+		},
+		category: { zh: '资料', en: 'Source' },
+	},
+	'tracekeeper.apply_approved_writeback': {
+		title: { zh: '应用已批准写回', en: 'Apply approved writeback' },
+		description: {
+			zh: '只对已经批准的审核提案执行写回，把明确批准的内容追加到目标笔记。',
+			en: 'Applies only approved review proposals by appending explicitly approved content to the target note.',
+		},
+		category: { zh: '写回', en: 'Writeback' },
+	},
+	'tracekeeper.build_context_pack': {
+		title: { zh: '生成上下文包', en: 'Build context pack' },
+		description: {
+			zh: '根据查询生成精简上下文；默认只返回结果，只有指定写入时才创建笔记。',
+			en: 'Builds compact context from a query; returns results by default and writes only when requested.',
+		},
+		category: { zh: '上下文', en: 'Context' },
+	},
+	'tracekeeper.lint': {
+		title: { zh: '检查知识库规范', en: 'Run vault checks' },
+		description: {
+			zh: '统一检查目录结构、链接、来源引用、声明来源和知识图谱问题。',
+			en: 'Checks structure, links, source references, claim sources, and graph health in one entry.',
+		},
+		category: { zh: '维护', en: 'Maintenance' },
+	},
+	'tracekeeper.finish_task': {
+		title: { zh: '结束任务', en: 'Finish task' },
+		description: {
+			zh: '任务结束时记录总结，并按记忆规则提交决策、方案调整、经验、偏好、后续动作和记忆候选。',
+			en: 'Records task closeout and submits decisions, solution changes, lessons, preferences, next actions, and memory candidates by rule.',
+		},
+		category: { zh: '任务', en: 'Task' },
+	},
+	'tracekeeper.distill_session': {
+		title: { zh: '提炼会话', en: 'Distill session' },
+		description: {
+			zh: '把一次会话中的决策、偏好和后续动作整理成会话记录与待审核记忆提案。',
+			en: 'Distills decisions, preferences, and next actions from a session into a session note and reviewable memory proposals.',
+		},
+		category: { zh: '记忆', en: 'Memory' },
+	},
+	'tracekeeper.write_context_pack': {
+		title: { zh: '写入上下文包', en: 'Write context pack' },
+		description: {
+			zh: '把已生成的上下文内容写入 Tracekeeper 工作区，便于后续复用和审计。',
+			en: 'Writes generated context content under the Tracekeeper workspace for reuse and auditability.',
+		},
+		category: { zh: '上下文', en: 'Context' },
+	},
+	'tracekeeper.write_session_note': {
+		title: { zh: '写入会话记录', en: 'Write session note' },
+		description: {
+			zh: '把会话内容写入 Tracekeeper 工作区，作为任务过程的本地记录。',
+			en: 'Writes session content under the Tracekeeper workspace as a local record of the work.',
+		},
+		category: { zh: '记录', en: 'Record' },
+	},
+	'tracekeeper.capture_source': {
+		title: { zh: '捕获资料来源', en: 'Capture source' },
+		description: {
+			zh: '记录网页、文件或文本来源的元数据和内容快照，保持知识来源可追溯。',
+			en: 'Records metadata and optional content snapshots for web, file, or text sources so knowledge remains traceable.',
+		},
+		category: { zh: '资料', en: 'Source' },
+	},
+	'tracekeeper.propose_memory': {
+		title: { zh: '提交记忆提案', en: 'Propose memory' },
+		description: {
+			zh: '按记忆规则处理 Agent 认为值得长期保存的内容；全局默认审核，项目可自动保存。',
+			en: 'Handles agent-suggested durable memory by memory rules; global defaults to review, project memory can auto-save.',
+		},
+		category: { zh: '记忆', en: 'Memory' },
+	},
+};
+
+export const mcpCapabilityRiskLabel = (risk: ToolRisk): string => {
+	switch (risk) {
+		case 'low-risk-write':
+			return ui('低风险写入', 'Low-risk write');
+		case 'review-gated-write':
+			return ui('审核后写入', 'Review-gated write');
+		case 'read-only':
+		default:
+			return ui('只读', 'Read-only');
+	}
+};
+
+export class McpCapabilitiesModal extends Modal {
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('tracekeeper-capabilities-modal');
+		this.titleEl.setText(ui('MCP 服务功能', 'MCP service capabilities'));
+
+		contentEl.createEl('p', {
+			text: ui(
+				'AI 工具连接后可以调用以下功能。移动到功能项上可查看说明。',
+				'Connected agents can call the capabilities below. Hover a capability to see its explanation.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+
+		const list = contentEl.createDiv({ cls: 'tracekeeper-capability-list' });
+		for (const definition of toolDefinitions()) {
+			const localization = MCP_CAPABILITY_LOCALIZATIONS[definition.name];
+			const contract = getContractByName(definition.name);
+			const title = localization ? localizedText(localization.title) : definition.title;
+			const description = localization ? localizedText(localization.description) : definition.description;
+			const category = localization ? localizedText(localization.category) : ui('功能', 'Capability');
+			const riskLabel = contract ? mcpCapabilityRiskLabel(contract.risk) : ui('功能说明', 'Capability');
+			const tooltip = `${definition.name}\n${description}`;
+			const row = list.createDiv({ cls: 'tracekeeper-capability-row' });
+			row.tabIndex = 0;
+			row.setAttr('aria-label', tooltip);
+			row.setAttr('data-tooltip-position', 'top');
+			row.setAttr('title', tooltip);
+			row.createEl('span', {
+				text: category,
+				cls: 'tracekeeper-badge tracekeeper-capability-row__badge',
+			});
+			const body = row.createDiv({ cls: 'tracekeeper-capability-row__body' });
+			const heading = body.createDiv({ cls: 'tracekeeper-capability-row__heading' });
+			heading.createEl('strong', { text: title });
+			heading.createEl('code', { text: definition.name });
+			body.createEl('small', { text: riskLabel });
+		}
+
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		const close = actions.createEl('button', { text: ui('关闭', 'Close') });
+		close.addEventListener('click', () => this.close());
+	}
+}

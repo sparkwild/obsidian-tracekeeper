@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { StreamableHttpMcpRuntime } = require('../dist/http-runtime.js');
+const { StreamableHttpMcpRuntime } = require('@tracekeeper/mcp-runtime');
+const { NodeFsVaultRepository } = require('@tracekeeper/core');
 
 function writeNote(vaultRoot, relativePath, content) {
 	const target = path.join(vaultRoot, relativePath);
@@ -71,23 +73,71 @@ function assertContainsNoSensitiveText(log, values) {
 	}
 }
 
+function rawPost(endpoint, { chunks, headers = {}, contentLength, leaveOpen = false, chunkDelayMs = 0 }) {
+	return new Promise((resolve, reject) => {
+		const target = new URL(endpoint);
+		const request = http.request(target, {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				accept: 'application/json',
+				'content-length': String(contentLength ?? chunks.reduce((total, chunk) => total + chunk.length, 0)),
+				...headers,
+			},
+		}, (response) => {
+			const responseChunks = [];
+			response.on('data', (chunk) => responseChunks.push(chunk));
+			response.on('end', () => {
+				request.destroy();
+				resolve({ status: response.statusCode, body: Buffer.concat(responseChunks).toString('utf8') });
+			});
+		});
+		request.on('error', reject);
+		void (async () => {
+			for (let index = 0; index < chunks.length; index += 1) {
+				request.write(chunks[index]);
+				if (chunkDelayMs > 0 && index < chunks.length - 1) {
+					await new Promise((resolveDelay) => setTimeout(resolveDelay, chunkDelayMs));
+				}
+			}
+			if (!leaveOpen) {
+				request.end();
+			}
+		})();
+	});
+}
+
 class McpTestClient {
 	constructor(vaultRoot, vaultConfigDir, options = {}) {
 		this.vaultRoot = vaultRoot;
 		this.vaultConfigDir = vaultConfigDir;
-		this.token = 'tracekeeper-smoke-token';
+		this.token = options.clientToken || 'tracekeeper-smoke-token';
 		this.nextId = 1;
 		this.sessionId = '';
 		this.options = options;
 	}
 
 	async start() {
+		const vaultRepository = this.options.useVaultRepository
+			? new NodeFsVaultRepository({
+				vaultRoot: this.vaultRoot,
+				protectedDirectoryName: this.vaultConfigDir,
+			})
+			: undefined;
 		this.runtime = new StreamableHttpMcpRuntime({
 			host: '127.0.0.1',
 			port: 0,
-			token: this.token,
+			token: this.options.legacyToken === false ? undefined : this.token,
+			credentials: this.options.credentials,
+			maxSessions: this.options.maxSessions,
+			maxRequestBytes: this.options.maxRequestBytes,
+			maxStreamsPerSession: this.options.maxStreamsPerSession,
+			sessionIdleTtlMs: this.options.sessionIdleTtlMs,
+			requestTimeoutMs: this.options.requestTimeoutMs,
 			defaultVaultRoot: this.vaultRoot,
 			vaultConfigDir: this.vaultConfigDir,
+			vaultRepository,
+			knowledgeSnapshotProvider: this.options.knowledgeSnapshotProvider,
 			memoryRules: this.options.memoryRules,
 			contentLanguage: this.options.contentLanguage,
 			contentLanguageSource: this.options.contentLanguageSource,
@@ -214,7 +264,7 @@ async function main() {
 	const vaultConfigDir = 'vault-config';
 	const fixturePath = path.join(vaultRoot, '00_tracekeeper', 'inbox', 'agent_requests', 'local-source-request.md');
 	const lintFixturePath = path.join(vaultRoot, '01_knowledge', 'wiki', 'concepts', 'smoke-lint-fixture.md');
-	const client = new McpTestClient(vaultRoot, vaultConfigDir);
+	const client = new McpTestClient(vaultRoot, vaultConfigDir, { useVaultRepository: true });
 
 	try {
 		if (!fs.existsSync(path.join(process.cwd(), 'dist', 'server.js'))) {
@@ -321,7 +371,44 @@ async function main() {
 		].join('\n'));
 		assert.ok(fs.existsSync(lintFixturePath), 'lint fixture created');
 
+		const snapshotClient = new McpTestClient(vaultRoot, vaultConfigDir, {
+			knowledgeSnapshotProvider: (requestedVaultRoot) => requestedVaultRoot === vaultRoot ? {
+				vaultRoot,
+				scannedAt: '2026-07-22T00:00:00.000Z',
+				notes: [],
+				errors: [],
+				index: {
+					index_state: 'ready',
+					generation: 7,
+					last_rebuild: '2026-07-22T00:00:00.000Z',
+				},
+			} : null,
+		});
+		try {
+			await snapshotClient.start();
+			await snapshotClient.call('initialize', {
+				protocolVersion: '2025-06-18',
+				capabilities: {},
+				clientInfo: { name: 'tracekeeper-snapshot-smoke', version: '0.2.3' },
+			});
+			const snapshotStatus = buildStructured(await snapshotClient.call('tools/call', {
+				name: 'tracekeeper.status',
+				arguments: {},
+			}));
+			assert.equal(snapshotStatus.counts.notes, 0, 'status should read the supplied snapshot instead of scanning the vault');
+			assert.equal(snapshotStatus.index_state, 'ready');
+			assert.equal(snapshotStatus.snapshot_generation, 7);
+		} finally {
+			await snapshotClient.close();
+		}
+
 		await client.start();
+		assert.equal(JSON.stringify(client.runtime).includes(client.token), false, 'runtime must not retain plaintext credentials');
+		assert.deepEqual(client.runtime.getStatus().recovery && {
+			recovered: client.runtime.getStatus().recovery.recovered,
+			failed: client.runtime.getStatus().recovery.failed,
+			skipped: client.runtime.getStatus().recovery.skipped,
+		}, { recovered: 0, failed: 0, skipped: 0 });
 
 		const initialize = await client.call('initialize', {
 			protocolVersion: '2025-06-18',
@@ -488,8 +575,9 @@ async function main() {
 				secret: `secret_${sensitiveText}`,
 				password: `pwd_${sensitiveText}`,
 				cookie: `cookie=${sensitiveText}`,
-				token: `token_${sensitiveText}`,
-				project_hint: 'demo',
+					token: `token_${sensitiveText}`,
+					project_hint: 'demo',
+					idempotency_key: 'smoke-start-task',
 			},
 		});
 		const startTask = buildStructured(startTaskCall);
@@ -517,7 +605,29 @@ async function main() {
 			JSON.stringify(startTask, null, 2),
 			'content.text should be compact and not duplicate full structuredContent'
 		);
-		assert.ok(fs.existsSync(path.join(vaultRoot, startTask.path)));
+			assert.ok(fs.existsSync(path.join(vaultRoot, startTask.path)));
+			const replayedStartTask = buildStructured(await client.call('tools/call', {
+				name: 'tracekeeper.start_task',
+				arguments: {
+					goal: 'Smoke sensitive summary',
+					client: 'agent-smoke',
+					project_hint: 'demo',
+					idempotency_key: 'smoke-start-task',
+				},
+			}));
+			assert.deepEqual(replayedStartTask, startTask, 'start_task retry should replay the original result');
+			await assert.rejects(
+				() => client.call('tools/call', {
+					name: 'tracekeeper.start_task',
+					arguments: {
+						goal: 'Different goal under the same retry key',
+						client: 'agent-smoke',
+						project_hint: 'demo',
+						idempotency_key: 'smoke-start-task',
+					},
+				}),
+				/Idempotency key conflict/
+			);
 		const taskId = startTask.task_id;
 		const activeTaskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
 		assert.ok(activeTaskText.includes('status: "active"'));
@@ -564,6 +674,10 @@ async function main() {
 		assert.equal(typeof globalRecall.matches[0].why_matched, 'string');
 		assert.ok(globalRecall.matches[0].why_matched.length > 0);
 		assert.ok(Array.isArray(globalRecall.matches[0].graph_links));
+		assert.ok(
+			hasToolCallSection(readAuditLog(vaultRoot), 'tracekeeper.recall', 'success', ['- result_summary:', 'matched_count=']),
+			'recall audit should include matched-count evidence for onboarding verification'
+		);
 
 		const writeContext = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.write_context_pack',
@@ -665,9 +779,10 @@ async function main() {
 		const finishTask = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.finish_task',
 			arguments: {
-				task_id: taskId,
-				summary: 'Smoke task finish session.',
-				outcomes: ['Complete smoke validation'],
+					task_id: taskId,
+					summary: 'Smoke task finish session.',
+					outcomes: ['Complete smoke validation'],
+					idempotency_key: 'smoke-finish-task',
 			},
 		}));
 		assert.equal(finishTask.ok, true);
@@ -685,9 +800,42 @@ async function main() {
 		assert.ok(Array.isArray(finishTask.next_actions_for_agent));
 		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('no durable closeout memory candidates')));
 		assert.ok(fs.existsSync(path.join(vaultRoot, finishTask.path)));
-		taskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
-		assert.ok(taskText.includes('status: completed') || taskText.includes('status: "completed"'));
-		assert.ok(taskText.includes(finishTask.path));
+			taskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
+			assert.ok(taskText.includes('status: completed') || taskText.includes('status: "completed"'));
+			assert.ok(taskText.includes(finishTask.path));
+			const replayedFinishTask = buildStructured(await client.call('tools/call', {
+				name: 'tracekeeper.finish_task',
+				arguments: {
+					task_id: taskId,
+					summary: 'Smoke task finish session.',
+					outcomes: ['Complete smoke validation'],
+					idempotency_key: 'smoke-finish-task',
+				},
+			}));
+			assert.deepEqual(replayedFinishTask, finishTask, 'finish_task retry should replay the original result');
+			await assert.rejects(
+				() => client.call('tools/call', {
+					name: 'tracekeeper.finish_task',
+					arguments: {
+						task_id: taskId,
+						summary: 'Different closeout under the same retry key.',
+						outcomes: ['Complete smoke validation'],
+						idempotency_key: 'smoke-finish-task',
+					},
+				}),
+				/Idempotency key conflict/
+			);
+			await assert.rejects(
+				() => client.call('tools/call', {
+					name: 'tracekeeper.finish_task',
+					arguments: {
+						task_id: taskId,
+						summary: 'Second independent closeout.',
+						idempotency_key: 'smoke-finish-task-second',
+					},
+				}),
+				/Task is already completed/
+			);
 
 		const zhClient = new McpTestClient(vaultRoot, vaultConfigDir, {
 			contentLanguage: 'zh-CN',
@@ -858,10 +1006,10 @@ async function main() {
 		);
 
 		const queueCountBeforeSuggest = countReviewQueueFiles(vaultRoot);
-		const finishWithSuggestions = buildStructured(await client.call('tools/call', {
-			name: 'tracekeeper.finish_task',
-			arguments: {
-				task_id: taskId,
+			const finishWithSuggestions = buildStructured(await client.call('tools/call', {
+				name: 'tracekeeper.finish_task',
+				arguments: {
+					task_id: `${taskId}-suggest`,
 				summary: 'Smoke finish task with suggestion mode.',
 				outcomes: ['Closeout proposal capture'],
 				next_actions: ['Verify memory proposals'],
@@ -918,10 +1066,10 @@ async function main() {
 			assert.ok(fs.existsSync(path.join(vaultRoot, proposal.path)));
 		}
 
-		const finishWithProposals = buildStructured(await client.call('tools/call', {
-			name: 'tracekeeper.finish_task',
-			arguments: {
-				task_id: taskId,
+			const finishWithProposals = buildStructured(await client.call('tools/call', {
+				name: 'tracekeeper.finish_task',
+				arguments: {
+					task_id: `${taskId}-auto`,
 				summary: 'Smoke finish task with auto proposal mode.',
 				outcomes: ['Closeout proposal capture'],
 				next_actions: ['Verify memory proposals'],
@@ -930,9 +1078,11 @@ async function main() {
 				lessons: ['Prefer explicit session scope filtering'],
 				preferences: ['Favor local vault-first memory'],
 				memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
-				review_proposal_mode: 'auto_propose',
-				related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
-				related_sources: ['01_knowledge/sources/local-source.md'],
+				project_hint: 'demo',
+					review_proposal_mode: 'auto_propose',
+					related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
+					related_sources: ['01_knowledge/sources/local-source.md'],
+					idempotency_key: 'smoke-auto-finish',
 			},
 		}));
 		assert.equal(finishWithProposals.ok, true);
@@ -957,8 +1107,8 @@ async function main() {
 		const retryFinishWithProposals = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.finish_task',
 			arguments: {
-				task_id: taskId,
-				summary: 'Smoke finish task with auto proposal retry.',
+					task_id: `${taskId}-auto`,
+					summary: 'Smoke finish task with auto proposal mode.',
 				outcomes: ['Closeout proposal capture'],
 				next_actions: ['Verify memory proposals'],
 				decisions: ['Use project-scoped recall for context'],
@@ -966,9 +1116,11 @@ async function main() {
 				lessons: ['Prefer explicit session scope filtering'],
 				preferences: ['Favor local vault-first memory'],
 				memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
-				review_proposal_mode: 'auto_propose',
-				related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
-				related_sources: ['01_knowledge/sources/local-source.md'],
+				project_hint: 'demo',
+					review_proposal_mode: 'auto_propose',
+					related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
+					related_sources: ['01_knowledge/sources/local-source.md'],
+					idempotency_key: 'smoke-auto-finish',
 			},
 		}));
 		assert.equal(retryFinishWithProposals.proposal_count, 0);
@@ -1030,6 +1182,7 @@ async function main() {
 		assert.ok(fs.existsSync(path.join(vaultRoot, proposedMemory.path)));
 
 		const autoMemoryClient = new McpTestClient(vaultRoot, vaultConfigDir, {
+			useVaultRepository: true,
 			memoryRules: {
 				globalMemoryRule: 'review_queue',
 				projectMemoryRule: 'auto_write',
@@ -1310,6 +1463,108 @@ async function main() {
 			/Refusing to write potential secret/,
 			'should reject approved writeback content that looks like a secret'
 		);
+
+		const constrainedClient = new McpTestClient(vaultRoot, vaultConfigDir, {
+			legacyToken: false,
+			clientToken: 'read-only-token',
+			credentials: [
+				{ id: 'read-only-client', token: 'read-only-token', capabilities: ['vault.read'] },
+				{ id: 'other-client', token: 'other-token', capabilities: ['vault.read'] },
+			],
+			maxSessions: 1,
+				maxRequestBytes: 512,
+				maxStreamsPerSession: 1,
+				sessionIdleTtlMs: 30,
+				requestTimeoutMs: 100,
+		});
+		try {
+			await constrainedClient.start();
+			assert.equal(constrainedClient.runtime.getStatus().maxStreamsPerSession, 1);
+				assert.equal(constrainedClient.runtime.getStatus().requestTimeoutMs, 100);
+			const unsupportedMediaResponse = await fetch(constrainedClient.endpoint, {
+				method: 'POST',
+				headers: { accept: 'application/json' },
+				body: JSON.stringify({ jsonrpc: '2.0', id: 997, method: 'initialize', params: {} }),
+			});
+			assert.equal(unsupportedMediaResponse.status, 415);
+			await constrainedClient.call('initialize', {
+				protocolVersion: '2025-06-18',
+				capabilities: {},
+				clientInfo: { name: 'read-only-smoke', version: '0.2.3' },
+			});
+			const readOnlyStatus = buildStructured(await constrainedClient.call('tools/call', {
+				name: 'tracekeeper.status',
+				arguments: {},
+			}));
+			assert.equal(readOnlyStatus.ok, true);
+				const firstStream = await fetch(constrainedClient.endpoint, {
+				method: 'GET',
+				headers: {
+					accept: 'text/event-stream',
+					'mcp-session-id': constrainedClient.sessionId,
+				},
+				});
+				assert.equal(firstStream.status, 200);
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				const statusWithActiveStream = buildStructured(await constrainedClient.call('tools/call', {
+					name: 'tracekeeper.status',
+					arguments: {},
+				}));
+				assert.equal(statusWithActiveStream.ok, true, 'active SSE stream must keep its session alive beyond idle TTL');
+				const streamLimitResponse = await fetch(constrainedClient.endpoint, {
+				method: 'GET',
+				headers: {
+					accept: 'text/event-stream',
+					'mcp-session-id': constrainedClient.sessionId,
+				},
+			});
+				assert.equal(streamLimitResponse.status, 429);
+				const unicodePayload = Buffer.from(JSON.stringify({
+					jsonrpc: '2.0',
+					method: 'notifications/initialized',
+					params: { note: '分片中文' },
+				}), 'utf8');
+				const splitMarker = Buffer.from('中', 'utf8');
+				const markerOffset = unicodePayload.indexOf(splitMarker);
+				assert.ok(markerOffset > 0);
+				const unicodeResponse = await rawPost(constrainedClient.endpoint, {
+					chunks: [unicodePayload.subarray(0, markerOffset + 1), unicodePayload.subarray(markerOffset + 1)],
+					headers: { 'mcp-session-id': constrainedClient.sessionId },
+					chunkDelayMs: 10,
+				});
+				assert.equal(unicodeResponse.status, 202, 'split UTF-8 code points must decode as one request body');
+				const timeoutResponse = await rawPost(constrainedClient.endpoint, {
+					chunks: [Buffer.from('{', 'utf8')],
+					contentLength: 64,
+					leaveOpen: true,
+				});
+				assert.equal(timeoutResponse.status, 408, 'incomplete request bodies should time out before tool dispatch');
+				await firstStream.body?.cancel();
+			await assert.rejects(
+				() => constrainedClient.call('tools/call', {
+					name: 'tracekeeper.start_task',
+					arguments: { goal: 'Read-only credential must not start tasks' },
+				}),
+				/lacks capability workflow.manage/
+			);
+			await constrainedClient.expectHttpStatus({ token: 'other-token', status: 403 });
+			await constrainedClient.expectHttpStatus({ sessionId: '', method: 'initialize', status: 429 });
+			const oversizedResponse = await fetch(constrainedClient.endpoint, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json', accept: 'application/json' },
+				body: JSON.stringify({
+					jsonrpc: '2.0',
+					id: 999,
+					method: 'tools/list',
+					padding: 'x'.repeat(1024),
+				}),
+			});
+			assert.equal(oversizedResponse.status, 413);
+			assert.match(readAuditLog(vaultRoot), /principal_id: "read-only-client"/);
+			await constrainedClient.deleteSession();
+		} finally {
+			await constrainedClient.close().catch(() => {});
+		}
 		await client.deleteSession();
 		await client.expectHttpStatus({ status: 404 });
 

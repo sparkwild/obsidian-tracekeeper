@@ -8,3 +8,6 @@ export * from './graph-health';
 export * from './knowledge-architecture';
 export * from './source-analysis';
 export * from './legacy-structure';
+export * from './operation-journal';
+export * from './knowledge-index';
+export * from './vault-repository';

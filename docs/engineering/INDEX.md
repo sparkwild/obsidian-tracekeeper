@@ -14,9 +14,12 @@
 obsidian-tracekeeper/
 ├─ apps/
 │  ├─ obsidian-plugin/   plugin UI, settings, packaging, and runtime host
-│  └─ mcp-server/        MCP transport, protocol, tools, and smoke tests
+│  └─ mcp-server/        standalone composition and cross-layer smoke tests
 ├─ packages/
-│  └─ core/              shared vault and knowledge primitives
+│  ├─ contracts/         structured tool contract registry
+│  ├─ core/              shared vault, index, journal, and knowledge primitives
+│  └─ mcp-runtime/       MCP transport, auth, sessions, and tool application adapter
+├─ skills/tracekeeper/   companion Agent workflow guidance
 ├─ docs/                 canonical product and engineering documentation
 ├─ scripts/              repository verification
 └─ package.json          workspace commands and version coordination
@@ -39,18 +42,25 @@ npm run verify
 ```
 
 The gate runs community metadata checks, TypeScript checks, builds, tests, plugin packaging, and `git diff --check`.
+`npm run agent:ecosystem` and its fixture tests are part of this verification lane; they check that the companion Skill keeps alignment with the Agent workflow contract, is embedded into the plugin onboarding bundle from its canonical source, and that ecosystem docs references are consistent.
+
+The release workflow also rebuilds and checks tracked package artifacts with `git diff --exit-code`; generated `dist/` output must match its TypeScript source on a clean checkout.
+
+`npm run architecture:check` rejects relative imports across workspace boundaries and guards against reintroducing the plugin's removed self-MCP execution path.
 
 Narrower commands are useful while iterating:
 
 ```bash
 npm run community:check
+npm run agent:ecosystem
+npm run architecture:check
 npm run typecheck
 npm run build
 npm run test
 npm run package
 ```
 
-The plugin workspace currently has build, typecheck, and packaging checks. MCP and core workspaces also run local fixture/smoke tests. UI changes therefore require relevant manual verification in desktop Obsidian until automated plugin UI coverage exists.
+The plugin workspace has pure feature tests plus onboarding acceptance, client-configuration preview/CAS, and asynchronous index-adapter checks. The onboarding acceptance check builds the plugin and verifies canonical Skill embedding, staged setup, external connection evidence, and first-recall evidence. Core tests cover operation recovery, cross-process journal locking/atomic claim, and incremental index events; MCP tests cover contracts, HTTP/auth/session/stream/request limits, split UTF-8 bodies, snapshot injection, task idempotency, repository-backed closeout, concurrent audit append, and writeback recovery. Rendered Obsidian UI changes still require relevant desktop verification.
 
 ## Pull Requests
 

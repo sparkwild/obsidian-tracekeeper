@@ -10,7 +10,7 @@ Tracekeeper is local-first, not trust-free. The user explicitly chooses an AI cl
 | --- | --- |
 | Active vault | User-owned source of truth; access is scoped and validated |
 | Tracekeeper-controlled vault folders | Bounded operational writes are allowed according to policy |
-| Local MCP runtime | Loopback service requiring a generated token by default |
+| Local MCP runtime | Loopback service requiring a generated credential by default |
 | Connected Agent client | Explicitly user-authorized consumer; not automatically trusted with arbitrary filesystem access |
 | Client configuration files | Outside-vault exception, changed only after user confirmation and backup |
 | Network and shell | Not exposed by Tracekeeper MCP tools |
@@ -19,7 +19,13 @@ Tracekeeper is local-first, not trust-free. The user explicitly chooses an AI cl
 
 - Production MCP uses Streamable HTTP hosted by desktop Obsidian.
 - The default bind address is `127.0.0.1`; wildcard interfaces are not the product default.
-- A generated local token is required. Missing-token startup is a development-only opt-in.
+- Each managed client receives an independent credential principal; the legacy shared token remains a full-access migration credential.
+- The user can rotate one managed client's credential without revoking unrelated clients; the affected connection must then be updated and re-established.
+- A credential is required. Missing-token startup is a development-only opt-in.
+- The running MCP service normalizes configured tokens to SHA-256 hashes and retains only those hashes for request authentication; plaintext values are not kept in Runtime credential records.
+- Tool contracts map every tool to a capability, and the authenticated principal is checked before dispatch. Client-reported names remain untrusted display claims.
+- A session is bound to one principal and cannot be reused with another credential.
+- Request bodies, active sessions, per-session event streams, idle session lifetime, and request-body read time have bounded defaults. POST requests require an `application/json` content type. The body timeout expires before tool dispatch; it does not report cancellation after a write has begun.
 - Browser-style CORS origins are restricted to Obsidian and loopback origins; wildcard CORS is not used.
 - Tokens and other sensitive argument keys are excluded or redacted from audit summaries.
 - The connection URL contains a credential and should be treated as sensitive local configuration.
@@ -36,7 +42,7 @@ MCP tools must:
 - never read or write arbitrary Agent client configuration;
 - never expose delete, rename, bulk rewrite, or shell execution.
 
-The Obsidian plugin may update supported client configuration only through a user-confirmed flow that previews the target, preserves unrelated entries, creates a timestamped backup, and replaces through a temporary file.
+The Obsidian plugin may update supported client configuration only through a user-confirmed flow. A preview produces a short-lived plan bound to the original file hash and current client credential. Confirmation revalidates both values, preserves unrelated entries, creates a timestamped backup, and replaces through a temporary file. A concurrent edit, expired plan, or credential rotation requires a new preview.
 
 ## Permission Classes
 
@@ -47,6 +53,8 @@ The Obsidian plugin may update supported client configuration only through a use
 | Review-gated write | Append to a durable target only from an approved proposal | approved writeback |
 
 Generated records must not overwrite existing notes. Project memory auto-save is a user-controlled exception to global review: it remains append-only, duplicate-protected, project-scoped, and dependent on a valid Wiki bridge.
+
+Multi-step task closeout and approved writeback use operation IDs, idempotency keys, payload hashes, atomic replacement, and a recoverable journal. Vault-local process locks and atomic claims prevent two local runtimes from executing one idempotency key simultaneously. Audit entries use a narrower event identity derived from operation, target, action, and result so one operation can record several distinct artifacts without duplicating any individual event; repository-backed audit appends are serialized and retry optimistic conflicts. Reusing an idempotency key with another payload is rejected. Startup recovery rolls known operations forward and records conflicts instead of silently overwriting a changed file.
 
 ## Human Review Invariants
 
@@ -61,7 +69,7 @@ Generated records must not overwrite existing notes. Project memory auto-save is
 
 Tracekeeper does not require a hosted backend or external database and does not upload vault content by itself. Data may still leave the machine when the user connects an Agent whose model or service is remote. Users must review that client's privacy policy and choose which vault content to expose.
 
-Audit records should contain operation identity, result, bounded target paths, client/session context, duration, and risk level. They should not persist tokens, passwords, API keys, cookies, authorization headers, or full sensitive payloads.
+Audit records contain operation identity, authenticated principal, untrusted client/session claims, bounded target paths, result summary, duration, and risk level. Recall result summaries include only bounded diagnostic fields such as `matched_count`, which onboarding uses as evidence. Audit records must not persist tokens, passwords, API keys, cookies, authorization headers, or full sensitive payloads.
 
 ## Recovery And User Responsibility
 

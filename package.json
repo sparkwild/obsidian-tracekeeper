@@ -5,17 +5,22 @@
 	"private": true,
 	"workspaces": [
 		"packages/core",
+		"packages/contracts",
+		"packages/mcp-runtime",
 		"apps/mcp-server",
 		"apps/obsidian-plugin"
 	],
 	"scripts": {
 		"community:check": "node ./scripts/check_community_plugin.mjs",
+		"agent:ecosystem": "node ./scripts/check_agent_ecosystem.mjs",
+		"agent:ecosystem:test": "node --test ./scripts/check_agent_ecosystem.test.mjs",
+		"architecture:check": "node ./scripts/check_architecture_boundaries.mjs && node --test ./scripts/check_architecture_boundaries.test.mjs",
 		"typecheck": "npm run typecheck --workspaces --if-present",
 		"build": "npm run build --workspaces --if-present",
 		"test": "npm run test --workspaces --if-present",
 		"package": "npm run package --workspace apps/obsidian-plugin",
 		"verify": "bash ./scripts/verify.sh",
-		"version": "node ./version-bump.mjs && git add manifest.json versions.json package.json package-lock.json apps/obsidian-plugin/manifest.json apps/obsidian-plugin/package.json apps/obsidian-plugin/package-lock.json apps/obsidian-plugin/src/main.ts apps/mcp-server/src/handler.ts apps/mcp-server/scripts/smoke.mjs apps/mcp-server/package.json apps/mcp-server/package-lock.json packages/core/package.json packages/core/package-lock.json"
+		"version": "node ./version-bump.mjs && git add manifest.json versions.json package.json package-lock.json apps/obsidian-plugin/manifest.json apps/obsidian-plugin/package.json apps/obsidian-plugin/package-lock.json apps/mcp-server/scripts/smoke.mjs apps/mcp-server/package.json apps/mcp-server/package-lock.json packages/contracts/package.json packages/core/package.json packages/core/package-lock.json packages/mcp-runtime/package.json packages/mcp-runtime/src/handler.ts"
 	},
 	"devDependencies": {
 		"@types/node": "^22.19.19",

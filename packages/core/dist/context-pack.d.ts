@@ -1,3 +1,4 @@
+import { type ScanResult } from './scan';
 export interface ContextPack {
     query: string;
     generatedAt: string;
@@ -31,3 +32,4 @@ export interface ContextPackOptions {
     vaultConfigDir?: string;
 }
 export declare function buildContextPack(vaultRoot: string, query: string, options?: ContextPackOptions): ContextPack;
+export declare function buildContextPackFromScan(scan: ScanResult, query: string, options?: ContextPackOptions): ContextPack;

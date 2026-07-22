@@ -24,3 +24,6 @@ __exportStar(require("./graph-health"), exports);
 __exportStar(require("./knowledge-architecture"), exports);
 __exportStar(require("./source-analysis"), exports);
 __exportStar(require("./legacy-structure"), exports);
+__exportStar(require("./operation-journal"), exports);
+__exportStar(require("./knowledge-index"), exports);
+__exportStar(require("./vault-repository"), exports);

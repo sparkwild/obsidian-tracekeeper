@@ -7,34 +7,70 @@ This is a dated implementation snapshot, not a permanent product contract. Updat
 
 ## Implemented Baseline
 
-- Desktop Obsidian hosts a loopback Streamable HTTP MCP runtime at a configurable port; the default is `58437` with path `/mcp`.
-- Runtime authentication uses a generated local token by default.
-- The public MCP surface contains 12 focused tools covering status, lint, recall, note reads, task lifecycle, context packs, review, source workflows, and memory proposals.
-- The plugin exposes activity, source status, Review Queue, memory inspection, runtime log/status, permission policy, and graph-health views.
+### Runtime And Package Boundaries
+
+- Desktop Obsidian hosts the production loopback Streamable HTTP MCP runtime; the standalone server remains a development and test composition root.
+- Reusable MCP protocol, authentication, tool dispatch, and application services live in `packages/mcp-runtime` rather than inside either application.
+- Structured public tool metadata lives in `packages/contracts`; the registry drives tool order, schemas, risk, capability, and public/deprecated status.
+- The plugin and standalone server import workspace packages through declared package dependencies. Neither application imports the other application's source or compiled output.
+- The public MCP surface contains 12 focused `tracekeeper.*` tools covering status, lint, recall, reads, task lifecycle, context packs, review, source workflows, and memory proposals.
+
+### Knowledge Reads
+
+- Core exposes a rebuildable in-memory `KnowledgeIndex` whose snapshots include generation and index-state provenance.
+- The Obsidian adapter subscribes to Vault events before starting a background initial rebuild. Events received during rebuild are queued and replayed before the new generation becomes current.
+- Production status, recall, context, graph, lint, and task-start paths share the current indexed snapshot instead of synchronously rescanning the vault for every tool call.
+- Connection Status exposes index state, generation, note count, and last rebuild, and a plugin command can request a rebuild without replacing the Vault as fact source.
+- The standalone runtime retains the Node filesystem scan path for development and tests; the Vault remains the only durable fact source.
+
+### Recoverable Writes And Tasks
+
+- Coordinated multi-step operations use stable operation IDs, payload hashes, step records, atomic journal replacement, startup roll-forward recovery, and per-artifact audit-event identities.
+- The operation journal is stored under `00_tracekeeper/control/operations/` and is excluded from knowledge scanning.
+- Approved writeback uses a stable target marker and optimistic content checks so retries do not duplicate the target block and external edits are not silently overwritten.
+- `start_task` and `finish_task` accept idempotency keys. Replays return the original result, while reusing a key with a different payload is rejected.
+- The first `finish_task` invocation freezes its normalized request and derived routing/language snapshot in the journal. Recovery reuses that snapshot, so later graph, policy, language, or task-metadata changes cannot mutate the original closeout.
+- Completed tasks cannot be finished a second time with a conflicting closeout.
+- Vault-local process locks and atomic journal claims prevent the Obsidian runtime and standalone development runtime from executing the same idempotency key at the same time.
+- Runtime status retains the latest startup-recovery counts so the Obsidian Connection Status surface can show recovered, failed, and skipped operations.
+
+### Identity, Limits, And Audit
+
+- Managed Agent clients receive independent credential principals; legacy shared-token settings are migrated for compatibility.
+- Settings can rotate one managed client credential at a time; the old credential stops working while other client credentials remain unchanged.
+- Credentials carry explicit tool capabilities. A read-only principal cannot invoke write tools, and client-reported identity cannot change authorization.
+- Runtime authentication retains credential hashes rather than plaintext token values after construction.
+- MCP sessions are principal-bound and have idle-lifetime, active-session-count, per-session stream, request-body-read-time, and request-body-size limits. Active event streams are not removed by ordinary idle pruning, and POST requests reject unsupported content types.
+- Tool-call audit records include credential principal and bounded result evidence such as recall match count; tokens and response bodies are not persisted.
+
+### Agent Ecosystem And Onboarding
+
+- The companion workflow Skill is canonical at `skills/tracekeeper/SKILL.md` and embedded into the community-plugin bundle from that source. Onboarding can copy it without requiring a repository checkout. It teaches meaningful-task start/recall/finish habits but does not grant permissions or duplicate the server.
+- `npm run agent:ecosystem` checks the Skill against the normative Agent workflow contract and is part of `npm run verify`.
+- Plugin onboarding is resumable across vault check, runtime readiness, client configuration, embedded Skill copy/setup, Agent restart, external connection verification, and first recall.
+- Configuration is not treated as successful connection. Connection and first-recall completion require recorded tool-call evidence from the selected credential principal, and first recall requires at least one match.
+
+### Product And Release Baseline
+
 - The current three-root vault architecture, required indexes/control files, lint, graph health, and legacy-layout inspection are implemented.
-- Global durable memory is review-gated by default; user-enabled project memory may append automatically with duplicate protection and a Wiki bridge.
-- Codex and Claude Desktop have automatic configuration support where desktop APIs are available. Claude Code, Cursor, and custom clients receive copyable Streamable HTTP configuration.
-- Client configuration changes preserve unrelated entries, create timestamped backups, and use temporary-file replacement.
+- Global durable memory is review-gated by default; user-enabled project memory remains append-only, duplicate-protected, and linked to a Wiki context.
+- Client configuration changes preserve unrelated entries and use short-lived preview plans. Confirmation rechecks the original file hash and current client credential before creating a timestamped backup and temporary-file replacement.
 - The GitHub release workflow verifies and packages the plugin, uploads the three community assets, and generates artifact attestations.
 
-## Known Gaps
+## Remaining Engineering Limits
 
-- There is no packaged companion Tracekeeper Skill in this repository yet.
-- Agent workflow guidance exists in MCP descriptions and documentation, but is not yet generated or checked from one structured contract.
-- Connection controls exist in settings, but the recoverable first-run sequence from vault check through Skill installation and first recall is not yet a dedicated onboarding flow.
-- Recall scans the vault on demand; there is no persistent incremental `KnowledgeIndex` yet.
-- Cross-file vault writes do not yet share a general operation journal and idempotency key model.
-- The Obsidian plugin UI remains concentrated in a large `main.ts`, and the plugin workspace has no automated UI test suite.
-- The standalone MCP command is a development tool; production packaging is the Obsidian-hosted runtime.
+- Native Views, Modals, feature models, legacy migration, graph evaluation, Review Queue/writeback, activity/audit projection, source/task/context/proposal records, shared Markdown parsing, and client-configuration I/O have been extracted from the historical large `main.ts`. The composition entry now retains lifecycle and registration, required-structure initialization, runtime/settings/onboarding composition, Agent-connection aggregation, and thin local-action delegates.
+- Core has Node and Obsidian `VaultRepository` adapters. Production note reads and generated task/source/context/session/proposal/audit/auto-memory paths prefer the injected repository; the standalone development composition intentionally retains safe filesystem fallbacks, and several compatibility path prechecks still use the Node safety layer.
+- The in-memory index intentionally rebuilds on plugin startup; persistent index caching is not part of the current baseline.
+- Automated coverage focuses on contracts, recovery, repository adapters, runtime flows, onboarding state, and pure view models. A full Obsidian-hosted UI integration suite is not yet present.
+- The standalone MCP command is a development tool; production packaging remains the Obsidian-hosted runtime.
 
 ## Next Coherent Slices
 
-1. Define and package the companion Skill from the [Agent Workflow Contract](../architecture/AGENT_WORKFLOW_CONTRACT.md), with thin adapters for supported clients.
-2. Implement a resumable onboarding state machine: vault check, runtime, client configuration, Skill setup, restart detection, connection verification, and first recall.
-3. Add contract conformance checks so MCP descriptions, Skill guidance, and plugin copy cannot drift semantically.
-4. Introduce a rebuildable incremental knowledge index behind the existing recall boundary.
-5. Add coordinated operation identifiers, idempotency, atomic writes, and recovery journaling for multi-file workflows.
-6. Split plugin UI responsibilities into testable modules and add focused configuration/onboarding fixtures before expanding visual scope.
+1. Continue reducing composition-root orchestration only where it creates an independently testable controller; do not split files solely for line count.
+2. Split the large MCP application-tool module by use-case ownership while preserving the contract registry and current package boundary.
+3. Add real Obsidian-hosted UI acceptance coverage for onboarding, Review Queue, index rebuild, and credential lifecycle.
+4. Decide from measured large-vault startup data whether a rebuildable persistent index cache is justified.
 
 ## Status Update Rule
 

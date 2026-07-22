@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.scannedNoteFromContent = scannedNoteFromContent;
 exports.scanVault = scanVault;
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
@@ -47,6 +48,28 @@ function getAliases(frontmatter) {
     }
     return [...new Set(aliases)];
 }
+function scannedNoteFromContent(input) {
+    const parsed = (0, markdown_1.parseMarkdown)(input.content);
+    const aliases = getAliases(parsed.frontmatter.fields);
+    return {
+        absolutePath: input.absolutePath,
+        relativePath: input.relativePath.replace(/\\/g, '/'),
+        title: parsed.title || input.fallbackTitle,
+        size: input.size,
+        modifiedAt: input.modifiedAt,
+        tokens: parsed.searchText,
+        frontmatter: parsed.frontmatter.fields,
+        aliases,
+        type: typeof parsed.frontmatter.fields.type === 'string' ? parsed.frontmatter.fields.type : undefined,
+        tags: parsed.tags,
+        headings: parsed.headings,
+        blockIds: parsed.blockIds,
+        wikilinks: parsed.wikilinks,
+        claimBlocks: parsed.claimBlocks,
+        evidenceBlocks: parsed.evidenceBlocks,
+        content: parsed.body,
+    };
+}
 function normalizeProtectedDirectoryName(configDir) {
     const normalized = (configDir || '').replace(/\\/g, '/').trim().replace(/\/+$/g, '');
     if (!normalized || normalized.includes('/')) {
@@ -88,28 +111,16 @@ function scanDirectory(vaultRoot, directory, notes, errors, options) {
         }
         try {
             const fileContent = node_fs_1.default.readFileSync(safePath, 'utf8');
-            const parsed = (0, markdown_1.parseMarkdown)(fileContent);
             const stats = node_fs_1.default.statSync(safePath);
             const relativePath = node_path_1.default.relative(vaultRoot, safePath).replace(/\\/g, '/');
-            const aliases = getAliases(parsed.frontmatter.fields);
-            notes.push({
+            notes.push(scannedNoteFromContent({
                 absolutePath: safePath,
                 relativePath,
-                title: parsed.title || node_path_1.default.basename(entry.name, ext),
+                fallbackTitle: node_path_1.default.basename(entry.name, ext),
                 size: stats.size,
                 modifiedAt: stats.mtime.toISOString(),
-                tokens: parsed.searchText,
-                frontmatter: parsed.frontmatter.fields,
-                aliases,
-                type: typeof parsed.frontmatter.fields.type === 'string' ? parsed.frontmatter.fields.type : undefined,
-                tags: parsed.tags,
-                headings: parsed.headings,
-                blockIds: parsed.blockIds,
-                wikilinks: parsed.wikilinks,
-                claimBlocks: parsed.claimBlocks,
-                evidenceBlocks: parsed.evidenceBlocks,
-                content: parsed.body,
-            });
+                content: fileContent,
+            }));
         }
         catch (error) {
             errors.push({

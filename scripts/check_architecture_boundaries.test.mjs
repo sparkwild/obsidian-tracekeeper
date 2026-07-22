@@ -1,0 +1,49 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+import { checkArchitectureBoundaries } from './check_architecture_boundaries.mjs';
+
+function write(root, relativePath, content) {
+	const absolutePath = path.join(root, relativePath);
+	fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+	fs.writeFileSync(absolutePath, content, 'utf8');
+}
+
+test('accepts package imports across workspaces', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'apps/obsidian-plugin/src/main.ts', "import { callTool } from '@tracekeeper/mcp-runtime';\n");
+		write(root, 'packages/mcp-runtime/src/index.ts', 'export const callTool = () => undefined;\n');
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, true);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('rejects relative imports into another workspace', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'apps/obsidian-plugin/src/main.ts', "import '../../../packages/mcp-runtime/src/index';\n");
+		write(root, 'packages/mcp-runtime/src/index.ts', 'export {};\n');
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, false);
+		assert.match(result.errors[0], /relative cross-workspace import/);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('rejects plugin self-MCP client symbols', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'apps/obsidian-plugin/src/main.ts', 'const callLocalMcpTool = () => undefined;\n');
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, false);
+		assert.match(result.errors[0], /must not call its own MCP transport/);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});

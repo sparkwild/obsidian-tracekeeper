@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const http_runtime_1 = require("./http-runtime");
+const mcp_runtime_1 = require("@tracekeeper/mcp-runtime");
 function parseArgs(argv) {
     const result = {};
     for (let index = 0; index < argv.length; index += 1) {
@@ -61,7 +61,7 @@ function toErrorMessage(error) {
 }
 async function main() {
     const args = parseArgs(process.argv.slice(2));
-    const runtime = new http_runtime_1.StreamableHttpMcpRuntime(args);
+    const runtime = new mcp_runtime_1.StreamableHttpMcpRuntime(args);
     const status = await runtime.start();
     process.stdout.write(`${JSON.stringify({ ok: true, endpoint: status.endpoint })}\n`);
     const stop = async () => {

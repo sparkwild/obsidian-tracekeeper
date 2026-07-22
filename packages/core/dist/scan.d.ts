@@ -26,8 +26,22 @@ export interface ScanResult {
     scannedAt: string;
     notes: ScannedNote[];
     errors: ScanError[];
+    index?: {
+        index_state: 'initializing' | 'rebuilding' | 'ready';
+        generation: number;
+        last_rebuild: string | null;
+    };
 }
 export interface ScanVaultOptions {
     vaultConfigDir?: string;
 }
+export interface ScannedNoteContentInput {
+    absolutePath: string;
+    relativePath: string;
+    fallbackTitle: string;
+    size: number;
+    modifiedAt: string;
+    content: string;
+}
+export declare function scannedNoteFromContent(input: ScannedNoteContentInput): ScannedNote;
 export declare function scanVault(vaultRoot: string, options?: ScanVaultOptions): ScanResult;

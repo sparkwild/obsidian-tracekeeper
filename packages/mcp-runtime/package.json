@@ -1,0 +1,22 @@
+{
+	"name": "@tracekeeper/mcp-runtime",
+	"version": "0.2.3",
+	"description": "Tracekeeper local MCP transport, tool adapter, and application runtime.",
+	"private": true,
+	"type": "commonjs",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@tracekeeper/contracts": "file:../contracts",
+		"@tracekeeper/core": "file:../core"
+	},
+	"devDependencies": {
+		"@types/node": "^22.14.0",
+		"typescript": "^5.8.2"
+	},
+	"license": "MIT"
+}

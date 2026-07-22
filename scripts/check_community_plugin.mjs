@@ -7,7 +7,7 @@ const PLUGIN_MANIFEST_PATH = 'apps/obsidian-plugin/manifest.json';
 const PLUGIN_PACKAGE_PATH = 'apps/obsidian-plugin/package.json';
 const VERSIONS_PATH = 'versions.json';
 const RELEASE_WORKFLOW_PATH = '.github/workflows/release.yml';
-const MCP_HANDLER_PATH = 'apps/mcp-server/src/handler.ts';
+const MCP_HANDLER_PATH = 'packages/mcp-runtime/src/handler.ts';
 const PLUGIN_MAIN_PATH = 'apps/obsidian-plugin/src/main.ts';
 
 function readJson(path) {
@@ -74,7 +74,7 @@ function main() {
 	assert(pluginPackage.version === manifest.version, 'Plugin package version must match root manifest.');
 	assert(pluginPackage.description === manifest.description, 'Plugin package description must match root manifest.');
 	assert(mcpHandler.includes(`MCP_SERVER_VERSION = '${manifest.version}'`), 'MCP server version constant must match root manifest.');
-	assert(pluginMain.includes(`version: '${manifest.version}'`), 'Plugin UI MCP client version must match root manifest.');
+	assert(pluginMain.includes('StreamableHttpMcpRuntime'), 'Plugin must compose the shared MCP runtime package.');
 	assert(releaseWorkflow.includes('workflow_dispatch:'), 'Release workflow must support manually rebuilding an existing community release.');
 	assert(releaseWorkflow.includes('id-token: write'), 'Release workflow must grant id-token: write for artifact attestations.');
 	assert(releaseWorkflow.includes('attestations: write'), 'Release workflow must grant attestations: write.');
