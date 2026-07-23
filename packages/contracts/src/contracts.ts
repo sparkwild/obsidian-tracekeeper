@@ -246,7 +246,15 @@ export const toolContracts = [
 			{
 				goal: { type: 'string', description: 'Task goal statement.' },
 				client: { type: 'string', description: 'Optional client context.' },
-				project_hint: { type: 'string', description: 'Optional project hint.' },
+				project_hint: {
+					type: 'string',
+					description: 'Optional canonical project hint. A path-valued hint is treated as repo_path evidence.',
+				},
+				project_id: { type: 'string', description: 'Optional stable project id.' },
+				repo_path: {
+					type: 'string',
+					description: 'Optional repository/workspace path used to resolve and corroborate local project identity.',
+				},
 				idempotency_key: {
 					type: 'string',
 					description: 'Optional stable retry key. Reusing it with different arguments is rejected.',
@@ -577,7 +585,13 @@ export const toolContracts = [
 			'[read-only | optional write] Build a compact context pack from recall results. Writes an artifact only when write=true.',
 		inputSchema: withVaultRoot({
 			query: { type: 'string', description: 'Context pack query.' },
-			task_id: { type: 'string', description: 'Optional task id for traceability.' },
+			task_id: {
+				type: 'string',
+				description: 'Optional task id. When present, the context pack inherits and enforces the task project identity.',
+			},
+			project_hint: { type: 'string', description: 'Optional project hint for scoped matching.' },
+			project_id: { type: 'string', description: 'Project id for scoped matching.' },
+			repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
 			candidate_limit: { type: 'integer', description: 'How many matches to include.' },
 			stale_after_days: { type: 'integer', description: 'Stale warning threshold in days.' },
 			write: { type: 'boolean', description: 'Whether to write a markdown context-pack artifact.' },
@@ -657,7 +671,10 @@ export const toolContracts = [
 					description: 'Propose mode for closeout fields.',
 				},
 				client: { type: 'string', description: 'Optional client context.' },
-				project_hint: { type: 'string', description: 'Optional project hint.' },
+				project_hint: {
+					type: 'string',
+					description: 'Optional canonical project hint; inherited from the started task when omitted and rejected when conflicting.',
+				},
 				memory_scope: { type: 'string', enum: ['global', 'project'], description: 'Optional memory scope override.' },
 				related_wiki: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
@@ -668,6 +685,14 @@ export const toolContracts = [
 					description: 'Optional related sources.',
 				},
 				filename: { type: 'string', description: 'Optional file stem.' },
+				project_id: {
+					type: 'string',
+					description: 'Optional project id; a value conflicting with the started task identity is rejected.',
+				},
+				repo_path: {
+					type: 'string',
+					description: 'Optional repository path; a value conflicting with the started task identity is rejected.',
+				},
 				idempotency_key: {
 					type: 'string',
 					description: 'Optional stable retry key. Reusing it with different closeout content is rejected.',

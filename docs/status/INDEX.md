@@ -28,7 +28,8 @@ This is a dated implementation snapshot, not a permanent product contract. Updat
 - The standalone runtime retains the Node filesystem scan path for development and tests; the Vault remains the only durable fact source.
 - Recall matches identify note type, content origin, and `instruction_trust: data_only`. Correlated `read_note` calls retain the `recall_id`, so source instructions remain knowledge data rather than authority.
 - Recall excludes Tracekeeper control and inbox records. Project-scoped matching keeps project id/hint as strong evidence while allowing repository paths to corroborate notes that do not carry repository metadata; explicit repository conflicts remain excluded.
-- Global and project recall apply visible project-memory priority and work-record query-echo penalties so generated task text does not outrank matching durable project memory. Project-history recall continues to expose task and session records.
+- Task startup, project Recall/history, context-pack construction, and closeout now share one Runtime project-identity resolver. It separates canonical `project_hint` from `repo_path`, resolves unique repository matches against durable project memory, reports source/confidence/warnings, and refuses project filtering for ambiguous or contradictory evidence.
+- Global and project recall apply visible project-memory priority and a query-echo penalty that scales with matched query fragments, so a generated work record that repeats the current request does not outrank matching durable project memory. Project-history recall continues to expose task and session records for continuity.
 
 ### Recoverable Writes And Tasks
 
@@ -41,6 +42,7 @@ This is a dated implementation snapshot, not a permanent product contract. Updat
 - Vault-local process locks and atomic journal claims prevent the Obsidian runtime and standalone development runtime from executing the same idempotency key at the same time.
 - Runtime status retains the latest startup-recovery counts so the Obsidian Connection Status surface can show recovered, failed, and skipped operations.
 - Task closeout returns a canonical `memory_closeout_state` covering no candidates, disabled, suggested, queued review, partial/full auto-save, missing Wiki bridge, and conflict. Compatibility status fields remain available, and completed tasks are never instructed to finish again.
+- The resolved project identity is persisted in the task record, propagated into the recommended first Recall and context-pack result, inherited at closeout, and rejected when explicit closeout/context identity conflicts with the real task.
 
 ### Identity, Limits, And Audit
 
@@ -65,8 +67,9 @@ This is a dated implementation snapshot, not a permanent product contract. Updat
 
 - `evals/agent-initiative/` contains 37 shared scenarios and a frozen Git-sourced Skill v1 fixture. The deterministic v1 characterization scores 83.11 with 23/37 passing; Skill v2 scores 100 with 37/37 passing, a +16.89 delta and no regressed scenario ids.
 - The static Eval improves recall-only classification from 0 to 1, preserves the 10/10 no-track guardrail, and improves forbidden scenarios from 4/6 to 6/6. These are reproducible policy-characterization results, not observed LLM success rates.
-- An opt-in real Codex A/B runner now uses 12 bilingual scenarios, one temporary Vault and token-protected loopback MCP process per run, project-local Skill injection for only the Skill arm, redacted JSONL artifacts, and independent invocation/lifecycle/propagation metrics. Its non-model tests run in repository verification; real model calls do not.
+- An opt-in real Codex A/B runner now uses 12 bilingual scenarios, one temporary Vault and token-protected loopback MCP process per run, project-local Skill injection for only the Skill arm, redacted JSONL artifacts, and independent invocation/lifecycle/propagation metrics. Project-identity probes additionally measure correct startup resolution, correct first project Recall, first-Recall durable-memory hits, recovery retries, duplicate Recall, and calls before effective Recall. Its non-model tests run in repository verification; real model calls do not.
 - A bounded one-repetition smoke across no-track, recall-only, and tracked-task scenarios completed all six MCP-only/Skill-arm executions. Both arms preserved the no-track guardrail, invoked Recall for history, completed one start/Recall/finish lifecycle with the real task id, and propagated verified Wiki/source paths. This smoke showed no arm delta and is not the full 12-scenario repeated benchmark.
+- A three-repetition `real-track-basic` probe exposed Agent-supplied short project names, which led to the shared resolver canonicalizing unmatched hints through unique durable `repo_path` matches. In the post-fix run, both arms resolved startup and first project-Recall identity correctly in 3/3 runs with no identity recovery or duplicate Recall. The Skill arm reached durable project memory on the first Recall in 3/3 runs versus 2/3 for MCP-only and averaged 4.33 tool calls versus 5.67; both averaged two calls before effective Recall. One MCP-only run called `project_history` before the required narrow project Recall, so strict scenario acceptance was 2/3 versus 3/3. The Skill arm preserved expected Wiki paths in 2/3 runs versus 3/3 for MCP-only, so this small sample demonstrates improved identity enforcement but not a uniformly superior Skill arm.
 - Activity aggregates recent local audit events into workflow conversion ratios, incomplete or aged workflows, permission denials, zero matches, closeout distribution, P50/P95 tool duration, recent principals, and bundled Skill version. It provides a copyable local Eval command and states that retained audit calls cannot measure missed calls.
 
 ### Product And Release Baseline
@@ -84,11 +87,10 @@ This is a dated implementation snapshot, not a permanent product contract. Updat
 - Automated coverage focuses on contracts, recovery, repository adapters, protocol matrices, runtime flows, Skill installation, local profiles, onboarding evidence, workflow diagnostics, and pure view models. A full Obsidian-hosted UI integration suite is not yet present.
 - The standalone MCP command is a development tool; production packaging remains the Obsidian-hosted runtime.
 - The real initiative runner is opt-in and the current observed sample is intentionally small. Repeated full-matrix runs are still required before treating an arm delta as stable.
-- The bounded real smoke showed that a path-valued `project_hint` produced by task startup can initially retrieve the generated task echo rather than canonical project memory. Agents recovered by retrying with canonical `project_hint` plus `repo_path`, but startup and recommended Recall do not yet share one project-identity resolver.
 
 ## Next Coherent Slices
 
-1. Add one shared project-identity resolver for task startup, context-pack construction, recommended Recall, and closeout, then cover path-valued startup hints with an integration regression.
+1. Run the repeated full real A/B matrix before treating Skill-arm initiative or efficiency deltas as stable.
 2. Split the large MCP application-tool module by use-case ownership while preserving the contract registry, result validation, audit metadata, and current package boundary.
 3. Add real Obsidian-hosted UI acceptance coverage for managed Skill install/update, capability profiles, workflow diagnostics, onboarding, Review Queue, index rebuild, and credential lifecycle.
 4. Continue reducing composition-root orchestration only where it creates an independently testable controller; do not split files solely for line count.

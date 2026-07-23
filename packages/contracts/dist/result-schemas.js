@@ -30,6 +30,29 @@ exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA = {
     description: 'Runtime failure envelope; legacy callers rely on a stable field set.',
     additionalProperties: true,
 };
+const PROJECT_IDENTITY_OUTPUT_SCHEMA = {
+    type: 'object',
+    required: ['project_hint', 'project_id', 'repo_path', 'source', 'confidence', 'warnings'],
+    properties: {
+        project_hint: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+        project_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+        repo_path: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+        source: {
+            type: 'string',
+            enum: [
+                'explicit_project_id',
+                'explicit_project_hint',
+                'vault_match',
+                'repo_leaf',
+                'task_metadata',
+                'unknown',
+            ],
+        },
+        confidence: { type: 'string', enum: ['exact', 'derived', 'uncertain'] },
+        warnings: { type: 'array', items: { type: 'string' } },
+    },
+    additionalProperties: false,
+};
 exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = {
     type: 'object',
     allOf: [
@@ -39,6 +62,10 @@ exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = {
             properties: {
                 tool: { const: 'tracekeeper.start_task' },
                 task_id: { type: 'string', minLength: 1 },
+                project_hint: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                project_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                repo_path: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                project_identity: PROJECT_IDENTITY_OUTPUT_SCHEMA,
                 workflow: {
                     type: 'object',
                     required: ['mode', 'state'],
@@ -47,6 +74,9 @@ exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = {
                         state: { type: 'string' },
                         task_id: { type: 'string' },
                         operation_id: { type: 'string' },
+                        project_hint: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                        project_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                        repo_path: { oneOf: [{ type: 'string' }, { type: 'null' }] },
                     },
                     additionalProperties: true,
                 },
@@ -87,6 +117,7 @@ exports.RECALL_SUCCESS_OUTPUT_SCHEMA = {
             required: ['recall', 'matches', 'next_actions'],
             properties: {
                 tool: { const: 'tracekeeper.recall' },
+                project_identity: PROJECT_IDENTITY_OUTPUT_SCHEMA,
                 recall: {
                     type: 'object',
                     required: ['recall_id', 'scope', 'scope_confidence', 'query', 'matched_count', 'snapshot_generation'],
@@ -143,6 +174,11 @@ exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = {
             required: ['workflow', 'memory', 'memory_closeout_state', 'next_actions'],
             properties: {
                 tool: { const: 'tracekeeper.finish_task' },
+                task_id: { type: 'string', minLength: 1 },
+                project_hint: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                project_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                repo_path: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                project_identity: PROJECT_IDENTITY_OUTPUT_SCHEMA,
                 workflow: {
                     type: 'object',
                     required: ['mode', 'state'],
@@ -150,6 +186,9 @@ exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = {
                         mode: { const: 'tracked_task', type: 'string' },
                         state: { const: 'finished', type: 'string' },
                         task_id: { type: 'string' },
+                        project_hint: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                        project_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                        repo_path: { oneOf: [{ type: 'string' }, { type: 'null' }] },
                     },
                     additionalProperties: true,
                 },

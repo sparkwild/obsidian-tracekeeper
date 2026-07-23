@@ -74,6 +74,12 @@ import {
 	ApplyApprovedWritebackService,
 	type ApplyApprovedWritebackPayload,
 } from './application/apply-approved-writeback';
+import {
+	normalizeRepositoryPath,
+	projectIdentityToResult,
+	resolveProjectIdentity,
+	type ResolvedProjectIdentity,
+} from './application/project-identity';
 
 const REVIEW_QUEUE_PREFIX = TRACEKEEPER_REVIEW_QUEUE_DIR;
 const AUDIT_LOG_PATH = TRACEKEEPER_AUDIT_LOG_PATH;
@@ -101,7 +107,6 @@ const KNOWLEDGE_WIKI_RECALL_BOOST = 0.75;
 const WORK_RECORD_RECALL_PENALTY = 5;
 const PROJECT_MEMORY_RECALL_REASON = 'Project-memory location boost (+4)';
 const KNOWLEDGE_WIKI_RECALL_REASON = 'Wiki location boost (+0.75)';
-const WORK_RECORD_RECALL_REASON = 'Work-record query-echo penalty (-5)';
 
 type CaptureSourceMode = 'external_reference' | 'extracted_snapshot' | 'local_copy';
 type ReviewProposalMode = 'off' | 'suggest' | 'review_queue' | 'auto_propose';
@@ -251,10 +256,9 @@ interface GraphHealthArgs extends ToolArgs {
 	graph_profile?: unknown;
 }
 
-interface StartTaskArgs extends ToolArgs {
+interface StartTaskArgs extends ToolArgs, ProjectScopeArgs {
 	goal?: unknown;
 	client?: unknown;
-	project_hint?: unknown;
 	idempotency_key?: unknown;
 }
 
@@ -276,7 +280,7 @@ interface ProjectHistoryArgs extends ProjectScopeArgs {
 	max_items?: unknown;
 }
 
-interface BuildContextPackArgs extends ToolArgs {
+interface BuildContextPackArgs extends ProjectScopeArgs {
 	query?: unknown;
 	task_id?: unknown;
 	candidate_limit?: unknown;
@@ -291,7 +295,7 @@ interface LintArgs extends ToolArgs {
 	graph_profile?: unknown;
 }
 
-interface FinishTaskArgs extends ToolArgs {
+interface FinishTaskArgs extends ProjectScopeArgs {
 	task_id?: unknown;
 	summary?: unknown;
 	outcomes?: unknown;
@@ -303,7 +307,6 @@ interface FinishTaskArgs extends ToolArgs {
 	review_proposal_mode?: unknown;
 	next_actions?: unknown;
 	client?: unknown;
-	project_hint?: unknown;
 	memory_scope?: unknown;
 	related_wiki?: unknown;
 	related_sources?: unknown;
@@ -1037,6 +1040,9 @@ function decorateToolResult(
 			state: 'started',
 			task_id: payload.task_id,
 			operation_id: payload.operation_id,
+			project_hint: payload.project_hint ?? null,
+			project_id: payload.project_id ?? null,
+			repo_path: payload.repo_path ?? null,
 		};
 		decorated.next_actions = buildStartTaskActions(decorated, context);
 	}
@@ -1079,6 +1085,9 @@ function decorateToolResult(
 			state: 'finished',
 			task_id: payload.task_id,
 			operation_id: payload.operation_id,
+			project_hint: payload.project_hint ?? null,
+			project_id: payload.project_id ?? null,
+			repo_path: payload.repo_path ?? null,
 		};
 		decorated.memory = {
 			status: memoryStatus,
@@ -1721,21 +1730,10 @@ function resolveAutoMemoryTarget(
 	return null;
 }
 
-interface ProjectScopeFilter {
-	projectHint: string;
-	projectId: string;
-	repoPath: string;
-}
+type ProjectScopeFilter = ResolvedProjectIdentity;
 
-function coerceProjectScope(rawArgs: ProjectScopeArgs): ProjectScopeFilter {
-	return {
-		projectHint: coerceOptionalString(rawArgs.project_hint),
-		projectId: coerceOptionalString(rawArgs.project_id),
-		repoPath:
-			coerceOptionalString(rawArgs.repo_path) ||
-			coerceOptionalString(rawArgs.repo) ||
-			coerceOptionalString(rawArgs.project_path),
-	};
+function coerceProjectScope(rawArgs: ProjectScopeArgs, notes: ScannedNote[] = []): ProjectScopeFilter {
+	return resolveProjectIdentity(rawArgs, notes);
 }
 
 function hasProjectScope(scope: ProjectScopeFilter): boolean {
@@ -1805,6 +1803,12 @@ function noteMatchesProjectId(note: ScannedNote, projectId: string): boolean {
 	}
 	const pathValue = note.relativePath.toLowerCase();
 	return pathValue.includes(`/${token}/`) || pathValue.includes(`_${token}_`) || pathValue.includes(`-${token}-`);
+}
+
+function hasExplicitProjectIdMetadata(note: ScannedNote): boolean {
+	return Boolean(
+		readFrontmatterString(note.frontmatter, ['project_id', 'projectId', 'project-id', 'pid'])
+	);
 }
 
 function noteMatchesProjectHint(note: ScannedNote, projectHint: string): boolean {
@@ -1879,8 +1883,13 @@ function filterNotesByProjectScope(notes: ScannedNote[], scope: ProjectScopeFilt
 		if (projectHint && !noteMatchesProjectHint(note, projectHint)) {
 			return false;
 		}
-		if (projectId && !noteMatchesProjectId(note, projectId)) {
-			return false;
+		if (projectId) {
+			if (hasExplicitProjectIdMetadata(note) && !noteMatchesProjectId(note, projectId)) {
+				return false;
+			}
+			if (!hasExplicitProjectIdMetadata(note) && !projectHint && !noteMatchesProjectId(note, projectId)) {
+				return false;
+			}
 		}
 		return true;
 	});
@@ -2013,6 +2022,9 @@ function buildProjectScopeMetadata(scope: ProjectScopeFilter) {
 		project_hint: scope.projectHint || null,
 		project_id: scope.projectId || null,
 		repo_path: scope.repoPath || null,
+		source: scope.source,
+		confidence: scope.confidence,
+		warnings: scope.warnings,
 	};
 }
 
@@ -2084,8 +2096,10 @@ function rankRecallMatches(
 			notePath.startsWith(`${TRACEKEEPER_TASKS_DIR}/`) ||
 			notePath.startsWith(`${TRACEKEEPER_SESSIONS_DIR}/`)
 		) {
-			score = Math.max(0.01, score - WORK_RECORD_RECALL_PENALTY);
-			reasons.push(WORK_RECORD_RECALL_REASON);
+			const echoPenalty =
+				WORK_RECORD_RECALL_PENALTY + Math.max(0, match.matchedTokens.length - 1);
+			score = Math.max(0.01, score - echoPenalty);
+			reasons.push(`Work-record query-echo penalty (-${echoPenalty})`);
 		}
 		if (match.matchedTokens.length >= 2) {
 			score += 0.4;
@@ -3816,23 +3830,108 @@ function buildTaskNotePath(taskId: string): string {
 	return `${AGENT_TASK_DIR}/${safeId}.md`;
 }
 
+interface AgentTaskMetadata extends ResolvedProjectIdentity {
+	client: string;
+}
+
+function emptyAgentTaskMetadata(): AgentTaskMetadata {
+	return {
+		projectHint: '',
+		projectId: '',
+		repoPath: '',
+		source: 'unknown',
+		confidence: 'uncertain',
+		warnings: [],
+		client: '',
+	};
+}
+
+function agentTaskMetadataFromFrontmatter(frontmatter: Record<string, unknown>): AgentTaskMetadata {
+	const source = readFrontmatterString(frontmatter, ['project_identity_source']);
+	const confidence = readFrontmatterString(frontmatter, ['project_identity_confidence']);
+	return {
+		projectHint: readFrontmatterString(frontmatter, ['project_hint', 'related_project', 'project']),
+		projectId: readFrontmatterString(frontmatter, ['project_id', 'projectId', 'project-id']),
+		repoPath: readFrontmatterString(frontmatter, ['repo_path', 'repoPath', 'repository_path', 'repositoryPath']),
+		source: [
+			'explicit_project_id',
+			'explicit_project_hint',
+			'vault_match',
+			'repo_leaf',
+			'task_metadata',
+			'unknown',
+		].includes(source)
+			? source as ResolvedProjectIdentity['source']
+			: 'task_metadata',
+		confidence: ['exact', 'derived', 'uncertain'].includes(confidence)
+			? confidence as ResolvedProjectIdentity['confidence']
+			: 'derived',
+		warnings: readFrontmatterStringList(frontmatter, 'project_identity_warnings'),
+		client: readFrontmatterString(frontmatter, ['client']),
+	};
+}
+
+function projectIdentityValueMatches(field: 'project_hint' | 'project_id' | 'repo_path', left: string, right: string): boolean {
+	if (!left || !right) {
+		return true;
+	}
+	const normalize = field === 'repo_path'
+		? normalizeRepositoryPath
+		: (value: string) => value.trim();
+	return normalize(left).toLowerCase() === normalize(right).toLowerCase();
+}
+
+function mergeTaskProjectIdentity(
+	taskId: string,
+	task: AgentTaskMetadata,
+	explicit: ResolvedProjectIdentity
+): ResolvedProjectIdentity {
+	for (const [field, taskValue, explicitValue] of [
+		['project_hint', task.projectHint, explicit.projectHint],
+		['project_id', task.projectId, explicit.projectId],
+		['repo_path', task.repoPath, explicit.repoPath],
+	] as const) {
+		if (!projectIdentityValueMatches(field, taskValue, explicitValue)) {
+			throw new ToolInputError(
+				`Project identity mismatch: task ${taskId} was created with ${field} "${taskValue}", ` +
+				`but the current call received "${explicitValue}".`
+			);
+		}
+	}
+	if (!hasProjectScope(explicit)) {
+		return {
+			projectHint: task.projectHint,
+			projectId: task.projectId,
+			repoPath: task.repoPath,
+			source: 'task_metadata',
+			confidence: task.confidence,
+			warnings: task.warnings,
+		};
+	}
+	return {
+		projectHint: explicit.projectHint || task.projectHint,
+		projectId: explicit.projectId || task.projectId,
+		repoPath: explicit.repoPath || task.repoPath,
+		source: explicit.source,
+		confidence: explicit.confidence,
+		warnings: [...new Set([...task.warnings, ...explicit.warnings])],
+	};
+}
+
 function readAgentTaskMetadata(
 	vaultRoot: string,
 	taskId: string,
 	context: ToolContext
-): { projectHint: string; client: string } {
+): AgentTaskMetadata {
 	try {
 		const absolute = resolveSafeNotePath(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
 		const parsed = parseMarkdown(fs.readFileSync(absolute, 'utf8'));
-		return {
-			projectHint: readFrontmatterString(parsed.frontmatter.fields, ['project_hint', 'related_project', 'project']),
-			client: readFrontmatterString(parsed.frontmatter.fields, ['client']),
-		};
+		return agentTaskMetadataFromFrontmatter(parsed.frontmatter.fields);
 	} catch (error) {
 		if (error instanceof ToolInputError || error instanceof VaultPathError || error instanceof Error) {
-			return { projectHint: '', client: '' };
+			return emptyAgentTaskMetadata();
 		}
-		return { projectHint: '', client: '' };
+		return emptyAgentTaskMetadata();
 	}
 }
 
@@ -3840,34 +3939,28 @@ async function readAgentTaskMetadataAsync(
 	vaultRoot: string,
 	taskId: string,
 	context: ToolContext
-): Promise<{ projectHint: string; client: string }> {
+): Promise<AgentTaskMetadata> {
 	try {
 		const safePath = buildTaskNotePath(taskId);
 		let text: string;
 		if (context.vaultRepository) {
 			const repositoryFile = await context.vaultRepository.readText(safePath);
 			if (!repositoryFile) {
-				return { projectHint: '', client: '' };
+				return emptyAgentTaskMetadata();
 			}
 			text = repositoryFile.content;
 		} else {
 			const absolute = resolveSafeNotePath(vaultRoot, safePath, pathSafetyOptions(context));
 			const parsed = parseMarkdown(fs.readFileSync(absolute, 'utf8'));
-			return {
-				projectHint: readFrontmatterString(parsed.frontmatter.fields, ['project_hint', 'related_project', 'project']),
-				client: readFrontmatterString(parsed.frontmatter.fields, ['client']),
-			};
+			return agentTaskMetadataFromFrontmatter(parsed.frontmatter.fields);
 		}
 		const parsed = parseMarkdown(text);
-		return {
-			projectHint: readFrontmatterString(parsed.frontmatter.fields, ['project_hint', 'related_project', 'project']),
-			client: readFrontmatterString(parsed.frontmatter.fields, ['client']),
-		};
+		return agentTaskMetadataFromFrontmatter(parsed.frontmatter.fields);
 	} catch (error) {
 		if (error instanceof ToolInputError || error instanceof VaultPathError || error instanceof Error) {
-			return { projectHint: '', client: '' };
+			return emptyAgentTaskMetadata();
 		}
-		return { projectHint: '', client: '' };
+		return emptyAgentTaskMetadata();
 	}
 }
 
@@ -3900,7 +3993,7 @@ function mergeFrontmatterList(frontmatter: Record<string, unknown>, key: string,
 function updateAgentTaskRecord(
 	vaultRoot: string,
 	taskId: string | null,
-	fields: Record<string, string>,
+	fields: Record<string, string | null>,
 	context: ToolContext,
 	references: Record<string, string[]> = {},
 	appendBody = '',
@@ -3922,7 +4015,9 @@ function updateAgentTaskRecord(
 
 	const current = fs.readFileSync(absolute, 'utf8');
 	const frontmatter = parseMarkdown(current).frontmatter.fields;
-	const nextFields: Record<string, string> = { ...fields };
+	const nextFields: Record<string, string> = Object.fromEntries(
+		Object.entries(fields).map(([key, value]) => [key, value ?? ''])
+	);
 	for (const [key, values] of Object.entries(references)) {
 		const merged = mergeFrontmatterList(frontmatter, key, values);
 		if (merged) {
@@ -3941,7 +4036,7 @@ function updateAgentTaskRecord(
 async function updateAgentTaskRecordAsync(
 	vaultRoot: string,
 	taskId: string | null,
-	fields: Record<string, string>,
+	fields: Record<string, string | null>,
 	context: ToolContext,
 	references: Record<string, string[]> = {},
 	appendBody = '',
@@ -3967,7 +4062,9 @@ async function updateAgentTaskRecordAsync(
 			return null;
 		}
 		const frontmatter = parseMarkdown(existing.content).frontmatter.fields;
-		const nextFields: Record<string, string> = { ...fields };
+		const nextFields: Record<string, string> = Object.fromEntries(
+			Object.entries(fields).map(([key, value]) => [key, value ?? ''])
+		);
 		for (const [key, values] of Object.entries(references)) {
 			const merged = mergeFrontmatterList(frontmatter, key, values);
 			if (merged) {
@@ -3984,7 +4081,9 @@ async function updateAgentTaskRecordAsync(
 
 	const current = fs.readFileSync(absolute, 'utf8');
 	const frontmatter = parseMarkdown(current).frontmatter.fields;
-	const nextFields: Record<string, string> = { ...fields };
+	const nextFields: Record<string, string> = Object.fromEntries(
+		Object.entries(fields).map(([key, value]) => [key, value ?? ''])
+	);
 	for (const [key, values] of Object.entries(references)) {
 		const merged = mergeFrontmatterList(frontmatter, key, values);
 		if (merged) {
@@ -4006,6 +4105,11 @@ async function createAgentTaskRecord(
 		goal: string;
 		client: string;
 		projectHint: string;
+		projectId: string;
+		repoPath: string;
+		projectIdentitySource: ResolvedProjectIdentity['source'];
+		projectIdentityConfidence: ResolvedProjectIdentity['confidence'];
+		projectIdentityWarnings: string[];
 		context: ToolInvocationContext;
 		contextPack: ContextPack;
 		operationId: string;
@@ -4089,6 +4193,11 @@ async function createAgentTaskRecord(
 			objective: input.goal,
 			project_hint: input.projectHint || null,
 			related_project: input.projectHint || null,
+			project_id: input.projectId || null,
+			repo_path: input.repoPath || null,
+			project_identity_source: input.projectIdentitySource,
+			project_identity_confidence: input.projectIdentityConfidence,
+			project_identity_warnings: input.projectIdentityWarnings,
 			started_at: now,
 			start_operation_id: input.operationId,
 		},
@@ -5018,6 +5127,8 @@ function recoveryRequestForRecord(
 				goal: payload.goal,
 				client: payload.client,
 				project_hint: payload.projectHint,
+				project_id: payload.projectId,
+				repo_path: payload.repoPath,
 				idempotency_key: record.idempotency_key,
 			},
 		};
@@ -5047,6 +5158,8 @@ function recoveryRequestForRecord(
 				review_proposal_mode: payload.reviewProposalMode,
 				client: payload.client,
 				project_hint: payload.projectHint,
+				project_id: payload.projectId,
+				repo_path: payload.repoPath,
 				memory_scope: payload.memoryScope,
 				related_wiki: payload.relatedWiki,
 				related_sources: payload.relatedSources,
@@ -5083,20 +5196,33 @@ function markDeprecatedToolResult(toolName: string, result: McpStructuredToolRes
 	});
 }
 
-function buildRecommendedRecall(goal: string, projectHint: string, context: ToolContext): Record<string, unknown> {
-	const scope: RecallScope = projectHint ? 'project' : 'global';
+function buildRecommendedRecall(
+	goal: string,
+	identity: ResolvedProjectIdentity,
+	context: ToolContext
+): Record<string, unknown> {
+	const hasResolvedProject = hasProjectScope(identity) && identity.confidence !== 'uncertain';
+	const scope: RecallScope = hasResolvedProject ? 'project' : 'global';
 	const args: Record<string, unknown> = {
 		query: goal,
 		scope,
 		max_items: 6,
 	};
-	if (projectHint) {
-		args.project_hint = projectHint;
+	if (hasResolvedProject) {
+		if (identity.projectHint) {
+			args.project_hint = identity.projectHint;
+		}
+		if (identity.projectId) {
+			args.project_id = identity.projectId;
+		}
+		if (identity.repoPath) {
+			args.repo_path = identity.repoPath;
+		}
 	}
 	return {
 		tool: 'tracekeeper.recall',
 		arguments: args,
-		reason: projectHint
+		reason: hasResolvedProject
 			? contentText(context, '读取单篇笔记前，先使用项目级召回。', 'Use project-scoped recall before reading individual notes.')
 			: contentText(context, '先使用全局召回；已知项目后再用 project_hint 缩小范围。', 'Use global recall first, then narrow with project_hint when a project is known.'),
 	};
@@ -5126,15 +5252,17 @@ function buildCloseoutContract(context: ToolContext): Record<string, unknown> {
 	};
 }
 
-function buildStartTaskNextActions(projectHint: string, context: ToolContext): string[] {
+function buildStartTaskNextActions(identity: ResolvedProjectIdentity, context: ToolContext): string[] {
 	const actions = [
 		contentText(context, '读取单篇笔记前，先调用 tracekeeper.recall。', 'Call tracekeeper.recall before reading individual notes.'),
 		contentText(context, '只有召回摘要不够时，再使用 tracekeeper.read_note。', 'Use tracekeeper.read_note only when a recall excerpt is not enough.'),
 		contentText(context, '任务结束时调用一次 tracekeeper.finish_task，提交决策、方案调整、经验、偏好、下一步和记忆候选。', 'Call tracekeeper.finish_task once at the end with decisions, solution changes, lessons, preferences, next actions, and memory candidates.'),
 	];
-	if (projectHint) {
+	if (hasProjectScope(identity) && identity.confidence !== 'uncertain') {
 		actions.unshift(contentText(context, '使用相同 project_hint 和 scope="project" 做定向召回。', 'Use scope="project" with the same project_hint for targeted recall.'));
 		actions.splice(2, 0, contentText(context, '需要承接历史任务时，使用 scope="project_history"。', 'Use scope="project_history" when continuity from earlier sessions is needed.'));
+	} else if (identity.confidence === 'uncertain' && identity.warnings.length > 0) {
+		actions.unshift(contentText(context, '项目身份尚未确认；先使用全局召回并让用户确认项目，不要静默选择。', 'Project identity is unresolved; use global recall and ask the user to confirm the project instead of choosing silently.'));
 	}
 	return actions;
 }
@@ -5229,7 +5357,9 @@ async function handleStartTask(rawArgs: StartTaskArgs, context: ToolInvocationCo
 	const vaultRoot = vaultRootFromArgs(rawArgs, context);
 	const goal = coerceNonEmptyString(rawArgs.goal, true, 'goal');
 	const client = coerceNonEmptyString(rawArgs.client);
-	const projectHint = coerceNonEmptyString(rawArgs.project_hint);
+	const scan = scanVaultForContext(vaultRoot, context);
+	const projectIdentity = resolveProjectIdentity(rawArgs, scan.notes);
+	const projectHint = projectIdentity.projectHint;
 	if (goal.length < 3) {
 		throw new ToolInputError('goal must have at least 3 characters.');
 	}
@@ -5238,20 +5368,27 @@ async function handleStartTask(rawArgs: StartTaskArgs, context: ToolInvocationCo
 		goal,
 		client,
 		projectHint,
+		projectId: projectIdentity.projectId,
+		repoPath: projectIdentity.repoPath,
 		contentLanguage: contentLanguageFromContext(context),
 	};
-	const identity = buildToolOperationIdentity('start-task', rawArgs.idempotency_key, operationPayload, context);
-	const taskId = `obs_task_${identity.operationId.slice('start-task-'.length)}`;
+	const operationIdentity = buildToolOperationIdentity('start-task', rawArgs.idempotency_key, operationPayload, context);
+	const taskId = `obs_task_${operationIdentity.operationId.slice('start-task-'.length)}`;
 	const runner = new RecoverableOperationRunner({
-		operationId: identity.operationId,
-		idempotencyKey: identity.idempotencyKey,
+		operationId: operationIdentity.operationId,
+		idempotencyKey: operationIdentity.idempotencyKey,
 		payload: operationPayload,
 		journal: operationJournalForVault(vaultRoot),
 		failureInjection: context.operationFailureInjection,
 		steps: [],
 		finalize: async () => {
-			const scan = scanVaultForContext(vaultRoot, context);
-			const contextPack = buildContextPackForContext(vaultRoot, goal, context, { limit: 8 }, scan);
+			const scopedScan = hasProjectScope(projectIdentity) && projectIdentity.confidence !== 'uncertain'
+				? {
+					...scan,
+					notes: filterNotesByProjectScopeWithSessions(scan.notes, projectIdentity),
+				}
+				: scan;
+			const contextPack = buildContextPackForContext(vaultRoot, goal, context, { limit: 8 }, scopedScan);
 			const relatedProjects = scan.notes
 				.filter((note) => PROJECT_MEMORY_READ_DIRS.some((dir) => note.relativePath.startsWith(`${dir}/`)))
 				.slice(0, 10)
@@ -5261,16 +5398,21 @@ async function handleStartTask(rawArgs: StartTaskArgs, context: ToolInvocationCo
 				goal,
 				client,
 				projectHint,
+				projectId: projectIdentity.projectId,
+				repoPath: projectIdentity.repoPath,
+				projectIdentitySource: projectIdentity.source,
+				projectIdentityConfidence: projectIdentity.confidence,
+				projectIdentityWarnings: projectIdentity.warnings,
 				context,
 				contextPack,
-				operationId: identity.operationId,
+				operationId: operationIdentity.operationId,
 			});
 
 			return {
 				ok: true as const,
 				read_only: false as const,
-				operation_id: identity.operationId,
-				idempotency_key: identity.idempotencyKey,
+				operation_id: operationIdentity.operationId,
+				idempotency_key: operationIdentity.idempotencyKey,
 				task_id: taskId,
 				path: task.path,
 				audit_path: task.audit_path,
@@ -5292,9 +5434,12 @@ async function handleStartTask(rawArgs: StartTaskArgs, context: ToolInvocationCo
 				recent_sessions: buildRecentSessions(scan.notes),
 				user_preferences: buildUserPreferences(scan),
 				recommended_next_tool: 'tracekeeper.recall',
-				recommended_recall: buildRecommendedRecall(goal, projectHint, context),
+				recommended_recall: buildRecommendedRecall(goal, projectIdentity, context),
 				closeout_contract: buildCloseoutContract(context),
-				next_actions_for_agent: buildStartTaskNextActions(projectHint, context),
+				next_actions_for_agent: buildStartTaskNextActions(projectIdentity, context),
+				project_id: projectIdentity.projectId || null,
+				repo_path: projectIdentity.repoPath || null,
+				project_identity: projectIdentityToResult(projectIdentity),
 			};
 		},
 	});
@@ -5335,6 +5480,9 @@ function handleRecall(rawArgs: RecallArgs, context: ToolContext) {
 		projectHint: '',
 		projectId: '',
 		repoPath: '',
+		source: 'unknown',
+		confidence: 'uncertain',
+		warnings: [],
 	});
 
 	return {
@@ -5391,11 +5539,14 @@ async function handleReadNote(rawArgs: ReadNoteArgs, context: ToolContext) {
 function handleProjectContext(rawArgs: ProjectContextArgs, context: ToolContext) {
 	const vaultRoot = vaultRootFromArgs(rawArgs, context);
 	const query = coerceNonEmptyString(rawArgs.query, true, 'query');
-	const scope = coerceProjectScope(rawArgs);
 	const maxItems = coercePositiveInt(rawArgs.max_items, MAX_PROJECT_TOOL_ITEMS, 1, MAX_PROJECT_TOOL_ITEMS);
 	const scan = scanVaultForContext(vaultRoot, context);
-	const scopedNotes = filterNotesByProjectScopeWithSessions(scan.notes, scope);
-	const uncertain = !hasProjectScope(scope);
+	const scope = coerceProjectScope(rawArgs, scan.notes);
+	const unresolved = scope.confidence === 'uncertain';
+	const scopedNotes = unresolved
+		? scan.notes
+		: filterNotesByProjectScopeWithSessions(scan.notes, scope);
+	const uncertain = !hasProjectScope(scope) || scope.confidence === 'uncertain';
 	const rawMatches = recallNotes(scopedNotes, query, { limit: maxItems });
 	const matches = rankRecallMatches(rawMatches, query, scope);
 	const candidates = collectProjectCandidates(scan.notes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
@@ -5407,6 +5558,7 @@ function handleProjectContext(rawArgs: ProjectContextArgs, context: ToolContext)
 		query,
 		uncertain: uncertain,
 		scope: buildProjectScopeMetadata(scope),
+		project_identity: projectIdentityToResult(scope),
 		max_items: maxItems,
 		matched_count: matches.length,
 		...scanProvenance(scan),
@@ -5418,11 +5570,14 @@ function handleProjectContext(rawArgs: ProjectContextArgs, context: ToolContext)
 function handleProjectHistory(rawArgs: ProjectHistoryArgs, context: ToolContext) {
 	const vaultRoot = vaultRootFromArgs(rawArgs, context);
 	const query = coerceOptionalString(rawArgs.query);
-	const scope = coerceProjectScope(rawArgs);
 	const maxItems = coercePositiveInt(rawArgs.max_items, MAX_PROJECT_TOOL_ITEMS, 1, MAX_PROJECT_TOOL_ITEMS);
 	const scan = scanVaultForContext(vaultRoot, context);
-	const scopedNotes = filterNotesByProjectScopeWithSessions(scan.notes, scope);
-	const uncertain = !hasProjectScope(scope);
+	const scope = coerceProjectScope(rawArgs, scan.notes);
+	const unresolved = scope.confidence === 'uncertain';
+	const scopedNotes = unresolved
+		? scan.notes
+		: filterNotesByProjectScopeWithSessions(scan.notes, scope);
+	const uncertain = !hasProjectScope(scope) || scope.confidence === 'uncertain';
 	const filteredByQuery = query ? scopedNotes.filter((note) => matchesProjectQuery(note, query)) : scopedNotes;
 	const sortedMatches = filteredByQuery
 		.filter((note) => note.relativePath !== '')
@@ -5437,6 +5592,7 @@ function handleProjectHistory(rawArgs: ProjectHistoryArgs, context: ToolContext)
 		query: query || null,
 		uncertain: uncertain,
 		scope: buildProjectScopeMetadata(scope),
+		project_identity: projectIdentityToResult(scope),
 		max_items: maxItems,
 		matched_count: matches.length,
 		total_matches: sortedMatches.length,
@@ -6529,8 +6685,20 @@ async function handleBuildContextPack(rawArgs: BuildContextPackArgs, context: To
 	const staleAfterDays = coercePositiveInt(rawArgs.stale_after_days, 180, 1, 3650);
 	const shouldWrite = coerceBoolean(rawArgs.write, 'write', false);
 	const title = coerceOptionalString(rawArgs.title);
-
-	const scan = scanVaultForContext(vaultRoot, context);
+	const baseScan = scanVaultForContext(vaultRoot, context);
+	const explicitScope = coerceProjectScope(rawArgs, baseScan.notes);
+	let scopeForContextPack: ProjectScopeFilter = explicitScope;
+	if (taskId) {
+		const taskMetadata = await readAgentTaskMetadataAsync(vaultRoot, taskId, context);
+		scopeForContextPack = mergeTaskProjectIdentity(taskId, taskMetadata, explicitScope);
+	}
+	const scopedNotes = hasProjectScope(scopeForContextPack) && scopeForContextPack.confidence !== 'uncertain'
+		? filterNotesByProjectScopeWithSessions(baseScan.notes, scopeForContextPack)
+		: baseScan.notes;
+	const scan = {
+		...baseScan,
+		notes: scopedNotes,
+	};
 	const contextPack = buildContextPackForContext(vaultRoot, query, context, {
 		limit: candidateLimit,
 		staleAfterDays,
@@ -6542,6 +6710,10 @@ async function handleBuildContextPack(rawArgs: BuildContextPackArgs, context: To
 			read_only: true,
 			vault_root: vaultRoot,
 			task_id: taskId || null,
+			project_hint: scopeForContextPack.projectHint || null,
+			project_id: scopeForContextPack.projectId || null,
+			repo_path: scopeForContextPack.repoPath || null,
+			project_identity: projectIdentityToResult(scopeForContextPack),
 			query,
 			...scanProvenance(scan),
 			context_pack: contextPack,
@@ -6623,6 +6795,10 @@ async function handleBuildContextPack(rawArgs: BuildContextPackArgs, context: To
 		read_only: false,
 		vault_root: vaultRoot,
 		task_id: taskId || null,
+		project_hint: scopeForContextPack.projectHint || null,
+		project_id: scopeForContextPack.projectId || null,
+		repo_path: scopeForContextPack.repoPath || null,
+		project_identity: projectIdentityToResult(scopeForContextPack),
 		query,
 		...scanProvenance(scan),
 		context_pack: contextPack,
@@ -6996,6 +7172,9 @@ interface FinishTaskOperationPayload {
 	lessons: string[];
 	preferences: string[];
 	memoryCandidates: string[];
+	projectIdentity?: ResolvedProjectIdentity;
+	projectId: string;
+	repoPath: string;
 	reviewProposalMode: ReviewProposalMode;
 	client: string;
 	projectHint: string;
@@ -7010,7 +7189,19 @@ interface FinishTaskOperationPayload {
 	contentLanguage: ContentLanguage;
 }
 
+function projectIdentityFromFinishPayload(input: FinishTaskOperationPayload): ResolvedProjectIdentity {
+	return input.projectIdentity ?? {
+		projectHint: input.projectHint,
+		projectId: input.projectId || '',
+		repoPath: input.repoPath || '',
+		source: 'task_metadata',
+		confidence: input.projectHint || input.projectId || input.repoPath ? 'derived' : 'uncertain',
+		warnings: ['legacy_finish_payload_without_project_identity'],
+	};
+}
+
 function buildFinishTaskRequestSnapshot(rawArgs: FinishTaskArgs) {
+	const explicitIdentity = resolveProjectIdentity(rawArgs);
 	return {
 		task_id: coerceNonEmptyString(rawArgs.task_id, true, 'task_id'),
 		summary: coerceNonEmptyString(rawArgs.summary, true, 'summary'),
@@ -7025,7 +7216,9 @@ function buildFinishTaskRequestSnapshot(rawArgs: FinishTaskArgs) {
 			? null
 			: coerceReviewProposalMode(rawArgs.review_proposal_mode, 'auto_propose'),
 		client: coerceOptionalString(rawArgs.client) || null,
-		project_hint: coerceOptionalString(rawArgs.project_hint) || null,
+		project_hint: explicitIdentity.projectHint || null,
+		project_id: explicitIdentity.projectId || null,
+		repo_path: explicitIdentity.repoPath || null,
 		memory_scope: rawArgs.memory_scope ?? null,
 		related_wiki: normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki'),
 		related_sources: normalizeMultiValueList(rawArgs.related_sources, 'related_sources'),
@@ -7055,8 +7248,11 @@ async function buildFinishTaskOperationPayload(
 		defaultReviewProposalMode(context)
 	);
 	const taskMetadata = await readAgentTaskMetadataAsync(vaultRoot, taskId, context);
+	const identityScan = scanVaultForContext(vaultRoot, context);
+	const explicitIdentity = resolveProjectIdentity(rawArgs, identityScan.notes);
+	const projectIdentity = mergeTaskProjectIdentity(taskId, taskMetadata, explicitIdentity);
 	const client = coerceOptionalString(rawArgs.client) || taskMetadata.client;
-	const projectHint = coerceOptionalString(rawArgs.project_hint) || taskMetadata.projectHint;
+	const projectHint = projectIdentity.projectHint;
 	const memoryScope = rawArgs.memory_scope === undefined ? '' : rawArgs.memory_scope;
 	const relatedWiki = normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki');
 	const relatedSources = normalizeMultiValueList(rawArgs.related_sources, 'related_sources');
@@ -7091,6 +7287,9 @@ async function buildFinishTaskOperationPayload(
 		lessons,
 		preferences,
 		memoryCandidates,
+		projectIdentity,
+		projectId: projectIdentity.projectId,
+		repoPath: projectIdentity.repoPath,
 		reviewProposalMode,
 		client,
 		projectHint,
@@ -7123,6 +7322,7 @@ function resolveFinishTaskSessionNotePath(
 }
 
 async function writeFinishTaskSessionNote(input: FinishTaskOperationPayload, context: ToolContext, operationId: string): Promise<string> {
+	const projectIdentity = projectIdentityFromFinishPayload(input);
 	const body = buildSessionNoteBodyWithCloseout(
 		context,
 		input.summary,
@@ -7184,6 +7384,11 @@ async function writeFinishTaskSessionNote(input: FinishTaskOperationPayload, con
 			client: input.client || null,
 			project_hint: input.projectHint || null,
 			related_project: input.projectHint || null,
+			project_id: input.projectId || null,
+			repo_path: input.repoPath || null,
+			project_identity_source: projectIdentity.source,
+			project_identity_confidence: projectIdentity.confidence,
+			project_identity_warnings: projectIdentity.warnings,
 			memory_scope: resolveMemoryScope('session_finish', '', input.projectHint, input.memoryScope),
 			related_wiki: input.relatedWiki,
 			related_sources: input.relatedSources,
@@ -7295,6 +7500,7 @@ async function writeFinishTaskCloseoutArtifacts(
 }
 
 async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context: ToolContext, operationId: string): Promise<string | null> {
+	const projectIdentity = projectIdentityFromFinishPayload(input);
 	const notePath = resolveFinishTaskSessionNotePath(input, context);
 	const sessionNote = await findOperationOwnedNoteAsync(
 		input.vaultRoot,
@@ -7347,8 +7553,13 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 			preferences: input.preferences.join(', '),
 			memory_candidates: input.memoryCandidates.join(', '),
 			review_proposal_mode: input.reviewProposalMode,
+			project_id: input.projectId || null,
+			repo_path: input.repoPath || null,
 			project_hint: input.projectHint,
 			related_project: input.projectHint,
+			project_identity_source: projectIdentity.source,
+			project_identity_confidence: projectIdentity.confidence,
+			project_identity_warnings: projectIdentity.warnings.join(', '),
 			finish_operation_id: operationId,
 		},
 		context,
@@ -7392,6 +7603,7 @@ async function executeFinishTaskOperation(
 	operationId: string,
 	idempotencyKey: string
 ) {
+	const projectIdentity = projectIdentityFromFinishPayload(input);
 	const sessionNote = await findOperationOwnedNoteAsync(
 		input.vaultRoot,
 		SESSION_NOTE_DIR,
@@ -7462,7 +7674,10 @@ async function executeFinishTaskOperation(
 		memory_closeout_state: MemoryCloseoutStatus;
 		memory_closeout_summary: string;
 		memory_scope?: MemoryScope;
+		project_id?: string | null;
+		repo_path?: string | null;
 		project_hint?: string | null;
+		project_identity?: ReturnType<typeof projectIdentityToResult>;
 		related_wiki?: string[];
 		related_sources?: string[];
 		architecture_status?: ArchitectureStatus;
@@ -7484,7 +7699,10 @@ async function executeFinishTaskOperation(
 		outcome_count: input.outcomes.length,
 		next_action_count: input.nextActions.length,
 		memory_scope: resolveMemoryScope('session_finish', '', input.projectHint, input.memoryScope),
+		project_id: input.projectId || null,
+		repo_path: input.repoPath || null,
 		project_hint: input.projectHint || null,
+		project_identity: projectIdentityToResult(projectIdentity),
 		related_wiki: input.relatedWiki,
 		related_sources: input.relatedSources,
 		architecture_status: input.architectureStatus.architecture_status,

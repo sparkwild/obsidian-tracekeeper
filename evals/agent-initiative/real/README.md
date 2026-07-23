@@ -63,8 +63,8 @@ Every scenario/repetition/arm receives a fresh temporary worktree, Vault, token,
 Execution writes one JSON report (default `evals/agent-initiative/reports/real/<run-id>/aggregate.json`):
 
 - `runs`: per-run metadata, output path map, evaluation checks, and class.
-- `summaries`: per-run evaluation summary with continuity/review metrics.
-- `aggregates`: per-arm aggregate rates (`mode_classification_rate`, `tracked_start_recall_finish_rate`, etc.) and class counts.
+- `summaries`: per-run evaluation summary with continuity, project-identity, first-recall, duplicate-call, and review metrics.
+- `aggregates`: per-arm aggregate rates (`mode_classification_rate`, `tracked_start_recall_finish_rate`, `first_project_recall_identity_rate`, etc.), efficiency averages, and class counts.
 - `delta`: difference between `mcp-skill` and `mcp-only` where both arms are present.
 - `dry_run: true`: returned when `--execute` is not set, with no actual codex calls.
 
@@ -81,5 +81,7 @@ The runtime binds to `127.0.0.1` on an ephemeral port and uses a random bearer t
 
 - Real execution consumes model quota and is probabilistic. Use repetitions before drawing conclusions.
 - The aggregate reports mode classification, proactive Recall, tracked lifecycle completion, task-id continuity, no-track false positives, tool errors, and Wiki/source closeout propagation per arm and as `mcp-skill - mcp-only` deltas.
+- The project-identity probe also reports whether task startup resolved a canonical identity, whether the first project Recall used that identity and ranked durable project memory first, whether the Agent needed an identity-recovery retry, duplicate Recall rate, average tool calls, and calls before the first effective Recall.
+- Lower `project_identity_recovery_rate`, `duplicate_recall_rate`, `average_tool_calls_per_run`, and `average_tool_calls_before_effective_recall` are better. Other rates are success rates where higher is better.
 - This runner is not a CI gate. Only its local parser/configuration tests belong in ordinary verification.
 - A good result characterizes this client/model/scenario set; it does not prove that every Agent will select the Skill or that every user Vault has adequate knowledge quality.

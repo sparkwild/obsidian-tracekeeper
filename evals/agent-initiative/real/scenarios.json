@@ -178,6 +178,7 @@
 		"class": "tracked_task",
 		"kind": "positive",
 		"prompt": "继续完善 Tracekeeper 的任务启动与收口闭环实现。",
+		"identity_probe": true,
 		"project_hint": "obsidian-tracekeeper",
 		"repo_path": "obsidian-tracekeeper",
 		"related_wiki": ["01_knowledge/wiki/hubs/project-overview.md", "01_knowledge/wiki/hubs/query-echo.md"],

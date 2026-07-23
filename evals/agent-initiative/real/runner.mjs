@@ -412,12 +412,110 @@ function buildCodexPrompt(scenario) {
 	].join('\n');
 }
 
+function isPathLikeProjectHint(value) {
+	const normalized = normalizeText(value);
+	return Boolean(
+		normalized &&
+		(
+			/^[A-Za-z]:[\\/]/.test(normalized) ||
+			normalized.startsWith('/') ||
+			normalized.startsWith('./') ||
+			normalized.startsWith('../') ||
+			normalized.includes('\\') ||
+			normalized.startsWith('file:')
+		)
+	);
+}
+
+function collectToolInteractions(events, toolName) {
+	const pending = [];
+	const interactions = [];
+	let callOrder = 0;
+	for (const [eventIndex, event] of (events || []).entries()) {
+		if (event.type === 'tool_call') {
+			callOrder += 1;
+			if (event.tool === toolName) {
+				const interaction = { call: event, result: null, eventIndex, callOrder };
+				pending.push(interaction);
+				interactions.push(interaction);
+			}
+			continue;
+		}
+		if (event.type !== 'tool_result' || event.tool !== toolName) {
+			continue;
+		}
+		const interaction = pending.find((entry) => entry.result === null);
+		if (interaction) {
+			interaction.result = event.result;
+		}
+	}
+	return interactions;
+}
+
+function projectIdentityFromResult(result) {
+	const identity = result?.project_identity && typeof result.project_identity === 'object'
+		? result.project_identity
+		: {};
+	const scope = result?.scope && typeof result.scope === 'object' ? result.scope : {};
+	return {
+		projectHint: normalizeText(identity.project_hint ?? identity.projectHint ?? scope.project_hint ?? result?.project_hint),
+		projectId: normalizeText(identity.project_id ?? identity.projectId ?? scope.project_id ?? result?.project_id),
+		repoPath: normalizeText(identity.repo_path ?? identity.repoPath ?? scope.repo_path ?? result?.repo_path),
+	};
+}
+
+function projectIdentityMatchesScenario(result, scenario, requireRepoPath = false) {
+	const identity = projectIdentityFromResult(result);
+	const expectedHint = normalizeText(scenario.project_hint).toLowerCase();
+	const expectedProjectId = normalizeText(scenario.project_id).toLowerCase();
+	if (!identity.projectHint || isPathLikeProjectHint(identity.projectHint)) {
+		return false;
+	}
+	if (expectedHint && identity.projectHint.toLowerCase() !== expectedHint) {
+		return false;
+	}
+	if (expectedProjectId && identity.projectId.toLowerCase() !== expectedProjectId) {
+		return false;
+	}
+	if (requireRepoPath && normalizeText(scenario.repo_path) && !identity.repoPath) {
+		return false;
+	}
+	return true;
+}
+
+function recallEntries(result) {
+	if (Array.isArray(result?.entries)) {
+		return result.entries;
+	}
+	if (Array.isArray(result?.matches)) {
+		return result.matches;
+	}
+	return [];
+}
+
+function firstRecallRanksDurableProjectMemory(result) {
+	const firstPath = normalizeText(recallEntries(result)[0]?.path).replace(/\\/g, '/');
+	return firstPath.startsWith('01_knowledge/memory/projects/');
+}
+
+function recallSignature(args) {
+	const input = args && typeof args === 'object' ? args : {};
+	return JSON.stringify([
+		normalizeText(input.query).toLowerCase(),
+		normalizeText(input.scope).toLowerCase(),
+		normalizeText(input.project_hint).toLowerCase(),
+		normalizeText(input.project_id).toLowerCase(),
+		normalizeText(input.repo_path ?? input.repo ?? input.project_path).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase(),
+	]);
+}
+
 function parseEvaluationAndSummary(scenario, trace, codexResult) {
 	const evaluation = evaluateTrace(scenario, trace);
 	const calls = trace.events?.filter((entry) => entry.type === 'tool_call') || [];
 	const results = trace.events?.filter((entry) => entry.type === 'tool_result') || [];
 	const finishCalls = calls.filter((call) => call.tool === 'tracekeeper.finish_task');
 	const startResults = results.filter((result) => result.tool === 'tracekeeper.start_task');
+	const recallInteractions = collectToolInteractions(trace.events, 'tracekeeper.recall');
 	const noTrackTools = calls.filter((call) => /^tracekeeper\./.test(call.tool));
 	const called = new Set(calls.map((call) => call.tool));
 	const calledInOrder = calls.map((call) => call.tool);
@@ -446,6 +544,28 @@ function parseEvaluationAndSummary(scenario, trace, codexResult) {
 	const trackedTaskContinuity = scenario.class === 'tracked_task' && expectSameTaskId && typeof lastStartTaskId === 'string'
 		? toolCallsWithTaskId.length > 0 && toolCallsWithTaskId.every((call) => call.args.task_id === lastStartTaskId)
 		: null;
+	const identityProbe = Boolean(scenario.identity_probe);
+	const firstRecall = recallInteractions[0] || null;
+	const firstRecallIdentityCorrect = identityProbe && firstRecall
+		? projectIdentityMatchesScenario(firstRecall.result, scenario, true)
+		: null;
+	const firstRecallDurableHit = identityProbe && firstRecall
+		? firstRecallRanksDurableProjectMemory(firstRecall.result)
+		: null;
+	const laterEffectiveRecall = identityProbe && firstRecall
+		? recallInteractions.slice(1).find((interaction) =>
+			projectIdentityMatchesScenario(interaction.result, scenario, true) &&
+			firstRecallRanksDurableProjectMemory(interaction.result)
+		)
+		: null;
+	const effectiveRecall = identityProbe
+		? recallInteractions.find((interaction) =>
+			projectIdentityMatchesScenario(interaction.result, scenario, true) &&
+			firstRecallRanksDurableProjectMemory(interaction.result)
+		) || null
+		: null;
+	const recallSignatures = recallInteractions.map((interaction) => recallSignature(interaction.call.args));
+	const duplicateRecallCount = recallSignatures.length - new Set(recallSignatures).size;
 	return {
 		scenario_id: scenario.id,
 		arm: trace.arm,
@@ -470,6 +590,17 @@ function parseEvaluationAndSummary(scenario, trace, codexResult) {
 		tool_error: toolErrorCount > 0,
 		tool_error_count: toolErrorCount,
 		tool_call_count: calls.length,
+		start_project_identity_correct: identityProbe && startResults.length > 0
+			? projectIdentityMatchesScenario(startResults.at(-1).result, scenario, true)
+			: null,
+		first_project_recall_identity_correct: firstRecallIdentityCorrect,
+		first_recall_durable_project_memory_hit: firstRecallDurableHit,
+		project_identity_recovery_required: identityProbe && firstRecall
+			? (!firstRecallIdentityCorrect || !firstRecallDurableHit) && Boolean(laterEffectiveRecall)
+			: null,
+		duplicate_recall_count: duplicateRecallCount,
+		duplicate_recall: recallInteractions.length > 0 ? duplicateRecallCount > 0 : null,
+		tool_calls_before_effective_recall: effectiveRecall?.callOrder ?? null,
 		diagnostics_count: (trace.diagnostics || []).length,
 		agent_message: trace.agent_message || '',
 		run_exit_code: codexResult?.exitCode ?? 0,
@@ -510,6 +641,12 @@ function computeArmAggregate(scenarios, summaries, armName) {
 	const relatedWiki = relevant.filter((entry) => entry.related_wiki_propagation).length;
 	const relatedSources = relevant.filter((entry) => entry.related_sources_propagation).length;
 	const trackedFinishOnce = byClass.tracked_task.filter((entry) => entry.track_task_finish_once).length;
+	const startIdentitySamples = relevant.filter((entry) => entry.start_project_identity_correct !== null);
+	const projectRecallIdentitySamples = relevant.filter((entry) => entry.first_project_recall_identity_correct !== null);
+	const durableRecallSamples = relevant.filter((entry) => entry.first_recall_durable_project_memory_hit !== null);
+	const identityRecoverySamples = relevant.filter((entry) => entry.project_identity_recovery_required !== null);
+	const duplicateRecallSamples = relevant.filter((entry) => entry.duplicate_recall !== null);
+	const effectiveRecallSamples = relevant.filter((entry) => entry.tool_calls_before_effective_recall !== null);
 	return {
 		arm: armName,
 		total_runs: total,
@@ -523,6 +660,30 @@ function computeArmAggregate(scenarios, summaries, armName) {
 		tool_error_rate: toolCalls ? Number((toolErrors / toolCalls).toFixed(4)) : 0,
 		related_wiki_propagation: relatedWikiDenom ? Number((relatedWiki / relatedWikiDenom).toFixed(4)) : 0,
 		related_sources_propagation: relatedSourceDenom ? Number((relatedSources / relatedSourceDenom).toFixed(4)) : 0,
+		start_project_identity_resolution_rate: startIdentitySamples.length
+			? Number((startIdentitySamples.filter((entry) => entry.start_project_identity_correct).length / startIdentitySamples.length).toFixed(4))
+			: 0,
+		first_project_recall_identity_rate: projectRecallIdentitySamples.length
+			? Number((projectRecallIdentitySamples.filter((entry) => entry.first_project_recall_identity_correct).length / projectRecallIdentitySamples.length).toFixed(4))
+			: 0,
+		first_recall_durable_memory_hit_rate: durableRecallSamples.length
+			? Number((durableRecallSamples.filter((entry) => entry.first_recall_durable_project_memory_hit).length / durableRecallSamples.length).toFixed(4))
+			: 0,
+		project_identity_recovery_rate: identityRecoverySamples.length
+			? Number((identityRecoverySamples.filter((entry) => entry.project_identity_recovery_required).length / identityRecoverySamples.length).toFixed(4))
+			: 0,
+		duplicate_recall_rate: duplicateRecallSamples.length
+			? Number((duplicateRecallSamples.filter((entry) => entry.duplicate_recall).length / duplicateRecallSamples.length).toFixed(4))
+			: 0,
+		average_tool_calls_per_run: total
+			? Number((toolCalls / total).toFixed(4))
+			: 0,
+		average_tool_calls_before_effective_recall: effectiveRecallSamples.length
+			? Number((
+				effectiveRecallSamples.reduce((sum, entry) => sum + entry.tool_calls_before_effective_recall, 0) /
+				effectiveRecallSamples.length
+			).toFixed(4))
+			: 0,
 		executed_runs_by_class: {
 			no_track: noTrackCount,
 			recall_only: recallCount,
@@ -545,6 +706,13 @@ function buildDelta(armSummaries) {
 		'tool_error_rate',
 		'related_wiki_propagation',
 		'related_sources_propagation',
+		'start_project_identity_resolution_rate',
+		'first_project_recall_identity_rate',
+		'first_recall_durable_memory_hit_rate',
+		'project_identity_recovery_rate',
+		'duplicate_recall_rate',
+		'average_tool_calls_per_run',
+		'average_tool_calls_before_effective_recall',
 	];
 	return Object.fromEntries(rateKeys.map((key) => [
 		key,
@@ -862,6 +1030,7 @@ export {
 	computeArmAggregate,
 	buildDelta,
 	buildCodexPrompt,
+	parseEvaluationAndSummary,
 	runFailureTrace,
 	repositoryRoot,
 	mcpRuntimePath,

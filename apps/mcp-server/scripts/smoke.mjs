@@ -357,6 +357,16 @@ async function main() {
 			'',
 			'Atlasfixture project recall note without explicit repo metadata.',
 		].join('\n'));
+		writeNote(vaultRoot, '01_knowledge/memory/projects/atlas/filtered-scope-match.md', [
+			'---',
+			'type: memory',
+			'project_hint: atlas',
+			'project_id: atlas-proj-id',
+			'repo_path: repo/atlas-temp',
+			'---',
+			'# Atlas Scope Match',
+			'project-scope-filter-token for context pack filtering validation.',
+		].join('\n'));
 		writeNote(vaultRoot, '01_knowledge/memory/projects/atlas/explicit-match.md', [
 			'---',
 			'type: memory',
@@ -383,6 +393,16 @@ async function main() {
 			'',
 			'## Related memory',
 			'- [[01_knowledge/memory/projects/atlas/memory|Atlas memory]]',
+		].join('\n'));
+		writeNote(vaultRoot, '01_knowledge/memory/projects/demo/filtered-scope-match.md', [
+			'---',
+			'type: memory',
+			'project_hint: demo',
+			'project_id: demo-proj-id',
+			'repo_path: repo/demo-temp',
+			'---',
+			'# Demo Scope Match',
+			'project-scope-filter-token for context pack filtering validation.',
 		].join('\n'));
 		writeNote(vaultRoot, '01_knowledge/sources/atlas-source.md', [
 			'# Atlas Source',
@@ -879,6 +899,117 @@ async function main() {
 		assert.ok(activeTaskText.includes('status: "active"'));
 		assert.ok(activeTaskText.includes(`task_id: "${taskId}"`));
 		assert.ok(activeTaskText.includes('project_hint: "demo"'));
+		const atlasStartTask = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.start_task',
+			arguments: {
+				goal: 'project-scope-filter-token',
+				project_hint: path.join(vaultRoot, 'repo', 'atlas-temp'),
+				idempotency_key: 'smoke-start-task-atlas',
+			},
+		}));
+		assert.equal(atlasStartTask.ok, true);
+		assert.equal(atlasStartTask.project_hint, 'atlas');
+		assert.equal(atlasStartTask.project_id, 'atlas-proj-id');
+		assert.equal(atlasStartTask.repo_path, path.join(vaultRoot, 'repo', 'atlas-temp'));
+		assert.equal(atlasStartTask.project_identity?.source, 'vault_match');
+		assert.equal(atlasStartTask.project_identity?.confidence, 'exact');
+		assert.ok(atlasStartTask.project_identity?.warnings?.includes('path_project_hint_treated_as_repo_path'));
+		assert.equal(atlasStartTask.recommended_recall?.arguments?.project_hint, 'atlas');
+		assert.equal(atlasStartTask.recommended_recall?.arguments?.project_id, 'atlas-proj-id');
+		assert.equal(
+			atlasStartTask.recommended_recall?.arguments?.repo_path,
+			path.join(vaultRoot, 'repo', 'atlas-temp')
+		);
+		const atlasStartContextPaths = (atlasStartTask.context_pack_summary?.relevant_notes || [])
+			.map((entry) => entry.path || entry.relativePath || '')
+			.filter(Boolean);
+		assert.ok(atlasStartContextPaths.includes('01_knowledge/memory/projects/atlas/filtered-scope-match.md'));
+		assert.ok(!atlasStartContextPaths.includes('01_knowledge/memory/projects/demo/filtered-scope-match.md'));
+		const atlasTaskId = atlasStartTask.task_id;
+		const atlasTaskText = fs.readFileSync(path.join(vaultRoot, atlasStartTask.path), 'utf8');
+		assert.ok(atlasTaskText.includes('project_hint: "atlas"'));
+		assert.ok(atlasTaskText.includes('project_id: "atlas-proj-id"'));
+		assert.ok(atlasTaskText.includes('project_identity_source: "vault_match"'));
+		const atlasRecommendedRecall = buildStructured(await client.call('tools/call', {
+			name: atlasStartTask.recommended_recall.tool,
+			arguments: atlasStartTask.recommended_recall.arguments,
+		}));
+		const atlasRecommendedEntries = atlasRecommendedRecall.entries || atlasRecommendedRecall.matches || [];
+		assert.ok(atlasRecommendedEntries.length > 0);
+		assert.ok(
+			atlasRecommendedEntries[0].path.startsWith('01_knowledge/memory/projects/atlas/'),
+			`first recommended recall should rank durable Atlas memory above the new task echo: ${JSON.stringify(
+				atlasRecommendedEntries.map((entry) => entry.path)
+			)}`
+		);
+		const atlasAliasRecall = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.recall',
+			arguments: {
+				query: 'project-scope-filter-token',
+				scope: 'project',
+				project_hint: 'atlas-short-name',
+				repo_path: path.join(vaultRoot, 'repo', 'atlas-temp'),
+				max_items: 6,
+			},
+		}));
+		assert.equal(atlasAliasRecall.project_identity?.project_hint, 'atlas');
+		assert.equal(atlasAliasRecall.project_identity?.project_id, 'atlas-proj-id');
+		assert.equal(atlasAliasRecall.project_identity?.source, 'vault_match');
+		assert.equal(atlasAliasRecall.project_identity?.confidence, 'exact');
+		assert.ok(
+			atlasAliasRecall.project_identity?.warnings?.includes('project_hint_canonicalized_from_repo_match')
+		);
+
+		const scopedBuildContext = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.build_context_pack',
+			arguments: {
+				task_id: atlasTaskId,
+				query: 'project-scope-filter-token',
+				write: false,
+			},
+		}));
+		assert.equal(scopedBuildContext.ok, true);
+		assert.equal(scopedBuildContext.project_hint, 'atlas');
+		assert.equal(scopedBuildContext.project_id, 'atlas-proj-id');
+		assert.equal(scopedBuildContext.repo_path, path.join(vaultRoot, 'repo', 'atlas-temp'));
+		const scopedPaths = (scopedBuildContext.context_pack?.relevantNotes || [])
+			.map((entry) => entry.path || entry.relativePath || '')
+			.filter(Boolean);
+		assert.ok(scopedPaths.some((notePath) => notePath.includes('01_knowledge/memory/projects/atlas/filtered-scope-match.md')));
+		assert.ok(
+			scopedPaths.every(
+				(notePath) => !notePath.includes('01_knowledge/memory/projects/demo/filtered-scope-match.md')
+			),
+			'scoped build_context_pack should exclude non-task project notes'
+		);
+
+		const atlasFinish = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: {
+				task_id: atlasTaskId,
+				summary: 'Smoke atlas finish.',
+				outcomes: ['Atlas finish validated'],
+				idempotency_key: 'smoke-finish-task-atlas',
+			},
+		}));
+		assert.equal(atlasFinish.ok, true);
+		assert.equal(atlasFinish.project_id, 'atlas-proj-id');
+		assert.equal(atlasFinish.repo_path, path.join(vaultRoot, 'repo', 'atlas-temp'));
+		assert.equal(atlasFinish.project_identity?.source, 'task_metadata');
+		await assert.rejects(
+			() =>
+				client.call('tools/call', {
+					name: 'tracekeeper.finish_task',
+					arguments: {
+						task_id: atlasTaskId,
+						summary: 'Atlas finish with mismatched project',
+						outcomes: ['Atlas finish mismatch'],
+						project_id: 'other-project-id',
+						idempotency_key: 'smoke-finish-task-atlas-mismatch',
+					},
+				}),
+			/Project identity mismatch/
+		);
 
 		const afterSensitiveAudit = readAuditLog(vaultRoot);
 		assertToolCallEvent(afterSensitiveAudit, 'tracekeeper.start_task', 'success');
@@ -1297,6 +1428,17 @@ async function main() {
 			atlasTrackedEntries[0].score_reason.includes('Project-memory location boost (+4)'),
 			'project-memory ranking should expose its location signal'
 		);
+		const atlasQueryEcho = atlasTrackedEntries.find(
+			(entry) => entry.path === '00_tracekeeper/work/tasks/atlas-task.md'
+		);
+		const echoPenaltyReason = atlasQueryEcho?.score_reason?.find(
+			(reason) => reason.startsWith('Work-record query-echo penalty (-')
+		);
+		assert.ok(echoPenaltyReason, 'query-echo work records should expose their ranking penalty');
+		assert.ok(
+			Number.parseInt(echoPenaltyReason.match(/-([0-9]+)/)?.[1] || '0', 10) > 5,
+			`query-echo penalty should scale above the base when several query fragments match: ${echoPenaltyReason}`
+		);
 
 		const atlasRepoOnlyContext = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.recall',
@@ -1311,7 +1453,7 @@ async function main() {
 		const atlasRepoOnlyPaths = atlasRepoOnlyEntries.map((entry) => entry.path);
 		assert.ok(atlasRepoOnlyContext.ok, true);
 		assert.ok(atlasRepoOnlyPaths.includes('01_knowledge/memory/projects/atlas/explicit-match.md'));
-		assert.ok(!atlasRepoOnlyPaths.includes('01_knowledge/memory/projects/atlas/no-repo-bridge.md'));
+		assert.ok(atlasRepoOnlyPaths.includes('01_knowledge/memory/projects/atlas/no-repo-bridge.md'));
 		assert.ok(!atlasRepoOnlyPaths.includes('01_knowledge/memory/projects/atlas/explicit-conflict.md'));
 
 		const deprecatedProjectContext = buildStructured(await client.call('tools/call', {

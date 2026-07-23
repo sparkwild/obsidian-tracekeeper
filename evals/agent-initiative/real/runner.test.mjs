@@ -12,6 +12,7 @@ import {
 	computeArmAggregate,
 	buildDelta,
 	buildCodexPrompt,
+	parseEvaluationAndSummary,
 	repositoryRoot,
 	mcpRuntimePath,
 } from './runner.mjs';
@@ -127,6 +128,12 @@ test('computeArmAggregate and buildDelta produce expected task metrics', () => {
 			track_task_flow_ok: null,
 			track_task_finish_once: null,
 			finish_task_id_continuity: null,
+			start_project_identity_correct: null,
+			first_project_recall_identity_correct: null,
+			first_recall_durable_project_memory_hit: null,
+			project_identity_recovery_required: null,
+			duplicate_recall: null,
+			tool_calls_before_effective_recall: null,
 			tool_calls: [],
 		},
 		{
@@ -150,6 +157,12 @@ test('computeArmAggregate and buildDelta produce expected task metrics', () => {
 			track_task_flow_ok: null,
 			track_task_finish_once: null,
 			finish_task_id_continuity: null,
+			start_project_identity_correct: null,
+			first_project_recall_identity_correct: null,
+			first_recall_durable_project_memory_hit: null,
+			project_identity_recovery_required: null,
+			duplicate_recall: false,
+			tool_calls_before_effective_recall: null,
 			tool_calls: [],
 		},
 		{
@@ -173,6 +186,12 @@ test('computeArmAggregate and buildDelta produce expected task metrics', () => {
 			track_task_flow_ok: true,
 			track_task_finish_once: true,
 			finish_task_id_continuity: true,
+			start_project_identity_correct: true,
+			first_project_recall_identity_correct: true,
+			first_recall_durable_project_memory_hit: true,
+			project_identity_recovery_required: false,
+			duplicate_recall: false,
+			tool_calls_before_effective_recall: 2,
 			tool_calls: [],
 		},
 		{
@@ -196,6 +215,12 @@ test('computeArmAggregate and buildDelta produce expected task metrics', () => {
 			track_task_flow_ok: false,
 			track_task_finish_once: false,
 			finish_task_id_continuity: false,
+			start_project_identity_correct: false,
+			first_project_recall_identity_correct: false,
+			first_recall_durable_project_memory_hit: false,
+			project_identity_recovery_required: true,
+			duplicate_recall: true,
+			tool_calls_before_effective_recall: null,
 			tool_calls: [],
 		},
 	];
@@ -214,12 +239,26 @@ test('computeArmAggregate and buildDelta produce expected task metrics', () => {
 	assert.equal(mcpOnlyAggregate.tracked_finish_once_rate, 0.5);
 	assert.equal(mcpOnlyAggregate.task_id_continuity_rate, 0.5);
 	assert.equal(mcpOnlyAggregate.no_track_false_positive_rate, 0);
+	assert.equal(mcpOnlyAggregate.start_project_identity_resolution_rate, 0.5);
+	assert.equal(mcpOnlyAggregate.first_project_recall_identity_rate, 0.5);
+	assert.equal(mcpOnlyAggregate.first_recall_durable_memory_hit_rate, 0.5);
+	assert.equal(mcpOnlyAggregate.project_identity_recovery_rate, 0.5);
+	assert.equal(mcpOnlyAggregate.duplicate_recall_rate, 0.3333);
+	assert.equal(mcpOnlyAggregate.average_tool_calls_per_run, 1.5);
+	assert.equal(mcpOnlyAggregate.average_tool_calls_before_effective_recall, 2);
 	const delta = buildDelta({ 'mcp-only': mcpOnlyAggregate, 'mcp-skill': mcpSkillAggregate });
 	assert.equal(typeof delta, 'object');
 	assert.deepEqual(Object.keys(delta).sort(), [
 		'mode_classification_rate',
 		'no_track_false_positive_rate',
 		'recall_invocation_rate',
+		'start_project_identity_resolution_rate',
+		'first_project_recall_identity_rate',
+		'first_recall_durable_memory_hit_rate',
+		'project_identity_recovery_rate',
+		'duplicate_recall_rate',
+		'average_tool_calls_per_run',
+		'average_tool_calls_before_effective_recall',
 		'related_sources_propagation',
 		'related_wiki_propagation',
 		'task_id_continuity_rate',
@@ -227,6 +266,74 @@ test('computeArmAggregate and buildDelta produce expected task metrics', () => {
 		'tracked_finish_once_rate',
 		'tracked_start_recall_finish_rate',
 	].sort());
+});
+
+test('identity probe measures first-pass project identity and durable recall without counting recovery', async () => {
+	const scenarios = await loadRealScenarios();
+	const scenario = scenarios.find((entry) => entry.id === 'real-track-basic');
+	const taskId = 'obs_task_identity_probe';
+	const trace = {
+		scenario_id: scenario.id,
+		arm: 'mcp-only',
+		repetition: 1,
+		classification: 'tracked_task',
+		diagnostics: [],
+		unknown_event_types: [],
+		events: [
+			{ type: 'tool_call', tool: 'tracekeeper.start_task', args: { goal: scenario.prompt, project_hint: '/tmp/work/obsidian-tracekeeper' } },
+			{
+				type: 'tool_result',
+				tool: 'tracekeeper.start_task',
+				result: {
+					task_id: taskId,
+					project_identity: {
+						project_hint: 'obsidian-tracekeeper',
+						repo_path: '/tmp/work/obsidian-tracekeeper',
+					},
+				},
+			},
+			{
+				type: 'tool_call',
+				tool: 'tracekeeper.recall',
+				args: {
+					query: scenario.prompt,
+					scope: 'project',
+					project_hint: 'obsidian-tracekeeper',
+					repo_path: '/tmp/work/obsidian-tracekeeper',
+				},
+			},
+			{
+				type: 'tool_result',
+				tool: 'tracekeeper.recall',
+				result: {
+					project_identity: {
+						project_hint: 'obsidian-tracekeeper',
+						repo_path: '/tmp/work/obsidian-tracekeeper',
+					},
+					entries: [{ path: '01_knowledge/memory/projects/obsidian-tracekeeper/memory.md' }],
+				},
+			},
+			{
+				type: 'tool_call',
+				tool: 'tracekeeper.finish_task',
+				args: {
+					task_id: taskId,
+					summary: 'Finished identity probe.',
+					related_wiki: scenario.related_wiki,
+					related_sources: scenario.related_sources,
+				},
+			},
+			{ type: 'tool_result', tool: 'tracekeeper.finish_task', result: { memory_closeout_state: 'no_candidates' } },
+			{ type: 'assistant_report', closeout_status: 'ignored', codes: [] },
+		],
+	};
+	const summary = parseEvaluationAndSummary(scenario, trace, { exitCode: 0 });
+	assert.equal(summary.start_project_identity_correct, true);
+	assert.equal(summary.first_project_recall_identity_correct, true);
+	assert.equal(summary.first_recall_durable_project_memory_hit, true);
+	assert.equal(summary.project_identity_recovery_required, false);
+	assert.equal(summary.duplicate_recall, false);
+	assert.equal(summary.tool_calls_before_effective_recall, 2);
 });
 
 test('buildCodexPrompt is identical across arms and does not leak expectations', () => {

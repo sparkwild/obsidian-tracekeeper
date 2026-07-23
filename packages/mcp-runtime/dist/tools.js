@@ -48,6 +48,7 @@ const protocol_1 = require("./protocol");
 const result_validation_1 = require("./result-validation");
 const safety_1 = require("./safety");
 const apply_approved_writeback_1 = require("./application/apply-approved-writeback");
+const project_identity_1 = require("./application/project-identity");
 const REVIEW_QUEUE_PREFIX = core_1.TRACEKEEPER_REVIEW_QUEUE_DIR;
 const AUDIT_LOG_PATH = core_1.TRACEKEEPER_AUDIT_LOG_PATH;
 const MAX_LIST_QUEUE_ITEMS = 20;
@@ -74,7 +75,6 @@ const KNOWLEDGE_WIKI_RECALL_BOOST = 0.75;
 const WORK_RECORD_RECALL_PENALTY = 5;
 const PROJECT_MEMORY_RECALL_REASON = 'Project-memory location boost (+4)';
 const KNOWLEDGE_WIKI_RECALL_REASON = 'Wiki location boost (+0.75)';
-const WORK_RECORD_RECALL_REASON = 'Work-record query-echo penalty (-5)';
 function normalizeContentLanguage(value) {
     const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
     return normalized === 'zh' || normalized.startsWith('zh-') || normalized.startsWith('zh_') ? 'zh-CN' : 'en';
@@ -554,6 +554,9 @@ function decorateToolResult(toolName, result, context) {
             state: 'started',
             task_id: payload.task_id,
             operation_id: payload.operation_id,
+            project_hint: payload.project_hint ?? null,
+            project_id: payload.project_id ?? null,
+            repo_path: payload.repo_path ?? null,
         };
         decorated.next_actions = buildStartTaskActions(decorated, context);
     }
@@ -596,6 +599,9 @@ function decorateToolResult(toolName, result, context) {
             state: 'finished',
             task_id: payload.task_id,
             operation_id: payload.operation_id,
+            project_hint: payload.project_hint ?? null,
+            project_id: payload.project_id ?? null,
+            repo_path: payload.repo_path ?? null,
         };
         decorated.memory = {
             status: memoryStatus,
@@ -1096,14 +1102,8 @@ function resolveAutoMemoryTarget(vaultRoot, proposalKind, targetNote, projectHin
     }
     return null;
 }
-function coerceProjectScope(rawArgs) {
-    return {
-        projectHint: coerceOptionalString(rawArgs.project_hint),
-        projectId: coerceOptionalString(rawArgs.project_id),
-        repoPath: coerceOptionalString(rawArgs.repo_path) ||
-            coerceOptionalString(rawArgs.repo) ||
-            coerceOptionalString(rawArgs.project_path),
-    };
+function coerceProjectScope(rawArgs, notes = []) {
+    return (0, project_identity_1.resolveProjectIdentity)(rawArgs, notes);
 }
 function hasProjectScope(scope) {
     return Boolean(scope.projectHint || scope.projectId || scope.repoPath);
@@ -1167,6 +1167,9 @@ function noteMatchesProjectId(note, projectId) {
     }
     const pathValue = note.relativePath.toLowerCase();
     return pathValue.includes(`/${token}/`) || pathValue.includes(`_${token}_`) || pathValue.includes(`-${token}-`);
+}
+function hasExplicitProjectIdMetadata(note) {
+    return Boolean(readFrontmatterString(note.frontmatter, ['project_id', 'projectId', 'project-id', 'pid']));
 }
 function noteMatchesProjectHint(note, projectHint) {
     if (!projectHint) {
@@ -1237,8 +1240,13 @@ function filterNotesByProjectScope(notes, scope) {
         if (projectHint && !noteMatchesProjectHint(note, projectHint)) {
             return false;
         }
-        if (projectId && !noteMatchesProjectId(note, projectId)) {
-            return false;
+        if (projectId) {
+            if (hasExplicitProjectIdMetadata(note) && !noteMatchesProjectId(note, projectId)) {
+                return false;
+            }
+            if (!hasExplicitProjectIdMetadata(note) && !projectHint && !noteMatchesProjectId(note, projectId)) {
+                return false;
+            }
         }
         return true;
     });
@@ -1362,6 +1370,9 @@ function buildProjectScopeMetadata(scope) {
         project_hint: scope.projectHint || null,
         project_id: scope.projectId || null,
         repo_path: scope.repoPath || null,
+        source: scope.source,
+        confidence: scope.confidence,
+        warnings: scope.warnings,
     };
 }
 function collectRecallScopeTokens(scope) {
@@ -1424,8 +1435,9 @@ function rankRecallMatches(matches, query, scope) {
         }
         else if (notePath.startsWith(`${core_1.TRACEKEEPER_TASKS_DIR}/`) ||
             notePath.startsWith(`${core_1.TRACEKEEPER_SESSIONS_DIR}/`)) {
-            score = Math.max(0.01, score - WORK_RECORD_RECALL_PENALTY);
-            reasons.push(WORK_RECORD_RECALL_REASON);
+            const echoPenalty = WORK_RECORD_RECALL_PENALTY + Math.max(0, match.matchedTokens.length - 1);
+            score = Math.max(0.01, score - echoPenalty);
+            reasons.push(`Work-record query-echo penalty (-${echoPenalty})`);
         }
         if (match.matchedTokens.length >= 2) {
             score += 0.4;
@@ -2800,20 +2812,91 @@ function buildTaskNotePath(taskId) {
     }
     return `${AGENT_TASK_DIR}/${safeId}.md`;
 }
+function emptyAgentTaskMetadata() {
+    return {
+        projectHint: '',
+        projectId: '',
+        repoPath: '',
+        source: 'unknown',
+        confidence: 'uncertain',
+        warnings: [],
+        client: '',
+    };
+}
+function agentTaskMetadataFromFrontmatter(frontmatter) {
+    const source = readFrontmatterString(frontmatter, ['project_identity_source']);
+    const confidence = readFrontmatterString(frontmatter, ['project_identity_confidence']);
+    return {
+        projectHint: readFrontmatterString(frontmatter, ['project_hint', 'related_project', 'project']),
+        projectId: readFrontmatterString(frontmatter, ['project_id', 'projectId', 'project-id']),
+        repoPath: readFrontmatterString(frontmatter, ['repo_path', 'repoPath', 'repository_path', 'repositoryPath']),
+        source: [
+            'explicit_project_id',
+            'explicit_project_hint',
+            'vault_match',
+            'repo_leaf',
+            'task_metadata',
+            'unknown',
+        ].includes(source)
+            ? source
+            : 'task_metadata',
+        confidence: ['exact', 'derived', 'uncertain'].includes(confidence)
+            ? confidence
+            : 'derived',
+        warnings: readFrontmatterStringList(frontmatter, 'project_identity_warnings'),
+        client: readFrontmatterString(frontmatter, ['client']),
+    };
+}
+function projectIdentityValueMatches(field, left, right) {
+    if (!left || !right) {
+        return true;
+    }
+    const normalize = field === 'repo_path'
+        ? project_identity_1.normalizeRepositoryPath
+        : (value) => value.trim();
+    return normalize(left).toLowerCase() === normalize(right).toLowerCase();
+}
+function mergeTaskProjectIdentity(taskId, task, explicit) {
+    for (const [field, taskValue, explicitValue] of [
+        ['project_hint', task.projectHint, explicit.projectHint],
+        ['project_id', task.projectId, explicit.projectId],
+        ['repo_path', task.repoPath, explicit.repoPath],
+    ]) {
+        if (!projectIdentityValueMatches(field, taskValue, explicitValue)) {
+            throw new safety_1.ToolInputError(`Project identity mismatch: task ${taskId} was created with ${field} "${taskValue}", ` +
+                `but the current call received "${explicitValue}".`);
+        }
+    }
+    if (!hasProjectScope(explicit)) {
+        return {
+            projectHint: task.projectHint,
+            projectId: task.projectId,
+            repoPath: task.repoPath,
+            source: 'task_metadata',
+            confidence: task.confidence,
+            warnings: task.warnings,
+        };
+    }
+    return {
+        projectHint: explicit.projectHint || task.projectHint,
+        projectId: explicit.projectId || task.projectId,
+        repoPath: explicit.repoPath || task.repoPath,
+        source: explicit.source,
+        confidence: explicit.confidence,
+        warnings: [...new Set([...task.warnings, ...explicit.warnings])],
+    };
+}
 function readAgentTaskMetadata(vaultRoot, taskId, context) {
     try {
         const absolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
         const parsed = (0, core_1.parseMarkdown)(fs.readFileSync(absolute, 'utf8'));
-        return {
-            projectHint: readFrontmatterString(parsed.frontmatter.fields, ['project_hint', 'related_project', 'project']),
-            client: readFrontmatterString(parsed.frontmatter.fields, ['client']),
-        };
+        return agentTaskMetadataFromFrontmatter(parsed.frontmatter.fields);
     }
     catch (error) {
         if (error instanceof safety_1.ToolInputError || error instanceof core_1.VaultPathError || error instanceof Error) {
-            return { projectHint: '', client: '' };
+            return emptyAgentTaskMetadata();
         }
-        return { projectHint: '', client: '' };
+        return emptyAgentTaskMetadata();
     }
 }
 async function readAgentTaskMetadataAsync(vaultRoot, taskId, context) {
@@ -2823,29 +2906,23 @@ async function readAgentTaskMetadataAsync(vaultRoot, taskId, context) {
         if (context.vaultRepository) {
             const repositoryFile = await context.vaultRepository.readText(safePath);
             if (!repositoryFile) {
-                return { projectHint: '', client: '' };
+                return emptyAgentTaskMetadata();
             }
             text = repositoryFile.content;
         }
         else {
             const absolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, safePath, pathSafetyOptions(context));
             const parsed = (0, core_1.parseMarkdown)(fs.readFileSync(absolute, 'utf8'));
-            return {
-                projectHint: readFrontmatterString(parsed.frontmatter.fields, ['project_hint', 'related_project', 'project']),
-                client: readFrontmatterString(parsed.frontmatter.fields, ['client']),
-            };
+            return agentTaskMetadataFromFrontmatter(parsed.frontmatter.fields);
         }
         const parsed = (0, core_1.parseMarkdown)(text);
-        return {
-            projectHint: readFrontmatterString(parsed.frontmatter.fields, ['project_hint', 'related_project', 'project']),
-            client: readFrontmatterString(parsed.frontmatter.fields, ['client']),
-        };
+        return agentTaskMetadataFromFrontmatter(parsed.frontmatter.fields);
     }
     catch (error) {
         if (error instanceof safety_1.ToolInputError || error instanceof core_1.VaultPathError || error instanceof Error) {
-            return { projectHint: '', client: '' };
+            return emptyAgentTaskMetadata();
         }
-        return { projectHint: '', client: '' };
+        return emptyAgentTaskMetadata();
     }
 }
 function readFrontmatterStringList(frontmatter, key) {
@@ -2888,7 +2965,7 @@ function updateAgentTaskRecord(vaultRoot, taskId, fields, context, references = 
     }
     const current = fs.readFileSync(absolute, 'utf8');
     const frontmatter = (0, core_1.parseMarkdown)(current).frontmatter.fields;
-    const nextFields = { ...fields };
+    const nextFields = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value ?? '']));
     for (const [key, values] of Object.entries(references)) {
         const merged = mergeFrontmatterList(frontmatter, key, values);
         if (merged) {
@@ -2922,7 +2999,7 @@ async function updateAgentTaskRecordAsync(vaultRoot, taskId, fields, context, re
             return null;
         }
         const frontmatter = (0, core_1.parseMarkdown)(existing.content).frontmatter.fields;
-        const nextFields = { ...fields };
+        const nextFields = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value ?? '']));
         for (const [key, values] of Object.entries(references)) {
             const merged = mergeFrontmatterList(frontmatter, key, values);
             if (merged) {
@@ -2938,7 +3015,7 @@ async function updateAgentTaskRecordAsync(vaultRoot, taskId, fields, context, re
     }
     const current = fs.readFileSync(absolute, 'utf8');
     const frontmatter = (0, core_1.parseMarkdown)(current).frontmatter.fields;
-    const nextFields = { ...fields };
+    const nextFields = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value ?? '']));
     for (const [key, values] of Object.entries(references)) {
         const merged = mergeFrontmatterList(frontmatter, key, values);
         if (merged) {
@@ -3019,6 +3096,11 @@ async function createAgentTaskRecord(vaultRoot, input) {
         objective: input.goal,
         project_hint: input.projectHint || null,
         related_project: input.projectHint || null,
+        project_id: input.projectId || null,
+        repo_path: input.repoPath || null,
+        project_identity_source: input.projectIdentitySource,
+        project_identity_confidence: input.projectIdentityConfidence,
+        project_identity_warnings: input.projectIdentityWarnings,
         started_at: now,
         start_operation_id: input.operationId,
     }, body, input.taskId, input.context, taskAuditMetadata, input.operationId);
@@ -3848,6 +3930,8 @@ function recoveryRequestForRecord(record) {
                 goal: payload.goal,
                 client: payload.client,
                 project_hint: payload.projectHint,
+                project_id: payload.projectId,
+                repo_path: payload.repoPath,
                 idempotency_key: record.idempotency_key,
             },
         };
@@ -3877,6 +3961,8 @@ function recoveryRequestForRecord(record) {
                 review_proposal_mode: payload.reviewProposalMode,
                 client: payload.client,
                 project_hint: payload.projectHint,
+                project_id: payload.projectId,
+                repo_path: payload.repoPath,
                 memory_scope: payload.memoryScope,
                 related_wiki: payload.relatedWiki,
                 related_sources: payload.relatedSources,
@@ -3910,20 +3996,29 @@ function markDeprecatedToolResult(toolName, result) {
         replacement_tool: replacement,
     });
 }
-function buildRecommendedRecall(goal, projectHint, context) {
-    const scope = projectHint ? 'project' : 'global';
+function buildRecommendedRecall(goal, identity, context) {
+    const hasResolvedProject = hasProjectScope(identity) && identity.confidence !== 'uncertain';
+    const scope = hasResolvedProject ? 'project' : 'global';
     const args = {
         query: goal,
         scope,
         max_items: 6,
     };
-    if (projectHint) {
-        args.project_hint = projectHint;
+    if (hasResolvedProject) {
+        if (identity.projectHint) {
+            args.project_hint = identity.projectHint;
+        }
+        if (identity.projectId) {
+            args.project_id = identity.projectId;
+        }
+        if (identity.repoPath) {
+            args.repo_path = identity.repoPath;
+        }
     }
     return {
         tool: 'tracekeeper.recall',
         arguments: args,
-        reason: projectHint
+        reason: hasResolvedProject
             ? contentText(context, '读取单篇笔记前，先使用项目级召回。', 'Use project-scoped recall before reading individual notes.')
             : contentText(context, '先使用全局召回；已知项目后再用 project_hint 缩小范围。', 'Use global recall first, then narrow with project_hint when a project is known.'),
     };
@@ -3951,15 +4046,18 @@ function buildCloseoutContract(context) {
             'Reuse verified wiki/source paths already gathered from recall/read_note, otherwise report review fallback.',
     };
 }
-function buildStartTaskNextActions(projectHint, context) {
+function buildStartTaskNextActions(identity, context) {
     const actions = [
         contentText(context, '读取单篇笔记前，先调用 tracekeeper.recall。', 'Call tracekeeper.recall before reading individual notes.'),
         contentText(context, '只有召回摘要不够时，再使用 tracekeeper.read_note。', 'Use tracekeeper.read_note only when a recall excerpt is not enough.'),
         contentText(context, '任务结束时调用一次 tracekeeper.finish_task，提交决策、方案调整、经验、偏好、下一步和记忆候选。', 'Call tracekeeper.finish_task once at the end with decisions, solution changes, lessons, preferences, next actions, and memory candidates.'),
     ];
-    if (projectHint) {
+    if (hasProjectScope(identity) && identity.confidence !== 'uncertain') {
         actions.unshift(contentText(context, '使用相同 project_hint 和 scope="project" 做定向召回。', 'Use scope="project" with the same project_hint for targeted recall.'));
         actions.splice(2, 0, contentText(context, '需要承接历史任务时，使用 scope="project_history"。', 'Use scope="project_history" when continuity from earlier sessions is needed.'));
+    }
+    else if (identity.confidence === 'uncertain' && identity.warnings.length > 0) {
+        actions.unshift(contentText(context, '项目身份尚未确认；先使用全局召回并让用户确认项目，不要静默选择。', 'Project identity is unresolved; use global recall and ask the user to confirm the project instead of choosing silently.'));
     }
     return actions;
 }
@@ -4041,7 +4139,9 @@ async function handleStartTask(rawArgs, context) {
     const vaultRoot = vaultRootFromArgs(rawArgs, context);
     const goal = coerceNonEmptyString(rawArgs.goal, true, 'goal');
     const client = coerceNonEmptyString(rawArgs.client);
-    const projectHint = coerceNonEmptyString(rawArgs.project_hint);
+    const scan = scanVaultForContext(vaultRoot, context);
+    const projectIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs, scan.notes);
+    const projectHint = projectIdentity.projectHint;
     if (goal.length < 3) {
         throw new safety_1.ToolInputError('goal must have at least 3 characters.');
     }
@@ -4049,20 +4149,27 @@ async function handleStartTask(rawArgs, context) {
         goal,
         client,
         projectHint,
+        projectId: projectIdentity.projectId,
+        repoPath: projectIdentity.repoPath,
         contentLanguage: contentLanguageFromContext(context),
     };
-    const identity = buildToolOperationIdentity('start-task', rawArgs.idempotency_key, operationPayload, context);
-    const taskId = `obs_task_${identity.operationId.slice('start-task-'.length)}`;
+    const operationIdentity = buildToolOperationIdentity('start-task', rawArgs.idempotency_key, operationPayload, context);
+    const taskId = `obs_task_${operationIdentity.operationId.slice('start-task-'.length)}`;
     const runner = new core_1.RecoverableOperationRunner({
-        operationId: identity.operationId,
-        idempotencyKey: identity.idempotencyKey,
+        operationId: operationIdentity.operationId,
+        idempotencyKey: operationIdentity.idempotencyKey,
         payload: operationPayload,
         journal: operationJournalForVault(vaultRoot),
         failureInjection: context.operationFailureInjection,
         steps: [],
         finalize: async () => {
-            const scan = scanVaultForContext(vaultRoot, context);
-            const contextPack = buildContextPackForContext(vaultRoot, goal, context, { limit: 8 }, scan);
+            const scopedScan = hasProjectScope(projectIdentity) && projectIdentity.confidence !== 'uncertain'
+                ? {
+                    ...scan,
+                    notes: filterNotesByProjectScopeWithSessions(scan.notes, projectIdentity),
+                }
+                : scan;
+            const contextPack = buildContextPackForContext(vaultRoot, goal, context, { limit: 8 }, scopedScan);
             const relatedProjects = scan.notes
                 .filter((note) => PROJECT_MEMORY_READ_DIRS.some((dir) => note.relativePath.startsWith(`${dir}/`)))
                 .slice(0, 10)
@@ -4072,15 +4179,20 @@ async function handleStartTask(rawArgs, context) {
                 goal,
                 client,
                 projectHint,
+                projectId: projectIdentity.projectId,
+                repoPath: projectIdentity.repoPath,
+                projectIdentitySource: projectIdentity.source,
+                projectIdentityConfidence: projectIdentity.confidence,
+                projectIdentityWarnings: projectIdentity.warnings,
                 context,
                 contextPack,
-                operationId: identity.operationId,
+                operationId: operationIdentity.operationId,
             });
             return {
                 ok: true,
                 read_only: false,
-                operation_id: identity.operationId,
-                idempotency_key: identity.idempotencyKey,
+                operation_id: operationIdentity.operationId,
+                idempotency_key: operationIdentity.idempotencyKey,
                 task_id: taskId,
                 path: task.path,
                 audit_path: task.audit_path,
@@ -4102,9 +4214,12 @@ async function handleStartTask(rawArgs, context) {
                 recent_sessions: buildRecentSessions(scan.notes),
                 user_preferences: buildUserPreferences(scan),
                 recommended_next_tool: 'tracekeeper.recall',
-                recommended_recall: buildRecommendedRecall(goal, projectHint, context),
+                recommended_recall: buildRecommendedRecall(goal, projectIdentity, context),
                 closeout_contract: buildCloseoutContract(context),
-                next_actions_for_agent: buildStartTaskNextActions(projectHint, context),
+                next_actions_for_agent: buildStartTaskNextActions(projectIdentity, context),
+                project_id: projectIdentity.projectId || null,
+                repo_path: projectIdentity.repoPath || null,
+                project_identity: (0, project_identity_1.projectIdentityToResult)(projectIdentity),
             };
         },
     });
@@ -4143,6 +4258,9 @@ function handleRecall(rawArgs, context) {
         projectHint: '',
         projectId: '',
         repoPath: '',
+        source: 'unknown',
+        confidence: 'uncertain',
+        warnings: [],
     });
     return {
         ok: true,
@@ -4190,11 +4308,14 @@ async function handleReadNote(rawArgs, context) {
 function handleProjectContext(rawArgs, context) {
     const vaultRoot = vaultRootFromArgs(rawArgs, context);
     const query = coerceNonEmptyString(rawArgs.query, true, 'query');
-    const scope = coerceProjectScope(rawArgs);
     const maxItems = coercePositiveInt(rawArgs.max_items, MAX_PROJECT_TOOL_ITEMS, 1, MAX_PROJECT_TOOL_ITEMS);
     const scan = scanVaultForContext(vaultRoot, context);
-    const scopedNotes = filterNotesByProjectScopeWithSessions(scan.notes, scope);
-    const uncertain = !hasProjectScope(scope);
+    const scope = coerceProjectScope(rawArgs, scan.notes);
+    const unresolved = scope.confidence === 'uncertain';
+    const scopedNotes = unresolved
+        ? scan.notes
+        : filterNotesByProjectScopeWithSessions(scan.notes, scope);
+    const uncertain = !hasProjectScope(scope) || scope.confidence === 'uncertain';
     const rawMatches = (0, core_1.recallNotes)(scopedNotes, query, { limit: maxItems });
     const matches = rankRecallMatches(rawMatches, query, scope);
     const candidates = collectProjectCandidates(scan.notes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
@@ -4205,6 +4326,7 @@ function handleProjectContext(rawArgs, context) {
         query,
         uncertain: uncertain,
         scope: buildProjectScopeMetadata(scope),
+        project_identity: (0, project_identity_1.projectIdentityToResult)(scope),
         max_items: maxItems,
         matched_count: matches.length,
         ...scanProvenance(scan),
@@ -4215,11 +4337,14 @@ function handleProjectContext(rawArgs, context) {
 function handleProjectHistory(rawArgs, context) {
     const vaultRoot = vaultRootFromArgs(rawArgs, context);
     const query = coerceOptionalString(rawArgs.query);
-    const scope = coerceProjectScope(rawArgs);
     const maxItems = coercePositiveInt(rawArgs.max_items, MAX_PROJECT_TOOL_ITEMS, 1, MAX_PROJECT_TOOL_ITEMS);
     const scan = scanVaultForContext(vaultRoot, context);
-    const scopedNotes = filterNotesByProjectScopeWithSessions(scan.notes, scope);
-    const uncertain = !hasProjectScope(scope);
+    const scope = coerceProjectScope(rawArgs, scan.notes);
+    const unresolved = scope.confidence === 'uncertain';
+    const scopedNotes = unresolved
+        ? scan.notes
+        : filterNotesByProjectScopeWithSessions(scan.notes, scope);
+    const uncertain = !hasProjectScope(scope) || scope.confidence === 'uncertain';
     const filteredByQuery = query ? scopedNotes.filter((note) => matchesProjectQuery(note, query)) : scopedNotes;
     const sortedMatches = filteredByQuery
         .filter((note) => note.relativePath !== '')
@@ -4233,6 +4358,7 @@ function handleProjectHistory(rawArgs, context) {
         query: query || null,
         uncertain: uncertain,
         scope: buildProjectScopeMetadata(scope),
+        project_identity: (0, project_identity_1.projectIdentityToResult)(scope),
         max_items: maxItems,
         matched_count: matches.length,
         total_matches: sortedMatches.length,
@@ -5130,7 +5256,20 @@ async function handleBuildContextPack(rawArgs, context) {
     const staleAfterDays = coercePositiveInt(rawArgs.stale_after_days, 180, 1, 3650);
     const shouldWrite = coerceBoolean(rawArgs.write, 'write', false);
     const title = coerceOptionalString(rawArgs.title);
-    const scan = scanVaultForContext(vaultRoot, context);
+    const baseScan = scanVaultForContext(vaultRoot, context);
+    const explicitScope = coerceProjectScope(rawArgs, baseScan.notes);
+    let scopeForContextPack = explicitScope;
+    if (taskId) {
+        const taskMetadata = await readAgentTaskMetadataAsync(vaultRoot, taskId, context);
+        scopeForContextPack = mergeTaskProjectIdentity(taskId, taskMetadata, explicitScope);
+    }
+    const scopedNotes = hasProjectScope(scopeForContextPack) && scopeForContextPack.confidence !== 'uncertain'
+        ? filterNotesByProjectScopeWithSessions(baseScan.notes, scopeForContextPack)
+        : baseScan.notes;
+    const scan = {
+        ...baseScan,
+        notes: scopedNotes,
+    };
     const contextPack = buildContextPackForContext(vaultRoot, query, context, {
         limit: candidateLimit,
         staleAfterDays,
@@ -5141,6 +5280,10 @@ async function handleBuildContextPack(rawArgs, context) {
             read_only: true,
             vault_root: vaultRoot,
             task_id: taskId || null,
+            project_hint: scopeForContextPack.projectHint || null,
+            project_id: scopeForContextPack.projectId || null,
+            repo_path: scopeForContextPack.repoPath || null,
+            project_identity: (0, project_identity_1.projectIdentityToResult)(scopeForContextPack),
             query,
             ...scanProvenance(scan),
             context_pack: contextPack,
@@ -5205,6 +5348,10 @@ async function handleBuildContextPack(rawArgs, context) {
         read_only: false,
         vault_root: vaultRoot,
         task_id: taskId || null,
+        project_hint: scopeForContextPack.projectHint || null,
+        project_id: scopeForContextPack.projectId || null,
+        repo_path: scopeForContextPack.repoPath || null,
+        project_identity: (0, project_identity_1.projectIdentityToResult)(scopeForContextPack),
         query,
         ...scanProvenance(scan),
         context_pack: contextPack,
@@ -5489,7 +5636,18 @@ async function createDistillProposal(vaultRoot, taskId, proposalKind, kindLabel,
     });
     return { path: proposal.path };
 }
+function projectIdentityFromFinishPayload(input) {
+    return input.projectIdentity ?? {
+        projectHint: input.projectHint,
+        projectId: input.projectId || '',
+        repoPath: input.repoPath || '',
+        source: 'task_metadata',
+        confidence: input.projectHint || input.projectId || input.repoPath ? 'derived' : 'uncertain',
+        warnings: ['legacy_finish_payload_without_project_identity'],
+    };
+}
 function buildFinishTaskRequestSnapshot(rawArgs) {
+    const explicitIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs);
     return {
         task_id: coerceNonEmptyString(rawArgs.task_id, true, 'task_id'),
         summary: coerceNonEmptyString(rawArgs.summary, true, 'summary'),
@@ -5504,7 +5662,9 @@ function buildFinishTaskRequestSnapshot(rawArgs) {
             ? null
             : coerceReviewProposalMode(rawArgs.review_proposal_mode, 'auto_propose'),
         client: coerceOptionalString(rawArgs.client) || null,
-        project_hint: coerceOptionalString(rawArgs.project_hint) || null,
+        project_hint: explicitIdentity.projectHint || null,
+        project_id: explicitIdentity.projectId || null,
+        repo_path: explicitIdentity.repoPath || null,
         memory_scope: rawArgs.memory_scope ?? null,
         related_wiki: normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki'),
         related_sources: normalizeMultiValueList(rawArgs.related_sources, 'related_sources'),
@@ -5524,8 +5684,11 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
     const memoryCandidates = coerceStringOrStringArray(rawArgs.memory_candidates, 'memory_candidates');
     const reviewProposalMode = coerceReviewProposalMode(rawArgs.review_proposal_mode, defaultReviewProposalMode(context));
     const taskMetadata = await readAgentTaskMetadataAsync(vaultRoot, taskId, context);
+    const identityScan = scanVaultForContext(vaultRoot, context);
+    const explicitIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs, identityScan.notes);
+    const projectIdentity = mergeTaskProjectIdentity(taskId, taskMetadata, explicitIdentity);
     const client = coerceOptionalString(rawArgs.client) || taskMetadata.client;
-    const projectHint = coerceOptionalString(rawArgs.project_hint) || taskMetadata.projectHint;
+    const projectHint = projectIdentity.projectHint;
     const memoryScope = rawArgs.memory_scope === undefined ? '' : rawArgs.memory_scope;
     const relatedWiki = normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki');
     const relatedSources = normalizeMultiValueList(rawArgs.related_sources, 'related_sources');
@@ -5551,6 +5714,9 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
         lessons,
         preferences,
         memoryCandidates,
+        projectIdentity,
+        projectId: projectIdentity.projectId,
+        repoPath: projectIdentity.repoPath,
         reviewProposalMode,
         client,
         projectHint,
@@ -5578,6 +5744,7 @@ function resolveFinishTaskSessionNotePath(input, context) {
     return `${SESSION_NOTE_DIR}/${normalized}`;
 }
 async function writeFinishTaskSessionNote(input, context, operationId) {
+    const projectIdentity = projectIdentityFromFinishPayload(input);
     const body = buildSessionNoteBodyWithCloseout(context, input.summary, input.outcomes, input.nextActions, input.decisions, input.solutionChanges, input.lessons, input.preferences, input.memoryCandidates);
     assertNoSensitiveText([
         { label: 'summary', value: input.summary },
@@ -5617,6 +5784,11 @@ async function writeFinishTaskSessionNote(input, context, operationId) {
         client: input.client || null,
         project_hint: input.projectHint || null,
         related_project: input.projectHint || null,
+        project_id: input.projectId || null,
+        repo_path: input.repoPath || null,
+        project_identity_source: projectIdentity.source,
+        project_identity_confidence: projectIdentity.confidence,
+        project_identity_warnings: projectIdentity.warnings,
         memory_scope: resolveMemoryScope('session_finish', '', input.projectHint, input.memoryScope),
         related_wiki: input.relatedWiki,
         related_sources: input.relatedSources,
@@ -5681,6 +5853,7 @@ async function writeFinishTaskCloseoutArtifacts(input, group, context, operation
     await createFinishTaskProposal(input.vaultRoot, input.taskId, sessionNotePath, operationId, group.kind, group.label, group.values, input.projectHint, input.reviewProposalMode, memoryScope, bridgeMetadata.related_wiki, input.relatedSources, input.architectureStatus, input.architectureStatus.missing_graph_bridges, bridgeMetadata.missing_wiki_bridge, bridgeMetadata.missing_related_wiki, context);
 }
 async function updateFinishTaskRecord(input, context, operationId) {
+    const projectIdentity = projectIdentityFromFinishPayload(input);
     const notePath = resolveFinishTaskSessionNotePath(input, context);
     const sessionNote = await findOperationOwnedNoteAsync(input.vaultRoot, SESSION_NOTE_DIR, input.filename, 'finish_operation_id', operationId, context);
     if (!sessionNote) {
@@ -5709,8 +5882,13 @@ async function updateFinishTaskRecord(input, context, operationId) {
         preferences: input.preferences.join(', '),
         memory_candidates: input.memoryCandidates.join(', '),
         review_proposal_mode: input.reviewProposalMode,
+        project_id: input.projectId || null,
+        repo_path: input.repoPath || null,
         project_hint: input.projectHint,
         related_project: input.projectHint,
+        project_identity_source: projectIdentity.source,
+        project_identity_confidence: projectIdentity.confidence,
+        project_identity_warnings: projectIdentity.warnings.join(', '),
         finish_operation_id: operationId,
     }, context, {
         memory_writes: [sessionNote.path, ...autoWritePaths],
@@ -5743,6 +5921,7 @@ async function updateFinishTaskRecord(input, context, operationId) {
     ].join('\n'), `^finish-${operationId}`);
 }
 async function executeFinishTaskOperation(input, context, operationId, idempotencyKey) {
+    const projectIdentity = projectIdentityFromFinishPayload(input);
     const sessionNote = await findOperationOwnedNoteAsync(input.vaultRoot, SESSION_NOTE_DIR, input.filename, 'finish_operation_id', operationId, context);
     if (!sessionNote) {
         throw new safety_1.ToolInputError(`Session note is missing for finish-task operation: ${resolveFinishTaskSessionNotePath(input, context)}`);
@@ -5772,7 +5951,10 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         outcome_count: input.outcomes.length,
         next_action_count: input.nextActions.length,
         memory_scope: resolveMemoryScope('session_finish', '', input.projectHint, input.memoryScope),
+        project_id: input.projectId || null,
+        repo_path: input.repoPath || null,
         project_hint: input.projectHint || null,
+        project_identity: (0, project_identity_1.projectIdentityToResult)(projectIdentity),
         related_wiki: input.relatedWiki,
         related_sources: input.relatedSources,
         architecture_status: input.architectureStatus.architecture_status,
