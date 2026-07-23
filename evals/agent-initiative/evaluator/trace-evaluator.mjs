@@ -28,8 +28,25 @@ function resultStatus(result) {
 	return result.memory_closeout_status || result.closeout_status || result.status || '';
 }
 
+function equivalentArgumentValue(rule, key, actualValue, expectedValue) {
+	const acceptsOneOrMany = rule.tool === 'tracekeeper.finish_task'
+		&& (key === 'related_wiki' || key === 'related_sources');
+	if (acceptsOneOrMany && Array.isArray(expectedValue) && expectedValue.length === 1 && !Array.isArray(actualValue)) {
+		return isDeepStrictEqual(actualValue, expectedValue[0]);
+	}
+	return isDeepStrictEqual(actualValue, expectedValue);
+}
+
 function rulePasses(rule, toolCalls) {
-	const candidates = toolCalls.filter((event) => event.tool === rule.tool);
+	let eligibleCalls = toolCalls;
+	if (rule.after_tool) {
+		const anchorIndex = toolCalls.findIndex((event) => event.tool === rule.after_tool);
+		if (anchorIndex < 0) {
+			return false;
+		}
+		eligibleCalls = toolCalls.slice(anchorIndex + 1);
+	}
+	const candidates = eligibleCalls.filter((event) => event.tool === rule.tool);
 	const call = rule.occurrence === 'last' ? candidates.at(-1) : candidates[0];
 	if (!call) {
 		return false;
@@ -41,7 +58,7 @@ function rulePasses(rule, toolCalls) {
 		}
 	}
 	for (const [key, expectedValue] of Object.entries(rule.equals || {})) {
-		if (!isDeepStrictEqual(args[key], expectedValue)) {
+		if (!equivalentArgumentValue(rule, key, args[key], expectedValue)) {
 			return false;
 		}
 	}

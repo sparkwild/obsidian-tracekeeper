@@ -7,6 +7,7 @@ export const TRACEKEEPER_SKILL_FORMAT_VERSION = 1;
 export const TRACEKEEPER_SKILL_SOURCE_FILES = Object.freeze([
 	'SKILL.md',
 	'references/workflow-state-machine.md',
+	'references/ingestion-workflow.md',
 	'references/failure-recovery.md',
 	'references/closeout-fields.md',
 	'references/instruction-isolation.md',
@@ -68,9 +69,9 @@ export async function buildTracekeeperSkillBundle(repoRoot = process.cwd()) {
 	const manifest = {
 		format_version: TRACEKEEPER_SKILL_FORMAT_VERSION,
 		name: 'tracekeeper',
-		skill_version: '2.0.0',
-		workflow_contract_version: 2,
-		minimum_tracekeeper_version: '0.2.3',
+		skill_version: '2.1.0',
+		workflow_contract_version: 3,
+		minimum_tracekeeper_version: '0.2.4',
 		hash_algorithm: 'sha256',
 		bundle_hash: sha256(canonicalBundle),
 		files: sources.map(({ relativePath, sha256: sourceHash }) => ({

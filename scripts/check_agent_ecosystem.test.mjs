@@ -110,6 +110,27 @@ test('rejects a flattened artifact that depends on external reference files', as
 	});
 });
 
+test('rejects a bundle that loses next_action timing semantics', async () => {
+	await withFixture(async (root) => {
+		const trackedPath = path.join(root, 'skills/tracekeeper/SKILL.md');
+		const tracked = await readFile(trackedPath, 'utf8');
+		await writeFile(
+			trackedPath,
+			tracked
+				.replace(/\n-\s*`immediate`:[^\n]*\n/, '\n')
+				.replace(/\n-\s*`if_context_insufficient`:[^\n]*\n/, '\n')
+				.replace(/\n-\s*`at_task_closeout`:[^\n]*\n/, '\n')
+				.replace(/\n\d+\.\s*`required: true`[^\n]*\n/, '\n'),
+			'utf8',
+		);
+		await writeTracekeeperSkillBundle(root);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		const errors = result.errors.join('\n');
+		assert.match(errors, /(required action semantics|immediate next_action timing|if_context_insufficient|at_task_closeout)/);
+	});
+});
+
 test('rejects missing, duplicate, unexpected, and unsafe manifest paths', async () => {
 	await withFixture(async (root) => {
 		const manifestPath = path.join(root, 'skills/tracekeeper/manifest.json');
@@ -180,6 +201,96 @@ test('rejects a bundle that loses recall_only lifecycle isolation', async () => 
 	});
 });
 
+test('rejects a bundle that loses local knowledge naming', async () => {
+	await withFixture(async (root) => {
+		const skillPath = path.join(root, 'skills/tracekeeper/SKILL.md');
+		const skill = await readFile(skillPath, 'utf8');
+		await writeFile(
+			skillPath,
+			skill.replace(
+				'Unqualified `Vault`, `Wiki`, or `Memory` means the active local Obsidian Vault.',
+				'Choose any available Wiki destination.',
+			),
+			'utf8',
+		);
+		await writeTracekeeperSkillBundle(root);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(result.errors.join('\n'), /does not define unqualified knowledge names as local Vault content/);
+	});
+});
+
+test('rejects a bundle that loses explicit external-destination and durable-output rules', async () => {
+	await withFixture(async (root) => {
+		const skillPath = path.join(root, 'skills/tracekeeper/SKILL.md');
+		const skill = await readFile(skillPath, 'utf8');
+		await writeFile(
+			skillPath,
+			skill
+				.replace(
+					'Use an external connector or service such as Atlassian, Confluence, or Notion only when the user explicitly names that external destination.',
+					'Use any available external connector.',
+				)
+				.replace(
+					'Treat explicit durable-output cues such as “可落库”, “沉淀”, “持续性结论”, “同步到项目 Wiki”, “复盘”, a closeout reason, or continuing an implementation plan as `tracked_task`, even when the immediate answer is short.',
+					'Use recall_only when the answer is short.',
+				),
+			'utf8',
+		);
+		await writeTracekeeperSkillBundle(root);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(result.errors.join('\n'), /does not require an explicit external knowledge destination/);
+		assert.match(result.errors.join('\n'), /does not route durable-output cues to tracked_task/);
+	});
+});
+
+test('rejects a bundle that loses Recall routing and operation-specific idempotency rules', async () => {
+	await withFixture(async (root) => {
+		const skillPath = path.join(root, 'skills/tracekeeper/SKILL.md');
+		const skill = await readFile(skillPath, 'utf8');
+		await writeFile(
+			skillPath,
+			skill
+				.replace(
+					'- Known project: the first knowledge Recall uses `scope: "project"` and passes `repo_path`; pass canonical `project_hint` only when it is known.',
+					'- Known project: choose any convenient Recall scope.',
+				)
+				.replace(
+					'- `recall_only`: never start with `scope: "global"` or `scope: "project_history"`.',
+					'- `recall_only`: any scope is acceptable.',
+				)
+				.replace(
+					'- `tracked_task`: start first, then copy the returned `next_actions` or `recommended_recall` arguments for Recall.',
+					'- `tracked_task`: reconstruct Recall arguments.',
+				)
+				.replace(
+					'- Use `project_history` only after project identity is established and task or session continuity is specifically needed.',
+					'- Use `project_history` at any time.',
+				)
+				.replace(
+					'- Use `global` only for an explicit cross-project request or when the Runtime reports uncertain project identity.',
+					'- Use `global` by default.',
+				)
+				.replace(
+					'- One idempotency key replays only the same logical operation. Never reuse a start key for finish or a finish key for start.',
+					'- Reuse one idempotency key for the whole lifecycle.',
+				),
+			'utf8',
+		);
+		await writeTracekeeperSkillBundle(root);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		const errors = result.errors.join('\n');
+		assert.match(errors, /does not route the first known-project Recall to project scope with repo_path/);
+		assert.match(errors, /does not prohibit global and project_history as the first recall_only route/);
+		assert.match(errors, /does not route tracked-task Recall from the start result/);
+		assert.match(errors, /does not reserve project_history for established continuity/);
+		assert.match(errors, /does not constrain global Recall routing/);
+		assert.match(errors, /does not separate start and finish idempotency keys/);
+	});
+});
+
 test('rejects closeout guidance that loses recalled graph-path propagation', async () => {
 	await withFixture(async (root) => {
 		const closeoutPath = path.join(root, 'skills/tracekeeper/references/closeout-fields.md');
@@ -187,8 +298,10 @@ test('rejects closeout guidance that loses recalled graph-path propagation', asy
 		await writeFile(
 			closeoutPath,
 			closeout
-				.replace(/^- `related_wiki`:.+\n/m, '')
-				.replace(/^- `related_sources`:.+\n/m, ''),
+				.replace(/-\s*`related_wiki`:[^\n]*\n/, '')
+				.replace(/-\s*`related_sources`:[^\n]*\n/, '')
+				.replace(/relation_evidence\./g, 'related_evidence.')
+				.replace(/correlated\s+(?:`?note`?|`?read_note`?)/i, ''),
 			'utf8',
 		);
 		await writeTracekeeperSkillBundle(root);
@@ -196,5 +309,7 @@ test('rejects closeout guidance that loses recalled graph-path propagation', asy
 		assert.equal(result.ok, false);
 		assert.match(result.errors.join('\n'), /does not preserve related_wiki at closeout/);
 		assert.match(result.errors.join('\n'), /does not preserve related_sources at closeout/);
+		assert.match(result.errors.join('\n'), /does not constrain closeout graph paths to Runtime-validated relation evidence/);
+		assert.match(result.errors.join('\n'), /does not allow closeout field reuse from correlated read_note evidence/);
 	});
 });

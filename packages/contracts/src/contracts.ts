@@ -276,7 +276,7 @@ export const toolContracts = [
 		workflowRole: 'recall',
 		useCase: 'recall',
 		description:
-			'[read-only] Use before read_note to find relevant memory, wiki, and source notes. Supports global, project, and project_history scopes.',
+			'[read-only] Find relevant memory, Wiki, and source notes in the active local Obsidian Vault before read_note. Supports global, project, and project_history scopes.',
 		inputSchema: withVaultRoot({
 			query: { type: 'string', description: 'Recall query text. Required unless scope is project_history.' },
 			scope: {
@@ -381,7 +381,7 @@ export const toolContracts = [
 		workflowRole: 'review',
 		useCase: 'review_queue',
 		description:
-			'[read-only] Inspect pending proposals or approved writeback candidates. Does not approve or apply changes.',
+			'[read-only] Inspect pending local Vault proposals or approved writeback candidates. Does not approve or apply changes.',
 		inputSchema: withVaultRoot({
 			action: {
 				type: 'string',
@@ -560,7 +560,7 @@ export const toolContracts = [
 		workflowRole: 'review',
 		useCase: 'apply_approved_writeback',
 		description:
-			'[review-gated apply] Use only after the user approves a Review Queue proposal. Appends approved content to the target note.',
+			'[review-gated apply] Use only after the user approves a Review Queue proposal. Appends approved content to the local Vault target note.',
 		inputSchema: withVaultRoot({
 			proposal_id: { type: 'string', description: 'Proposal id to apply.' },
 			proposal_path: { type: 'string', description: 'Vault-relative proposal note path.' },
@@ -678,7 +678,7 @@ export const toolContracts = [
 				memory_scope: { type: 'string', enum: ['global', 'project'], description: 'Optional memory scope override.' },
 				related_wiki: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-					description: 'Optional related wiki note references.',
+					description: 'Optional verified local Vault Wiki note paths, conventionally under 01_knowledge/wiki/**.',
 				},
 				related_sources: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
@@ -789,12 +789,12 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.capture_source',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'vault.write',
 		risk: 'low-risk-write',
 		effect: 'bounded-update',
-		idempotency: 'none',
+		idempotency: 'keyed',
 		world: 'closed',
 		workflowRole: 'source',
 		useCase: 'capture_source',
@@ -816,6 +816,10 @@ export const toolContracts = [
 				title: { type: 'string', description: 'Optional source note title.' },
 				content: { type: 'string', description: 'Required when mode is extracted_snapshot or local_copy.' },
 				text: { type: 'string', description: 'Alias of content for compatibility.' },
+				idempotency_key: {
+					type: 'string',
+					description: 'Optional stable retry key. Reusing it with different source content is rejected.',
+				},
 			},
 			['source', 'mode'],
 		),
@@ -823,30 +827,33 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.propose_memory',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'memory.propose',
 		risk: 'low-risk-write',
 		effect: 'bounded-update',
-		idempotency: 'none',
+		idempotency: 'keyed',
 		world: 'closed',
 		workflowRole: 'memory',
 		useCase: 'propose_memory',
 		description:
-			'[low-risk write] Submit a memory update through Tracekeeper rules. Global memory stays review-gated by default.',
+			'[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. Global memory stays review-gated by default.',
 		inputSchema: withVaultRoot(
 			{
 				proposal_kind: { type: 'string', description: 'Proposal kind.' },
 				content: { type: 'string', description: 'Proposal markdown/text content.' },
 				evidence: { type: 'string', description: 'Optional evidence summary.' },
-				target_note: { type: 'string', description: 'Optional target note path.' },
+				target_note: {
+					type: 'string',
+					description: 'Optional Vault-relative target note. Use 01_knowledge/wiki/** for a local project Wiki target.',
+				},
 				risk_level: { type: 'string', description: 'Risk level label.' },
 				task_id: { type: 'string', description: 'Optional task id for traceability.' },
 				project_hint: { type: 'string', description: 'Optional project hint for project memory routing.' },
 				memory_scope: { type: 'string', enum: ['global', 'project'], description: 'Optional memory scope override.' },
 				related_wiki: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-					description: 'Optional related wiki note references.',
+					description: 'Optional verified local Vault Wiki note paths, conventionally under 01_knowledge/wiki/**.',
 				},
 				related_sources: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
@@ -854,6 +861,10 @@ export const toolContracts = [
 				},
 				filename: { type: 'string', description: 'Optional file stem. If omitted, auto-generates one.' },
 				title: { type: 'string', description: 'Optional proposal title.' },
+				idempotency_key: {
+					type: 'string',
+					description: 'Optional stable retry key. Reusing it with different proposal content is rejected.',
+				},
 			},
 			['proposal_kind', 'content'],
 		),

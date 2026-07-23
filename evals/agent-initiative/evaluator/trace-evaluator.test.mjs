@@ -119,3 +119,98 @@ test('detects forbidden tools, order, task continuity, duplicate finish, and clo
 	assert.equal(result.checks.closeout_report, false);
 	assert.equal(result.checks.failure_recovery, false);
 });
+
+test('treats a schema-supported scalar as equivalent to a one-item expected list', () => {
+	const scenario = {
+		id: 'scalar-list-equivalence',
+		class: 'recall_only',
+		expected: {
+			required_tools: ['tracekeeper.finish_task'],
+			forbidden_tools: [],
+			ordered_subsequence: ['tracekeeper.finish_task'],
+			argument_rules: [{
+				tool: 'tracekeeper.finish_task',
+				required: ['related_wiki'],
+				equals: { related_wiki: ['01_knowledge/wiki/hubs/project-overview.md'] },
+			}],
+			same_task_id: false,
+			finish_exactly_once: false,
+			forbidden_behaviors: [],
+			required_reports: [],
+			closeout_report: { required: false, allowed_statuses: [], match_finish_result: false },
+		},
+	};
+	const result = evaluateTrace(scenario, {
+		scenario_id: scenario.id,
+		classification: 'recall_only',
+		events: [{
+			type: 'tool_call',
+			tool: 'tracekeeper.finish_task',
+			args: { related_wiki: '01_knowledge/wiki/hubs/project-overview.md' },
+		}],
+	});
+	assert.equal(result.checks.arguments, true);
+});
+
+function afterStartRecallScenario(id) {
+	return {
+		id,
+		class: 'tracked_task',
+		expected: {
+			required_tools: ['tracekeeper.start_task', 'tracekeeper.recall'],
+			forbidden_tools: [],
+			ordered_subsequence: ['tracekeeper.start_task', 'tracekeeper.recall'],
+			argument_rules: [{
+				tool: 'tracekeeper.recall',
+				after_tool: 'tracekeeper.start_task',
+				required: ['query', 'scope'],
+				equals: { scope: 'project' },
+			}],
+			same_task_id: false,
+			finish_exactly_once: false,
+			forbidden_behaviors: [],
+			required_reports: [],
+			closeout_report: { required: false, allowed_statuses: [], match_finish_result: false },
+		},
+	};
+}
+
+test('evaluates the first matching Recall after start and ignores legal preflight history', () => {
+	const scenario = afterStartRecallScenario('after-start-project-recall');
+	const result = evaluateTrace(scenario, {
+		scenario_id: scenario.id,
+		classification: 'tracked_task',
+		events: [
+			{ type: 'tool_call', tool: 'tracekeeper.recall', args: { query: 'history', scope: 'project_history' } },
+			{ type: 'tool_call', tool: 'tracekeeper.start_task', args: { goal: 'continue' } },
+			{ type: 'tool_call', tool: 'tracekeeper.recall', args: { query: 'context', scope: 'project' } },
+		],
+	});
+	assert.equal(result.checks.arguments, true);
+});
+
+test('fails Recall routing when the first matching Recall after start is global', () => {
+	const scenario = afterStartRecallScenario('after-start-global-recall');
+	const result = evaluateTrace(scenario, {
+		scenario_id: scenario.id,
+		classification: 'tracked_task',
+		events: [
+			{ type: 'tool_call', tool: 'tracekeeper.start_task', args: { goal: 'continue' } },
+			{ type: 'tool_call', tool: 'tracekeeper.recall', args: { query: 'wide', scope: 'global' } },
+			{ type: 'tool_call', tool: 'tracekeeper.recall', args: { query: 'context', scope: 'project' } },
+		],
+	});
+	assert.equal(result.checks.arguments, false);
+});
+
+test('fails an after_tool rule when its anchor call is absent', () => {
+	const scenario = afterStartRecallScenario('after-start-missing-anchor');
+	const result = evaluateTrace(scenario, {
+		scenario_id: scenario.id,
+		classification: 'tracked_task',
+		events: [
+			{ type: 'tool_call', tool: 'tracekeeper.recall', args: { query: 'context', scope: 'project' } },
+		],
+	});
+	assert.equal(result.checks.arguments, false);
+});

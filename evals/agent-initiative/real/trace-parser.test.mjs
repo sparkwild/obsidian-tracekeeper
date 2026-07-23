@@ -34,6 +34,25 @@ test('normalizeCodexTrace builds tracked_task events and derives closeout status
 	assert.equal(report.closeout_status, 'recorded');
 });
 
+test('normalizeCodexTrace derives task closeout only from finish_task results', () => {
+	const raw = [
+		'{"type":"tool_call","tool":"tracekeeper.start_task","arguments":{"goal":"Sync local Wiki"}}',
+		'{"type":"tool_result","tool":"tracekeeper.start_task","result":{"task_id":"task-1"}}',
+		'{"type":"tool_call","tool":"tracekeeper.recall","arguments":{"query":"latest closeout","scope":"project"}}',
+		'{"type":"tool_result","tool":"tracekeeper.recall","result":{"matches":[{"path":"wiki/project.md"}]}}',
+		'{"type":"assistant_report","closeout_status":"queued","codes":["proposal_not_applied"]}',
+		'{"type":"tool_call","tool":"tracekeeper.propose_memory","arguments":{"proposal_kind":"wiki_update","content":"Update"}}',
+		'{"type":"tool_result","tool":"tracekeeper.propose_memory","result":{"status":"written","auto_applied":false}}',
+		'{"type":"tool_call","tool":"tracekeeper.finish_task","arguments":{"task_id":"task-1","summary":"Queued"}}',
+		'{"type":"tool_result","tool":"tracekeeper.finish_task","result":{"memory_closeout_status":"ignored","memory_closeout_state":"disabled"}}',
+	].join('\n');
+	const trace = normalizeCodexTrace('real-track-wiki-closeout', raw);
+	const reports = trace.events.filter((event) => event.type === 'assistant_report');
+	assert.equal(reports.length, 1);
+	assert.equal(reports[0].closeout_status, 'ignored');
+	assert.deepEqual(reports[0].codes, ['proposal_not_applied']);
+});
+
 test('normalizeCodexTrace parses MCP item.started/item.completed envelopes', () => {
 	const raw = [
 		'{"item":{"type":"mcp_tool_call","id":"1","server":"tracekeeper","tool":"start_task","arguments":{"goal":"Trace continuity"}},"type":"item.started"}',

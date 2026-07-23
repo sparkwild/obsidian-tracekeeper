@@ -3,7 +3,7 @@ import { type ToolInvocationContext } from './tools';
 import type { VaultRepository } from '@tracekeeper/core';
 export declare const MCP_PROTOCOL_VERSION = "2025-06-18";
 export declare const SUPPORTED_MCP_PROTOCOL_VERSIONS: readonly ["2025-11-25", "2025-06-18"];
-export declare const MCP_SERVER_VERSION = "0.2.3";
+export declare const MCP_SERVER_VERSION = "0.2.4";
 export declare const STREAMABLE_HTTP_TRANSPORT = "streamable-http";
 export interface McpConnectionState {
     sessionId: string;

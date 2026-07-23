@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import skillEntrypoint from '../../../../../skills/tracekeeper/SKILL.md';
 import workflowStateMachine from '../../../../../skills/tracekeeper/references/workflow-state-machine.md';
+import ingestionWorkflow from '../../../../../skills/tracekeeper/references/ingestion-workflow.md';
 import failureRecovery from '../../../../../skills/tracekeeper/references/failure-recovery.md';
 import closeoutFields from '../../../../../skills/tracekeeper/references/closeout-fields.md';
 import instructionIsolation from '../../../../../skills/tracekeeper/references/instruction-isolation.md';
@@ -37,6 +38,7 @@ export interface EmbeddedTracekeeperSkillBundle {
 const sourceFiles: Record<string, string> = {
 	'SKILL.md': normalizeText(skillEntrypoint),
 	'references/workflow-state-machine.md': normalizeText(workflowStateMachine),
+	'references/ingestion-workflow.md': normalizeText(ingestionWorkflow),
 	'references/failure-recovery.md': normalizeText(failureRecovery),
 	'references/closeout-fields.md': normalizeText(closeoutFields),
 	'references/instruction-isolation.md': normalizeText(instructionIsolation),
@@ -118,9 +120,9 @@ function parseManifest(value: string): TracekeeperSkillManifest {
 	}
 	if (!isRecord(parsed)
 		|| parsed.name !== 'tracekeeper'
-		|| parsed.skill_version !== '2.0.0'
-		|| parsed.workflow_contract_version !== 2
-		|| parsed.minimum_tracekeeper_version !== '0.2.3'
+		|| parsed.skill_version !== '2.1.0'
+		|| parsed.workflow_contract_version !== 3
+		|| parsed.minimum_tracekeeper_version !== '0.2.4'
 		|| parsed.hash_algorithm !== 'sha256'
 		|| !Array.isArray(parsed.files)
 		|| !isRecord(parsed.artifacts)

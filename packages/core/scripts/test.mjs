@@ -126,6 +126,16 @@ function createRecallHygieneFixture(vaultRoot) {
 		'# Atlas Source\n\nAtlasfixture source note used for recall overlap tests.\n',
 		vaultRoot
 	);
+	writeFile(
+		`${KNOWLEDGE_DIR}/wiki/concepts/agent-memory-routing.md`,
+		'# Agent 外置记忆路由\n\n主动召回本地知识库，并在任务结束时沉淀项目记忆。\n',
+		vaultRoot
+	);
+	writeFile(
+		`${KNOWLEDGE_DIR}/wiki/concepts/common-chinese-noise.md`,
+		'# 常见中文噪声\n\n这是一个只有“知识”二字重叠的无关说明。\n',
+		vaultRoot
+	);
 }
 
 function assertLintKinds(issues, expectedKinds) {
@@ -206,6 +216,15 @@ async function run() {
 		const recallMatches = recallModule.recallNotes(recallScan.notes, 'recall priority', { limit: 3 });
 		assert.ok(recallMatches.length > 0, 'recall should return at least one result');
 		assert.equal(recallMatches[0].note.relativePath, `${KNOWLEDGE_DIR}/wiki/concepts/recall-priority.md`);
+		const chineseRecallMatches = recallModule.recallNotes(recallScan.notes, '如何让 Agent 主动使用外置知识库', { limit: 6 });
+		assert.ok(
+			chineseRecallMatches.some((match) => match.note.relativePath === `${KNOWLEDGE_DIR}/wiki/concepts/agent-memory-routing.md`),
+			'Chinese recall should match overlapping bounded n-grams'
+		);
+		assert.ok(
+			!chineseRecallMatches.some((match) => match.note.relativePath === `${KNOWLEDGE_DIR}/wiki/concepts/common-chinese-noise.md`),
+			'a single incidental Chinese n-gram should not produce a recall match'
+		);
 
 		const graphHealth = graphHealthModule.analyzeGraphHealth(scanBeforeSymlink.notes, { maxItems: 10 });
 		const advisoryGraphProfile = graphHealthModule.evaluateGraphProfile(graphHealth, 'advisory');
@@ -280,6 +299,19 @@ async function run() {
 		assert.equal(Array.isArray(sourceAnalysis.evidenceScaffolds), true);
 		assert.equal(Array.isArray(sourceAnalysis.claimScaffolds), true);
 		assert.equal(Array.isArray(sourceAnalysis.proposalDrafts), true);
+
+		const zhSourceAnalysis = sourceAnalysisModule.analyzeSourceText({
+			source: '01_knowledge/sources/中文来源.md',
+			sourceKind: 'local_file',
+			analysisMode: 'default',
+			purpose: '验证中文来源分析',
+			contentLanguage: 'zh-CN',
+			content: '# 来源\n\n这项研究表明本地知识库需要保留来源证据。',
+		});
+		assert.match(zhSourceAnalysis.summary, /目的：验证中文来源分析/);
+		assert.match(zhSourceAnalysis.claimScaffolds.join('\n'), /主张：/);
+		assert.match(zhSourceAnalysis.proposalDrafts[0].title, /来源分析：/);
+		assert.match(zhSourceAnalysis.proposalDrafts[0].content, /## 提案草稿/);
 
 		const sourceTarget = legacyStructureModule.getLegacyStructureTarget('03_sources/web/example.md');
 		assert.deepEqual(sourceTarget, {
@@ -457,6 +489,11 @@ async function run() {
 		const replayOutcome = await replayRunner.run();
 		assert.deepEqual(replayOutcome, normalOutcome);
 		assert.deepEqual(stepResult, ['step-1', 'step-2']);
+		const normalRecordBaseline = await new operationJournalModule.NodeFileOperationJournal({
+			directory: operationJournalDirectory,
+		}).loadById('op-normal');
+		assert.equal(normalRecordBaseline?.status, 'completed');
+		assert.deepEqual(normalRecordBaseline?.result, normalOutcome);
 
 		const operationIdConflictRunner = new operationJournalModule.RecoverableOperationRunner({
 			operationId: 'op-normal-id-mismatch',
@@ -469,9 +506,34 @@ async function run() {
 		await assert.rejects(
 			() => operationIdConflictRunner.run(),
 			(error) => {
-				return error instanceof operationJournalModule.OperationConflictError;
+				return error instanceof operationJournalModule.OperationConflictError
+					&& /idempotency key conflict/i.test(error.message);
 			}
 		);
+		const normalRecordAfterOperationIdConflict = await new operationJournalModule.NodeFileOperationJournal({
+			directory: operationJournalDirectory,
+		}).loadById('op-normal');
+		assert.deepEqual(normalRecordAfterOperationIdConflict, normalRecordBaseline);
+
+		const crossToolConflictRunner = new operationJournalModule.RecoverableOperationRunner({
+			operationId: 'start-task-smoke-cross',
+			idempotencyKey: 'idempotency-normal',
+			payload: { value: 'cross-tool-start' },
+			journal: new operationJournalModule.NodeFileOperationJournal({ directory: operationJournalDirectory }),
+			steps: [],
+			finalize: async () => ({ status: 'cross-tool-conflict' }),
+		});
+		await assert.rejects(
+			() => crossToolConflictRunner.run(),
+			(error) => {
+				return error instanceof operationJournalModule.OperationConflictError
+					&& /idempotency key conflict/i.test(error.message);
+			}
+		);
+		const normalRecordAfterCrossToolConflict = await new operationJournalModule.NodeFileOperationJournal({
+			directory: operationJournalDirectory,
+		}).loadById('op-normal');
+		assert.deepEqual(normalRecordAfterCrossToolConflict, normalRecordBaseline);
 
 		const conflictRunner = new operationJournalModule.RecoverableOperationRunner({
 			operationId: 'op-normal',

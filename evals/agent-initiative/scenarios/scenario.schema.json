@@ -11,6 +11,18 @@
 		"kind": { "enum": ["positive", "negative", "failure_recovery", "forbidden"] },
 		"prompt": { "type": "string", "minLength": 1 },
 		"project_hint": { "type": "string", "minLength": 1 },
+		"agent_materials": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["path", "content"],
+				"properties": {
+					"path": { "type": "string", "minLength": 1 },
+					"content": { "type": "string" }
+				}
+			}
+		},
 		"expected": {
 			"type": "object",
 			"additionalProperties": false,

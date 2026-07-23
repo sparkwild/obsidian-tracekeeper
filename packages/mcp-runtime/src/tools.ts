@@ -29,6 +29,7 @@ import {
 	KNOWLEDGE_SOURCES_DIR,
 	LEGACY_TOP_LEVEL_DIRS,
 	isKnowledgeWikiPath,
+	isKnowledgeSourcePath,
 	projectMemoryPath,
 	NodeFileOperationJournal,
 	OperationConflictError,
@@ -101,6 +102,8 @@ const MEMORY_PROPOSAL_DIR = TRACEKEEPER_REVIEW_QUEUE_DIR;
 const MAX_SOURCE_EXCERPT_LENGTH = 1000;
 const MAX_RECALL_EXCERPT_LENGTH = 480;
 const MAX_RECALL_GRAPH_LINKS = 8;
+const MAX_RECALL_RELATIONS = 8;
+const MAX_RECALL_CANDIDATES = 50;
 const DEFAULT_FINISH_TASK_REVIEW_MODE = 'auto_propose';
 const PROJECT_MEMORY_RECALL_BOOST = 4;
 const KNOWLEDGE_WIKI_RECALL_BOOST = 0.75;
@@ -333,6 +336,18 @@ interface RankedRecallMatch {
 	score_reason: string[];
 }
 
+interface RecallRelationEvidenceItem {
+	path: string;
+	declared_by: string;
+	declared_via: Array<'frontmatter' | 'body_wikilink'>;
+	verified_by: 'active_vault_snapshot';
+}
+
+interface RecallRelationEvidence {
+	related_wiki: RecallRelationEvidenceItem[];
+	related_sources: RecallRelationEvidenceItem[];
+}
+
 interface ArchitectureStatusReport {
 	architecture_status: ArchitectureStatus;
 	missing_graph_bridges: string[];
@@ -342,6 +357,8 @@ interface MemoryBridgeReport {
 	missing_wiki_bridge: boolean;
 	related_wiki: string[];
 	missing_related_wiki: string[];
+	related_sources: string[];
+	missing_related_sources: string[];
 }
 
 interface MemoryRoutingContext {
@@ -352,6 +369,7 @@ interface MemoryRoutingContext {
 	architecture: ArchitectureStatusReport;
 	missingWikiBridge: boolean;
 	missingRelatedWiki: string[];
+	missingRelatedSources: string[];
 }
 
 interface FinishTaskSuggestion {
@@ -371,6 +389,7 @@ interface FinishTaskProposalResult {
 	suggestedMemoryUpdates: FinishTaskSuggestion[];
 	autoAppliedMemoryUpdates: Array<{ kind: string; path: string; status: string }>;
 	hasMissingWikiBridge: boolean;
+	hasMissingRelatedSources: boolean;
 }
 
 function buildFinishTaskCloseoutGroups(
@@ -477,6 +496,7 @@ interface CaptureSourceArgs extends ToolArgs {
 	title?: unknown;
 	content?: unknown;
 	text?: unknown;
+	idempotency_key?: unknown;
 }
 
 interface ProposeMemoryArgs extends ToolArgs {
@@ -492,6 +512,7 @@ interface ProposeMemoryArgs extends ToolArgs {
 	memory_scope?: unknown;
 	related_wiki?: unknown;
 	related_sources?: unknown;
+	idempotency_key?: unknown;
 }
 
 interface ListApprovedWritebacksArgs extends ToolArgs {
@@ -859,18 +880,24 @@ function buildRecallActions(
 		}];
 	}
 	if (matches.length === 0) {
-		const query = typeof payload.query === 'string' ? payload.query : '';
-		if (scope !== 'global' && query && hasCredentialCapability(context, 'vault.read')) {
+		const candidates = Array.isArray(payload.candidate_notes) ? payload.candidate_notes : [];
+		const candidatePath = firstRecallMatchPath(candidates);
+		if (
+			scope === 'project' &&
+			payload.uncertain !== true &&
+			candidatePath &&
+			hasCredentialCapability(context, 'vault.read')
+		) {
 			return [{
-				action_id: `${recallId}:broaden`,
+				action_id: `${recallId}:read-project-candidate`,
 				kind: 'tool_call',
-				tool: 'tracekeeper.recall',
-				arguments: { query, scope: 'global', max_items: payload.max_items ?? 6 },
+				tool: 'tracekeeper.read_note',
+				arguments: { path: candidatePath, recall_id: recallId },
 				priority: 80,
 				required: false,
 				timing: 'immediate',
 				reason_code: 'RECALL_ZERO_MATCH',
-				reason: 'No scoped result matched; broaden once to global recall without loading the whole Vault.',
+				reason: 'No lexical result matched inside the resolved project; inspect one bounded project-memory candidate without broadening to unrelated global notes.',
 				capability_required: 'vault.read',
 			}];
 		}
@@ -968,7 +995,7 @@ function classifyToolError(message: string): { code: string; retryable: boolean;
 	if (/already completed/i.test(message)) {
 		return { code: 'FINISH_ALREADY_COMPLETED', retryable: false, reasonCode: 'FINISH_ALREADY_COMPLETED' };
 	}
-	if (/idempotency.*conflict|different .*hash/i.test(message)) {
+	if (/idempotency.*conflict|already associated with operation|different .*hash/i.test(message)) {
 		return { code: 'IDEMPOTENCY_CONFLICT', retryable: false, reasonCode: 'IDEMPOTENCY_CONFLICT' };
 	}
 	if (/unknown tool|tool not available/i.test(message)) {
@@ -984,7 +1011,7 @@ function safeToolErrorDescription(code: string): string {
 		case 'FINISH_ALREADY_COMPLETED':
 			return 'The tracked task is already closed and must not be finished again.';
 		case 'IDEMPOTENCY_CONFLICT':
-			return 'The retry key conflicts with an existing operation; preserve the original result.';
+			return 'Idempotency key conflict: the retry key conflicts with an existing operation; preserve the original result.';
 		case 'TOOL_UNAVAILABLE':
 			return 'The requested Tracekeeper tool is not available in this connection.';
 		default:
@@ -1350,16 +1377,9 @@ function resolveProjectMemoryBridgeMetadata(
 	memoryScope: MemoryScope,
 	projectHint: string,
 	relatedWikiRaw: string[],
+	relatedSourcesRaw: string[],
 	context: ToolContext
 ): MemoryBridgeReport {
-	if (memoryScope !== 'project') {
-		return {
-			missing_wiki_bridge: false,
-			related_wiki: relatedWikiRaw,
-			missing_related_wiki: [],
-		};
-	}
-
 	const options = pathSafetyOptions(context);
 	const scan = scanVaultForContext(vaultRoot, context);
 	const pathSet = new Set(scan.notes.map((note) => note.relativePath.toLowerCase()));
@@ -1369,18 +1389,16 @@ function resolveProjectMemoryBridgeMetadata(
 	}
 
 	const relatedWiki = dedupeAndNormalizeList(relatedWikiRaw.map(normalizeWikilinkOrSourceValue));
-	if (relatedWiki.length === 0) {
-		return {
-			missing_wiki_bridge: true,
-			related_wiki: [],
-			missing_related_wiki: [],
-		};
-	}
-
+	const relatedSources = dedupeAndNormalizeList(relatedSourcesRaw.map(normalizeWikilinkOrSourceValue));
 	const missing_related_wiki: string[] = [];
 	const resolved: string[] = [];
+	const missing_related_sources: string[] = [];
+	const resolvedSources: string[] = [];
 
-	const resolveReference = (rawReference: string): string | null => {
+	const resolveReference = (
+		rawReference: string,
+		isValid: (notePath: string) => boolean
+	): string | null => {
 		const candidates = new Set<string>();
 		candidates.add(rawReference);
 		if (!rawReference.toLowerCase().endsWith('.md')) {
@@ -1413,6 +1431,9 @@ function resolveProjectMemoryBridgeMetadata(
 
 		const title = rawReference.toLowerCase().replace(/\.md$/i, '');
 		for (const note of scan.notes) {
+			if (!isValid(note.relativePath)) {
+				continue;
+			}
 			const noteTitle = note.title.toLowerCase();
 			const basePath = note.relativePath.toLowerCase().split('/').pop()?.replace(/\.md$/i, '') || '';
 			if (noteTitle === title || basePath === title) {
@@ -1423,19 +1444,42 @@ function resolveProjectMemoryBridgeMetadata(
 	};
 
 	for (const reference of relatedWiki) {
-		const resolvedPath = resolveReference(reference);
+		const resolvedPath = resolveReference(reference, isKnowledgeWikiPath);
 		if (resolvedPath && isKnowledgeWikiPath(resolvedPath)) {
 			resolved.push(resolvedPath);
 		} else {
 			missing_related_wiki.push(reference);
 		}
 	}
+	for (const reference of relatedSources) {
+		const resolvedPath = resolveReference(reference, isKnowledgeSourcePath);
+		if (resolvedPath && isKnowledgeSourcePath(resolvedPath)) {
+			resolvedSources.push(resolvedPath);
+		} else {
+			missing_related_sources.push(reference);
+		}
+	}
 
-	if (missing_related_wiki.length > 0 || resolved.length === 0) {
+	if (memoryScope !== 'project') {
+		return {
+			missing_wiki_bridge: false,
+			related_wiki: dedupeAndNormalizeList(resolved),
+			missing_related_wiki: dedupeAndNormalizeList(missing_related_wiki),
+			related_sources: dedupeAndNormalizeList(resolvedSources),
+			missing_related_sources: dedupeAndNormalizeList(missing_related_sources),
+		};
+	}
+
+	const relatedWikiMissing =
+		relatedWiki.length === 0 || missing_related_wiki.length > 0 || dedupeAndNormalizeList(resolved).length === 0;
+
+	if (relatedWikiMissing) {
 		return {
 			missing_wiki_bridge: true,
 			related_wiki: dedupeAndNormalizeList(resolved),
 			missing_related_wiki: dedupeAndNormalizeList(missing_related_wiki),
+			related_sources: dedupeAndNormalizeList(resolvedSources),
+			missing_related_sources: dedupeAndNormalizeList(missing_related_sources),
 		};
 	}
 
@@ -1443,6 +1487,8 @@ function resolveProjectMemoryBridgeMetadata(
 		missing_wiki_bridge: false,
 		related_wiki: dedupeAndNormalizeList(resolved),
 		missing_related_wiki: [],
+		related_sources: dedupeAndNormalizeList(resolvedSources),
+		missing_related_sources: dedupeAndNormalizeList(missing_related_sources),
 	};
 }
 
@@ -1932,15 +1978,23 @@ function filterNotesByProjectScopeWithSessions(notes: ScannedNote[], scope: Proj
 	return results;
 }
 
-function collectProjectCandidates(notes: ScannedNote[], scope: ProjectScopeFilter, maxItems: number): string[] {
-	const candidates: string[] = [];
+function collectProjectCandidates(
+	notes: ScannedNote[],
+	scope: ProjectScopeFilter,
+	maxItems: number
+): Array<{ path: string; title: string; type: string | null }> {
+	const candidates: Array<{ path: string; title: string; type: string | null }> = [];
 	const seen = new Set<string>();
 	for (const note of notes) {
 		const candidate = projectMemoryCandidatePath(note.relativePath);
 		if (candidate) {
-			if (!seen.has(candidate)) {
-				seen.add(candidate);
-				candidates.push(candidate);
+			if (!seen.has(note.relativePath)) {
+				seen.add(note.relativePath);
+				candidates.push({
+					path: note.relativePath,
+					title: note.title,
+					type: note.type ?? null,
+				});
 			}
 		}
 		const notePath = note.relativePath.toLowerCase();
@@ -1951,7 +2005,11 @@ function collectProjectCandidates(notes: ScannedNote[], scope: ProjectScopeFilte
 		) {
 			if (!seen.has(note.relativePath)) {
 				seen.add(note.relativePath);
-				candidates.push(note.relativePath);
+				candidates.push({
+					path: note.relativePath,
+					title: note.title,
+					type: note.type ?? null,
+				});
 			}
 		}
 		if (candidates.length >= maxItems) {
@@ -1973,7 +2031,7 @@ function projectMemoryCandidatePath(notePath: string): string {
 	return '';
 }
 
-function buildProjectHistoryEntries(matches: ScannedNote[], query = '') {
+function buildProjectHistoryEntries(matches: ScannedNote[], query = '', allNotes: ScannedNote[] = []) {
 	return matches.map((note) => ({
 		path: note.relativePath,
 		title: note.title,
@@ -1988,7 +2046,48 @@ function buildProjectHistoryEntries(matches: ScannedNote[], query = '') {
 		why_matched: buildProjectHistoryWhy(note, query),
 		excerpt: compactNoteText(note.content),
 		graph_links: buildRecallGraphLinks(note),
+		relation_evidence: buildRecallRelationEvidence(note, allNotes),
 	}));
+}
+
+function buildProjectRecallRelationEvidence(scope: ProjectScopeFilter, fallbackToGlobal: boolean): Array<Record<string, unknown>> {
+	const evidence: Array<Record<string, unknown>> = [];
+	if (scope.projectHint) {
+		evidence.push({
+			type: 'project_hint',
+			value: scope.projectHint,
+			confidence: scope.confidence,
+		});
+	}
+	if (scope.projectId) {
+		evidence.push({
+			type: 'project_id',
+			value: scope.projectId,
+			confidence: scope.confidence,
+		});
+	}
+	if (scope.repoPath) {
+		evidence.push({
+			type: 'repo_path',
+			value: scope.repoPath,
+			confidence: scope.confidence,
+		});
+	}
+	if (fallbackToGlobal) {
+		evidence.push({
+			type: 'fallback',
+			value: 'project_scope_uncertain_no_matches',
+			target_scope: 'global',
+		});
+	}
+	if (evidence.length === 0) {
+		evidence.push({
+			type: 'fallback',
+			value: 'global_default',
+			target_scope: 'global',
+		});
+	}
+	return evidence;
 }
 
 function matchesProjectQuery(note: ScannedNote, query: string): boolean {
@@ -2066,6 +2165,75 @@ function recallRecencyBoost(modifiedAt: string): number {
 	return 0;
 }
 
+function recallCandidateLimit(maxItems: number): number {
+	return Math.min(Math.max(maxItems * 4, 24), MAX_RECALL_CANDIDATES);
+}
+
+function isGeneratedWorkRecord(note: ScannedNote): boolean {
+	const notePath = note.relativePath.replace(/\\/g, '/');
+	return notePath.startsWith(`${TRACEKEEPER_TASKS_DIR}/`) ||
+		notePath.startsWith(`${TRACEKEEPER_SESSIONS_DIR}/`) ||
+		notePath.startsWith('02_timeline/agent_tasks/') ||
+		notePath.startsWith('02_timeline/sessions/');
+}
+
+function buildProjectMemoryAnchors(
+	notes: ScannedNote[],
+	existingPaths: Set<string>,
+	maxItems = 2
+): Array<{ note: ScannedNote; score: number; matchedTokens: string[] }> {
+	return notes
+		.filter((note) =>
+			note.relativePath.startsWith(`${KNOWLEDGE_PROJECTS_MEMORY_DIR}/`) &&
+			!existingPaths.has(note.relativePath)
+		)
+		.sort((a, b) => {
+			const aCanonical = a.relativePath.toLowerCase().endsWith('/memory.md') ? 1 : 0;
+			const bCanonical = b.relativePath.toLowerCase().endsWith('/memory.md') ? 1 : 0;
+			return bCanonical - aCanonical ||
+				Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt) ||
+				a.relativePath.localeCompare(b.relativePath);
+		})
+		.slice(0, maxItems)
+		.map((note) => ({ note, score: 0, matchedTokens: [] }));
+}
+
+function selectRecallMatches(matches: RankedRecallMatch[], maxItems: number): RankedRecallMatch[] {
+	const hasDurableKnowledge = matches.some((match) =>
+		!isGeneratedWorkRecord(match.note) && match.raw_score > 0
+	);
+	if (!hasDurableKnowledge) {
+		return matches.slice(0, maxItems);
+	}
+	const selected: RankedRecallMatch[] = [];
+	let workRecordCount = 0;
+	for (const match of matches) {
+		if (isGeneratedWorkRecord(match.note)) {
+			if (workRecordCount >= 1) {
+				continue;
+			}
+			workRecordCount += 1;
+		}
+		selected.push(match);
+		if (selected.length >= maxItems) {
+			break;
+		}
+	}
+	if (
+		maxItems > 1 &&
+		workRecordCount === 0 &&
+		selected.length === maxItems
+	) {
+		const bestWorkRecord = matches.find((match) =>
+			isGeneratedWorkRecord(match.note) && match.raw_score > 0
+		);
+		if (bestWorkRecord) {
+			selected[selected.length - 1] = bestWorkRecord;
+		}
+	}
+	return selected;
+}
+
 function rankRecallMatches(
 	matches: Array<{ note: ScannedNote; score: number; matchedTokens: string[] }>,
 	query: string,
@@ -2096,8 +2264,10 @@ function rankRecallMatches(
 			notePath.startsWith(`${TRACEKEEPER_TASKS_DIR}/`) ||
 			notePath.startsWith(`${TRACEKEEPER_SESSIONS_DIR}/`)
 		) {
-			const echoPenalty =
-				WORK_RECORD_RECALL_PENALTY + Math.max(0, match.matchedTokens.length - 1);
+			const echoPenalty = Math.max(
+				WORK_RECORD_RECALL_PENALTY + Math.max(0, match.matchedTokens.length - 1),
+				Math.max(0, match.score - 2)
+			);
 			score = Math.max(0.01, score - echoPenalty);
 			reasons.push(`Work-record query-echo penalty (-${echoPenalty})`);
 		}
@@ -2156,6 +2326,101 @@ function buildRecallGraphLinks(note: ScannedNote): string[] {
 	return Array.from(links);
 }
 
+function relationValues(value: unknown): string[] {
+	const values = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
+	return values
+		.filter((entry): entry is string => typeof entry === 'string')
+		.flatMap((entry) => entry.split(/[\n,]/g))
+		.map(normalizeWikilinkOrSourceValue)
+		.filter(Boolean);
+}
+
+function resolveSnapshotRelation(reference: string, notes: ScannedNote[]): ScannedNote | null {
+	const normalized = normalizeWikilinkOrSourceValue(reference)
+		.replace(/#.*$/, '')
+		.replace(/\\/g, '/')
+		.replace(/^\.\//, '');
+	if (!normalized) {
+		return null;
+	}
+	const candidates = new Set([
+		normalized.toLowerCase(),
+		normalized.toLowerCase().endsWith('.md')
+			? normalized.toLowerCase().slice(0, -3)
+			: `${normalized.toLowerCase()}.md`,
+	]);
+	for (const note of notes) {
+		const notePath = note.relativePath.replace(/\\/g, '/').toLowerCase();
+		if (candidates.has(notePath) || candidates.has(notePath.replace(/\.md$/i, ''))) {
+			return note;
+		}
+	}
+	return null;
+}
+
+function buildRecallRelationEvidence(note: ScannedNote, allNotes: ScannedNote[]): RecallRelationEvidence {
+	const relationMap = new Map<string, RecallRelationEvidenceItem>();
+	const addRelation = (
+		reference: string,
+		declaredVia: 'frontmatter' | 'body_wikilink'
+	) => {
+		const resolved = resolveSnapshotRelation(reference, allNotes);
+		if (!resolved) {
+			return;
+		}
+		const relationKind = isKnowledgeWikiPath(resolved.relativePath)
+			? 'related_wiki'
+			: isKnowledgeSourcePath(resolved.relativePath)
+				? 'related_sources'
+				: null;
+		if (!relationKind) {
+			return;
+		}
+		const key = `${relationKind}:${resolved.relativePath.toLowerCase()}`;
+		const existing = relationMap.get(key);
+		if (existing) {
+			if (!existing.declared_via.includes(declaredVia)) {
+				existing.declared_via.push(declaredVia);
+			}
+			return;
+		}
+		relationMap.set(key, {
+			path: resolved.relativePath,
+			declared_by: note.relativePath,
+			declared_via: [declaredVia],
+			verified_by: 'active_vault_snapshot',
+		});
+	};
+
+	for (const key of ['related_wiki', 'relatedWiki', 'wiki']) {
+		for (const value of relationValues(note.frontmatter[key])) {
+			addRelation(value, 'frontmatter');
+		}
+	}
+	for (const key of ['related_sources', 'relatedSources', 'sources', 'source']) {
+		for (const value of relationValues(note.frontmatter[key])) {
+			addRelation(value, 'frontmatter');
+		}
+	}
+	for (const link of note.wikilinks) {
+		addRelation(link.target, 'body_wikilink');
+	}
+
+	const evidence: RecallRelationEvidence = {
+		related_wiki: [],
+		related_sources: [],
+	};
+	for (const [key, relation] of relationMap) {
+		if (key.startsWith('related_wiki:') && evidence.related_wiki.length < MAX_RECALL_RELATIONS) {
+			evidence.related_wiki.push(relation);
+		}
+		if (key.startsWith('related_sources:') && evidence.related_sources.length < MAX_RECALL_RELATIONS) {
+			evidence.related_sources.push(relation);
+		}
+	}
+	return evidence;
+}
+
 function buildRecallWhyMatched(match: RankedRecallMatch, scope: RecallScope): string {
 	const scopeLabel = scope === 'project_history'
 		? 'Project-history recall'
@@ -2183,7 +2448,11 @@ function recallContentOrigin(relativePath: string, noteType?: string): 'captured
 	return 'vault_note';
 }
 
-function buildRecallEntry(match: RankedRecallMatch, scope: RecallScope) {
+function buildRecallEntry(
+	match: RankedRecallMatch,
+	scope: RecallScope,
+	allNotes: ScannedNote[]
+) {
 	return {
 		path: match.note.relativePath,
 		title: match.note.title,
@@ -2199,6 +2468,7 @@ function buildRecallEntry(match: RankedRecallMatch, scope: RecallScope) {
 		content_origin: recallContentOrigin(match.note.relativePath, match.note.type),
 		instruction_trust: 'data_only',
 		graph_links: buildRecallGraphLinks(match.note),
+		relation_evidence: buildRecallRelationEvidence(match.note, allNotes),
 	};
 }
 
@@ -2277,6 +2547,7 @@ async function createFinishTaskProposal(
 	missingGraphBridges: string[],
 	missingWikiBridge: boolean,
 	missingRelatedWiki: string[],
+	missingRelatedSources: string[],
 	context: ToolContext
 ): Promise<{ path: string }> {
 	const normalizedValues = normalizeFinishTaskProposalValues(values);
@@ -2351,6 +2622,7 @@ async function createFinishTaskProposal(
 			missingGraphBridges.length ? `- missing_graph_bridges: ${JSON.stringify(missingGraphBridges)}` : '',
 			missingWikiBridge ? '- missing_wiki_bridge: true' : '',
 			missingRelatedWiki.length ? `- missing_related_wiki: ${JSON.stringify(missingRelatedWiki)}` : '',
+			missingRelatedSources.length ? `- missing_related_sources: ${JSON.stringify(missingRelatedSources)}` : '',
 			`- evidence: ${evidence}`,
 			'',
 			`## ${label}`,
@@ -2413,7 +2685,13 @@ async function collectFinishTaskArtifacts(
 	operationId: string
 ): Promise<FinishTaskProposalResult> {
 	if (proposalMode === 'off') {
-		return { proposals: [], suggestedMemoryUpdates: [], autoAppliedMemoryUpdates: [], hasMissingWikiBridge: false };
+		return {
+			proposals: [],
+			suggestedMemoryUpdates: [],
+			autoAppliedMemoryUpdates: [],
+			hasMissingWikiBridge: false,
+			hasMissingRelatedSources: false,
+		};
 	}
 
 	const groups: FinishTaskCloseoutGroup[] = buildFinishTaskCloseoutGroups(closeout, context);
@@ -2422,12 +2700,20 @@ async function collectFinishTaskArtifacts(
 	const suggestedMemoryUpdates: FinishTaskSuggestion[] = [];
 	const autoAppliedMemoryUpdates: Array<{ kind: string; path: string; status: string }> = [];
 	let hasMissingWikiBridge = false;
+	let hasMissingRelatedSources = false;
 	for (const group of groups) {
 		if (group.values.length === 0) {
 			continue;
 		}
 		const memoryScope = resolveMemoryScope(group.kind, '', projectHint, rawMemoryScope);
-		const bridgeMetadata = resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint, relatedWiki, context);
+		const bridgeMetadata = resolveProjectMemoryBridgeMetadata(
+			vaultRoot,
+			memoryScope,
+			projectHint,
+			relatedWiki,
+			relatedSources,
+			context
+		);
 		const memoryRule = memoryProposalRuleFor(group.kind, '', projectHint, context, memoryScope);
 		if (memoryRule === 'disabled') {
 			continue;
@@ -2447,6 +2733,9 @@ async function collectFinishTaskArtifacts(
 			);
 			if (memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge) {
 				hasMissingWikiBridge = true;
+			}
+			if (memoryScope === 'project' && bridgeMetadata.missing_related_sources.length > 0) {
+				hasMissingRelatedSources = true;
 			}
 			if (canAutoWrite) {
 				const autoTarget = resolveAutoMemoryTarget(
@@ -2501,6 +2790,7 @@ async function collectFinishTaskArtifacts(
 		suggestedMemoryUpdates,
 		autoAppliedMemoryUpdates,
 		hasMissingWikiBridge,
+		hasMissingRelatedSources,
 	};
 }
 
@@ -3421,6 +3711,7 @@ interface AutoMemoryWriteInput {
 	missingGraphBridges: string[];
 	missingWikiBridge: boolean;
 	missingRelatedWiki?: string[];
+	missingRelatedSources?: string[];
 	sourceNote?: string;
 	evidence?: string;
 	riskLevel?: string;
@@ -3563,6 +3854,7 @@ function buildAutoMemoryWriteBlock(input: AutoMemoryWriteInput, signature: strin
 		input.missingGraphBridges?.length ? `- missing_graph_bridges: ${JSON.stringify(input.missingGraphBridges)}` : '',
 		input.missingWikiBridge ? '- missing_wiki_bridge: true' : '',
 		input.missingRelatedWiki?.length ? `- missing_related_wiki: ${JSON.stringify(input.missingRelatedWiki)}` : '',
+		input.missingRelatedSources?.length ? `- missing_related_sources: ${JSON.stringify(input.missingRelatedSources)}` : '',
 		input.riskLevel ? `- risk_level: ${input.riskLevel}` : '',
 		`- created_at: ${new Date().toISOString()}`,
 		`- content_signature: ${signature}`,
@@ -5330,7 +5622,7 @@ function operationJournalForVault(vaultRoot: string): NodeFileOperationJournal {
 }
 
 function buildToolOperationIdentity(
-	tool: 'start-task' | 'finish-task',
+	tool: 'start-task' | 'finish-task' | 'capture-source' | 'propose-memory',
 	rawIdempotencyKey: unknown,
 	payload: Record<string, unknown>,
 	context: ToolInvocationContext
@@ -5457,7 +5749,7 @@ function handleRecall(rawArgs: RecallArgs, context: ToolContext) {
 				...result.scope,
 				scope,
 			},
-			scope_mode: scope,
+			scope_mode: result.scope_mode ?? scope,
 		};
 	}
 	if (scope === 'project_history') {
@@ -5475,15 +5767,18 @@ function handleRecall(rawArgs: RecallArgs, context: ToolContext) {
 	const query = coerceNonEmptyString(rawArgs.query, true, 'query');
 	const maxItems = coercePositiveInt(rawArgs.max_items, 6, 1, 20);
 	const scan = scanVaultForContext(vaultRoot, context);
-	const rawMatches = recallNotes(scan.notes, query, { limit: maxItems });
-	const matches = rankRecallMatches(rawMatches, query, {
-		projectHint: '',
-		projectId: '',
-		repoPath: '',
-		source: 'unknown',
-		confidence: 'uncertain',
-		warnings: [],
-	});
+	const rawMatches = recallNotes(scan.notes, query, { limit: recallCandidateLimit(maxItems) });
+	const matches = selectRecallMatches(
+		rankRecallMatches(rawMatches, query, {
+			projectHint: '',
+			projectId: '',
+			repoPath: '',
+			source: 'unknown',
+			confidence: 'uncertain',
+			warnings: [],
+		}),
+		maxItems
+	);
 
 	return {
 		ok: true,
@@ -5494,7 +5789,7 @@ function handleRecall(rawArgs: RecallArgs, context: ToolContext) {
 		max_items: maxItems,
 		matched_count: matches.length,
 		...scanProvenance(scan),
-		matches: matches.map((match) => buildRecallEntry(match, scope)),
+		matches: matches.map((match) => buildRecallEntry(match, scope, scan.notes)),
 	};
 }
 
@@ -5517,6 +5812,8 @@ async function handleReadNote(rawArgs: ReadNoteArgs, context: ToolContext) {
 		data = safeReadNote(vaultRoot, safePath, context);
 	}
 	const parsed = parseMarkdown(data.text);
+	const scan = scanVaultForContext(vaultRoot, context);
+	const scannedNote = scan.notes.find((note) => note.relativePath === data.path);
 
 	return {
 		ok: true,
@@ -5533,6 +5830,9 @@ async function handleReadNote(rawArgs: ReadNoteArgs, context: ToolContext) {
 		instruction_trust: 'data_only',
 		content: data.text,
 		excerpt: parsed.body.slice(0, 1024),
+		relation_evidence: scannedNote
+			? buildRecallRelationEvidence(scannedNote, scan.notes)
+			: { related_wiki: [], related_sources: [] },
 	};
 }
 
@@ -5546,10 +5846,33 @@ function handleProjectContext(rawArgs: ProjectContextArgs, context: ToolContext)
 	const scopedNotes = unresolved
 		? scan.notes
 		: filterNotesByProjectScopeWithSessions(scan.notes, scope);
-	const uncertain = !hasProjectScope(scope) || scope.confidence === 'uncertain';
-	const rawMatches = recallNotes(scopedNotes, query, { limit: maxItems });
-	const matches = rankRecallMatches(rawMatches, query, scope);
-	const candidates = collectProjectCandidates(scan.notes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
+	const candidateLimit = recallCandidateLimit(maxItems);
+	const initialMatches = recallNotes(scopedNotes, query, { limit: candidateLimit });
+	const anchoredMatches = unresolved
+		? initialMatches
+		: [
+			...initialMatches,
+			...buildProjectMemoryAnchors(
+				scopedNotes,
+				new Set(initialMatches.map((match) => match.note.relativePath))
+			),
+		];
+	const fallbackToGlobal = unresolved && anchoredMatches.length === 0;
+	const finalScope = fallbackToGlobal ? resolveProjectIdentity({}, scan.notes) : scope;
+	const finalScopeMode = fallbackToGlobal ? 'global' : 'project';
+	const finalRawMatches = fallbackToGlobal
+		? recallNotes(scan.notes, query, { limit: candidateLimit })
+		: anchoredMatches;
+	const matches = selectRecallMatches(
+		rankRecallMatches(finalRawMatches, query, finalScope),
+		maxItems
+	);
+	const uncertain = !hasProjectScope(scope) || scope.confidence === 'uncertain' || fallbackToGlobal;
+	const candidateNotes = collectProjectCandidates(scopedNotes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
+	const scopeEvidence = buildProjectRecallRelationEvidence(scope, fallbackToGlobal);
+	const scopeMetadata = fallbackToGlobal
+		? buildProjectScopeMetadata(resolveProjectIdentity({}, scan.notes))
+		: buildProjectScopeMetadata(scope);
 
 	return {
 		ok: true,
@@ -5557,13 +5880,16 @@ function handleProjectContext(rawArgs: ProjectContextArgs, context: ToolContext)
 		vault_root: vaultRoot,
 		query,
 		uncertain: uncertain,
-		scope: buildProjectScopeMetadata(scope),
+		scope: scopeMetadata,
 		project_identity: projectIdentityToResult(scope),
 		max_items: maxItems,
 		matched_count: matches.length,
 		...scanProvenance(scan),
-		candidates: candidates,
-		entries: matches.map((match) => buildRecallEntry(match, 'project')),
+		candidates: candidateNotes.map((candidate) => candidate.path),
+		candidate_notes: candidateNotes,
+		scope_evidence: scopeEvidence,
+		scope_mode: finalScopeMode,
+		entries: matches.map((match) => buildRecallEntry(match, finalScopeMode, scan.notes)),
 	};
 }
 
@@ -5582,7 +5908,7 @@ function handleProjectHistory(rawArgs: ProjectHistoryArgs, context: ToolContext)
 	const sortedMatches = filteredByQuery
 		.filter((note) => note.relativePath !== '')
 		.sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
-	const candidates = collectProjectCandidates(scan.notes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
+	const candidateNotes = collectProjectCandidates(scopedNotes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
 	const matches = sortedMatches.slice(0, maxItems);
 
 	return {
@@ -5597,8 +5923,9 @@ function handleProjectHistory(rawArgs: ProjectHistoryArgs, context: ToolContext)
 		matched_count: matches.length,
 		total_matches: sortedMatches.length,
 		...scanProvenance(scan),
-		candidates,
-		entries: buildProjectHistoryEntries(matches, query),
+		candidates: candidateNotes.map((candidate) => candidate.path),
+		candidate_notes: candidateNotes,
+		entries: buildProjectHistoryEntries(matches, query, scan.notes),
 	};
 }
 
@@ -5826,6 +6153,7 @@ async function handleAnalyzeSourceRequest(
 			purpose: request.purpose,
 			content: sourceText,
 			requestPath: request.path,
+			contentLanguage: contentLanguageFromContext(context),
 		});
 
 		assertNoSensitiveText([
@@ -6406,14 +6734,41 @@ async function handleWriteSessionNote(rawArgs: WriteSessionNoteArgs, context: To
 	return makeToolResultForWrite('tracekeeper.write_session_note', note);
 }
 
-async function handleCaptureSource(rawArgs: CaptureSourceArgs, context: ToolContext) {
+async function handleCaptureSource(rawArgs: CaptureSourceArgs, context: ToolInvocationContext) {
+	const vaultRoot = vaultRootFromArgs(rawArgs, context);
+	const requestHash = computePayloadHash({ ...rawArgs });
+	const identity = buildToolOperationIdentity(
+		'capture-source',
+		rawArgs.idempotency_key,
+		{ requestHash },
+		context
+	);
+	const runner = new RecoverableOperationRunner({
+		operationId: identity.operationId,
+		idempotencyKey: identity.idempotencyKey,
+		payload: { request_hash: requestHash },
+		journal: operationJournalForVault(vaultRoot),
+		failureInjection: context.operationFailureInjection,
+		steps: [],
+		finalize: () => handleCaptureSourceWrite(rawArgs, context, identity),
+	});
+	return runner.run();
+}
+
+async function handleCaptureSourceWrite(
+	rawArgs: CaptureSourceArgs,
+	context: ToolContext,
+	identity: { operationId: string; idempotencyKey: string }
+) {
 	const vaultRoot = vaultRootFromArgs(rawArgs, context);
 	const source = coerceNonEmptyString(rawArgs.source, true, 'source');
 	const sourceKind = coerceOptionalString(rawArgs.source_kind);
 	const mode = coerceCaptureMode(rawArgs.mode);
 	const captureReason = coerceOptionalString(rawArgs.capture_reason);
 	const relatedProject = coerceOptionalString(rawArgs.related_project);
-	const filename = buildSafeFilename(rawArgs.filename, 'source', context);
+	const filename = coerceOptionalString(rawArgs.filename)
+		? buildSafeFilename(rawArgs.filename, 'source', context)
+		: buildSafeFilename(`source-${identity.operationId}`, 'source', context);
 	const title = coerceOptionalString(rawArgs.title);
 	const taskId = coerceOptionalString(rawArgs.task_id) || null;
 	const now = new Date().toISOString();
@@ -6450,7 +6805,15 @@ async function handleCaptureSource(rawArgs: CaptureSourceArgs, context: ToolCont
 		body += `\n${sourceText}\n`;
 	}
 
-	const note = await buildAndWriteNoteAsync(
+	const existing = await findOperationOwnedNoteAsync(
+		vaultRoot,
+		SOURCES_DIR,
+		filename,
+		'source_operation_id',
+		identity.operationId,
+		context
+	);
+	const note = existing || await buildAndWriteNoteAsync(
 		vaultRoot,
 		'tracekeeper.capture_source',
 		SOURCES_DIR,
@@ -6458,7 +6821,7 @@ async function handleCaptureSource(rawArgs: CaptureSourceArgs, context: ToolCont
 		{
 			tool: 'tracekeeper.capture_source',
 			type: 'source_capture',
-			title: title || `source_${mode}_${now}`,
+			title: title || `source_${mode}`,
 			source,
 			source_kind: sourceKind || null,
 			mode,
@@ -6466,11 +6829,13 @@ async function handleCaptureSource(rawArgs: CaptureSourceArgs, context: ToolCont
 			related_project: relatedProject || null,
 			created_at: now,
 			task_id: taskId || null,
+			source_operation_id: identity.operationId,
 		},
 		body,
 		taskId,
 		context,
-		{ target_type: 'source_capture', mode }
+		{ target_type: 'source_capture', mode },
+		identity.operationId
 	);
 	await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
 		source_captures: [note.path],
@@ -6479,6 +6844,8 @@ async function handleCaptureSource(rawArgs: CaptureSourceArgs, context: ToolCont
 	return {
 		ok: true,
 		tool: 'tracekeeper.capture_source',
+		operation_id: identity.operationId,
+		idempotency_key: identity.idempotencyKey,
 		status: note.status,
 		path: note.path,
 		audit_path: note.audit_path,
@@ -6490,7 +6857,32 @@ async function handleCaptureSource(rawArgs: CaptureSourceArgs, context: ToolCont
 	};
 }
 
-async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolContext) {
+async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolInvocationContext) {
+	const vaultRoot = vaultRootFromArgs(rawArgs, context);
+	const requestHash = computePayloadHash({ ...rawArgs });
+	const identity = buildToolOperationIdentity(
+		'propose-memory',
+		rawArgs.idempotency_key,
+		{ requestHash },
+		context
+	);
+	const runner = new RecoverableOperationRunner({
+		operationId: identity.operationId,
+		idempotencyKey: identity.idempotencyKey,
+		payload: { request_hash: requestHash },
+		journal: operationJournalForVault(vaultRoot),
+		failureInjection: context.operationFailureInjection,
+		steps: [],
+		finalize: () => handleProposeMemoryWrite(rawArgs, context, identity),
+	});
+	return runner.run();
+}
+
+async function handleProposeMemoryWrite(
+	rawArgs: ProposeMemoryArgs,
+	context: ToolContext,
+	identity: { operationId: string; idempotencyKey: string }
+) {
 	const vaultRoot = vaultRootFromArgs(rawArgs, context);
 	const proposalKind = coerceNonEmptyString(rawArgs.proposal_kind, true, 'proposal_kind');
 	const content = coerceNonEmptyString(rawArgs.content, true, 'content');
@@ -6498,14 +6890,23 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolCont
 	const targetNote = coerceOptionalString(rawArgs.target_note);
 	const riskLevel = coerceOptionalString(rawArgs.risk_level);
 	const title = coerceOptionalString(rawArgs.title);
-	const filename = buildSafeFilename(rawArgs.filename, 'proposal', context);
+	const filename = coerceOptionalString(rawArgs.filename)
+		? buildSafeFilename(rawArgs.filename, 'proposal', context)
+		: buildSafeFilename(`proposal-${identity.operationId}`, 'proposal', context);
 	const taskId = coerceOptionalString(rawArgs.task_id) || null;
 	const projectHint = coerceOptionalString(rawArgs.project_hint);
 	const memoryScope = resolveMemoryScope(proposalKind, targetNote, projectHint, rawArgs.memory_scope);
 	const relatedWiki = normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki');
 	const relatedSources = normalizeMultiValueList(rawArgs.related_sources, 'related_sources');
 	const architectureStatus = buildArchitectureStatus(vaultRoot, context);
-	const bridgeMetadata = resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint, relatedWiki, context);
+	const bridgeMetadata = resolveProjectMemoryBridgeMetadata(
+		vaultRoot,
+		memoryScope,
+		projectHint,
+		relatedWiki,
+		relatedSources,
+		context
+	);
 	const now = new Date().toISOString();
 	assertMemoryProposalAllowed(proposalKind, targetNote, projectHint, context, memoryScope);
 	assertNoSensitiveText([
@@ -6539,17 +6940,19 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolCont
 				allowedDir: autoTarget.allowedDir,
 				title: title || contentText(context, `记忆更新：${proposalKind}`, `Memory update: ${proposalKind}`),
 				content,
+				operationId: identity.operationId,
 				taskId,
 				context,
 				projectHint,
 				evidence,
 				riskLevel,
 				memoryScope,
-				relatedWiki,
-				relatedSources,
+				relatedWiki: bridgeMetadata.related_wiki,
+				relatedSources: bridgeMetadata.related_sources,
 				architectureStatus,
 				missingGraphBridges: architectureStatus.missing_graph_bridges,
 				missingWikiBridge: false,
+				missingRelatedSources: bridgeMetadata.missing_related_sources,
 			});
 			await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
 				memory_writes: [note.path],
@@ -6558,6 +6961,8 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolCont
 			return {
 				ok: true,
 				tool: 'tracekeeper.propose_memory',
+				operation_id: identity.operationId,
+				idempotency_key: identity.idempotencyKey,
 				status: note.status,
 				path: note.path,
 				target_note: note.path,
@@ -6569,7 +6974,8 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolCont
 				memory_scope: memoryScope,
 				project_hint: projectHint || null,
 				related_wiki: bridgeMetadata.related_wiki,
-				related_sources: relatedSources,
+				related_sources: bridgeMetadata.related_sources,
+				missing_related_sources: bridgeMetadata.missing_related_sources,
 				architecture_status: architectureStatus.architecture_status,
 				missing_graph_bridges: architectureStatus.missing_graph_bridges,
 				missing_wiki_bridge: false,
@@ -6587,18 +6993,27 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolCont
 		`- memory_scope: ${memoryScope}`,
 		projectHint ? `- project_hint: ${projectHint}` : '',
 		bridgeMetadata.related_wiki.length ? `- related_wiki: ${JSON.stringify(bridgeMetadata.related_wiki)}` : '',
-		relatedSources.length ? `- related_sources: ${JSON.stringify(relatedSources)}` : '',
+		bridgeMetadata.related_sources.length ? `- related_sources: ${JSON.stringify(bridgeMetadata.related_sources)}` : '',
 		riskLevel ? `- risk_level: ${riskLevel}` : '',
 		`- architecture_status: ${architectureStatus.architecture_status}`,
 		`- missing_graph_bridges: ${JSON.stringify(architectureStatus.missing_graph_bridges)}`,
 		bridgeMetadata.missing_wiki_bridge ? '- missing_wiki_bridge: true' : '',
 		bridgeMetadata.missing_related_wiki.length ? `- missing_related_wiki: ${JSON.stringify(bridgeMetadata.missing_related_wiki)}` : '',
+		bridgeMetadata.missing_related_sources.length ? `- missing_related_sources: ${JSON.stringify(bridgeMetadata.missing_related_sources)}` : '',
 		'',
 		contentText(context, '## 写回内容', '## Writeback'),
 		content,
 	].filter(Boolean).join('\n');
 
-	const note = await buildAndWriteNoteAsync(
+	const existing = await findOperationOwnedNoteAsync(
+		vaultRoot,
+		MEMORY_PROPOSAL_DIR,
+		filename,
+		'proposal_operation_id',
+		identity.operationId,
+		context
+	);
+	const note = existing || await buildAndWriteNoteAsync(
 		vaultRoot,
 		'tracekeeper.propose_memory',
 		MEMORY_PROPOSAL_DIR,
@@ -6614,13 +7029,15 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolCont
 			project_hint: projectHint || null,
 			memory_scope: memoryScope,
 			related_wiki: bridgeMetadata.related_wiki,
-			related_sources: relatedSources,
+			related_sources: bridgeMetadata.related_sources,
 			architecture_status: architectureStatus.architecture_status,
 			missing_graph_bridges: architectureStatus.missing_graph_bridges,
 			missing_wiki_bridge: bridgeMetadata.missing_wiki_bridge,
 			missing_related_wiki: bridgeMetadata.missing_related_wiki,
+			missing_related_sources: bridgeMetadata.missing_related_sources,
 			created_at: now,
 			task_id: taskId || null,
+			proposal_operation_id: identity.operationId,
 		},
 		body,
 		taskId,
@@ -6629,7 +7046,8 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolCont
 			target_type: 'memory_proposal',
 			proposal_kind: proposalKind,
 			risk_level: riskLevel || null,
-		}
+		},
+		identity.operationId
 	);
 	await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
 		proposals: [note.path],
@@ -6637,6 +7055,8 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolCont
 	const response: {
 		ok: true;
 		tool: string;
+		operation_id: string;
+		idempotency_key: string;
 		status: string;
 		path: string;
 		audit_path: string;
@@ -6652,9 +7072,12 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolCont
 		architecture_status: ArchitectureStatus;
 		missing_graph_bridges: string[];
 		missing_wiki_bridge: boolean;
+		missing_related_sources: string[];
 	} = {
 		ok: true,
 		tool: 'tracekeeper.propose_memory',
+		operation_id: identity.operationId,
+		idempotency_key: identity.idempotencyKey,
 		status: note.status,
 		path: note.path,
 		audit_path: note.audit_path,
@@ -6666,7 +7089,8 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolCont
 		memory_scope: memoryScope,
 		project_hint: projectHint || null,
 		related_wiki: bridgeMetadata.related_wiki,
-		related_sources: relatedSources,
+		related_sources: bridgeMetadata.related_sources,
+		missing_related_sources: bridgeMetadata.missing_related_sources,
 		architecture_status: architectureStatus.architecture_status,
 		missing_graph_bridges: architectureStatus.missing_graph_bridges,
 		missing_wiki_bridge: bridgeMetadata.missing_wiki_bridge,
@@ -7181,12 +7605,56 @@ interface FinishTaskOperationPayload {
 	memoryScope: unknown;
 	relatedWiki: string[];
 	relatedSources: string[];
+	rawRelatedWiki?: string[];
+	rawRelatedSources?: string[];
+	missingWikiBridge?: boolean;
+	missingRelatedSources?: string[];
 	filename: string;
 	vaultRoot: string;
 	architectureStatus: ArchitectureStatusReport;
 	closeoutGroups: FinishTaskCloseoutGroup[];
 	hasCloseoutCandidates: boolean;
 	contentLanguage: ContentLanguage;
+}
+
+function isFinishTaskOperationPayload(payload: unknown): payload is FinishTaskOperationPayload {
+	if (!isRecord(payload)) {
+		return false;
+	}
+	if (typeof payload.taskId !== 'string' || !payload.taskId) {
+		return false;
+	}
+	if (typeof payload.summary !== 'string') {
+		return false;
+	}
+	if (!Array.isArray(payload.outcomes) || !payload.outcomes.every((item) => typeof item === 'string')) {
+		return false;
+	}
+	if (!Array.isArray(payload.nextActions) || !payload.nextActions.every((item) => typeof item === 'string')) {
+		return false;
+	}
+	if (!Array.isArray(payload.decisions) || !payload.decisions.every((item) => typeof item === 'string')) {
+		return false;
+	}
+	if (!Array.isArray(payload.solutionChanges) || !payload.solutionChanges.every((item) => typeof item === 'string')) {
+		return false;
+	}
+	if (!Array.isArray(payload.lessons) || !payload.lessons.every((item) => typeof item === 'string')) {
+		return false;
+	}
+	if (!Array.isArray(payload.preferences) || !payload.preferences.every((item) => typeof item === 'string')) {
+		return false;
+	}
+	if (!Array.isArray(payload.memoryCandidates) || !payload.memoryCandidates.every((item) => typeof item === 'string')) {
+		return false;
+	}
+	if (typeof payload.requestHash !== 'string' || !payload.requestHash) {
+		return false;
+	}
+	if (!isRecord(payload.requestSnapshot) || typeof payload.requestSnapshot.task_id !== 'string') {
+		return false;
+	}
+	return true;
 }
 
 function projectIdentityFromFinishPayload(input: FinishTaskOperationPayload): ResolvedProjectIdentity {
@@ -7257,6 +7725,14 @@ async function buildFinishTaskOperationPayload(
 	const relatedWiki = normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki');
 	const relatedSources = normalizeMultiValueList(rawArgs.related_sources, 'related_sources');
 	const architectureStatus = buildArchitectureStatus(vaultRoot, context);
+	const bridgeMetadata = resolveProjectMemoryBridgeMetadata(
+		vaultRoot,
+		resolveMemoryScope('session_finish', '', projectHint, memoryScope),
+		projectHint,
+		relatedWiki,
+		relatedSources,
+		context
+	);
 
 	const filename = buildSafeFilename(
 		rawArgs.filename || `finish-${taskId}-${operationId}`,
@@ -7294,8 +7770,12 @@ async function buildFinishTaskOperationPayload(
 		client,
 		projectHint,
 		memoryScope,
-		relatedWiki,
-		relatedSources,
+		relatedWiki: bridgeMetadata.related_wiki,
+		relatedSources: bridgeMetadata.related_sources,
+		rawRelatedWiki: relatedWiki,
+		rawRelatedSources: relatedSources,
+		missingWikiBridge: bridgeMetadata.missing_wiki_bridge,
+		missingRelatedSources: bridgeMetadata.missing_related_sources,
 		vaultRoot,
 		filename,
 		architectureStatus,
@@ -7431,7 +7911,8 @@ async function writeFinishTaskCloseoutArtifacts(
 		input.vaultRoot,
 		memoryScope,
 		input.projectHint,
-		input.relatedWiki,
+		input.rawRelatedWiki ?? input.relatedWiki,
+		input.rawRelatedSources ?? input.relatedSources,
 		context
 	);
 	const memoryRule = memoryProposalRuleFor(group.kind, '', input.projectHint, context, memoryScope);
@@ -7467,11 +7948,12 @@ async function writeFinishTaskCloseoutArtifacts(
 					sourceNote: sessionNotePath,
 					memoryScope,
 					relatedWiki: bridgeMetadata.related_wiki,
-					relatedSources: input.relatedSources,
+					relatedSources: bridgeMetadata.related_sources,
 					architectureStatus: input.architectureStatus,
 					missingGraphBridges: input.architectureStatus.missing_graph_bridges,
 					missingWikiBridge: false,
 					missingRelatedWiki: bridgeMetadata.missing_related_wiki,
+					missingRelatedSources: bridgeMetadata.missing_related_sources,
 					signature: buildFinishTaskProposalSignature(input.taskId, group.kind, group.values),
 				});
 				return;
@@ -7490,11 +7972,12 @@ async function writeFinishTaskCloseoutArtifacts(
 		input.reviewProposalMode,
 		memoryScope,
 		bridgeMetadata.related_wiki,
-		input.relatedSources,
+		bridgeMetadata.related_sources,
 		input.architectureStatus,
 		input.architectureStatus.missing_graph_bridges,
 		bridgeMetadata.missing_wiki_bridge,
 		bridgeMetadata.missing_related_wiki,
+		bridgeMetadata.missing_related_sources,
 		context
 	);
 }
@@ -7520,8 +8003,8 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 		input.reviewProposalMode,
 		input.projectHint,
 		input.memoryScope,
-		input.relatedWiki,
-		input.relatedSources,
+		input.rawRelatedWiki ?? input.relatedWiki,
+		input.rawRelatedSources ?? input.relatedSources,
 		input.architectureStatus,
 		{
 			decisions: input.decisions,
@@ -7624,8 +8107,8 @@ async function executeFinishTaskOperation(
 		input.reviewProposalMode,
 		input.projectHint,
 		input.memoryScope,
-		input.relatedWiki,
-		input.relatedSources,
+		input.rawRelatedWiki ?? input.relatedWiki,
+		input.rawRelatedSources ?? input.relatedSources,
 		input.architectureStatus,
 		{
 			decisions: input.decisions,
@@ -7683,6 +8166,7 @@ async function executeFinishTaskOperation(
 		architecture_status?: ArchitectureStatus;
 		missing_graph_bridges?: string[];
 		missing_wiki_bridge?: boolean;
+		missing_related_sources?: string[];
 		next_actions_for_agent: string[];
 	} = {
 		ok: true,
@@ -7705,14 +8189,17 @@ async function executeFinishTaskOperation(
 		project_identity: projectIdentityToResult(projectIdentity),
 		related_wiki: input.relatedWiki,
 		related_sources: input.relatedSources,
-		architecture_status: input.architectureStatus.architecture_status,
-		missing_graph_bridges: input.architectureStatus.missing_graph_bridges,
-		missing_wiki_bridge: proposalResult.hasMissingWikiBridge,
-		memory_closeout_status: memoryCloseoutStatus,
+			architecture_status: input.architectureStatus.architecture_status,
+			missing_graph_bridges: input.architectureStatus.missing_graph_bridges,
+			missing_wiki_bridge: proposalResult.hasMissingWikiBridge,
+			memory_closeout_status: memoryCloseoutStatus,
 		memory_closeout_state: memoryCloseoutState,
 		memory_closeout_summary: buildMemoryCloseoutSummary(context, memoryCloseoutStatus, proposalResult),
 		next_actions_for_agent: buildFinishTaskNextActions(context, input.reviewProposalMode, proposalResult, input.projectHint, input.hasCloseoutCandidates),
-	};
+		};
+	if (proposalResult.hasMissingRelatedSources) {
+		response.missing_related_sources = input.missingRelatedSources ?? [];
+	}
 
 	if (input.reviewProposalMode === 'auto_propose' || input.reviewProposalMode === 'review_queue') {
 		response.proposal_count = proposalResult.proposals.length;
@@ -7804,8 +8291,15 @@ async function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolInvocation
 	const existing = await journal.loadByIdempotencyKey(identity.idempotencyKey);
 	let operationPayload: FinishTaskOperationPayload;
 	if (existing) {
-		if (!isRecord(existing.payload)) {
-			throw new OperationConflictError(`Finish-task journal payload is missing for ${identity.operationId}`);
+		if (existing.operation_id !== identity.operationId) {
+			throw new OperationConflictError(
+				`Idempotency key conflict for "${identity.idempotencyKey}": associated with existing operation "${existing.operation_id}"`
+			);
+		}
+		if (!isFinishTaskOperationPayload(existing.payload)) {
+			throw new OperationConflictError(
+				`Idempotency key conflict for "${identity.idempotencyKey}" with incompatible finish_task request payload`
+			);
 		}
 		const storedRequestHash = typeof existing.payload.requestHash === 'string'
 			? existing.payload.requestHash

@@ -16,6 +16,7 @@ const REQUIRED_PATHS = Object.freeze([
 	'docs/status/INDEX.md',
 	'skills/tracekeeper/SKILL.md',
 	'skills/tracekeeper/references/closeout-fields.md',
+	'skills/tracekeeper/references/ingestion-workflow.md',
 	'skills/tracekeeper/manifest.json',
 	'skills/tracekeeper/dist/tracekeeper.flattened.md',
 	'apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts',
@@ -30,6 +31,8 @@ const ALLOWED_SKILL_WORKFLOW_TOOLS = new Set([
 	'tracekeeper.start_task',
 	'tracekeeper.recall',
 	'tracekeeper.finish_task',
+	'tracekeeper.capture_source',
+	'tracekeeper.propose_memory',
 ]);
 
 function isSafeRelativePath(relativePath) {
@@ -96,12 +99,20 @@ function checkWorkflowSemantics(contract, skill, flattened, errors) {
 			`${owner} does not require finish exactly once`,
 			errors,
 		);
+		requirePattern(content, /timing/i, `${owner} does not describe next_actions timing`, errors);
+		requirePattern(content, /immediate/i, `${owner} does not include immediate next_action timing`, errors);
+		requirePattern(content, /if_context_insufficient/i, `${owner} does not include context-insufficient next_action timing`, errors);
+		requirePattern(content, /at_task_closeout/i, `${owner} does not include closeout next_action timing`, errors);
+		requirePattern(content, /required:\s*true|required actions/i, `${owner} does not describe required action semantics`, errors);
 		requirePattern(
 			content,
 			/(?:untrusted )?knowledge data, not (?:a new |system or tool )?instructions?/i,
 			`${owner} does not isolate recalled knowledge from instructions`,
 			errors,
 		);
+		if (/\bmax_items\b|\branking\b/i.test(content)) {
+			errors.push(`${owner} appears to add ranking or candidate-limit behavior not allowed by Skill scope`);
+		}
 
 		const structuredIndex = content.indexOf('`next_actions`');
 		const compatibilityIndex = content.indexOf('`next_actions_for_agent`');
@@ -129,9 +140,9 @@ function checkUnsafeExamples(contents, errors) {
 function checkManifestShape(manifest, errors) {
 	if (manifest?.format_version !== 1) errors.push('manifest format_version must be 1');
 	if (manifest?.name !== 'tracekeeper') errors.push('manifest name must be tracekeeper');
-	if (manifest?.skill_version !== '2.0.0') errors.push('manifest skill_version must be 2.0.0');
-	if (manifest?.workflow_contract_version !== 2) errors.push('manifest workflow_contract_version must be 2');
-	if (manifest?.minimum_tracekeeper_version !== '0.2.3') errors.push('manifest minimum_tracekeeper_version must be 0.2.3');
+	if (manifest?.skill_version !== '2.1.0') errors.push('manifest skill_version must be 2.1.0');
+	if (manifest?.workflow_contract_version !== 3) errors.push('manifest workflow_contract_version must be 3');
+	if (manifest?.minimum_tracekeeper_version !== '0.2.4') errors.push('manifest minimum_tracekeeper_version must be 0.2.4');
 	if (manifest?.hash_algorithm !== 'sha256') errors.push('manifest hash_algorithm must be sha256');
 	if (!Array.isArray(manifest?.files)) {
 		errors.push('manifest files must be an array');
@@ -184,12 +195,68 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 		errors.push('flattened Skill must not depend on external reference files');
 	}
 
-	for (const heading of ['Responsibilities', 'Trigger Conditions', 'Golden Workflow', 'Recall Policy', 'Closeout', 'Instruction Isolation', 'Review Boundary', 'Skill Packaging Requirements', 'Contract Synchronization']) {
+	for (const heading of ['Responsibilities', 'Trigger Conditions', 'Golden Workflow', 'Recall Policy', 'Next-action timing', 'Closeout', 'Instruction Isolation', 'Review Boundary', 'Skill Packaging Requirements', 'Contract Synchronization']) {
 		requirePattern(contract, new RegExp(`^## ${heading}$`, 'm'), `workflow contract is missing heading: ${heading}`, errors);
 	}
 	requirePattern(skill, /^---\nname: tracekeeper\ndescription: [^\n]+\n---\n/, 'Skill frontmatter must contain only compatible name and description fields', errors);
 	requirePattern(skill, /description: .*project continuity.*Do not use Tracekeeper/i, 'Skill description must contain positive and negative triggers', errors);
 	checkWorkflowSemantics(contract, skill, flattened, errors);
+	for (const [content, owner] of [[contract, 'contract'], [skill, 'Skill'], [flattened, 'flattened Skill']]) {
+		requirePattern(
+			content,
+			/Unqualified `Vault`, `Wiki`, or `Memory` means the active local Obsidian Vault/i,
+			`${owner} does not define unqualified knowledge names as local Vault content`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/external connector or service[\s\S]{0,180}only when the user explicitly names/i,
+			`${owner} does not require an explicit external knowledge destination`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/(?:durable-output cues|explicit durable-output cues)[\s\S]{0,500}`tracked_task`/i,
+			`${owner} does not route durable-output cues to tracked_task`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/known project[\s\S]{0,220}(?:first knowledge Recall|first knowledge recall)[\s\S]{0,160}scope:\s*["'`]?project["'`]?[\s\S]{0,160}repo_path/i,
+			`${owner} does not route the first known-project Recall to project scope with repo_path`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/recall_only[\s\S]{0,220}(?:never|MUST NOT)[\s\S]{0,160}(?:global|scope:\s*["'`]?global)[\s\S]{0,120}(?:project_history|scope:\s*["'`]?project_history)/i,
+			`${owner} does not prohibit global and project_history as the first recall_only route`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/tracked_task[\s\S]{0,180}start first[\s\S]{0,180}(?:next_actions|recommended_recall)/i,
+			`${owner} does not route tracked-task Recall from the start result`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/project_history[\s\S]{0,220}after project identity is established/i,
+			`${owner} does not reserve project_history for established continuity`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/global[\s\S]{0,180}(?:explicit cross-project|uncertain project identity)/i,
+			`${owner} does not constrain global Recall routing`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/(?:start and finish use different stable keys|different stable[\s\S]{0,100}idempotency keys for start and finish|start key for finish)/i,
+			`${owner} does not separate start and finish idempotency keys`,
+			errors,
+		);
+	}
 	const closeoutFields = contents.get('skills/tracekeeper/references/closeout-fields.md') ?? '';
 	for (const [content, owner] of [
 		[contract, 'contract'],
@@ -200,8 +267,20 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 		requirePattern(content, /\brelated_sources\b/, `${owner} does not preserve related_sources at closeout`, errors);
 		requirePattern(
 			content,
-			/(?:Recall results?|correlated note read)[\s\S]{0,240}(?:never invent|never[\s\S]{0,80}(?:invent|guess))/i,
-			`${owner} does not constrain closeout graph paths to recalled or read evidence`,
+			/relation_evidence\.related_wiki|relation_evidence\.related_sources/i,
+			`${owner} does not constrain closeout graph paths to Runtime-validated relation evidence`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/correlated read_note/i,
+			`${owner} does not allow closeout field reuse from correlated read_note evidence`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/(?:never invent|never[\s\S]{0,80}(?:invent|guess|rewrite))/i,
+			`${owner} does not constrain closeout graph paths against inference`,
 			errors,
 		);
 	}
@@ -272,6 +351,7 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	const buildSource = contents.get('apps/obsidian-plugin/scripts/build.mjs') ?? '';
 	for (const [pattern, label] of [
 		[/['"]references\/workflow-state-machine\.md['"]\s*:/, 'plugin bundle does not embed the workflow state machine'],
+		[/['"]references\/ingestion-workflow\.md['"]\s*:/, 'plugin bundle does not embed source-ingestion guidance'],
 		[/['"]references\/failure-recovery\.md['"]\s*:/, 'plugin bundle does not embed failure recovery guidance'],
 		[/['"]references\/closeout-fields\.md['"]\s*:/, 'plugin bundle does not embed closeout field guidance'],
 		[/['"]references\/instruction-isolation\.md['"]\s*:/, 'plugin bundle does not embed instruction isolation guidance'],

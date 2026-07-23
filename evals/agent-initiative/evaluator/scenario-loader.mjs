@@ -10,6 +10,26 @@ function assertStringArray(value, label) {
 	}
 }
 
+function assertAgentMaterials(value, label) {
+	if (value === undefined) {
+		return;
+	}
+	if (!Array.isArray(value)) {
+		throw new Error(`${label} must be an array when provided.`);
+	}
+	for (const [index, material] of value.entries()) {
+		if (!material || typeof material !== 'object' || Array.isArray(material)
+			|| typeof material.path !== 'string' || material.path.trim().length === 0
+			|| typeof material.content !== 'string') {
+			throw new Error(`${label}[${index}] must provide non-empty path and string content.`);
+		}
+		const normalizedPath = path.posix.normalize(material.path.trim());
+		if (path.posix.isAbsolute(normalizedPath) || normalizedPath === '..' || normalizedPath.startsWith('../') || normalizedPath.includes('\\')) {
+			throw new Error(`${label}[${index}].path must remain workspace-relative.`);
+		}
+	}
+}
+
 export function validateScenario(scenario, source = 'scenario') {
 	if (!scenario || typeof scenario !== 'object' || Array.isArray(scenario)) {
 		throw new Error(`${source} must be an object.`);
@@ -26,6 +46,7 @@ export function validateScenario(scenario, source = 'scenario') {
 	if (typeof scenario.prompt !== 'string' || scenario.prompt.trim().length === 0) {
 		throw new Error(`${source}.prompt must be non-empty.`);
 	}
+	assertAgentMaterials(scenario.agent_materials, `${source}.agent_materials`);
 	const expected = scenario.expected;
 	if (!expected || typeof expected !== 'object' || Array.isArray(expected)) {
 		throw new Error(`${source}.expected must be an object.`);

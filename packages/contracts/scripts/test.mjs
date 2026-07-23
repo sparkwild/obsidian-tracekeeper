@@ -34,13 +34,13 @@ const EXPECTED_NONE_IDEMPOTENCY_TOOLS = new Set([
 	'tracekeeper.distill_session',
 	'tracekeeper.write_context_pack',
 	'tracekeeper.write_session_note',
-	'tracekeeper.capture_source',
-	'tracekeeper.propose_memory',
 ]);
 const EXPECTED_KEYED_IDEMPOTENCY_TOOLS = new Set([
 	'tracekeeper.start_task',
 	'tracekeeper.finish_task',
 	'tracekeeper.apply_approved_writeback',
+	'tracekeeper.capture_source',
+	'tracekeeper.propose_memory',
 ]);
 
 const publicNameSet = new Set(PUBLIC_TOOL_NAME_ORDER);
@@ -146,6 +146,30 @@ assert.strictEqual(visibilityMissing, 0, 'non-public tools without deprecated co
 assert.deepStrictEqual(START_TASK_OUTPUT_SCHEMA, getContractByName('tracekeeper.start_task').outputSchema, 'start_task output schema must use START_TASK_OUTPUT_SCHEMA');
 assert.deepStrictEqual(RECALL_OUTPUT_SCHEMA, getContractByName('tracekeeper.recall').outputSchema, 'recall output schema must use RECALL_OUTPUT_SCHEMA');
 assert.deepStrictEqual(FINISH_TASK_OUTPUT_SCHEMA, getContractByName('tracekeeper.finish_task').outputSchema, 'finish_task output schema must use FINISH_TASK_OUTPUT_SCHEMA');
+
+const recallContract = getContractByName('tracekeeper.recall');
+assert.match(recallContract.description, /active local Obsidian Vault/i, 'recall should identify the local Vault boundary');
+
+const finishContract = getContractByName('tracekeeper.finish_task');
+assert.match(
+	finishContract.inputSchema.properties.related_wiki.description,
+	/local Vault Wiki note paths/i,
+	'finish_task related_wiki should identify local Vault paths',
+);
+
+const proposeMemoryContract = getContractByName('tracekeeper.propose_memory');
+const captureSourceContract = getContractByName('tracekeeper.capture_source');
+assert.match(proposeMemoryContract.description, /active local Obsidian Vault/i, 'propose_memory should identify its local destination');
+assert.match(proposeMemoryContract.description, /does not write to an external Wiki service/i, 'propose_memory should reject external-Wiki ambiguity');
+assert.match(
+	proposeMemoryContract.inputSchema.properties.target_note.description,
+	/01_knowledge\/wiki\/\*\*/i,
+	'propose_memory target_note should describe the local Wiki convention',
+);
+for (const contract of [captureSourceContract, proposeMemoryContract]) {
+	assert.equal(contract.idempotency, 'keyed', `${contract.name} should support keyed retries`);
+	assert.equal(typeof contract.inputSchema.properties.idempotency_key?.description, 'string', `${contract.name} should describe idempotency_key`);
+}
 
 for (const contract of toolContracts) {
 	if (contract.name === 'tracekeeper.start_task' || contract.name === 'tracekeeper.recall' || contract.name === 'tracekeeper.finish_task') {

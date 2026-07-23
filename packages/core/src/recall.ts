@@ -23,6 +23,8 @@ export interface RecallMatch {
 const MIN_TOKEN_LENGTH = 2;
 const DEFAULT_LIMIT = 6;
 const RECENT_NOTE_WINDOW_DAYS = 14;
+const MAX_QUERY_TOKENS = 64;
+const MAX_NOTE_TOKENS = 4096;
 const EXCLUDED_RECALL_PREFIXES = [TRACEKEEPER_CONTROL_DIR, TRACEKEEPER_INBOX_DIR];
 
 function isExcludedFromRecall(note: ScannedNote): boolean {
@@ -33,10 +35,45 @@ function isExcludedFromRecall(note: ScannedNote): boolean {
 	});
 }
 
-function tokenize(input: string): string[] {
+function lexicalSegments(input: string): string[] {
 	const text = input.toLowerCase().normalize('NFKC');
-	return [...new Set((text.match(/[a-z0-9]+|[\u4e00-\u9fff]+/g) ?? []))]
-		.filter((token) => token.length >= MIN_TOKEN_LENGTH);
+	return text.match(/[a-z0-9]+|[\u4e00-\u9fff]+/g) ?? [];
+}
+
+function tokenize(input: string, maxTokens = MAX_NOTE_TOKENS): string[] {
+	const tokens: string[] = [];
+	const seen = new Set<string>();
+	const addToken = (token: string) => {
+		if (token.length < MIN_TOKEN_LENGTH || seen.has(token) || tokens.length >= maxTokens) {
+			return;
+		}
+		seen.add(token);
+		tokens.push(token);
+	};
+
+	for (const token of lexicalSegments(input)) {
+		if (/[\u4e00-\u9fff]/.test(token)) {
+			addToken(token);
+			for (const size of [2, 3]) {
+				for (let index = 0; index <= token.length - size; index += 1) {
+					addToken(token.slice(index, index + size));
+					if (tokens.length >= maxTokens) {
+						return tokens;
+					}
+				}
+			}
+			continue;
+		}
+		addToken(token);
+		if (tokens.length >= maxTokens) {
+			return tokens;
+		}
+	}
+	return tokens;
+}
+
+function strongQueryTokens(input: string): Set<string> {
+	return new Set(lexicalSegments(input).filter((token) => token.length >= MIN_TOKEN_LENGTH));
 }
 
 function frontmatterString(note: ScannedNote, key: string): string {
@@ -157,7 +194,8 @@ export function scoreNote(note: ScannedNote, queryTokens: string[]): number {
 }
 
 export function recallNotes(notes: ScannedNote[], query: string, options: RecallOptions = {}): RecallMatch[] {
-	const tokens = tokenize(query);
+	const tokens = tokenize(query, MAX_QUERY_TOKENS);
+	const strongTokens = strongQueryTokens(query);
 	const limit = options.limit ?? DEFAULT_LIMIT;
 	const matches: RecallMatch[] = [];
 
@@ -171,6 +209,10 @@ export function recallNotes(notes: ScannedNote[], query: string, options: Recall
 		}
 
 		const matchedTokens = tokens.filter((token) => weightForNoteToken(note, token) > 0);
+		const hasStrongMatch = matchedTokens.some((token) => strongTokens.has(token));
+		if (!hasStrongMatch && matchedTokens.length < 2) {
+			continue;
+		}
 		matches.push({
 			note,
 			score,

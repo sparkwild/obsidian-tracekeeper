@@ -10,8 +10,8 @@ Provide accurate values for the fields exposed by the current `tracekeeper.finis
 - decisions: durable decisions made during the task.
 - unresolved items: risks, blockers, or intentionally deferred work.
 - next steps: concrete follow-up that remains useful after the current session.
-- `related_wiki`: reuse relevant Vault-relative Wiki paths already exposed by Recall results or a correlated note read.
-- `related_sources`: reuse relevant Vault-relative source paths already exposed by Recall results or a correlated note read.
+- `related_wiki`: reuse only `relation_evidence.related_wiki[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
+- `related_sources`: reuse only `relation_evidence.related_sources[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
 
 Preserve known project graph context in the finish payload, but never invent, guess, or rewrite a Wiki or source path. If no verified relationship is available, omit the field and allow the MCP review policy to report the missing bridge or route the candidate to review.
 

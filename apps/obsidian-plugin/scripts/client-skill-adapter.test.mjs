@@ -143,6 +143,7 @@ function buildBundle(version, skillContent) {
 	const sourceFiles = {
 		'SKILL.md': normalize(skillContent),
 		'references/workflow-state-machine.md': '# Workflow\n',
+		'references/ingestion-workflow.md': '# Ingestion\n',
 		'references/failure-recovery.md': '# Recovery\n',
 		'references/closeout-fields.md': '# Closeout\n',
 		'references/instruction-isolation.md': '# Isolation\n',
@@ -154,8 +155,8 @@ function buildBundle(version, skillContent) {
 		format_version: 1,
 		name: 'tracekeeper',
 		skill_version: version,
-		workflow_contract_version: 2,
-		minimum_tracekeeper_version: '0.2.3',
+		workflow_contract_version: 3,
+		minimum_tracekeeper_version: '0.2.4',
 		hash_algorithm: 'sha256',
 		bundle_hash: sha(canonical),
 		files: manifestFiles,

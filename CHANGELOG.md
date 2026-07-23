@@ -2,6 +2,18 @@
 
 All notable changes to Tracekeeper will be documented in this file.
 
+## [0.2.4] - Local Language And Multi-source Ingestion
+
+### Added
+
+- Skill v2.1.0 multi-source ingestion guidance for user-requested local knowledge capture, source snapshots, and direct candidate-memory submission.
+- Idempotent `capture_source` and `propose_memory` operations with operation ownership markers and payload-conflict protection.
+
+### Changed
+
+- Tracekeeper-authored source-analysis summaries and proposal drafts now follow the configured Obsidian content language while preserving raw source material in its original language.
+- Explicit user requests to research and save knowledge are treated as workflow intent only; MCP capabilities, Vault boundaries, and review policy remain enforced.
+
 ## [0.2.3] - Community CSS Lint Fix
 
 ### Fixed

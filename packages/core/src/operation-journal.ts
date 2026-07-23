@@ -479,7 +479,7 @@ export class RecoverableOperationRunner<TPayload, TResult> {
 			if (existing) {
 				if (existing.operation_id !== this.config.operationId) {
 					throw new OperationConflictError(
-						`Idempotency key "${this.config.idempotencyKey}" is already associated with operation "${existing.operation_id}"`
+						`Idempotency key conflict for "${this.config.idempotencyKey}": associated with existing operation "${existing.operation_id}"`
 					);
 				}
 				if (existing.payload_hash !== payloadHash) {

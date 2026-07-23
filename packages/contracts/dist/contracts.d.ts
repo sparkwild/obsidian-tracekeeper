@@ -101,7 +101,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "recall";
     readonly useCase: "recall";
-    readonly description: "[read-only] Use before read_note to find relevant memory, wiki, and source notes. Supports global, project, and project_history scopes.";
+    readonly description: "[read-only] Find relevant memory, Wiki, and source notes in the active local Obsidian Vault before read_note. Supports global, project, and project_history scopes.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly deprecated: {
@@ -167,7 +167,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "review";
     readonly useCase: "review_queue";
-    readonly description: "[read-only] Inspect pending proposals or approved writeback candidates. Does not approve or apply changes.";
+    readonly description: "[read-only] Inspect pending local Vault proposals or approved writeback candidates. Does not approve or apply changes.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly deprecated: {
@@ -287,7 +287,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "review";
     readonly useCase: "apply_approved_writeback";
-    readonly description: "[review-gated apply] Use only after the user approves a Review Queue proposal. Appends approved content to the target note.";
+    readonly description: "[review-gated apply] Use only after the user approves a Review Queue proposal. Appends approved content to the local Vault target note.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly outputSchema: ToolOutputSchema;
@@ -392,12 +392,12 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.capture_source";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "vault.write";
     readonly risk: "low-risk-write";
     readonly effect: "bounded-update";
-    readonly idempotency: "none";
+    readonly idempotency: "keyed";
     readonly world: "closed";
     readonly workflowRole: "source";
     readonly useCase: "capture_source";
@@ -407,16 +407,16 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.propose_memory";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "memory.propose";
     readonly risk: "low-risk-write";
     readonly effect: "bounded-update";
-    readonly idempotency: "none";
+    readonly idempotency: "keyed";
     readonly world: "closed";
     readonly workflowRole: "memory";
     readonly useCase: "propose_memory";
-    readonly description: "[low-risk write] Submit a memory update through Tracekeeper rules. Global memory stays review-gated by default.";
+    readonly description: "[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. Global memory stays review-gated by default.";
     readonly inputSchema: ToolInputSchema;
 }];
 type ContractByName = {

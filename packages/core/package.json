@@ -1,6 +1,6 @@
 {
 	"name": "@tracekeeper/core",
-	"version": "0.2.3",
+	"version": "0.2.4",
 	"description": "Shared local wiki compilation runtime for Tracekeeper.",
 	"private": true,
 	"type": "commonjs",

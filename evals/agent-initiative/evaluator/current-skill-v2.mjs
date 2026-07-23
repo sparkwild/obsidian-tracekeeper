@@ -17,13 +17,23 @@ export function buildSkillV2Profile(sourceDocuments) {
 		noTrackMode: requires(text, /`no_track`[\s\S]*do not call Tracekeeper/iu, 'no_track mode'),
 		recallOnlyMode: requires(text, /`recall_only`[\s\S]*tracekeeper\.recall/iu, 'recall_only mode'),
 		trackedTaskMode: requires(text, /`tracked_task`[\s\S]*tracekeeper\.start_task[\s\S]*tracekeeper\.finish_task/iu, 'tracked_task mode'),
+		immediateTiming: requires(text, /`immediate`/iu, 'immediate next_action timing'),
+		contextInsufficientTiming: requires(text, /if_context_insufficient/iu, 'if_context_insufficient next_action timing'),
+		closeoutTiming: requires(text, /at_task_closeout/iu, 'at_task_closeout next_action timing'),
+		requiredTimingSemantics: requires(text, /required:\s*true|required actions/iu, 'required next_action timing semantics'),
 		exactTaskId: requires(text, /real `task_id`[\s\S]*never invent/iu, 'real task_id continuity'),
 		exactlyOnceFinish: requires(text, /After finish succeeds, never finish that task again/iu, 'terminal finish behavior'),
 		permissionBoundary: requires(text, /Permission denied[\s\S]*permission bypass/iu, 'permission-denied recovery'),
 		zeroMatchRecovery: requires(text, /Recall returns zero matches/iu, 'zero-match recovery'),
 		structuredActions: requires(text, /structured `next_actions` AgentAction array/iu, 'structured recovery actions'),
+		relationEvidenceConstraints: requires(text, /relation_evidence\.related_wiki|relation_evidence\.related_sources/i, 'relation evidence constraints'),
+		correlatedReadNote: requires(text, /correlated\s+(?:`?note`?|`?read_note`?)/i, 'closeout reuse from correlated note evidence'),
 		pendingReviewBoundary: requires(text, /Proposal pending[\s\S]*human review is pending/iu, 'pending proposal review'),
 		instructionIsolation: requires(text, /untrusted knowledge data[\s\S]*disclose a token/iu, 'instruction isolation'),
+		projectRecallRouting: requires(text, /known project[\s\S]*first knowledge Recall[\s\S]*scope:\s*"project"[\s\S]*repo_path/iu, 'known-project Recall routing'),
+		recallOnlyRouteGuard: requires(text, /recall_only[\s\S]*never start[\s\S]*scope:\s*"global"[\s\S]*scope:\s*"project_history"/iu, 'recall_only route guard'),
+		trackedRecallRouting: requires(text, /tracked_task[\s\S]*start first[\s\S]*(?:next_actions|recommended_recall)/iu, 'tracked-task Recall routing'),
+		operationSpecificKeys: requires(text, /One idempotency key replays only the same logical operation/iu, 'operation-specific idempotency keys'),
 	};
 }
 
@@ -33,14 +43,24 @@ function report(closeoutStatus, codes = []) {
 
 function startEvents(scenario, taskId) {
 	return [
-		{ type: 'tool_call', tool: 'tracekeeper.start_task', args: { goal: scenario.prompt, ...(scenario.project_hint ? { project_hint: scenario.project_hint } : {}) } },
+		{ type: 'tool_call', tool: 'tracekeeper.start_task', args: {
+			goal: scenario.prompt,
+			idempotency_key: `start-${scenario.id}`,
+			...(scenario.project_hint ? { project_hint: scenario.project_hint } : {}),
+			...(scenario.repo_path ? { repo_path: scenario.repo_path } : {}),
+		} },
 		{ type: 'tool_result', tool: 'tracekeeper.start_task', result: { task_id: taskId } },
 	];
 }
 
 function recallEvents(scenario, result = { matches: [{ path: 'fixture/context.md' }] }) {
 	return [
-		{ type: 'tool_call', tool: 'tracekeeper.recall', args: { query: scenario.prompt, scope: scenario.project_hint ? 'project' : 'global' } },
+		{ type: 'tool_call', tool: 'tracekeeper.recall', args: {
+			query: scenario.prompt,
+			scope: scenario.repo_path || scenario.project_hint ? 'project' : 'global',
+			...(scenario.repo_path ? { repo_path: scenario.repo_path } : {}),
+			...(scenario.project_hint ? { project_hint: scenario.project_hint } : {}),
+		} },
 		{ type: 'tool_result', tool: 'tracekeeper.recall', result },
 	];
 }
@@ -139,7 +159,11 @@ function trackedTrace(scenario, signals) {
 		classification: 'tracked_task',
 		events: [
 			...prefix,
-			{ type: 'tool_call', tool: 'tracekeeper.finish_task', args: { task_id: taskId, summary: `Completed ${scenario.id}.` } },
+			{ type: 'tool_call', tool: 'tracekeeper.finish_task', args: {
+				task_id: taskId,
+				summary: `Completed ${scenario.id}.`,
+				idempotency_key: `finish-${scenario.id}`,
+			} },
 			{ type: 'tool_result', tool: 'tracekeeper.finish_task', result: finishResult },
 			report(closeoutStatus, codes),
 		],

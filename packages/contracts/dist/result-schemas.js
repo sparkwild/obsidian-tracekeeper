@@ -145,8 +145,61 @@ exports.RECALL_SUCCESS_OUTPUT_SCHEMA = {
                                 enum: ['captured_source', 'tracekeeper_generated', 'vault_note'],
                             },
                             instruction_trust: { const: 'data_only', type: 'string' },
+                            relation_evidence: {
+                                type: 'object',
+                                properties: {
+                                    related_wiki: {
+                                        type: 'array',
+                                        items: {
+                                            type: 'object',
+                                            required: ['path', 'declared_by', 'declared_via', 'verified_by'],
+                                            properties: {
+                                                path: { type: 'string', minLength: 1 },
+                                                declared_by: { type: 'string', minLength: 1 },
+                                                declared_via: {
+                                                    type: 'array',
+                                                    items: { type: 'string', enum: ['frontmatter', 'body_wikilink'] },
+                                                },
+                                                verified_by: { const: 'active_vault_snapshot', type: 'string' },
+                                            },
+                                            additionalProperties: true,
+                                        },
+                                    },
+                                    related_sources: {
+                                        type: 'array',
+                                        items: {
+                                            type: 'object',
+                                            required: ['path', 'declared_by', 'declared_via', 'verified_by'],
+                                            properties: {
+                                                path: { type: 'string', minLength: 1 },
+                                                declared_by: { type: 'string', minLength: 1 },
+                                                declared_via: {
+                                                    type: 'array',
+                                                    items: { type: 'string', enum: ['frontmatter', 'body_wikilink'] },
+                                                },
+                                                verified_by: { const: 'active_vault_snapshot', type: 'string' },
+                                            },
+                                            additionalProperties: true,
+                                        },
+                                    },
+                                },
+                                additionalProperties: false,
+                            },
                         },
                         additionalProperties: true,
+                    },
+                },
+                candidate_notes: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        required: ['path', 'title', 'type'],
+                        properties: {
+                            path: { type: 'string', minLength: 1 },
+                            title: { type: 'string' },
+                            type: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                        },
+                        additionalProperties: false,
                     },
                 },
                 workflow: {

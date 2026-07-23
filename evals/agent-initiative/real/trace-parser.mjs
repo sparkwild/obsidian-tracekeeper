@@ -173,9 +173,11 @@ function pushToolResult(container, events, reportCodes) {
 	if (normalizeObject(result) && typeof result.error === 'string') {
 		addErrorCodes(reportCodes, result.error);
 	}
-	const mapped = normalizeCloseoutStatus(result?.memory_closeout_status ?? result?.memory_closeout_state ?? result?.status ?? '');
-	if (mapped) {
-		events.push({ type: 'assistant_report', closeout_status: mapped, codes: [] });
+	if (tool === 'tracekeeper.finish_task') {
+		const mapped = normalizeCloseoutStatus(result?.memory_closeout_status ?? result?.memory_closeout_state ?? result?.status ?? '');
+		if (mapped) {
+			events.push({ type: 'assistant_report', closeout_status: mapped, codes: [] });
+		}
 	}
 	const nextActions = normalizeObject(result)?.next_actions;
 	if (Array.isArray(nextActions)) {
@@ -436,12 +438,6 @@ function inferClassification(events, fallbackClass = 'no_track') {
 }
 
 function canonicalizeCloseoutStatusFromCodesAndEvents(events, existingStatus) {
-	if (existingStatus) {
-		const normalized = normalizeCloseoutStatus(existingStatus);
-		if (normalized) {
-			return normalized;
-		}
-	}
 	for (let index = events.length - 1; index >= 0; index -= 1) {
 		const event = events[index];
 		if (event.type === 'tool_result' && event.tool === 'tracekeeper.finish_task' && event.result) {
@@ -451,6 +447,12 @@ function canonicalizeCloseoutStatusFromCodesAndEvents(events, existingStatus) {
 			if (normalized) {
 				return normalized;
 			}
+		}
+	}
+	if (existingStatus) {
+		const normalized = normalizeCloseoutStatus(existingStatus);
+		if (normalized) {
+			return normalized;
 		}
 	}
 	return '';
@@ -536,20 +538,19 @@ export function normalizeCodexTrace(scenarioId, raw, options = {}) {
 		closeout_status: closeoutStatus,
 		codes: Array.from(codes),
 	};
-	const reportSeen = events.find((event) => event.type === 'assistant_report');
-	if (reportSeen) {
-		reportSeen.codes = Array.from(new Set([...(reportSeen.codes || []), ...mergedReport.codes]));
-		if (!reportSeen.closeout_status && mergedReport.closeout_status) {
-			reportSeen.closeout_status = mergedReport.closeout_status;
-		}
-	} else if (codes.size > 0 || closeoutStatus) {
-		events.push({ type: 'assistant_report', closeout_status: mergedReport.closeout_status, codes: mergedReport.codes });
+	const normalizedEvents = events.filter((event) => event.type !== 'assistant_report');
+	if (codes.size > 0 || closeoutStatus) {
+		normalizedEvents.push({
+			type: 'assistant_report',
+			closeout_status: mergedReport.closeout_status,
+			codes: mergedReport.codes,
+		});
 	}
 
 	return {
 		scenario_id: scenarioId,
 		classification: inferClassification(events, fallbackClass),
-		events,
+		events: normalizedEvents,
 		diagnostics: parsed.diagnostics,
 		unknown_event_types: Object.entries(parsed.unknown_event_types).map(([type, count]) => ({ type, count })),
 		agent_message: parsed.finalAgentMessage || parsed.final_agent_message,
