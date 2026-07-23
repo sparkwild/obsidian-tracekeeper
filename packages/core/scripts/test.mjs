@@ -90,6 +90,44 @@ function createReciprocalCase(vaultRoot) {
 	);
 }
 
+function createRecallHygieneFixture(vaultRoot) {
+	writeFile(
+		'00_tracekeeper/control/audit_log.md',
+		'# Audit Log\n\nAtlasfixture control audit entries.\n',
+		vaultRoot
+	);
+	writeFile(
+		'00_tracekeeper/inbox/agent_requests/atlas-recall-hygiene.md',
+		'# Atlas Recall Hygiene\n\nAtlasfixture inbox entry for candidate filtering test.\n',
+		vaultRoot
+	);
+	writeFile(
+		'00_tracekeeper/work/tasks/atlas-task.md',
+		'# Atlas Task\n\nAtlasfixture task context entry for recall overlap.\n',
+		vaultRoot
+	);
+	writeFile(
+		'00_tracekeeper/work/sessions/atlas-session.md',
+		'# Atlas Session\n\nAtlasfixture current session context entry.\n',
+		vaultRoot
+	);
+	writeFile(
+		`${KNOWLEDGE_DIR}/memory/projects/atlas/memory.md`,
+		'---\nproject_hint: atlas\n---\n# Atlas Memory\n\nAtlasfixture project memory note.\n',
+		vaultRoot
+	);
+	writeFile(
+		`${KNOWLEDGE_DIR}/wiki/hubs/atlas-hub.md`,
+		'# Atlas Hub\n\nAtlasfixture wiki note.\n',
+		vaultRoot
+	);
+	writeFile(
+		`${KNOWLEDGE_DIR}/sources/atlas-source.md`,
+		'# Atlas Source\n\nAtlasfixture source note used for recall overlap tests.\n',
+		vaultRoot
+	);
+}
+
 function assertLintKinds(issues, expectedKinds) {
 	const actualKinds = new Set(issues.map((issue) => issue.kind));
 	for (const kind of expectedKinds) {
@@ -126,8 +164,9 @@ async function run() {
 	try {
 		const vaultRoot = createFixture(tempRoot);
 		createSourceSeed(vaultRoot);
-	createGraphAndLintFixture(vaultRoot);
-	createReciprocalCase(vaultRoot);
+		createGraphAndLintFixture(vaultRoot);
+		createReciprocalCase(vaultRoot);
+		createRecallHygieneFixture(vaultRoot);
 
 		const results = { skipped: [] };
 		const rootConfigPath = path.join(vaultRoot, CONFIG_DIR, 'config.json');
@@ -155,6 +194,15 @@ async function run() {
 		assert.ok(!scanBeforeSymlink.notes.some((note) => note.relativePath.startsWith(`${CONFIG_DIR}/`)), 'Expected vault config directory to be skipped');
 
 		const recallScan = scanModule.scanVault(vaultRoot, { vaultConfigDir: CONFIG_DIR });
+		const recallPriorityMatches = recallModule.recallNotes(recallScan.notes, 'atlasfixture', { limit: 8 });
+		assert.ok(recallPriorityMatches.length > 0, 'recall should include atlasfixture fixtures');
+		assert.equal(recallPriorityMatches[0].note.relativePath, `${KNOWLEDGE_DIR}/memory/projects/atlas/memory.md`);
+		assert.ok(
+			!recallPriorityMatches.some((match) =>
+				match.note.relativePath.startsWith('00_tracekeeper/control/') || match.note.relativePath.startsWith('00_tracekeeper/inbox/')
+			),
+			'control and inbox paths should be excluded from recall candidates'
+		);
 		const recallMatches = recallModule.recallNotes(recallScan.notes, 'recall priority', { limit: 3 });
 		assert.ok(recallMatches.length > 0, 'recall should return at least one result');
 		assert.equal(recallMatches[0].note.relativePath, `${KNOWLEDGE_DIR}/wiki/concepts/recall-priority.md`);

@@ -6,6 +6,14 @@ const knowledge_architecture_1 = require("./knowledge-architecture");
 const MIN_TOKEN_LENGTH = 2;
 const DEFAULT_LIMIT = 6;
 const RECENT_NOTE_WINDOW_DAYS = 14;
+const EXCLUDED_RECALL_PREFIXES = [knowledge_architecture_1.TRACEKEEPER_CONTROL_DIR, knowledge_architecture_1.TRACEKEEPER_INBOX_DIR];
+function isExcludedFromRecall(note) {
+    const normalizedPath = note.relativePath.replace(/\\/g, '/').toLowerCase();
+    return EXCLUDED_RECALL_PREFIXES.some((prefix) => {
+        const normalizedPrefix = prefix.toLowerCase();
+        return normalizedPath === normalizedPrefix || normalizedPath.startsWith(`${normalizedPrefix}/`);
+    });
+}
 function tokenize(input) {
     const text = input.toLowerCase().normalize('NFKC');
     return [...new Set((text.match(/[a-z0-9]+|[\u4e00-\u9fff]+/g) ?? []))]
@@ -124,6 +132,9 @@ function recallNotes(notes, query, options = {}) {
     const limit = options.limit ?? DEFAULT_LIMIT;
     const matches = [];
     for (const note of notes) {
+        if (isExcludedFromRecall(note)) {
+            continue;
+        }
         const score = scoreNote(note, tokens);
         if (score <= 0) {
             continue;

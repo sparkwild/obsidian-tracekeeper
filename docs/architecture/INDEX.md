@@ -121,8 +121,9 @@ Body wikilinks are the graph contract. Relationship fields such as `related`, `s
 1. The plugin creates an empty `KnowledgeIndex`, subscribes to Vault events, and rebuilds the first versioned snapshot in the background instead of blocking plugin startup.
 2. Obsidian create, modify, delete, and rename events update only the affected indexed record; events received during rebuild are queued and replayed before the rebuilt generation is considered current.
 3. A tool invocation receives one stable scan snapshot. Ready-state status, recall, start, lint, graph, and context-pack queries do not synchronously rescan the full vault.
-4. `tracekeeper.recall` ranks matching memory, Wiki, source, task, and session context according to the requested scope.
-5. The Agent consumes excerpts, match reasons, and graph links first, then uses `tracekeeper.read_note` only when complete content is required.
+4. `tracekeeper.recall` ranks matching memory, Wiki, source, task, and session context according to the requested scope. Control and inbox records are not recall candidates. Global and project recall prioritize durable project memory and down-rank work-record query echoes; `project_history` retains task and session continuity.
+5. Project scope treats `project_id` and `project_hint` as strong identity evidence. A repository path can scope by itself or corroborate that identity, but it does not exclude a matching project-memory note merely because the note has no repository metadata. Explicit conflicting repository metadata remains excluded.
+6. The Agent consumes excerpts, match reasons, and graph links first, then uses `tracekeeper.read_note` only when complete content is required.
 
 The standalone MCP composition retains safe filesystem scanning as a development and recovery fallback. Index results expose `index_state` and snapshot generation. A plugin command can rebuild the index, and Connection Status shows its state, generation, note count, and last rebuild. The index is disposable and rebuildable; Markdown remains the only knowledge authority.
 
@@ -137,6 +138,7 @@ Task, session, source-analysis, context-pack, request, and proposal records are 
 - Global memory is review-gated by default.
 - Project auto-save is opt-in, append-only, and limited to `01_knowledge/memory/projects/<project>/memory.md`.
 - Project auto-save requires a resolvable Wiki bridge; otherwise the candidate enters the Review Queue.
+- A tracked Agent preserves relevant existing `related_wiki` and `related_sources` paths from Recall or correlated note reads in its finish payload. The Runtime validates those paths and never asks the Skill to infer or authorize a bridge.
 - Applying an approved proposal appends to the proposal's existing target and updates proposal state.
 
 Project auto-save retains content signatures. `start_task`, `finish_task`, and approved writeback additionally use stable operation identities, payload-hash idempotency checks, atomic replacement, and per-operation journals under `00_tracekeeper/control/operations/`. Journal execution uses an in-process queue plus a vault-local process lock and atomic initial claim, preventing the plugin runtime and standalone development runtime from executing the same idempotency key concurrently. Runtime startup resumes known unfinished operations by rolling them forward, exposes recovered/failed/skipped counts to Connection Status, and never rolls user-visible Markdown back over a later edit.

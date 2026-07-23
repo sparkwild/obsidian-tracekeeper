@@ -27,6 +27,8 @@ This is a dated implementation snapshot, not a permanent product contract. Updat
 - Connection Status exposes index state, generation, note count, and last rebuild, and a plugin command can request a rebuild without replacing the Vault as fact source.
 - The standalone runtime retains the Node filesystem scan path for development and tests; the Vault remains the only durable fact source.
 - Recall matches identify note type, content origin, and `instruction_trust: data_only`. Correlated `read_note` calls retain the `recall_id`, so source instructions remain knowledge data rather than authority.
+- Recall excludes Tracekeeper control and inbox records. Project-scoped matching keeps project id/hint as strong evidence while allowing repository paths to corroborate notes that do not carry repository metadata; explicit repository conflicts remain excluded.
+- Global and project recall apply visible project-memory priority and work-record query-echo penalties so generated task text does not outrank matching durable project memory. Project-history recall continues to expose task and session records.
 
 ### Recoverable Writes And Tasks
 
@@ -53,6 +55,7 @@ This is a dated implementation snapshot, not a permanent product contract. Updat
 ### Agent Ecosystem And Onboarding
 
 - Skill v2 is a canonical bundle containing a short entrypoint, four focused references, a versioned hash manifest, and a generated flattened compatibility artifact. It classifies `no_track`, `recall_only`, and `tracked_task`, prefers structured actions, isolates recalled instructions, and keeps permission enforcement in MCP.
+- Tracked closeout guidance preserves existing `related_wiki` and `related_sources` paths from Recall or correlated note reads without inventing graph relationships; Runtime validation and Review Queue fallback remain authoritative.
 - The plugin embeds and verifies the complete bundle. A supported managed client can preview and explicitly confirm install/update with hash rechecks, staging, backup, rollback, and modified-file protection; other clients receive copy-only compatibility guidance.
 - `npm run agent:ecosystem` rebuilds bundle identity, checks workflow semantics and unsafe examples, and verifies plugin packaging, installation controls, and evidence fields as part of `npm run verify`.
 - Plugin onboarding is resumable across vault check, runtime readiness, client configuration, bundle availability/copy/install evidence, client reload, external connection verification, first recall, and observed tracked workflow.
@@ -62,6 +65,8 @@ This is a dated implementation snapshot, not a permanent product contract. Updat
 
 - `evals/agent-initiative/` contains 37 shared scenarios and a frozen Git-sourced Skill v1 fixture. The deterministic v1 characterization scores 83.11 with 23/37 passing; Skill v2 scores 100 with 37/37 passing, a +16.89 delta and no regressed scenario ids.
 - The static Eval improves recall-only classification from 0 to 1, preserves the 10/10 no-track guardrail, and improves forbidden scenarios from 4/6 to 6/6. These are reproducible policy-characterization results, not observed LLM success rates.
+- An opt-in real Codex A/B runner now uses 12 bilingual scenarios, one temporary Vault and token-protected loopback MCP process per run, project-local Skill injection for only the Skill arm, redacted JSONL artifacts, and independent invocation/lifecycle/propagation metrics. Its non-model tests run in repository verification; real model calls do not.
+- A bounded one-repetition smoke across no-track, recall-only, and tracked-task scenarios completed all six MCP-only/Skill-arm executions. Both arms preserved the no-track guardrail, invoked Recall for history, completed one start/Recall/finish lifecycle with the real task id, and propagated verified Wiki/source paths. This smoke showed no arm delta and is not the full 12-scenario repeated benchmark.
 - Activity aggregates recent local audit events into workflow conversion ratios, incomplete or aged workflows, permission denials, zero matches, closeout distribution, P50/P95 tool duration, recent principals, and bundled Skill version. It provides a copyable local Eval command and states that retained audit calls cannot measure missed calls.
 
 ### Product And Release Baseline
@@ -78,11 +83,12 @@ This is a dated implementation snapshot, not a permanent product contract. Updat
 - The in-memory index intentionally rebuilds on plugin startup; persistent index caching is not part of the current baseline.
 - Automated coverage focuses on contracts, recovery, repository adapters, protocol matrices, runtime flows, Skill installation, local profiles, onboarding evidence, workflow diagnostics, and pure view models. A full Obsidian-hosted UI integration suite is not yet present.
 - The standalone MCP command is a development tool; production packaging remains the Obsidian-hosted runtime.
-- The initiative Eval is deterministic and static. Real client/model runs are needed before treating its scores as measured Agent invocation rates.
+- The real initiative runner is opt-in and the current observed sample is intentionally small. Repeated full-matrix runs are still required before treating an arm delta as stable.
+- The bounded real smoke showed that a path-valued `project_hint` produced by task startup can initially retrieve the generated task echo rather than canonical project memory. Agents recovered by retrying with canonical `project_hint` plus `repo_path`, but startup and recommended Recall do not yet share one project-identity resolver.
 
 ## Next Coherent Slices
 
-1. Add an opt-in local real-Agent evaluation runner that records only synthetic scenario traces and compares clients/models without reading the user's Vault.
+1. Add one shared project-identity resolver for task startup, context-pack construction, recommended Recall, and closeout, then cover path-valued startup hints with an integration regression.
 2. Split the large MCP application-tool module by use-case ownership while preserving the contract registry, result validation, audit metadata, and current package boundary.
 3. Add real Obsidian-hosted UI acceptance coverage for managed Skill install/update, capability profiles, workflow diagnostics, onboarding, Review Queue, index rebuild, and credential lifecycle.
 4. Continue reducing composition-root orchestration only where it creates an independently testable controller; do not split files solely for line count.

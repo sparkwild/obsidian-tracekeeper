@@ -331,6 +331,72 @@ async function main() {
 			'',
 			'Initial project memory.',
 		].join('\n'));
+		writeNote(vaultRoot, '01_knowledge/memory/projects/atlas/index.md', [
+			'---',
+			'type: project_memory_index',
+			'project_hint: atlas',
+			'---',
+			'# Atlas Project Memory',
+		].join('\n'));
+		writeNote(vaultRoot, '01_knowledge/memory/projects/atlas/memory.md', [
+			'---',
+			'type: memory',
+			'project_hint: atlas',
+			'related_wiki: [01_knowledge/wiki/hubs/atlas-hub.md]',
+			'---',
+			'# Atlas Project Memory',
+			'',
+			'Atlasfixture project memory note shared with repo validation tests.',
+		].join('\n'));
+		writeNote(vaultRoot, '01_knowledge/memory/projects/atlas/no-repo-bridge.md', [
+			'---',
+			'type: memory',
+			'project_hint: atlas',
+			'---',
+			'# Atlas Memory (No Repo Metadata)',
+			'',
+			'Atlasfixture project recall note without explicit repo metadata.',
+		].join('\n'));
+		writeNote(vaultRoot, '01_knowledge/memory/projects/atlas/explicit-match.md', [
+			'---',
+			'type: memory',
+			'project_hint: atlas',
+			'repo_path: repo/atlas-temp',
+			'related_wiki: [01_knowledge/wiki/hubs/atlas-hub.md]',
+			'---',
+			'# Atlas Memory (Explicit Repo Match)',
+			'',
+			'Atlasfixture project recall note with explicit matching repo metadata.',
+		].join('\n'));
+		writeNote(vaultRoot, '01_knowledge/memory/projects/atlas/explicit-conflict.md', [
+			'---',
+			'type: memory',
+			'project_hint: atlas',
+			'repo: github.com/other/atlas',
+			'---',
+			'# Atlas Memory (Explicit Repo Conflict)',
+			'',
+			'Atlasfixture project recall note with explicit repo metadata conflict.',
+		].join('\n'));
+		writeNote(vaultRoot, '01_knowledge/wiki/hubs/atlas-hub.md', [
+			'# Atlas Hub',
+			'',
+			'## Related memory',
+			'- [[01_knowledge/memory/projects/atlas/memory|Atlas memory]]',
+		].join('\n'));
+		writeNote(vaultRoot, '01_knowledge/sources/atlas-source.md', [
+			'# Atlas Source',
+			'Atlasfixture source note for overlap tests.',
+		].join('\n'));
+		writeNote(vaultRoot, '00_tracekeeper/work/tasks/atlas-task.md', [
+			'---',
+			'type: agent_task',
+			'project_hint: atlas',
+			'---',
+			'# Atlas Task',
+			'Atlasfixture task note for scope filtering tests.',
+			'继续 Atlas 项目的架构工作：基于既有决策，为订单投影重建制定可执行的三步实施计划，并总结本次决定和下一步。',
+		].join('\n'));
 		writeNote(vaultRoot, '00_tracekeeper/inbox/agent_requests/local-source-request.md', [
 			'---',
 			'type: agent-request',
@@ -774,6 +840,8 @@ async function main() {
 			startTask.closeout_contract?.fields?.includes('solution_changes'),
 			'start_task should return closeout fields for agents'
 		);
+		assert.ok(startTask.closeout_contract?.fields?.includes('related_wiki'), 'start_task should include related_wiki in closeout contract fields');
+		assert.ok(startTask.closeout_contract?.fields?.includes('related_sources'), 'start_task should include related_sources in closeout contract fields');
 		assert.equal(startTask.recommended_recall?.tool, 'tracekeeper.recall');
 		assert.equal(startTask.recommended_recall?.arguments?.scope, 'project');
 		assert.equal(startTask.recommended_recall?.arguments?.project_hint, 'demo');
@@ -1189,6 +1257,62 @@ async function main() {
 		assert.ok(Array.isArray(projectContextEntries[0].graph_links));
 		assert.ok(projectContext.scope === 'project' || (projectContext.scope && projectContext.scope.scope === 'project'));
 		assert.equal(projectContext.scope?.project_hint || projectContext.project_hint || null, 'demo');
+
+		const atlasProjectContext = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.recall',
+			arguments: {
+				query: 'atlasfixture',
+				scope: 'project',
+				project_hint: 'Atlas',
+				repo_path: 'repo/atlas-temp',
+				max_items: 6,
+			},
+		}));
+		assert.equal(atlasProjectContext.ok, true);
+		const atlasProjectContextEntries = atlasProjectContext.entries || atlasProjectContext.matches || [];
+		const atlasProjectPaths = atlasProjectContextEntries.map((entry) => entry.path);
+		assert.ok(atlasProjectPaths.includes('01_knowledge/memory/projects/atlas/explicit-match.md'));
+		assert.ok(atlasProjectPaths.includes('01_knowledge/memory/projects/atlas/no-repo-bridge.md'));
+		assert.ok(!atlasProjectPaths.includes('01_knowledge/memory/projects/atlas/explicit-conflict.md'));
+
+		const atlasTrackedRecall = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.recall',
+			arguments: {
+				query: '继续 Atlas 项目的架构工作：基于既有决策，为订单投影重建制定可执行的三步实施计划，并总结本次决定和下一步',
+				scope: 'project',
+				project_hint: 'Atlas',
+				repo_path: 'repo/atlas-temp',
+				max_items: 6,
+			},
+		}));
+		const atlasTrackedEntries = atlasTrackedRecall.entries || atlasTrackedRecall.matches || [];
+		assert.ok(atlasTrackedEntries.length > 0);
+		assert.ok(
+			atlasTrackedEntries[0].path.startsWith('01_knowledge/memory/projects/atlas/'),
+			`project recall should rank durable project memory above a current task that echoes the query: ${JSON.stringify(
+				atlasTrackedEntries.map((entry) => ({ path: entry.path, score: entry.score, reasons: entry.score_reason }))
+			)}`
+		);
+		assert.ok(
+			atlasTrackedEntries[0].score_reason.includes('Project-memory location boost (+4)'),
+			'project-memory ranking should expose its location signal'
+		);
+
+		const atlasRepoOnlyContext = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.recall',
+			arguments: {
+				query: 'atlasfixture',
+				scope: 'project',
+				repo_path: 'repo/atlas-temp',
+				max_items: 6,
+			},
+		}));
+		const atlasRepoOnlyEntries = atlasRepoOnlyContext.entries || atlasRepoOnlyContext.matches || [];
+		const atlasRepoOnlyPaths = atlasRepoOnlyEntries.map((entry) => entry.path);
+		assert.ok(atlasRepoOnlyContext.ok, true);
+		assert.ok(atlasRepoOnlyPaths.includes('01_knowledge/memory/projects/atlas/explicit-match.md'));
+		assert.ok(!atlasRepoOnlyPaths.includes('01_knowledge/memory/projects/atlas/no-repo-bridge.md'));
+		assert.ok(!atlasRepoOnlyPaths.includes('01_knowledge/memory/projects/atlas/explicit-conflict.md'));
 
 		const deprecatedProjectContext = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.project_context',

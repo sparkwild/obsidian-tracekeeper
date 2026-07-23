@@ -58,9 +58,21 @@ npm run eval:agent-initiative:test
 
 The existing `npm run eval:agent-initiative` command remains the v1 compatibility check. Use `--traces <file>` with a single baseline to evaluate externally captured synthetic traces. Use `--report <name>` to write beneath the ignored `reports/` directory.
 
+## Real Agent A/B runner
+
+`real/` contains a separate opt-in runner that starts a token-protected loopback MCP runtime over a fresh temporary synthetic Vault for every run. It compares identical Codex prompts in two arms: MCP only and MCP plus the repository's Tracekeeper Skill installed into the temporary worktree.
+
+```bash
+npm run eval:agent-initiative:real:test
+npm run eval:agent-initiative:real -- --scenario real-greeting
+npm run eval:agent-initiative:real -- --execute --scenario real-recall-basic,real-track-basic
+```
+
+The default command only previews the matrix. `--execute` consumes model quota and writes redacted, Git-ignored traces under `reports/real/`. The real execution lane is deliberately not a CI or release gate; only its parser, CLI, metric, and synthetic-Vault tests run during ordinary verification. See [the runner guide](real/README.md) for isolation and interpretation rules.
+
 ## Limitations
 
 - Static adapters model explicit Skill semantics; they do not measure probabilistic model behavior.
 - Prompt patterns are bilingual scenario semantics, not a general natural-language classifier.
-- Runtime action-envelope and MCP integration behavior require separate integration evaluation.
+- Runtime action-envelope and MCP integration behavior can be sampled with the opt-in real runner, but results remain client-, model-, scenario-, and repetition-dependent.
 - Changing scenarios, Skill sources, adapters, or evaluator output requires an intentional baseline/hash review.

@@ -96,6 +96,12 @@ const MAX_SOURCE_EXCERPT_LENGTH = 1000;
 const MAX_RECALL_EXCERPT_LENGTH = 480;
 const MAX_RECALL_GRAPH_LINKS = 8;
 const DEFAULT_FINISH_TASK_REVIEW_MODE = 'auto_propose';
+const PROJECT_MEMORY_RECALL_BOOST = 4;
+const KNOWLEDGE_WIKI_RECALL_BOOST = 0.75;
+const WORK_RECORD_RECALL_PENALTY = 5;
+const PROJECT_MEMORY_RECALL_REASON = 'Project-memory location boost (+4)';
+const KNOWLEDGE_WIKI_RECALL_REASON = 'Wiki location boost (+0.75)';
+const WORK_RECORD_RECALL_REASON = 'Work-record query-echo penalty (-5)';
 
 type CaptureSourceMode = 'external_reference' | 'extracted_snapshot' | 'local_copy';
 type ReviewProposalMode = 'off' | 'suggest' | 'review_queue' | 'auto_propose';
@@ -1825,6 +1831,33 @@ function noteMatchesProjectHint(note: ScannedNote, projectHint: string): boolean
 	return valueContainsAnyToken(frontmatterValues, tokens);
 }
 
+function noteRepoMetadataValues(note: ScannedNote): string[] {
+	return [
+		readFrontmatterString(note.frontmatter, ['repo_path', 'repoPath', 'repository_path', 'repositoryPath']),
+		readFrontmatterString(note.frontmatter, ['repo', 'repository']),
+		readFrontmatterString(note.frontmatter, ['project_path', 'projectPath', 'project_paths', 'projectPaths']),
+		readFrontmatterString(note.frontmatter, ['workspace', 'cwd']),
+	]
+		.map((value) => value.toLowerCase().trim())
+		.filter(Boolean);
+}
+
+function hasExplicitRepoMetadata(note: ScannedNote): boolean {
+	return noteRepoMetadataValues(note).length > 0;
+}
+
+function noteMatchesExplicitRepoMetadata(note: ScannedNote, normalizedRepoPath: string): boolean {
+	if (!normalizedRepoPath) {
+		return false;
+	}
+	const repoMetadata = noteRepoMetadataValues(note);
+	if (repoMetadata.length === 0) {
+		return false;
+	}
+	const repoLeaf = normalizedRepoPath.split('/').filter(Boolean).pop() || normalizedRepoPath;
+	return repoMetadata.some((value) => valueContainsAnyToken(value, [normalizedRepoPath, repoLeaf]));
+}
+
 function filterNotesByProjectScope(notes: ScannedNote[], scope: ProjectScopeFilter): ScannedNote[] {
 	if (!hasProjectScope(scope)) {
 		return notes.filter((note) => PROJECT_MEMORY_READ_DIRS.some((dir) => note.relativePath.startsWith(`${dir}/`)));
@@ -1833,8 +1866,14 @@ function filterNotesByProjectScope(notes: ScannedNote[], scope: ProjectScopeFilt
 	const normalizedRepo = hasRepoPath ? normalizeRepoPrefix(scope.repoPath).toLowerCase() : '';
 	const projectHint = scope.projectHint.toLowerCase();
 	const projectId = scope.projectId.toLowerCase();
+	const hasProjectIdentity = Boolean(projectHint || projectId);
 	return notes.filter((note) => {
-		if (hasRepoPath && !noteMatchesRepoPath(note, normalizedRepo)) {
+		if (hasRepoPath && hasProjectIdentity) {
+			const explicitMetadata = hasExplicitRepoMetadata(note);
+			if (explicitMetadata && !noteMatchesExplicitRepoMetadata(note, normalizedRepo)) {
+				return false;
+			}
+		} else if (hasRepoPath && !noteMatchesRepoPath(note, normalizedRepo)) {
 			return false;
 		}
 		if (projectHint && !noteMatchesProjectHint(note, projectHint)) {
@@ -2035,6 +2074,19 @@ function rankRecallMatches(
 			readFrontmatterString(match.note.frontmatter, ['related_project', 'relatedProject', 'workspace']),
 		].join(' ').toLowerCase();
 
+		if (notePath.startsWith(`${KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)) {
+			score += PROJECT_MEMORY_RECALL_BOOST;
+			reasons.push(PROJECT_MEMORY_RECALL_REASON);
+		} else if (isKnowledgeWikiPath(notePath)) {
+			score += KNOWLEDGE_WIKI_RECALL_BOOST;
+			reasons.push(KNOWLEDGE_WIKI_RECALL_REASON);
+		} else if (
+			notePath.startsWith(`${TRACEKEEPER_TASKS_DIR}/`) ||
+			notePath.startsWith(`${TRACEKEEPER_SESSIONS_DIR}/`)
+		) {
+			score = Math.max(0.01, score - WORK_RECORD_RECALL_PENALTY);
+			reasons.push(WORK_RECORD_RECALL_REASON);
+		}
 		if (match.matchedTokens.length >= 2) {
 			score += 0.4;
 			reasons.push('Multiple query token matches (+0.4)');
@@ -5065,9 +5117,12 @@ function buildCloseoutContract(context: ToolContext): Record<string, unknown> {
 			'preferences',
 			'next_actions',
 			'memory_candidates',
+			'related_wiki',
+			'related_sources',
 		],
 		project_hint_required_for_project_memory: true,
-		note: 'At task closeout, include durable decisions, solution changes, lessons, user preferences, next actions, and memory candidates when present.',
+		note: 'At task closeout, include durable decisions, solution changes, lessons, user preferences, next actions, and memory candidates when present. ' +
+			'Reuse verified wiki/source paths already gathered from recall/read_note, otherwise report review fallback.',
 	};
 }
 

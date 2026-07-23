@@ -6,7 +6,7 @@
 	"skill_sha256": "fb8d7f2c8910f2509eb03654beb269b3877569b3f744bafda1703af6d6d4ad2f",
 	"skill_sources": [
 		{ "path": "skills/tracekeeper/SKILL.md", "sha256": "fb8d7f2c8910f2509eb03654beb269b3877569b3f744bafda1703af6d6d4ad2f" },
-		{ "path": "skills/tracekeeper/references/closeout-fields.md", "sha256": "d2396fce39b6738b5b9efe0c52b3551ca4ee04c4bd6869ae44b30b3b0fdadf20" },
+		{ "path": "skills/tracekeeper/references/closeout-fields.md", "sha256": "08b5ecc22dafbfa7d44ed222e9cafe1633fb846d5f933eedf17b9a47a36286c4" },
 		{ "path": "skills/tracekeeper/references/failure-recovery.md", "sha256": "2b95aef2ffdf4af49fd4344a30ea13e32f789b895777bbb406ec61542ffac597" },
 		{ "path": "skills/tracekeeper/references/instruction-isolation.md", "sha256": "2bf2f2f047bba9a968d2ca841029f130c12a9829e2e294e3b8d56659fd8c9357" },
 		{ "path": "skills/tracekeeper/references/workflow-state-machine.md", "sha256": "4d74f1c6984961d87e6d059dab5a3e6650743b429ef2b8e662d332d6c9f1fa8b" }

@@ -179,3 +179,22 @@ test('rejects a bundle that loses recall_only lifecycle isolation', async () => 
 		assert.match(result.errors.join('\n'), /prohibit start and finish in recall_only/);
 	});
 });
+
+test('rejects closeout guidance that loses recalled graph-path propagation', async () => {
+	await withFixture(async (root) => {
+		const closeoutPath = path.join(root, 'skills/tracekeeper/references/closeout-fields.md');
+		const closeout = await readFile(closeoutPath, 'utf8');
+		await writeFile(
+			closeoutPath,
+			closeout
+				.replace(/^- `related_wiki`:.+\n/m, '')
+				.replace(/^- `related_sources`:.+\n/m, ''),
+			'utf8',
+		);
+		await writeTracekeeperSkillBundle(root);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(result.errors.join('\n'), /does not preserve related_wiki at closeout/);
+		assert.match(result.errors.join('\n'), /does not preserve related_sources at closeout/);
+	});
+});

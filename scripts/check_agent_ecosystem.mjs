@@ -15,6 +15,7 @@ const REQUIRED_PATHS = Object.freeze([
 	'docs/engineering/INDEX.md',
 	'docs/status/INDEX.md',
 	'skills/tracekeeper/SKILL.md',
+	'skills/tracekeeper/references/closeout-fields.md',
 	'skills/tracekeeper/manifest.json',
 	'skills/tracekeeper/dist/tracekeeper.flattened.md',
 	'apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts',
@@ -189,6 +190,21 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	requirePattern(skill, /^---\nname: tracekeeper\ndescription: [^\n]+\n---\n/, 'Skill frontmatter must contain only compatible name and description fields', errors);
 	requirePattern(skill, /description: .*project continuity.*Do not use Tracekeeper/i, 'Skill description must contain positive and negative triggers', errors);
 	checkWorkflowSemantics(contract, skill, flattened, errors);
+	const closeoutFields = contents.get('skills/tracekeeper/references/closeout-fields.md') ?? '';
+	for (const [content, owner] of [
+		[contract, 'contract'],
+		[closeoutFields, 'closeout guidance'],
+		[flattened, 'flattened Skill'],
+	]) {
+		requirePattern(content, /\brelated_wiki\b/, `${owner} does not preserve related_wiki at closeout`, errors);
+		requirePattern(content, /\brelated_sources\b/, `${owner} does not preserve related_sources at closeout`, errors);
+		requirePattern(
+			content,
+			/(?:Recall results?|correlated note read)[\s\S]{0,240}(?:never invent|never[\s\S]{0,80}(?:invent|guess))/i,
+			`${owner} does not constrain closeout graph paths to recalled or read evidence`,
+			errors,
+		);
+	}
 
 	const manifestText = contents.get(`skills/tracekeeper/${TRACEKEEPER_SKILL_MANIFEST_PATH}`) ?? '';
 	let manifest;

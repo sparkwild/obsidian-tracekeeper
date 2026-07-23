@@ -20,7 +20,7 @@ obsidian-tracekeeper/
 │  ├─ core/              shared vault, index, journal, and knowledge primitives
 │  └─ mcp-runtime/       MCP transport, auth, sessions, and tool application adapter
 ├─ skills/tracekeeper/   companion Agent workflow guidance
-├─ evals/agent-initiative/ deterministic local Skill-policy characterization
+├─ evals/agent-initiative/ static characterization plus opt-in real Agent A/B runner
 ├─ docs/                 canonical product and engineering documentation
 ├─ scripts/              repository verification
 └─ package.json          workspace commands and version coordination
@@ -63,7 +63,7 @@ npm run test
 npm run package
 ```
 
-The Agent-initiative Eval uses 37 bilingual deterministic scenarios and a frozen historical Skill fixture. It is a static policy characterization, not an observed LLM success rate and not a production missed-call metric.
+The static Agent-initiative Eval uses 37 bilingual deterministic scenarios and a frozen historical Skill fixture. The separate opt-in real runner uses fresh temporary Vaults and loopback MCP processes to compare MCP-only and MCP-plus-Skill Codex traces. Real execution consumes model quota and is not a CI or release gate; its parser, CLI, metric, redaction, and synthetic-Vault tests do run in `npm run verify`.
 
 The plugin workspace has pure feature tests plus onboarding acceptance, client-configuration preview/CAS, complete Skill-bundle install/update/rollback, local capability profiles, workflow diagnostics, and asynchronous index-adapter checks. Onboarding acceptance verifies bundle distribution, distinct setup evidence, external connection evidence, recall evidence, and same-principal tracked-workflow evidence. Core tests cover operation recovery, cross-process journal locking/atomic claim, and incremental index events; MCP tests cover contracts, output validation, protocol-version matrices, tools/resources/prompts, HTTP/auth/session/stream/request limits, snapshot injection, instruction isolation, task idempotency, repository-backed closeout, concurrent audit append, and writeback recovery. Rendered Obsidian UI changes still require relevant desktop verification.
 

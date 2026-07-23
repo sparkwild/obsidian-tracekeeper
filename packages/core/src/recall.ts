@@ -3,6 +3,8 @@ import {
 	ARCHIVE_ARCHITECTURE_DIR,
 	KNOWLEDGE_ARCHITECTURE_DIR,
 	KNOWLEDGE_PROJECTS_MEMORY_DIR,
+	TRACEKEEPER_CONTROL_DIR,
+	TRACEKEEPER_INBOX_DIR,
 	TRACEKEEPER_ARCHITECTURE_DIR,
 	TRACEKEEPER_SESSIONS_DIR,
 	TRACEKEEPER_TASKS_DIR,
@@ -21,6 +23,15 @@ export interface RecallMatch {
 const MIN_TOKEN_LENGTH = 2;
 const DEFAULT_LIMIT = 6;
 const RECENT_NOTE_WINDOW_DAYS = 14;
+const EXCLUDED_RECALL_PREFIXES = [TRACEKEEPER_CONTROL_DIR, TRACEKEEPER_INBOX_DIR];
+
+function isExcludedFromRecall(note: ScannedNote): boolean {
+	const normalizedPath = note.relativePath.replace(/\\/g, '/').toLowerCase();
+	return EXCLUDED_RECALL_PREFIXES.some((prefix) => {
+		const normalizedPrefix = prefix.toLowerCase();
+		return normalizedPath === normalizedPrefix || normalizedPath.startsWith(`${normalizedPrefix}/`);
+	});
+}
 
 function tokenize(input: string): string[] {
 	const text = input.toLowerCase().normalize('NFKC');
@@ -151,6 +162,9 @@ export function recallNotes(notes: ScannedNote[], query: string, options: Recall
 	const matches: RecallMatch[] = [];
 
 	for (const note of notes) {
+		if (isExcludedFromRecall(note)) {
+			continue;
+		}
 		const score = scoreNote(note, tokens);
 		if (score <= 0) {
 			continue;

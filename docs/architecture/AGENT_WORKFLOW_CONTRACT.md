@@ -62,6 +62,8 @@ Only `tracked_task` has a closeout lifecycle.
 - Reuse the real `task_id` from start.
 - Choose an accurate completion status such as completed, partial, or blocked.
 - Summarize work performed, decisions made, unresolved risks, and useful next steps.
+- Preserve relevant `related_wiki` and `related_sources` Vault-relative paths already exposed by Recall results or a correlated note read.
+- Never invent, guess, or rewrite a Wiki or source path. When no verified relationship is available, omit it and allow MCP review policy to report the missing bridge.
 - Submit durable-memory or Wiki changes only through the review-gated proposal workflow.
 - A pending proposal is not durable memory.
 - Apply an approved proposal only when the user explicitly requests the apply action.
