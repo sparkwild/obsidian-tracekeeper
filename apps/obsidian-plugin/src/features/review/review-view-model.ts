@@ -30,8 +30,10 @@ export interface MemoryProposalRecord {
 	proposedBy: string;
 	relatedProject: string;
 	taskId: string;
+	sourceSessionNote: string;
 	targetNote: string;
 	evidence: string[];
+	relatedSources: string[];
 	riskLevel: string;
 	approvalStatus: MemoryProposalStatus;
 	created: string;
@@ -344,8 +346,10 @@ export const parseMemoryProposalRecord = ({
 		proposedBy: firstString(fields, ['proposed_by', 'proposedBy']) || 'unknown',
 		relatedProject: firstString(fields, ['related_project', 'relatedProject', 'project_hint', 'projectHint']) || '',
 		taskId: firstString(fields, ['task_id', 'taskId']) || '',
+		sourceSessionNote: firstString(fields, ['proposal_source_session_note', 'proposalSourceSessionNote', 'session_note', 'sessionNote']) || '',
 		targetNote: firstString(fields, ['target_note', 'targetNote', 'target_path', 'targetPath']) || '',
 		evidence: readStringList(fields, ['evidence']),
+		relatedSources: readStringList(fields, ['related_sources', 'relatedSources']),
 		riskLevel: firstString(fields, ['risk_level', 'riskLevel', 'risk']) || 'unknown',
 		approvalStatus,
 		created,

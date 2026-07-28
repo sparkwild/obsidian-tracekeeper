@@ -655,6 +655,17 @@
 	font-size: 14px;
 }
 
+button.tracekeeper-task-card__change-chip {
+	height: auto;
+	cursor: pointer;
+}
+
+button.tracekeeper-task-card__change-chip:hover,
+button.tracekeeper-task-card__change-chip:focus-visible {
+	border-color: var(--interactive-accent);
+	color: var(--text-normal);
+}
+
 .tracekeeper-task-card__change-note {
 	color: var(--text-muted);
 }
@@ -695,6 +706,66 @@
 	display: flex;
 	flex-wrap: wrap;
 	gap: 6px;
+}
+
+.tracekeeper-observability-list {
+	display: grid;
+	gap: 8px;
+}
+
+.tracekeeper-observability-list > .tracekeeper-card {
+	margin-top: 0;
+	background: var(--background-primary);
+}
+
+.tracekeeper-observability-record__path {
+	margin-top: 2px;
+	color: var(--text-muted);
+	font-family: var(--font-monospace);
+	font-size: 11px;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-observability-warning {
+	border-color: var(--text-warning);
+	box-shadow: inset 3px 0 0 var(--text-warning);
+}
+
+.tracekeeper-observability-warning p {
+	margin: 4px 0 0;
+	color: var(--text-muted);
+}
+
+.tracekeeper-observability-filters {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.tracekeeper-observability-focus {
+	border-color: var(--interactive-accent);
+	box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+.tracekeeper-observability-focus .tracekeeper-card__header {
+	align-items: center;
+	margin-bottom: 0;
+}
+
+.tracekeeper-observability-pagination {
+	align-items: center;
+	justify-content: center;
+	margin-top: 10px;
+}
+
+.tracekeeper-source-requests > summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+
+.tracekeeper-source-requests__body {
+	margin-top: 10px;
 }
 
 button.tracekeeper-confirm-button {

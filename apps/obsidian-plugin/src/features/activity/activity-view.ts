@@ -19,6 +19,8 @@ import {
 	TRACEKEEPER_RUNTIME_STATUS_VIEW,
 } from '../../ui/view-types';
 
+type TaskChangeKind = 'memory_reads' | 'memory_writes' | 'source_captures' | 'memory_proposals';
+
 export class TracekeeperActivityView extends ItemView {
 	private advancedDiagnosticsEl: HTMLDetailsElement | null = null;
 
@@ -64,6 +66,18 @@ export class TracekeeperActivityView extends ItemView {
 		const heading = header.createDiv();
 		heading.createEl('h2', { text: ui('AI 助手活动', 'AI assistant activity'), cls: 'tracekeeper-view__title' });
 		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
+		const memoryButton = actions.createEl('button', {
+			text: ui('记忆', 'Memory'),
+		});
+		memoryButton.addEventListener('click', () => {
+			void this.plugin.openMemoryInspector();
+		});
+		const sourceButton = actions.createEl('button', {
+			text: ui('资料', 'Sources'),
+		});
+		sourceButton.addEventListener('click', () => {
+			void this.plugin.openSourceStatus();
+		});
 		const refreshButton = actions.createEl('button', {
 			text: ui('刷新', 'Refresh'),
 		});
@@ -337,7 +351,12 @@ export class TracekeeperActivityView extends ItemView {
 
 	private renderSourceActivitySection(container: HTMLElement, snapshot: AgentActivitySnapshot): void {
 		const card = container.createDiv({ cls: 'tracekeeper-card' });
-		card.createEl('h3', { text: ui('资料活动', 'Source activity') });
+		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
+		header.createEl('h3', { text: ui('资料活动', 'Source activity') });
+		const viewAllButton = header.createEl('button', { text: ui('查看资料', 'Open sources') });
+		viewAllButton.addEventListener('click', () => {
+			void this.plugin.openSourceStatus();
+		});
 		const pendingRequests = snapshot.recentSourceRequests.filter((request) =>
 			this.isSourceRequestPending(request.status)
 		);
@@ -392,6 +411,10 @@ export class TracekeeperActivityView extends ItemView {
 		const recallButton = actions.createEl('button', { text: ui('测试召回', 'Test recall') });
 		recallButton.addEventListener('click', () => {
 			new MemoryRecallPreviewModal(this.app, this.plugin).open();
+		});
+		const memoryButton = actions.createEl('button', { text: ui('查看记忆', 'Open memory') });
+		memoryButton.addEventListener('click', () => {
+			void this.plugin.openMemoryInspector();
 		});
 
 		const latestProposal = snapshot.recentProposals[0] ?? null;
@@ -674,9 +697,12 @@ export class TracekeeperActivityView extends ItemView {
 				});
 			} else {
 				for (const change of changeItems) {
-					const chip = chips.createEl('span', { cls: 'tracekeeper-task-card__change-chip' });
+					const chip = chips.createEl('button', { cls: 'tracekeeper-task-card__change-chip' });
 					chip.createEl('strong', { text: String(change.value) });
 					chip.createEl('span', { text: change.label });
+					chip.addEventListener('click', () => {
+						void this.openTaskChange(task, change.kind);
+					});
 				}
 			}
 		}
@@ -706,13 +732,40 @@ export class TracekeeperActivityView extends ItemView {
 		field.createEl('strong', { text: value || ui('未知', 'Unknown') });
 	}
 
-	private taskChangeItems(task: AgentTaskRecord): Array<{ label: string; value: number }> {
-		return [
-			{ label: ui('读取记忆', 'Memory reads'), value: task.memoryReads.length },
-			{ label: ui('写入记忆', 'Memory writes'), value: this.taskDurableMemoryWriteCount(task) },
-			{ label: ui('捕获资料', 'Source captures'), value: task.sourceCaptures.length },
-			{ label: ui('记忆提案', 'Memory proposals'), value: task.proposals.length },
-		].filter((item) => item.value > 0);
+	private taskChangeItems(task: AgentTaskRecord): Array<{ kind: TaskChangeKind; label: string; value: number }> {
+		const items: Array<{ kind: TaskChangeKind; label: string; value: number }> = [
+			{ kind: 'memory_reads', label: ui('读取记忆', 'Memory reads'), value: task.memoryReads.length },
+			{ kind: 'memory_writes', label: ui('写入记忆', 'Memory writes'), value: this.taskDurableMemoryWriteCount(task) },
+			{ kind: 'source_captures', label: ui('捕获资料', 'Source captures'), value: task.sourceCaptures.length },
+			{ kind: 'memory_proposals', label: ui('记忆提案', 'Memory proposals'), value: task.proposals.length },
+		];
+		return items.filter((item) => item.value > 0);
+	}
+
+	private async openTaskChange(task: AgentTaskRecord, kind: TaskChangeKind): Promise<void> {
+		switch (kind) {
+			case 'memory_reads':
+				await this.plugin.openMemoryInspector({
+					focusPaths: task.memoryReads,
+					taskId: task.taskId,
+				});
+				return;
+			case 'memory_writes':
+				await this.plugin.openMemoryInspector({
+					focusPaths: task.memoryWrites.filter((path) => path && path !== task.sessionNote),
+					taskId: task.taskId,
+				});
+				return;
+			case 'source_captures':
+				await this.plugin.openSourceStatus({
+					focusPaths: task.sourceCaptures,
+					taskId: task.taskId,
+				});
+				return;
+			case 'memory_proposals':
+				await this.plugin.openPluginView(TRACEKEEPER_REVIEW_QUEUE_VIEW);
+				return;
+		}
 	}
 
 	private taskTimeLabel(task: AgentTaskRecord): string {

@@ -38,6 +38,8 @@ try {
 			target_note: 'projects/tracekeeper/index.md',
 			task_id: 'task-42',
 			evidence: ['e1', 'e2', 'e1'],
+			related_sources: ['01_knowledge/sources/web/a.md', '01_knowledge/sources/web/a.md'],
+			proposal_source_session_note: '00_tracekeeper/work/sessions/task-42.md',
 			risk_level: 'low',
 			writeback_content: 'frontmatter line1\\nfrontmatter line2',
 			revision_requested_by: 'agent',
@@ -54,6 +56,8 @@ try {
 	assert.equal(memoryProposal?.riskLevel, 'low');
 	assert.equal(memoryProposal?.revisionRequestedBy, 'agent');
 	assert.equal(memoryProposal?.evidence.length, 2);
+	assert.deepEqual(memoryProposal?.relatedSources, ['01_knowledge/sources/web/a.md']);
+	assert.equal(memoryProposal?.sourceSessionNote, '00_tracekeeper/work/sessions/task-42.md');
 	assert.equal(memoryProposal?.writebackContent, 'frontmatter line1\nfrontmatter line2');
 	assert.equal(memoryProposal?.targetNote, 'projects/tracekeeper/index.md');
 
@@ -146,7 +150,7 @@ try {
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...invalidTarget, approvalStatus: 'pending' }), 'incomplete');
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...legacyProposal, approvalStatus: 'approved' }), 'completed');
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 27 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 29 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

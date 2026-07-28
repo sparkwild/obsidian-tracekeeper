@@ -8,7 +8,6 @@ import { compareProposalRecords, parseMemoryProposalRecord, type MemoryProposalR
 import { REVIEW_QUEUE_PATH } from '../review/review-queue-model';
 import {
 	AGENT_TASKS_PATH,
-	MAX_SOURCE_STATUS_ROWS,
 	type AgentTaskRecord,
 	type ContextPackRecord,
 	type SourceCaptureRecord,
@@ -26,31 +25,8 @@ const SOURCE_REQUESTS_PATH = TRACEKEEPER_AGENT_REQUESTS_DIR;
 const CONTEXT_PACKS_PATH = TRACEKEEPER_CONTEXT_PACKS_DIR;
 const SOURCES_PATH = KNOWLEDGE_SOURCES_DIR;
 
-export interface SourceAnalysisSnapshot {
-	requests: SourceRequestRecord[];
-	missingRequestFolder: boolean;
-	updatedAt: string;
-}
-
 export class ActivityRecordRepository {
 	constructor(private readonly app: App) {}
-
-async loadSourceStatusSnapshot(): Promise<SourceAnalysisSnapshot> {
-		const folder = this.app.vault.getAbstractFileByPath(SOURCE_REQUESTS_PATH);
-		if (!(folder instanceof TFolder)) {
-			return {
-				requests: [],
-				missingRequestFolder: true,
-				updatedAt: new Date().toISOString(),
-			};
-		}
-
-		return {
-			requests: await this.readRecentSourceRequests(MAX_SOURCE_STATUS_ROWS),
-			missingRequestFolder: false,
-			updatedAt: new Date().toISOString(),
-		};
-	}
 
 async readRecentSourceRequests(limit: number): Promise<SourceRequestRecord[]> {
 		const folder = this.app.vault.getAbstractFileByPath(SOURCE_REQUESTS_PATH);
@@ -58,7 +34,7 @@ async readRecentSourceRequests(limit: number): Promise<SourceRequestRecord[]> {
 			return [];
 		}
 
-		const files = this.collectMarkdownFiles(folder);
+		const files = this.collectRecentMarkdownFiles(folder, limit);
 		const records = await Promise.all(files.map((file) => this.readSourceRequestFile(file)));
 		return records
 			.filter((record): record is SourceRequestRecord => Boolean(record))
@@ -113,7 +89,7 @@ async readRecentAgentTasks(limit: number): Promise<AgentTaskRecord[]> {
 			return [];
 		}
 
-		const files = this.collectMarkdownFiles(folder);
+		const files = this.collectRecentMarkdownFiles(folder, limit);
 		const records = await Promise.all(
 			files.map((file) => this.readAgentTaskFile(file))
 		);
@@ -129,7 +105,7 @@ async readRecentContextPacks(limit: number): Promise<ContextPackRecord[]> {
 			return [];
 		}
 
-		const files = this.collectMarkdownFiles(folder);
+		const files = this.collectRecentMarkdownFiles(folder, limit);
 		const records = await Promise.all(files.map((file) => this.readContextPackFile(file)));
 		return records
 			.filter((record): record is ContextPackRecord => Boolean(record))
@@ -167,7 +143,7 @@ async readRecentSourceCaptures(limit: number): Promise<SourceCaptureRecord[]> {
 			return [];
 		}
 
-		const files = this.collectMarkdownFiles(folder);
+		const files = this.collectRecentMarkdownFiles(folder, limit);
 		const records = await Promise.all(files.map((file) => this.readSourceCaptureFile(file)));
 		return records
 			.filter((record): record is SourceCaptureRecord => Boolean(record))
@@ -219,7 +195,7 @@ async readRecentMemoryProposals(limit: number): Promise<MemoryProposalRecord[]> 
 			return [];
 		}
 
-		const files = this.collectMarkdownFiles(folder);
+		const files = this.collectRecentMarkdownFiles(folder, limit);
 		const records = await Promise.all(files.map((file) => this.readMemoryProposalFile(file)));
 		return records
 			.filter((record): record is MemoryProposalRecord => Boolean(record))
@@ -255,6 +231,15 @@ collectMarkdownFiles(folder: TFolder): TFile[] {
 			}
 		}
 		return files;
+	}
+
+collectRecentMarkdownFiles(folder: TFolder, limit: number): TFile[] {
+		const files = this.collectMarkdownFiles(folder)
+			.sort((left, right) => (right.stat?.mtime || 0) - (left.stat?.mtime || 0));
+		if (!Number.isFinite(limit) || limit >= files.length) {
+			return files;
+		}
+		return files.slice(0, Math.max(0, Math.floor(limit)));
 	}
 
 async readAgentTaskFile(file: TFile): Promise<AgentTaskRecord> {

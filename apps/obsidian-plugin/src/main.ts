@@ -21,9 +21,11 @@ import {
 	ARCHIVE_ROOT,
 	KNOWLEDGE_GLOBAL_MEMORY_DIR,
 	KNOWLEDGE_INDEX_PATH,
+	KNOWLEDGE_MEMORY_DIR,
 	KNOWLEDGE_MEMORY_INDEX_PATH,
 	KNOWLEDGE_PROJECTS_MEMORY_DIR,
 	KNOWLEDGE_PROJECTS_INDEX_PATH,
+	KNOWLEDGE_SOURCES_DIR,
 	KNOWLEDGE_SOURCES_INDEX_PATH,
 	KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
 	KNOWLEDGE_WIKI_INDEX_PATH,
@@ -217,10 +219,20 @@ import {
 	timestampFromFilename,
 	trimText,
 } from './features/shared/markdown-record-parser';
-import { ActivityRecordRepository, type SourceAnalysisSnapshot } from './features/activity/activity-record-repository';
+import { ActivityRecordRepository } from './features/activity/activity-record-repository';
 import { GraphHealthController } from './features/graph/graph-health-controller';
 import type { GraphHealthSnapshot } from './features/graph/graph-health-model';
 import { ReviewQueueController, type ApprovedWritebackPreview } from './features/review/review-queue-controller';
+import {
+	KNOWLEDGE_RELATIONSHIP_READ_LIMIT,
+	buildMemoryInspectorSnapshot,
+	buildSourceStatusSnapshot,
+	type KnowledgeIndexEvidence,
+	type MemoryInspectorQuery,
+	type MemoryInspectorSnapshot,
+	type SourceStatusQuery,
+	type SourceStatusSnapshot,
+} from './features/observability/knowledge-observability-model';
 
 
 const MANAGED_AGENT_CLIENT_IDS = ['codex', 'claude-code', 'claude-desktop', 'cursor', 'custom'] as const;
@@ -575,7 +587,7 @@ export default class TracekeeperPlugin extends Plugin {
 		);
 		this.registerView(
 			TRACEKEEPER_MEMORY_INSPECTOR_VIEW,
-			(leaf) => new TracekeeperMemoryInspectorView(leaf)
+			(leaf) => new TracekeeperMemoryInspectorView(leaf, this)
 		);
 		this.registerView(
 			TRACEKEEPER_RUNTIME_LOG_VIEW,
@@ -619,7 +631,15 @@ export default class TracekeeperPlugin extends Plugin {
 			id: 'open-memory-inspector',
 			name: ui('打开记忆查看', 'Open memory view'),
 			callback: () => {
-				void this.openPluginView(TRACEKEEPER_MEMORY_INSPECTOR_VIEW);
+				void this.openMemoryInspector();
+			},
+		});
+
+		this.addCommand({
+			id: 'open-source-status',
+			name: ui('打开来源状态', 'Open source status'),
+			callback: () => {
+				void this.openSourceStatus();
 			},
 		});
 
@@ -1574,6 +1594,16 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 	}
 
+	private async refreshMemoryInspectorViews(): Promise<void> {
+		const memoryLeaves = this.app.workspace.getLeavesOfType(TRACEKEEPER_MEMORY_INSPECTOR_VIEW);
+		for (const leaf of memoryLeaves) {
+			const view = leaf.view;
+			if (view instanceof TracekeeperMemoryInspectorView) {
+				await view.refresh();
+			}
+		}
+	}
+
 	private async refreshGraphHealthViews(): Promise<void> {
 		const graphHealthLeaves = this.app.workspace.getLeavesOfType(TRACEKEEPER_GRAPH_HEALTH_VIEW);
 		for (const leaf of graphHealthLeaves) {
@@ -1632,14 +1662,60 @@ export default class TracekeeperPlugin extends Plugin {
 	async refreshGovernanceViews(): Promise<void> {
 		await this.refreshActivityViews();
 		await this.refreshReviewQueueViews();
+		await this.refreshMemoryInspectorViews();
 		await this.refreshSourceStatusViews();
 		await this.refreshRuntimeLogViews();
 		await this.refreshRuntimeStatusViews();
 		await this.refreshGraphHealthViews();
 	}
 
-	async loadSourceStatusSnapshot(): Promise<SourceAnalysisSnapshot> {
-		return this.activityRecordRepository.loadSourceStatusSnapshot();
+	private async loadKnowledgeIndexEvidence(): Promise<KnowledgeIndexEvidence> {
+		const snapshot = await this.knowledgeIndex?.knowledgeSnapshot();
+		const scan = this.knowledgeIndex?.scanSnapshot(this.getVaultRoot());
+		return {
+			state: snapshot?.index_state ?? 'initializing',
+			generation: snapshot?.generation ?? 0,
+			lastRebuild: snapshot?.last_rebuild ?? '',
+			notes: snapshot ? Array.from(snapshot.notes.values()) : [],
+			errors: scan?.errors ?? [],
+		};
+	}
+
+	async loadMemoryInspectorSnapshot(
+		query: MemoryInspectorQuery = {}
+	): Promise<MemoryInspectorSnapshot> {
+		const [index, proposals, tasks] = await Promise.all([
+			this.loadKnowledgeIndexEvidence(),
+			this.activityRecordRepository.readRecentMemoryProposals(KNOWLEDGE_RELATIONSHIP_READ_LIMIT),
+			this.activityRecordRepository.readRecentAgentTasks(KNOWLEDGE_RELATIONSHIP_READ_LIMIT),
+		]);
+		return buildMemoryInspectorSnapshot({
+			index,
+			proposals,
+			tasks,
+			missingMemoryFolder: !(this.app.vault.getAbstractFileByPath(KNOWLEDGE_MEMORY_DIR) instanceof TFolder),
+			query,
+		});
+	}
+
+	async loadSourceStatusSnapshot(
+		query: SourceStatusQuery = {}
+	): Promise<SourceStatusSnapshot> {
+		const [index, proposals, tasks, requests] = await Promise.all([
+			this.loadKnowledgeIndexEvidence(),
+			this.activityRecordRepository.readRecentMemoryProposals(KNOWLEDGE_RELATIONSHIP_READ_LIMIT),
+			this.activityRecordRepository.readRecentAgentTasks(KNOWLEDGE_RELATIONSHIP_READ_LIMIT),
+			this.activityRecordRepository.readRecentSourceRequests(KNOWLEDGE_RELATIONSHIP_READ_LIMIT),
+		]);
+		return buildSourceStatusSnapshot({
+			index,
+			proposals,
+			tasks,
+			requests,
+			missingSourceFolder: !(this.app.vault.getAbstractFileByPath(KNOWLEDGE_SOURCES_DIR) instanceof TFolder),
+			missingRequestFolder: !(this.app.vault.getAbstractFileByPath(TRACEKEEPER_AGENT_REQUESTS_DIR) instanceof TFolder),
+			query,
+		});
 	}
 
 
@@ -2608,6 +2684,26 @@ export default class TracekeeperPlugin extends Plugin {
 			active: true,
 		});
 		await this.app.workspace.revealLeaf(leaf);
+	}
+
+	async openMemoryInspector(
+		query: Pick<MemoryInspectorQuery, 'focusPaths' | 'taskId'> = {}
+	): Promise<void> {
+		await this.openPluginView(TRACEKEEPER_MEMORY_INSPECTOR_VIEW);
+		const leaf = this.app.workspace.getLeavesOfType(TRACEKEEPER_MEMORY_INSPECTOR_VIEW)[0];
+		if (leaf?.view instanceof TracekeeperMemoryInspectorView) {
+			await leaf.view.focus(query);
+		}
+	}
+
+	async openSourceStatus(
+		query: Pick<SourceStatusQuery, 'focusPaths' | 'taskId'> = {}
+	): Promise<void> {
+		await this.openPluginView(TRACEKEEPER_SOURCE_STATUS_VIEW);
+		const leaf = this.app.workspace.getLeavesOfType(TRACEKEEPER_SOURCE_STATUS_VIEW)[0];
+		if (leaf?.view instanceof TracekeeperSourceStatusView) {
+			await leaf.view.focus(query);
+		}
 	}
 
 	openSettingsTab(): void {
