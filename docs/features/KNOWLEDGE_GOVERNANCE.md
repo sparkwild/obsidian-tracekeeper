@@ -41,6 +41,11 @@ previewed, explicitly confirmed action.
 
 Project memory may use an opt-in lighter rule:
 
+- fresh installations start with project memory in Knowledge Change Review;
+- automatic project persistence requires an explicit user selection and a
+  separately visible onboarding confirmation;
+- an upgrade preserves every stored memory rule exactly and asks for that
+  confirmation without rewriting the selected policy;
 - the target is the current project's memory note;
 - writes are append-only and duplicate-protected;
 - the project must have a valid Wiki bridge;

@@ -16,9 +16,9 @@ export type MemoryProposalRule = 'review_queue' | 'auto_write' | 'disabled';
 
 export type TaskMemoryProposalMode = 'off' | 'suggest' | 'review_queue' | 'auto_propose';
 
-export const MEMORY_RULES_VERSION = 3;
+export const MEMORY_RULES_VERSION = 4;
 
-export const MEMORY_PROPOSAL_RULES: MemoryProposalRule[] = ['auto_write', 'review_queue', 'disabled'];
+export const MEMORY_PROPOSAL_RULES: MemoryProposalRule[] = ['review_queue', 'auto_write', 'disabled'];
 
 export const TASK_MEMORY_PROPOSAL_MODES: TaskMemoryProposalMode[] = ['auto_propose', 'review_queue', 'off'];
 
@@ -62,14 +62,37 @@ export const memoryProposalRuleLabel = (rule: MemoryProposalRule): string => {
 	}
 };
 
-export const normalizeTaskMemoryProposalMode = (value: unknown): TaskMemoryProposalMode => {
+export const normalizeTaskMemoryProposalMode = (
+	value: unknown,
+	fallback: TaskMemoryProposalMode = 'off'
+): TaskMemoryProposalMode => {
 	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
 	if (normalized === 'suggest') {
 		return 'review_queue';
 	}
 	return TASK_MEMORY_PROPOSAL_MODES.includes(normalized as TaskMemoryProposalMode)
 		? normalized as TaskMemoryProposalMode
-		: 'off';
+		: fallback;
+};
+
+export interface MemoryRuleSettings {
+	memoryRulesVersion: number;
+	globalMemoryRule: MemoryProposalRule;
+	projectMemoryRule: MemoryProposalRule;
+	taskMemoryProposalMode: TaskMemoryProposalMode;
+}
+
+export const normalizeMemoryRuleSettings = (
+	raw: unknown,
+	defaults: Pick<MemoryRuleSettings, 'globalMemoryRule' | 'projectMemoryRule' | 'taskMemoryProposalMode'>
+): MemoryRuleSettings => {
+	const source = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+	return {
+		memoryRulesVersion: MEMORY_RULES_VERSION,
+		globalMemoryRule: normalizeMemoryProposalRule(source.globalMemoryRule, defaults.globalMemoryRule),
+		projectMemoryRule: normalizeMemoryProposalRule(source.projectMemoryRule, defaults.projectMemoryRule),
+		taskMemoryProposalMode: normalizeTaskMemoryProposalMode(source.taskMemoryProposalMode, defaults.taskMemoryProposalMode),
+	};
 };
 
 export const taskMemoryProposalModeLabel = (mode: TaskMemoryProposalMode): string => {

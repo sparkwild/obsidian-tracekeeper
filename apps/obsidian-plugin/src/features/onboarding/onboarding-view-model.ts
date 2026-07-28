@@ -127,6 +127,7 @@ export const buildOnboardingContext = (input: BuildOnboardingContextInput): Onbo
 		runtimeRunning: input.runtimeState === 'running' && input.runtimeEnabled,
 		clientConfigured,
 		skillSetupConfirmed: liveFileVerified || userConfirmed,
+		memoryPolicyConfirmed: input.onboarding.memoryPolicyConfirmedAt !== '',
 		agentRestartConfirmed: clientReloaded,
 		connectionVerified: input.onboarding.connectionVerifiedAt !== '',
 		firstRecallCompleted: recallObserved,
@@ -218,6 +219,7 @@ export const onboardingStepLabel = (
 		case 'runtime': return localize('启动 MCP 服务', 'Start MCP service');
 		case 'client_configuration': return localize('配置客户端连接', 'Configure a client');
 		case 'skill_setup': return localize('完成 Skill 设置', 'Configure Skill workflow');
+		case 'memory_policy': return localize('确认记忆持久化策略', 'Confirm memory persistence policy');
 		case 'agent_restart': return localize('重启客户端', 'Restart client');
 		case 'connection_verification': return localize('验证 MCP 连接', 'Verify MCP connection');
 		case 'first_recall': return localize('执行首个召回', 'Run first recall');
@@ -234,6 +236,7 @@ export const onboardingContextDescription = (
 		context.runtimeRunning,
 		context.clientConfigured,
 		context.skillSetupConfirmed,
+		context.memoryPolicyConfirmed,
 		context.agentRestartConfirmed,
 		context.connectionVerified,
 		context.firstRecallCompleted,

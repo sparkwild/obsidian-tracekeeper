@@ -31,8 +31,6 @@ import {
 	TASK_MEMORY_PROPOSAL_MODES,
 	memoryProposalRuleLabel,
 	normalizeGraphProfileValue,
-	normalizeMemoryProposalRule,
-	normalizeTaskMemoryProposalMode,
 	noteContentLanguageLabel,
 	taskMemoryProposalModeLabel,
 } from './settings-model';
@@ -144,6 +142,12 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		this.renderSkillEvidence(evidence, ui('已复制', 'Copied'), ui('人工复制事件', 'Manual copy event'), context.skillCopied);
 		this.renderSkillEvidence(evidence, ui('用户确认', 'User confirmed'), ui('人工自证，不等于文件验证', 'Self-attested, not file verification'), context.skillUserConfirmed);
 		this.renderSkillEvidence(evidence, ui('文件验证', 'File verified'), skillInstallState.detail, context.skillFileVerified);
+		this.renderSkillEvidence(
+			evidence,
+			ui('记忆策略已确认', 'Memory policy confirmed'),
+			ui('确认当前持久化规则；自动项目记忆必须由用户显式选择。', 'Confirms the current persistence rules; automatic project memory requires an explicit user choice.'),
+			context.memoryPolicyConfirmed
+		);
 		this.renderSkillEvidence(
 			evidence,
 			skillInstallState.restartRequired ? ui('客户端已重载', 'Client reloaded') : ui('客户端自动识别', 'Client auto-detection'),
@@ -330,6 +334,42 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 								.catch((error) => {
 									console.error('tracekeeper failed to mark agent restart', error);
 								});
+						});
+				});
+		}
+		if (nextStep === 'memory_policy') {
+			new Setting(section)
+				.setName(ui('项目记忆持久化', 'Project memory persistence'))
+				.setDesc(ui(
+					'新安装默认进入审核。只有你明确选择“自动”后，项目记忆才会在满足既有追加、去重和 Wiki 关联条件时自动保存。',
+					'New installations start in review. Project memory auto-saves only after you explicitly choose Auto and the existing append-only, duplicate, and Wiki-link conditions are met.'
+				))
+				.addDropdown((dropdown) => {
+					for (const rule of MEMORY_PROPOSAL_RULES) {
+						dropdown.addOption(rule, memoryProposalRuleLabel(rule));
+					}
+					dropdown
+						.setValue(this.plugin.settings.projectMemoryRule)
+						.onChange((value: string) => {
+							void this.plugin.setProjectMemoryRule(value)
+								.then(() => this.renderSettings())
+								.catch((error) => console.error('tracekeeper failed to update onboarding project memory rule', error));
+						});
+				});
+			new Setting(section)
+				.setName(ui('确认当前记忆策略', 'Confirm current memory policy'))
+				.setDesc(ui(
+					`全局记忆：${memoryProposalRuleLabel(this.plugin.settings.globalMemoryRule)}；项目记忆：${memoryProposalRuleLabel(this.plugin.settings.projectMemoryRule)}；任务结束提案：${taskMemoryProposalModeLabel(this.plugin.settings.taskMemoryProposalMode)}。你可以稍后在“记忆规则”中调整。`,
+					`Global memory: ${memoryProposalRuleLabel(this.plugin.settings.globalMemoryRule)}; project memory: ${memoryProposalRuleLabel(this.plugin.settings.projectMemoryRule)}; task-closeout proposals: ${taskMemoryProposalModeLabel(this.plugin.settings.taskMemoryProposalMode)}. You can adjust these later in Memory rules.`
+				))
+				.addButton((button) => {
+					button
+						.setButtonText(ui('确认记忆策略', 'Confirm memory policy'))
+						.setCta()
+						.onClick(() => {
+							void this.plugin.confirmOnboardingMemoryPolicy()
+								.then(() => this.renderSettings())
+								.catch((error) => console.error('tracekeeper failed to confirm onboarding memory policy', error));
 						});
 				});
 		}
@@ -715,9 +755,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				dropdown
 					.setValue(this.plugin.settings.globalMemoryRule)
 					.onChange((value: string) => {
-						this.plugin.settings.globalMemoryRule = normalizeMemoryProposalRule(value);
-						void this.plugin.saveSettings()
-							.then(() => this.plugin.restartMcpRuntime())
+						void this.plugin.setGlobalMemoryRule(value)
+							.then(() => this.renderSettings())
 							.catch((error) => {
 								console.error('tracekeeper failed to update global memory rule', error);
 							});
@@ -726,8 +765,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('项目记忆', 'Project memory'))
 			.setDesc(ui(
-				'项目、仓库或工作区相关记忆默认自动保存，减少重复审核。',
-				'Project, repository, or workspace memory auto-saves by default to reduce repeated review.'
+				'项目、仓库或工作区相关记忆默认进入审核。仅当你明确选择自动时，才会在既有安全条件下追加保存。',
+				'Project, repository, or workspace memory starts in review. It appends automatically under the existing safeguards only after you explicitly choose Auto.'
 			))
 			.addDropdown((dropdown) => {
 				for (const rule of MEMORY_PROPOSAL_RULES) {
@@ -736,9 +775,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				dropdown
 					.setValue(this.plugin.settings.projectMemoryRule)
 					.onChange((value: string) => {
-						this.plugin.settings.projectMemoryRule = normalizeMemoryProposalRule(value);
-						void this.plugin.saveSettings()
-							.then(() => this.plugin.restartMcpRuntime())
+						void this.plugin.setProjectMemoryRule(value)
+							.then(() => this.renderSettings())
 							.catch((error) => {
 								console.error('tracekeeper failed to update project memory rule', error);
 							});
@@ -757,9 +795,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				dropdown
 					.setValue(this.plugin.settings.taskMemoryProposalMode)
 					.onChange((value: string) => {
-						this.plugin.settings.taskMemoryProposalMode = normalizeTaskMemoryProposalMode(value);
-						void this.plugin.saveSettings()
-							.then(() => this.plugin.restartMcpRuntime())
+						void this.plugin.setTaskMemoryProposalMode(value)
+							.then(() => this.renderSettings())
 							.catch((error) => {
 								console.error('tracekeeper failed to update task memory proposal mode', error);
 							});

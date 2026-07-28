@@ -3,6 +3,7 @@ export const ONBOARDING_STEP_SEQUENCE = [
 	'runtime',
 	'client_configuration',
 	'skill_setup',
+	'memory_policy',
 	'agent_restart',
 	'connection_verification',
 	'first_recall',
@@ -17,6 +18,7 @@ export interface OnboardingProgressContext {
 	runtimeRunning: boolean;
 	clientConfigured: boolean;
 	skillSetupConfirmed: boolean;
+	memoryPolicyConfirmed: boolean;
 	agentRestartConfirmed: boolean;
 	connectionVerified: boolean;
 	firstRecallCompleted: boolean;
@@ -41,6 +43,7 @@ export interface OnboardingSettingsState {
 	skillFileVerifiedAt: string;
 	skillVerifiedBundleHash: string;
 	skillUpdateAvailableAt: string;
+	memoryPolicyConfirmedAt: string;
 	agentRestartCompletedAt: string;
 	connectionVerifiedAt: string;
 	firstRecallCompletedAt: string;
@@ -87,6 +90,7 @@ export const DEFAULT_ONBOARDING_SETTINGS: OnboardingSettingsState = {
 	skillFileVerifiedAt: '',
 	skillVerifiedBundleHash: '',
 	skillUpdateAvailableAt: '',
+	memoryPolicyConfirmedAt: '',
 	agentRestartCompletedAt: '',
 	connectionVerifiedAt: '',
 	firstRecallCompletedAt: '',
@@ -126,6 +130,7 @@ export const normalizeOnboardingSettingsState = (raw: unknown): OnboardingSettin
 		skillFileVerifiedAt: asTimestamp(rawState.skillFileVerifiedAt),
 		skillVerifiedBundleHash: asString(rawState.skillVerifiedBundleHash),
 		skillUpdateAvailableAt: asTimestamp(rawState.skillUpdateAvailableAt),
+		memoryPolicyConfirmedAt: asTimestamp(rawState.memoryPolicyConfirmedAt),
 		agentRestartCompletedAt: asTimestamp(rawState.agentRestartCompletedAt),
 		connectionVerifiedAt: asTimestamp(rawState.connectionVerifiedAt),
 		firstRecallCompletedAt: asTimestamp(rawState.firstRecallCompletedAt),
@@ -163,6 +168,7 @@ const stepIsCompleted = (
 		case 'runtime': return context.runtimeRunning;
 		case 'client_configuration': return context.clientConfigured;
 		case 'skill_setup': return context.skillSetupConfirmed;
+		case 'memory_policy': return context.memoryPolicyConfirmed;
 		case 'agent_restart': return context.agentRestartConfirmed;
 		case 'connection_verification': return context.connectionVerified;
 		case 'first_recall': return context.firstRecallCompleted && asNonNegativeInteger(state.firstRecallMatchedCount, 0) > 0;
@@ -257,6 +263,9 @@ export const markSkillUserConfirmed = (state: OnboardingSettingsState): Onboardi
 };
 
 export const markSkillSetupDone = markSkillUserConfirmed;
+
+export const markMemoryPolicyConfirmed = (state: OnboardingSettingsState): OnboardingSettingsState =>
+	timestamped(state, { memoryPolicyConfirmedAt: new Date().toISOString() });
 
 export const markSkillFileVerified = (
 	state: OnboardingSettingsState,

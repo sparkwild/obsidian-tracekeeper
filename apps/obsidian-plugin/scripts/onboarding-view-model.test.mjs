@@ -23,6 +23,7 @@ try {
 		skillFileVerifiedAt: '',
 		skillVerifiedBundleHash: '',
 		skillUpdateAvailableAt: '',
+		memoryPolicyConfirmedAt: '',
 		agentRestartCompletedAt: '',
 		connectionVerifiedAt: '',
 		firstRecallCompletedAt: '',
@@ -78,6 +79,16 @@ try {
 	assert.equal(verified.skillFileVerified, true);
 	assert.equal(verified.skillSetupConfirmed, true);
 	assert.equal(verified.skillUserConfirmed, false);
+	assert.equal(verified.memoryPolicyConfirmed, false);
+	const memoryPolicyConfirmed = vm.buildOnboardingContext({
+		vaultReady: true,
+		runtimeState: 'running',
+		runtimeEnabled: true,
+		selectedClient: { clientId: 'codex', configState: 'configured' },
+		skillInstallState: { state: 'installed', fileVerified: true, updateAvailable: false },
+		onboarding: { ...base, memoryPolicyConfirmedAt: '2026-07-23T00:00:00.000Z' },
+	});
+	assert.equal(memoryPolicyConfirmed.memoryPolicyConfirmed, true);
 	const automaticActivation = vm.buildOnboardingContext({
 		vaultReady: true,
 		runtimeState: 'running',

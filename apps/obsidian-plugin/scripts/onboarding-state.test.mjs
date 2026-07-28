@@ -16,6 +16,7 @@ try {
 	const legacy = stateModule.normalizeOnboardingSettingsState({ selectedClientId: 'codex', skillSetupCompletedAt: legacyTime });
 	assert.equal(legacy.skillUserConfirmedAt, legacyTime);
 	assert.equal(legacy.skillFileVerifiedAt, '');
+	assert.equal(legacy.memoryPolicyConfirmedAt, '');
 	assert.equal(legacy.entryPromptVersion, 0);
 	assert.equal(legacy.entryDeferredAt, '');
 	assert.equal(stateModule.shouldShowOnboardingEntryPrompt(legacy), true);
@@ -78,8 +79,11 @@ try {
 
 	const observed = stateModule.markTrackedWorkflowObserved(state, 'task-7');
 	assert.equal(observed.trackedWorkflowTaskId, 'task-7');
+	const policyConfirmed = stateModule.markMemoryPolicyConfirmed(observed);
+	assert.ok(policyConfirmed.memoryPolicyConfirmedAt);
 	const reset = stateModule.resetOnboardingState();
 	assert.equal(reset.skillUserConfirmedAt, '');
+	assert.equal(reset.memoryPolicyConfirmedAt, '');
 	assert.equal(reset.trackedWorkflowObservedAt, '');
 	assert.equal(reset.entryPromptVersion, 0);
 	assert.equal(reset.entryDeferredAt, '');

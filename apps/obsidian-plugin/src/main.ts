@@ -64,6 +64,7 @@ import {
 	markClientConfigured,
 	markConnectionVerified,
 	markFirstRecallDone,
+	markMemoryPolicyConfirmed,
 	markSkillCopied,
 	markSkillFileVerified,
 	markSkillUserConfirmed,
@@ -151,6 +152,7 @@ import {
 import {
 	MEMORY_RULES_VERSION,
 	normalizeGraphProfileValue,
+	normalizeMemoryRuleSettings,
 	normalizeMemoryProposalRule,
 	normalizeNoteContentLanguage,
 	normalizeTaskMemoryProposalMode,
@@ -445,7 +447,7 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 	runtimeCredentials: [],
 	graphProfile: 'advisory',
 	globalMemoryRule: 'review_queue',
-	projectMemoryRule: 'auto_write',
+	projectMemoryRule: 'review_queue',
 	taskMemoryProposalMode: 'auto_propose',
 	noteContentLanguage: 'auto',
 	autoRefreshEnabled: true,
@@ -725,17 +727,11 @@ export default class TracekeeperPlugin extends Plugin {
 		next.graphProfile = normalizeGraphProfileValue(saved.graphProfile);
 		next.onboarding = normalizeOnboardingSettingsState(saved.onboarding);
 		next.skillInstallReceipts = normalizeSkillInstallReceipts(saved.skillInstallReceipts);
-		const savedMemoryRulesVersion = typeof saved.memoryRulesVersion === 'number' ? saved.memoryRulesVersion : 0;
-		next.memoryRulesVersion = MEMORY_RULES_VERSION;
-		next.globalMemoryRule = normalizeMemoryProposalRule(saved.globalMemoryRule, DEFAULT_SETTINGS.globalMemoryRule);
-		const savedProjectRule = normalizeMemoryProposalRule(saved.projectMemoryRule, DEFAULT_SETTINGS.projectMemoryRule);
-		next.projectMemoryRule = savedMemoryRulesVersion < MEMORY_RULES_VERSION && savedProjectRule === 'review_queue'
-			? DEFAULT_SETTINGS.projectMemoryRule
-			: savedProjectRule;
-		const savedTaskMemoryProposalMode = normalizeTaskMemoryProposalMode(saved.taskMemoryProposalMode);
-		next.taskMemoryProposalMode = savedMemoryRulesVersion < MEMORY_RULES_VERSION && savedTaskMemoryProposalMode === 'off'
-			? DEFAULT_SETTINGS.taskMemoryProposalMode
-			: savedTaskMemoryProposalMode;
+		const memoryRules = normalizeMemoryRuleSettings(saved, DEFAULT_SETTINGS);
+		next.memoryRulesVersion = memoryRules.memoryRulesVersion;
+		next.globalMemoryRule = memoryRules.globalMemoryRule;
+		next.projectMemoryRule = memoryRules.projectMemoryRule;
+		next.taskMemoryProposalMode = memoryRules.taskMemoryProposalMode;
 		next.noteContentLanguage = normalizeNoteContentLanguage(saved.noteContentLanguage);
 		next.autoRefreshEnabled = typeof saved.autoRefreshEnabled === 'boolean'
 			? saved.autoRefreshEnabled
@@ -1912,6 +1908,35 @@ export default class TracekeeperPlugin extends Plugin {
 	private async persistOnboardingState(): Promise<void> {
 		this.settings.onboarding.lastUpdatedAt = new Date().toISOString();
 		await this.saveSettings();
+	}
+
+	async confirmOnboardingMemoryPolicy(): Promise<void> {
+		if (this.settings.onboarding.memoryPolicyConfirmedAt) {
+			return;
+		}
+		this.settings.onboarding = markMemoryPolicyConfirmed(this.settings.onboarding);
+		await this.persistOnboardingState();
+	}
+
+	async setGlobalMemoryRule(value: unknown): Promise<void> {
+		this.settings.globalMemoryRule = normalizeMemoryProposalRule(value);
+		await this.persistExplicitMemoryPolicySelection();
+	}
+
+	async setProjectMemoryRule(value: unknown): Promise<void> {
+		this.settings.projectMemoryRule = normalizeMemoryProposalRule(value);
+		await this.persistExplicitMemoryPolicySelection();
+	}
+
+	async setTaskMemoryProposalMode(value: unknown): Promise<void> {
+		this.settings.taskMemoryProposalMode = normalizeTaskMemoryProposalMode(value);
+		await this.persistExplicitMemoryPolicySelection();
+	}
+
+	private async persistExplicitMemoryPolicySelection(): Promise<void> {
+		this.settings.onboarding = markMemoryPolicyConfirmed(this.settings.onboarding);
+		await this.saveSettings();
+		await this.restartMcpRuntime();
 	}
 
 	async setOnboardingClientId(clientId: string): Promise<void> {
