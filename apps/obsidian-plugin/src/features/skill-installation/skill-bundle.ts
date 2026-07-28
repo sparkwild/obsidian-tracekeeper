@@ -7,6 +7,7 @@ import closeoutFields from '../../../../../skills/tracekeeper/references/closeou
 import instructionIsolation from '../../../../../skills/tracekeeper/references/instruction-isolation.md';
 import flattenedSkill from '../../../../../skills/tracekeeper/dist/tracekeeper.flattened.md';
 import manifestText from '../../../../../skills/tracekeeper/manifest.json';
+import releaseMetadataText from '../../../../../skills/tracekeeper/release.json';
 
 export interface SkillManifestFile {
 	path: string;
@@ -27,6 +28,12 @@ export interface TracekeeperSkillManifest {
 	};
 }
 
+interface TracekeeperSkillReleaseMetadata {
+	skill_version: string;
+	workflow_contract_version: number;
+	minimum_tracekeeper_version: string;
+}
+
 export interface EmbeddedTracekeeperSkillBundle {
 	manifest: TracekeeperSkillManifest;
 	manifestText: string;
@@ -35,6 +42,7 @@ export interface EmbeddedTracekeeperSkillBundle {
 	installFiles: Readonly<Record<string, string>>;
 }
 
+const releaseMetadata = parseReleaseMetadata(normalizeText(releaseMetadataText));
 const sourceFiles: Record<string, string> = {
 	'SKILL.md': normalizeText(skillEntrypoint),
 	'references/workflow-state-machine.md': normalizeText(workflowStateMachine),
@@ -95,7 +103,6 @@ function buildEmbeddedBundle(
 	const installFiles = {
 		...embeddedSources,
 		'manifest.json': embeddedManifestText,
-		[manifest.artifacts.flattened.path]: flattened,
 	};
 	for (const [filePath, content] of Object.entries(installFiles)) {
 		assertSafeRelativePath(filePath);
@@ -120,9 +127,9 @@ function parseManifest(value: string): TracekeeperSkillManifest {
 	}
 	if (!isRecord(parsed)
 		|| parsed.name !== 'tracekeeper'
-		|| parsed.skill_version !== '2.1.0'
-		|| parsed.workflow_contract_version !== 3
-		|| parsed.minimum_tracekeeper_version !== '0.2.4'
+		|| parsed.skill_version !== releaseMetadata.skill_version
+		|| parsed.workflow_contract_version !== releaseMetadata.workflow_contract_version
+		|| parsed.minimum_tracekeeper_version !== releaseMetadata.minimum_tracekeeper_version
 		|| parsed.hash_algorithm !== 'sha256'
 		|| !Array.isArray(parsed.files)
 		|| !isRecord(parsed.artifacts)
@@ -154,4 +161,26 @@ function assertNoCredentialValue(content: string, filePath: string): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseReleaseMetadata(value: string): TracekeeperSkillReleaseMetadata {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		throw new Error('Embedded Tracekeeper release metadata is invalid JSON.');
+	}
+	if (!isRecord(parsed)
+		|| typeof parsed.skill_version !== 'string'
+		|| parsed.skill_version.trim() === ''
+		|| typeof parsed.workflow_contract_version !== 'number'
+		|| typeof parsed.minimum_tracekeeper_version !== 'string'
+		|| parsed.minimum_tracekeeper_version.trim() === '') {
+		throw new Error('Embedded Tracekeeper release metadata has an unsupported shape.');
+	}
+	return {
+		skill_version: parsed.skill_version,
+		workflow_contract_version: parsed.workflow_contract_version,
+		minimum_tracekeeper_version: parsed.minimum_tracekeeper_version,
+	};
 }

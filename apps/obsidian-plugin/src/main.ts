@@ -58,6 +58,7 @@ import {
 	OnboardingSettingsState,
 	findOnboardingRecallEvidence,
 	findOnboardingTrackedWorkflowEvidence,
+	getNextOnboardingStep,
 	hasOnboardingConnectionEvidence,
 	markAgentRestartDone,
 	markClientConfigured,
@@ -67,9 +68,12 @@ import {
 	markSkillFileVerified,
 	markSkillUserConfirmed,
 	markTrackedWorkflowObserved,
+	markOnboardingEntryPromptDeferred,
+	markOnboardingEntryPromptOpened,
 	normalizeOnboardingSettingsState,
 	OnboardingProgressContext,
 	resetOnboardingState,
+	shouldShowOnboardingEntryPrompt,
 } from './features/onboarding/onboarding-state';
 import {
 	buildClientConfigText,
@@ -96,6 +100,11 @@ import {
 } from './adapters/client-skill-adapter';
 import { TRACEKEEPER_SKILL_BUNDLE } from './features/skill-installation/skill-bundle';
 import { buildSkillInstallAuditEntry } from './features/skill-installation/skill-install-audit';
+import {
+	normalizeSkillInstallReceipts,
+	recordSkillInstallReceipt,
+	type SkillInstallReceipts,
+} from './features/skill-installation/skill-install-receipts';
 import {
 	capabilitiesForRuntimeProfile,
 	normalizeRuntimeCredentialProfileAndCapabilities,
@@ -164,6 +173,7 @@ import {
 	type RuntimeLogSnapshot,
 } from './features/runtime/runtime-log-model';
 import { InitializeMemoryStructureModal } from './features/structure/initialize-memory-structure-modal';
+import { OnboardingEntryModal } from './features/onboarding/onboarding-entry-modal';
 import { TracekeeperSourceStatusView } from './features/sources/source-status-view';
 import { TracekeeperActivityView } from './features/activity/activity-view';
 import { TracekeeperReviewQueueView } from './features/review/review-queue-view';
@@ -171,6 +181,8 @@ import { TracekeeperGraphHealthView } from './features/graph/graph-health-view';
 import { TracekeeperMemoryInspectorView } from './features/memory/memory-inspector-view';
 import { TracekeeperRuntimeLogView } from './features/runtime/runtime-log-view';
 import { TracekeeperRuntimeStatusView } from './features/runtime/runtime-status-view';
+import { McpRuntimeLifecycleController } from './features/runtime/runtime-lifecycle-controller';
+import { runtimeViewModel } from './features/runtime/runtime-view-model';
 import { TracekeeperPermissionPolicyView } from './features/permissions/permission-policy-view';
 import { TracekeeperSettingTab } from './features/settings/tracekeeper-setting-tab';
 import {
@@ -399,6 +411,7 @@ interface TracekeeperSettings {
 	mcpRuntimeEnabled: boolean;
 	mcpPort: number;
 	onboarding: OnboardingSettingsState;
+	skillInstallReceipts: SkillInstallReceipts;
 	runtimeToken: string;
 	runtimeTokenCreatedAt: string;
 	runtimeCredentials: StoredRuntimeCredential[];
@@ -426,6 +439,7 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 		...DEFAULT_ONBOARDING_SETTINGS,
 		selectedClientId: 'codex',
 	},
+	skillInstallReceipts: {},
 	runtimeToken: '',
 	runtimeTokenCreatedAt: '',
 	runtimeCredentials: [],
@@ -440,7 +454,7 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 
 export default class TracekeeperPlugin extends Plugin {
 	settings: TracekeeperSettings = DEFAULT_SETTINGS;
-	private mcpRuntime: StreamableHttpMcpRuntime | null = null;
+	private readonly mcpRuntimeLifecycle = new McpRuntimeLifecycleController();
 	private localToolExecutor!: LocalToolExecutor;
 	private vaultRepository!: ObsidianVaultRepository;
 	private knowledgeIndex: ObsidianKnowledgeIndexAdapter | null = null;
@@ -593,7 +607,7 @@ export default class TracekeeperPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'open-review-queue',
-			name: ui('打开审核队列', 'Open review queue'),
+			name: ui('打开知识变更审核', 'Open Knowledge Change Review'),
 			callback: () => {
 				void this.openPluginView(TRACEKEEPER_REVIEW_QUEUE_VIEW);
 			},
@@ -663,16 +677,26 @@ export default class TracekeeperPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: 'continue-agent-onboarding',
+			name: ui('继续 Agent 接入', 'Continue agent onboarding'),
+			callback: () => {
+				this.openSettingsTab();
+			},
+		});
+
 		this.addSettingTab(new TracekeeperSettingTab(this.app, this));
 		this.restartAutoRefresh();
+		this.app.workspace.onLayoutReady(() => {
+			this.openOnboardingEntryIfNeeded();
+		});
 	}
 
 	onunload(): void {
 		this.stopAutoRefresh();
 		this.clientConfigAdapter = null;
 		this.clientSkillAdapter = null;
-		this.knowledgeIndex = null;
-		void this.stopMcpRuntime();
+		void this.closeMcpRuntime();
 	}
 
 	private normalizeSettings(raw: unknown): TracekeeperSettings {
@@ -700,6 +724,7 @@ export default class TracekeeperPlugin extends Plugin {
 		next.runtimeCredentials = this.normalizeRuntimeCredentials(saved.runtimeCredentials, next.runtimeToken);
 		next.graphProfile = normalizeGraphProfileValue(saved.graphProfile);
 		next.onboarding = normalizeOnboardingSettingsState(saved.onboarding);
+		next.skillInstallReceipts = normalizeSkillInstallReceipts(saved.skillInstallReceipts);
 		const savedMemoryRulesVersion = typeof saved.memoryRulesVersion === 'number' ? saved.memoryRulesVersion : 0;
 		next.memoryRulesVersion = MEMORY_RULES_VERSION;
 		next.globalMemoryRule = normalizeMemoryProposalRule(saved.globalMemoryRule, DEFAULT_SETTINGS.globalMemoryRule);
@@ -867,9 +892,10 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	async restartMcpRuntime(): Promise<void> {
-		await this.stopMcpRuntime();
 		if (this.settings.mcpRuntimeEnabled) {
-			await this.startMcpRuntime();
+			await this.replaceMcpRuntime();
+		} else {
+			await this.stopMcpRuntime();
 		}
 		await this.refreshGovernanceViews();
 	}
@@ -888,6 +914,21 @@ export default class TracekeeperPlugin extends Plugin {
 		} else {
 			await this.stopMcpRuntime();
 			new Notice(ui('MCP 服务已关闭。', 'MCP service is off.'));
+		}
+		await this.refreshGovernanceViews();
+	}
+
+	async ensureMcpRuntimeRunning(): Promise<void> {
+		const status = this.getRuntimeViewStatus();
+		if (status.state === 'running' || status.state === 'starting' || status.state === 'stopping') {
+			return;
+		}
+		if (!this.settings.mcpRuntimeEnabled) {
+			this.settings.mcpRuntimeEnabled = true;
+			await this.saveSettings();
+			await this.startMcpRuntime();
+		} else {
+			await this.replaceMcpRuntime();
 		}
 		await this.refreshGovernanceViews();
 	}
@@ -1145,9 +1186,21 @@ export default class TracekeeperPlugin extends Plugin {
 
 	private async startMcpRuntime(): Promise<void> {
 		if (!this.settings.mcpRuntimeEnabled) {
-			this.runtimeStatus = this.createStoppedRuntimeStatus();
+			await this.stopMcpRuntime();
 			return;
 		}
+		await this.runMcpRuntimeStart(() => this.mcpRuntimeLifecycle.start(
+			() => this.createMcpRuntime()
+		));
+	}
+
+	private async replaceMcpRuntime(): Promise<void> {
+		await this.runMcpRuntimeStart(() => this.mcpRuntimeLifecycle.restart(
+			() => this.createMcpRuntime()
+		));
+	}
+
+	private createMcpRuntime(): StreamableHttpMcpRuntime {
 		const vaultRoot = this.getVaultRoot();
 		const noteContentLanguage = this.resolveNoteContentLanguage();
 		const runtimeOptions: StreamableHttpRuntimeOptionsWithGraphProfile = {
@@ -1170,25 +1223,48 @@ export default class TracekeeperPlugin extends Plugin {
 				taskMemoryProposalMode: this.settings.taskMemoryProposalMode,
 			},
 		};
-		const runtime = new StreamableHttpMcpRuntime(runtimeOptions);
-		this.mcpRuntime = runtime;
+		return new StreamableHttpMcpRuntime(runtimeOptions);
+	}
+
+	private async runMcpRuntimeStart(
+		start: () => Promise<StreamableHttpRuntimeStatus | null>
+	): Promise<void> {
+		const pending = start();
+		await Promise.resolve();
+		this.runtimeStatus = this.mcpRuntimeLifecycle.getStatus() ?? this.runtimeStatus;
+		await this.refreshRuntimeViews();
 		try {
-			this.runtimeStatus = await runtime.start();
+			this.runtimeStatus = await pending ?? this.createStoppedRuntimeStatus();
 		} catch (error) {
-			this.runtimeStatus = runtime.getStatus();
+			this.runtimeStatus = this.mcpRuntimeLifecycle.getStatus() ?? this.createStoppedRuntimeStatus();
 			const message = error instanceof Error ? error.message : 'Unknown MCP Runtime error.';
 			console.error('tracekeeper failed to start MCP Runtime', error);
 			new Notice(ui(`MCP 服务启动失败：${message}`, `MCP service failed to start: ${message}`));
+		} finally {
+			await this.refreshRuntimeViews();
 		}
 	}
 
 	private async stopMcpRuntime(): Promise<void> {
-		const runtime = this.mcpRuntime;
-		this.mcpRuntime = null;
-		if (runtime) {
-			await runtime.stop();
-		}
+		const pending = this.mcpRuntimeLifecycle.stop();
+		await Promise.resolve();
+		this.runtimeStatus = this.mcpRuntimeLifecycle.getStatus() ?? this.runtimeStatus;
+		await this.refreshRuntimeViews();
+		await pending;
 		this.runtimeStatus = this.createStoppedRuntimeStatus();
+		await this.refreshRuntimeViews();
+	}
+
+	private async closeMcpRuntime(): Promise<void> {
+		try {
+			await this.mcpRuntimeLifecycle.close();
+			this.runtimeStatus = this.createStoppedRuntimeStatus();
+		} catch (error) {
+			this.runtimeStatus = this.mcpRuntimeLifecycle.getStatus() ?? this.runtimeStatus;
+			console.error('tracekeeper failed to stop MCP Runtime during plugin unload', error);
+		} finally {
+			this.knowledgeIndex = null;
+		}
 	}
 
 	private createStoppedRuntimeStatus(): StreamableHttpRuntimeStatus {
@@ -1522,6 +1598,21 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 	}
 
+	private async refreshRuntimeStatusViews(): Promise<void> {
+		const statusLeaves = this.app.workspace.getLeavesOfType(TRACEKEEPER_RUNTIME_STATUS_VIEW);
+		for (const leaf of statusLeaves) {
+			const view = leaf.view;
+			if (view instanceof TracekeeperRuntimeStatusView) {
+				await view.refresh();
+			}
+		}
+	}
+
+	private async refreshRuntimeViews(): Promise<void> {
+		await this.refreshActivityViews();
+		await this.refreshRuntimeStatusViews();
+	}
+
 	private async replaceLegacyAgentConnectionLeaves(): Promise<void> {
 		const legacyLeaves = this.app.workspace.getLeavesOfType(LEGACY_AGENT_CONNECTIONS_VIEW);
 		for (const leaf of legacyLeaves) {
@@ -1547,6 +1638,7 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.refreshReviewQueueViews();
 		await this.refreshSourceStatusViews();
 		await this.refreshRuntimeLogViews();
+		await this.refreshRuntimeStatusViews();
 		await this.refreshGraphHealthViews();
 	}
 
@@ -1721,16 +1813,19 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	getRuntimeViewStatus(): RuntimeViewStatus {
-		const status = this.mcpRuntime?.getStatus() || this.runtimeStatus;
+		const status = this.mcpRuntimeLifecycle.getStatus() || this.runtimeStatus;
 		const enabled = this.settings.mcpRuntimeEnabled;
-		const label = enabled ? this.runtimeStateLabel(status.state) : ui('已关闭', 'Off');
+		const viewModel = runtimeViewModel({
+			enabled,
+			state: status.state,
+			port: this.settings.mcpPort || DEFAULT_MCP_PORT,
+			lastError: status.lastError,
+		}, ui);
 		return {
 			enabled,
 			state: status.state,
-			label,
-			detail: enabled
-				? this.runtimeStateDetail(status)
-				: ui('MCP 服务已关闭。需要 AI 工具连接时，可在插件设置中重新开启。', 'MCP service is off. Turn it back on in plugin settings when AI tools need to connect.'),
+			label: viewModel.label,
+			detail: viewModel.detail,
 			endpoint: this.getMcpHttpEndpoint(),
 			host: DEFAULT_MCP_HOST,
 			port: this.settings.mcpPort || DEFAULT_MCP_PORT,
@@ -1777,6 +1872,25 @@ export default class TracekeeperPlugin extends Plugin {
 			skillInstallState: this.getSkillInstallState(this.settings.onboarding.selectedClientId),
 			onboarding: this.settings.onboarding,
 		});
+	}
+
+	isOnboardingComplete(): boolean {
+		const clientConfigs = this.buildClientConfigs();
+		const selectedClient = clientConfigs.find((client) =>
+			client.clientId === this.settings.onboarding.selectedClientId
+		) ?? clientConfigs[0] ?? null;
+		const context = buildOnboardingContext({
+			vaultReady: this.isVaultStructureReady(),
+			runtimeState: this.getRuntimeViewStatus().state,
+			runtimeEnabled: this.settings.mcpRuntimeEnabled,
+			selectedClient: selectedClient ? {
+				clientId: selectedClient.clientId,
+				configState: selectedClient.configState,
+			} : null,
+			skillInstallState: this.getSkillInstallState(selectedClient?.clientId ?? ''),
+			onboarding: this.settings.onboarding,
+		});
+		return getNextOnboardingStep(this.settings.onboarding, context) === 'complete';
 	}
 
 	getOnboardingSelectedClient(snapshot: AgentConnectionsSnapshot): GeneratedClientConfig | null {
@@ -1925,38 +2039,27 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.persistOnboardingState();
 	}
 
-	private runtimeStateLabel(state: RuntimeState): string {
-		switch (state) {
-			case 'running':
-				return ui('运行中', 'Running');
-			case 'starting':
-				return ui('启动中', 'Starting');
-			case 'port_conflict':
-				return ui('端口被占用', 'Port in use');
-			case 'failed':
-				return ui('启动失败', 'Failed');
-			case 'stopped':
-			default:
-				return ui('未运行', 'Not running');
+	private openOnboardingEntryIfNeeded(): void {
+		if (this.isOnboardingComplete() || !shouldShowOnboardingEntryPrompt(this.settings.onboarding)) {
+			return;
 		}
-	}
-
-	private runtimeStateDetail(status: StreamableHttpRuntimeStatus): string {
-		switch (status.state) {
-			case 'running':
-				return ui('Obsidian 已托管本机 MCP 服务，AI 工具可在 Obsidian 开启时连接。', 'Obsidian is hosting the local MCP service. AI tools can connect while Obsidian is open.');
-			case 'starting':
-				return ui('MCP 服务正在启动。', 'The MCP service is starting.');
-			case 'port_conflict':
-				return ui(`端口 ${this.settings.mcpPort} 已被占用，请修改端口或关闭占用程序。`, `Port ${this.settings.mcpPort} is already in use. Change the port or close the process using it.`);
-			case 'failed':
-				return status.lastError
-					? ui(`MCP 服务启动失败：${status.lastError}`, `MCP service failed to start: ${status.lastError}`)
-					: ui('MCP 服务启动失败，请检查 Obsidian 控制台。', 'MCP service failed to start. Check the Obsidian console.');
-			case 'stopped':
-			default:
-				return ui('MCP 服务未运行。插件启用且 Obsidian 打开后会自动启动。', 'The MCP service is not running. It starts automatically when the plugin is enabled and Obsidian is open.');
-		}
+		new OnboardingEntryModal(
+			this.app,
+			{
+				onOpen: async () => {
+					this.settings.onboarding = markOnboardingEntryPromptOpened(this.settings.onboarding);
+					await this.persistOnboardingState();
+				},
+				onStartConnectingAgent: () => {
+					this.openSettingsTab();
+				},
+				onSetupLater: async () => {
+					this.settings.onboarding = markOnboardingEntryPromptDeferred(this.settings.onboarding);
+					await this.persistOnboardingState();
+				},
+			},
+			{ localize: ui }
+		).open();
 	}
 
 	private isRecord(value: unknown): value is Record<string, unknown> {
@@ -2119,8 +2222,13 @@ export default class TracekeeperPlugin extends Plugin {
 		if (!this.clientSkillAdapter) {
 			return {
 				clientId,
+				targetId: profile.targetId,
 				targetDirectory: profile.targetDirectory,
 				state: 'unavailable',
+				legacyTargetDirectories: profile.legacyTargetDirectories ?? [],
+				deliveryMode: profile.deliveryMode,
+				activationMode: profile.activationMode,
+				restartRequired: profile.restartRequired,
 				fileVerified: false,
 				updateAvailable: false,
 				installedVersion: '',
@@ -2134,8 +2242,13 @@ export default class TracekeeperPlugin extends Plugin {
 			console.error('tracekeeper failed to detect client Skill', error);
 			return {
 				clientId,
+				targetId: profile.targetId,
 				targetDirectory: profile.targetDirectory,
 				state: 'unavailable',
+				legacyTargetDirectories: profile.legacyTargetDirectories ?? [],
+				deliveryMode: profile.deliveryMode,
+				activationMode: profile.activationMode,
+				restartRequired: profile.restartRequired,
 				fileVerified: false,
 				updateAvailable: false,
 				installedVersion: '',
@@ -2145,22 +2258,33 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 	}
 
-	prepareSkillInstall(clientId: string, action: Extract<SkillInstallAction, 'install' | 'update'>): SkillInstallPlan {
+	prepareSkillInstall(clientId: string, action: Extract<SkillInstallAction, 'install' | 'update' | 'migrate'>): SkillInstallPlan {
 		const adapter = this.requireClientSkillAdapter();
 		const profile = this.getClientSkillProfile(clientId);
-		return action === 'install' ? adapter.previewInstall(profile) : adapter.previewUpdate(profile);
+		if (action === 'install') return adapter.previewInstall(profile);
+		if (action === 'update') return adapter.previewUpdate(profile);
+		return adapter.previewMigrate(profile);
 	}
 
 	async confirmSkillInstall(
 		planId: string,
-		action: Extract<SkillInstallAction, 'install' | 'update'>,
+		action: Extract<SkillInstallAction, 'install' | 'update' | 'migrate'>,
 		clientId: string
 	): Promise<SkillInstallResult> {
 		try {
 			const adapter = this.requireClientSkillAdapter();
 			const result = action === 'install'
 				? adapter.confirmInstall(planId)
-				: adapter.confirmUpdate(planId);
+				: action === 'update'
+					? adapter.confirmUpdate(planId)
+					: adapter.confirmMigrate(planId);
+			const profile = this.getClientSkillProfile(result.clientId);
+			this.settings.skillInstallReceipts = recordSkillInstallReceipt(this.settings.skillInstallReceipts, {
+				targetId: profile.targetId,
+				bundleHash: result.bundleHash,
+				skillVersion: TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version,
+				installedAt: new Date().toISOString(),
+			});
 			this.settings.onboarding = markSkillFileVerified(this.settings.onboarding, result.bundleHash);
 			this.settings.onboarding.agentRestartCompletedAt = '';
 			this.settings.onboarding.connectionVerifiedAt = '';
@@ -2177,9 +2301,14 @@ export default class TracekeeperPlugin extends Plugin {
 				backupCreated: result.backupDirectory !== '',
 				result: 'success',
 			}));
-			new Notice(action === 'install'
-				? ui('Skill bundle 已安装。请重启客户端。', 'Skill bundle installed. Restart the client.')
-				: ui('Skill bundle 已更新。请重启客户端。', 'Skill bundle updated. Restart the client.'));
+			const actionLabel = action === 'install'
+				? ui('Skill bundle 已安装。', 'Skill bundle installed.')
+				: action === 'update'
+					? ui('Skill bundle 已更新。', 'Skill bundle updated.')
+					: ui('Skill 已复制到官方目录，旧目录保持不变。', 'Skill copied to the official directory. The legacy directory was kept unchanged.');
+			new Notice(profile.restartRequired
+				? `${actionLabel} ${ui('请重启客户端。', 'Restart the client.')}`
+				: `${actionLabel} ${ui('客户端通常会自动识别；若未出现再重启。', 'The client normally detects it automatically; restart only if it does not appear.')}`);
 			return result;
 		} catch (error) {
 			console.error('tracekeeper failed to install client Skill', error);
@@ -2274,12 +2403,18 @@ export default class TracekeeperPlugin extends Plugin {
 	private getClientSkillProfile(clientId: string): ClientSkillProfile {
 		const desktopApi = this.getDesktopNodeApi();
 		const client = this.getClientProfiles().find((profile) => profile.id === clientId);
-		return buildClientSkillProfile(
+		const profile = buildClientSkillProfile(
 			clientId,
 			client?.displayName || clientId,
 			desktopApi?.os.homedir(),
 			desktopApi?.path.join.bind(desktopApi.path) || ((...parts) => parts.join('/'))
 		);
+		const receipt = this.settings.skillInstallReceipts[profile.targetId];
+		return {
+			...profile,
+			ownedBundleHash: receipt?.bundleHash,
+			ownedSkillVersion: receipt?.skillVersion,
+		};
 	}
 
 	private requireClientSkillAdapter(): ClientSkillAdapter {
@@ -2370,6 +2505,13 @@ export default class TracekeeperPlugin extends Plugin {
 		} = {}
 	): Promise<void> {
 		return this.reviewQueueController.updateMemoryProposalStatus(proposal, nextStatus, options);
+	}
+
+	async updateMemoryProposalDraft(
+		proposal: MemoryProposalRecord,
+		draft: { targetNote: string; writebackContent: string }
+	): Promise<void> {
+		return this.reviewQueueController.updateMemoryProposalDraft(proposal, draft);
 	}
 
 	async archiveMemoryProposals(proposals: MemoryProposalRecord[]): Promise<number> {
@@ -2500,10 +2642,10 @@ export default class TracekeeperPlugin extends Plugin {
 			start_task: ui('开始任务记录', 'Start task record'),
 			recall: ui('查找相关笔记', 'Find related notes'),
 			read_note: ui('读取笔记', 'Read note'),
-			review_queue: ui('查看审核队列', 'Review queue'),
-			list_review_queue: ui('查看待审核内容', 'Review pending items'),
+			review_queue: ui('查看知识变更审核', 'Knowledge Change Review'),
+			list_review_queue: ui('查看待审核的知识变更', 'List knowledge changes to review'),
 			list_source_requests: ui('查看资料请求', 'Review material requests'),
-			list_approved_writebacks: ui('查看已批准写回', 'Review approved writebacks'),
+			list_approved_writebacks: ui('查看待写入内容', 'Review ready-to-apply changes'),
 			audit_recent: ui('查看最近记录', 'Review recent activity'),
 			source_request: ui('处理资料请求', 'Handle source requests'),
 			build_context_pack: ui('整理上下文材料', 'Prepare context material'),
@@ -2513,7 +2655,7 @@ export default class TracekeeperPlugin extends Plugin {
 			capture_source: ui('保存来源资料', 'Save source material'),
 			propose_memory: ui('提出记忆更新', 'Propose memory updates'),
 			analyze_source_request: ui('处理资料请求', 'Process material request'),
-			apply_approved_writeback: ui('应用已批准写回', 'Apply approved writeback'),
+			apply_approved_writeback: ui('预览并写入', 'Preview and apply'),
 		};
 		return labels[normalized] || normalized.replace(/_/g, ' ') || ui('未知操作', 'Unknown action');
 	}

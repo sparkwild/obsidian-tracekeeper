@@ -55,6 +55,56 @@ try {
 	assert.equal(memoryProposal?.revisionRequestedBy, 'agent');
 	assert.equal(memoryProposal?.evidence.length, 2);
 	assert.equal(memoryProposal?.writebackContent, 'frontmatter line1\nfrontmatter line2');
+	assert.equal(memoryProposal?.targetNote, 'projects/tracekeeper/index.md');
+
+	const invalidTarget = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/invalid-target.md',
+		fileMtime: 1700000400000,
+		fields: {
+			type: 'memory-proposal',
+			approval_status: 'pending',
+			target_note: 'null',
+			writeback_content: 'frontmatter line',
+		},
+		body: '# Invalid proposal\n',
+	});
+	assert.ok(invalidTarget);
+	assert.equal(invalidTarget?.targetNote, '');
+	assert.equal(reviewModule.getReviewProposalAttentionState(invalidTarget), 'incomplete');
+
+	const missingWriteback = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/missing-writeback.md',
+		fileMtime: 1700000450000,
+		fields: {
+			type: 'memory-proposal',
+			approval_status: 'pending',
+			target_note: 'notes/target.md',
+			writeback_content: 'unknown',
+		},
+		body: '# Missing writeback\n',
+	});
+	assert.ok(missingWriteback);
+	const validity = reviewModule.getReviewProposalValidity(missingWriteback);
+	assert.equal(validity.missingTargetNote, false);
+	assert.equal(validity.missingWritebackContent, true);
+	assert.equal(validity.isComplete, false);
+	assert.equal(reviewModule.getReviewProposalAttentionState(missingWriteback), 'incomplete');
+
+	const legacyPlaceholders = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/legacy-placeholders.md',
+		fileMtime: 1700000470000,
+		fields: {
+			type: 'memory-proposal',
+			approval_status: 'pending',
+			target_note: '未指定',
+			writeback_content: 'undefined',
+		},
+		body: '# Legacy placeholders\n',
+	});
+	assert.ok(legacyPlaceholders);
+	assert.equal(legacyPlaceholders?.targetNote, '');
+	assert.equal(legacyPlaceholders?.writebackContent, '');
+	assert.equal(reviewModule.getReviewProposalAttentionState(legacyPlaceholders), 'incomplete');
 
 	const legacyProposal = reviewModule.parseMemoryProposalRecord({
 		filePath: 'review_queue/legacy.md',
@@ -90,8 +140,13 @@ try {
 	assert.ok(reviewModule.compareProposalRecords(pending, applied) < 0);
 	assert.ok(reviewModule.compareProposalRecords(rejected, applied) > 0);
 	assert.ok(reviewModule.compareProposalRecords(applied, rejected) < 0);
+	assert.equal(reviewModule.getReviewProposalAttentionState({ ...memoryProposal, approvalStatus: 'approved' }), 'ready_to_apply');
+	assert.equal(reviewModule.getReviewProposalAttentionState({ ...pending, approvalStatus: 'revision_requested' }), 'awaiting_revision');
+	assert.equal(reviewModule.getReviewProposalAttentionState({ ...applied, approvalStatus: 'applied' }), 'completed');
+	assert.equal(reviewModule.getReviewProposalAttentionState({ ...invalidTarget, approvalStatus: 'pending' }), 'incomplete');
+	assert.equal(reviewModule.getReviewProposalAttentionState({ ...legacyProposal, approvalStatus: 'approved' }), 'completed');
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 17 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 27 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

@@ -18,12 +18,12 @@ Do not introduce a hosted control plane, external database, silent background up
 
 Start with [docs/INDEX.md](docs/INDEX.md), then read the owner document for the change:
 
-- Product behavior or onboarding: [docs/product/INDEX.md](docs/product/INDEX.md)
-- Runtime, vault layout, or module ownership: [docs/architecture/INDEX.md](docs/architecture/INDEX.md)
-- Agent, Skill, or MCP behavior: [docs/architecture/AGENT_WORKFLOW_CONTRACT.md](docs/architecture/AGENT_WORKFLOW_CONTRACT.md)
-- Permissions, privacy, or trust boundaries: [docs/security/INDEX.md](docs/security/INDEX.md)
-- Build, test, release, or contribution flow: [docs/engineering/INDEX.md](docs/engineering/INDEX.md)
-- Implemented baseline and known gaps: [docs/status/INDEX.md](docs/status/INDEX.md)
+- Product purpose and long-term scope: [docs/overview/INDEX.md](docs/overview/INDEX.md)
+- User-facing capabilities and workflows: [docs/features/INDEX.md](docs/features/INDEX.md)
+- Agent, Skill, or MCP workflow: [docs/features/AGENT_WORKFLOW.md](docs/features/AGENT_WORKFLOW.md)
+- Accepted stack and compatibility constraints: [docs/technology/INDEX.md](docs/technology/INDEX.md)
+- Runtime, Vault layout, module ownership, or trust boundaries: [docs/architecture/INDEX.md](docs/architecture/INDEX.md)
+- Build, test, release, security review, or contribution flow: [docs/development/INDEX.md](docs/development/INDEX.md)
 
 Read the `INDEX.md` in a documentation area before adding a file there.
 
@@ -37,7 +37,7 @@ Read the `INDEX.md` in a documentation area before adding a file there.
 | Core package | Reusable parsing, scanning, recall, graph, lint, and path-safety primitives | A UI or client-specific integration layer |
 | Agent Skill | Proactive recall/closeout habits and client-specific workflow guidance | A permission bypass or duplicate server implementation |
 
-The normative Agent workflow lives in `docs/architecture/AGENT_WORKFLOW_CONTRACT.md`. Tool descriptions, prompts, Skills, and onboarding copy should be derived from that contract and kept semantically aligned.
+The normative Agent workflow lives in `docs/features/AGENT_WORKFLOW.md`. Tool descriptions, prompts, Skills, and onboarding copy should be derived from that contract and kept semantically aligned.
 
 ## Repository Map
 
@@ -85,11 +85,11 @@ For documentation-only changes, at minimum check Markdown links, run `git diff -
 ## Documentation Rules
 
 - Keep root Markdown limited to GitHub/community entry points and policies listed in `docs/INDEX.md`.
-- Put durable product, architecture, security, and engineering decisions in their owning area.
-- Put time-sensitive implementation snapshots in `docs/status/`, with a date and version.
+- Put durable project overview, feature, technology, architecture, and development decisions in their owning area.
+- Keep plans, progress, dated status, research, review evidence, and handoffs outside `docs/`; use the established task location under `tmp/` or `.specs/`.
 - Rewrite and consolidate information; do not preserve duplicate documents by merely moving them.
 - Link to one authoritative explanation instead of copying tool matrices, permission rules, or release steps into several files.
-- If implementation and documentation disagree, verify the executable behavior, update the status document, and resolve the contract mismatch explicitly.
+- If implementation and documentation disagree, verify the executable behavior, update the working status when relevant, and resolve the contract mismatch explicitly.
 
 ## Change Discipline
 

@@ -1,7 +1,7 @@
 import type { ToolCapability } from '@tracekeeper/contracts';
 import type { VaultRepository } from '@tracekeeper/core';
 import { McpJsonRpcHandler } from './handler';
-export type RuntimeState = 'stopped' | 'starting' | 'running' | 'failed' | 'port_conflict';
+export type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed' | 'port_conflict';
 export interface RuntimeCredential {
     id: string;
     token: string;
@@ -68,6 +68,7 @@ export declare class StreamableHttpMcpRuntime {
     private recoveryContext;
     private handler;
     private server;
+    private stopPromise;
     private sessions;
     private state;
     private startedAt;
@@ -76,6 +77,7 @@ export declare class StreamableHttpMcpRuntime {
     constructor(options?: StreamableHttpRuntimeOptions);
     start(): Promise<StreamableHttpRuntimeStatus>;
     stop(): Promise<void>;
+    private stopServer;
     getStatus(): StreamableHttpRuntimeStatus;
     private handleRequest;
     private handlePost;
@@ -90,6 +92,7 @@ export declare class StreamableHttpMcpRuntime {
     private readBody;
     private consumeRequestBody;
     private isAllowedOrigin;
+    private isAllowedHost;
     private allowedCorsOrigin;
     private authenticate;
     private pruneExpiredSessions;

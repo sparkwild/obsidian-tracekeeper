@@ -2,13 +2,13 @@
 
 Tracekeeper is local-first. It is designed to work with an Obsidian vault on the user's machine.
 
-For the complete technical trust model, see [Security and Privacy Architecture](./docs/security/INDEX.md).
+For the complete technical trust model, see [Trust Boundaries](./docs/architecture/TRUST_BOUNDARIES.md).
 
 ## What Tracekeeper Does
 
 - Reads the active Obsidian vault through Obsidian plugin APIs and the local MCP runtime.
 - Writes vault notes only through explicit user actions or controlled MCP tools.
-- Keeps important long-term memory changes behind Review Queue approval.
+- Keeps important long-term memory changes behind Knowledge Change Review approval.
 - Reads the supported AI-client configuration locations only to detect the Tracekeeper connection state.
 - Lets the user preview and explicitly confirm supported AI-client configuration changes.
 

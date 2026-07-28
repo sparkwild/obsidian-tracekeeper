@@ -74,8 +74,8 @@ const RESOURCES = [
     {
         uri: 'tracekeeper://review-queue',
         name: 'review-queue',
-        title: 'Review queue',
-        description: 'Pending proposal queue snapshots.',
+        title: 'Knowledge Change Review',
+        description: 'Pending knowledge change proposal snapshots.',
         mimeType: 'text/markdown',
         read: readReviewQueueResource,
     },
@@ -487,11 +487,11 @@ async function readActiveContextResource(vaultRoot, context) {
 }
 async function readReviewQueueResource(vaultRoot, context) {
     const safeScope = (0, safety_1.normalizeNotePath)(core_1.TRACEKEEPER_REVIEW_QUEUE_DIR, { vaultConfigDir: context.vaultConfigDir });
-    const lines = ['# Review Queue Resource', `Source path: ${safeScope}`];
+    const lines = ['# Knowledge Change Review Resource', `Source path: ${safeScope}`];
     if (context.vaultRepository) {
         const proposals = await context.vaultRepository.listMarkdown(safeScope);
         if (proposals.length === 0) {
-            return lines.concat('No review queue proposals are currently visible.').join('\n');
+            return lines.concat('No knowledge change proposals are currently visible.').join('\n');
         }
         for (const proposal of proposals.slice(-MAX_REVIEW_QUEUE_LINES)) {
             lines.push(`- ${proposal.path}`);
@@ -510,7 +510,7 @@ async function readReviewQueueResource(vaultRoot, context) {
         safeAbsolute = resolveSafeDirectory(vaultRoot, safeScope, context.vaultConfigDir);
     }
     catch {
-        return lines.concat('No review queue proposals are currently visible.').join('\n');
+        return lines.concat('No knowledge change proposals are currently visible.').join('\n');
     }
     let files = [];
     try {
@@ -520,7 +520,7 @@ async function readReviewQueueResource(vaultRoot, context) {
             .slice(-MAX_REVIEW_QUEUE_LINES);
     }
     catch {
-        return lines.concat('No review queue proposals are currently visible.').join('\n');
+        return lines.concat('No knowledge change proposals are currently visible.').join('\n');
     }
     for (const fileName of files) {
         const relative = `${safeScope}/${fileName}`;
@@ -534,7 +534,7 @@ async function readReviewQueueResource(vaultRoot, context) {
         }
     }
     return boundResourceText(files.length === 0
-        ? lines.concat('No review queue proposals are currently visible.').join('\n')
+        ? lines.concat('No knowledge change proposals are currently visible.').join('\n')
         : lines.join('\n'));
 }
 async function readAgentActivityResource(vaultRoot, context) {

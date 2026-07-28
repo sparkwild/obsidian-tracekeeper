@@ -14,7 +14,7 @@ import {
 	STREAMABLE_HTTP_TRANSPORT,
 } from './handler';
 
-export type RuntimeState = 'stopped' | 'starting' | 'running' | 'failed' | 'port_conflict';
+export type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed' | 'port_conflict';
 
 export interface RuntimeCredential {
 	id: string;
@@ -110,6 +110,7 @@ export class StreamableHttpMcpRuntime {
 	private recoveryContext: ToolInvocationContext;
 	private handler: McpJsonRpcHandler;
 	private server: HttpServer | null = null;
+	private stopPromise: Promise<void> | null = null;
 	private sessions = new Map<string, RuntimeSession>();
 	private state: RuntimeState = 'stopped';
 	private startedAt = '';
@@ -157,6 +158,9 @@ export class StreamableHttpMcpRuntime {
 	}
 
 	async start(): Promise<StreamableHttpRuntimeStatus> {
+		if (this.stopPromise) {
+			await this.stopPromise;
+		}
 		if (this.server && this.state === 'running') {
 			return this.getStatus();
 		}
@@ -215,18 +219,32 @@ export class StreamableHttpMcpRuntime {
 		});
 	}
 
-	async stop(): Promise<void> {
-		for (const session of this.sessions.values()) {
-			this.closeSession(session);
+	stop(): Promise<void> {
+		if (this.stopPromise) {
+			return this.stopPromise;
 		}
-		this.sessions.clear();
+		const stopPromise = this.stopServer();
+		this.stopPromise = stopPromise;
+		return stopPromise.finally(() => {
+			if (this.stopPromise === stopPromise) {
+				this.stopPromise = null;
+			}
+		});
+	}
+
+	private async stopServer(): Promise<void> {
 		const server = this.server;
-		this.server = null;
 		if (!server) {
 			this.state = 'stopped';
 			this.startedAt = '';
 			return;
 		}
+		this.state = 'stopping';
+		for (const session of this.sessions.values()) {
+			this.closeSession(session);
+		}
+		this.sessions.clear();
+		this.server = null;
 
 		await new Promise<void>((resolve) => {
 			server.close(() => resolve());
@@ -257,6 +275,10 @@ export class StreamableHttpMcpRuntime {
 
 	private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
 		this.pruneExpiredSessions();
+		if (!this.isAllowedHost(request)) {
+			this.writeJson(response, 403, this.errorResponse(null, -32003, 'Forbidden host.'), request);
+			return;
+		}
 		const url = this.parseRequestUrl(request);
 		if (!url || url.pathname !== this.path) {
 			this.writePlain(response, 404, 'Not found.', request);
@@ -528,6 +550,18 @@ export class StreamableHttpMcpRuntime {
 		return !origin || this.allowedCorsOrigin(request) !== null;
 	}
 
+	private isAllowedHost(request: IncomingMessage): boolean {
+		const requestHost = requestHostname(this.firstHeaderValue(request.headers.host));
+		const boundHost = normalizeHostname(this.host);
+		if (!requestHost || !boundHost) {
+			return false;
+		}
+		if (isLoopbackHostname(boundHost)) {
+			return isLoopbackHostname(requestHost);
+		}
+		return requestHost === boundHost;
+	}
+
 	private allowedCorsOrigin(request: IncomingMessage): string | null {
 		const origin = this.firstHeaderValue(request.headers.origin);
 		if (!origin) {
@@ -631,6 +665,33 @@ function toErrorMessage(error: unknown, fallback: string): string {
 		return error.message || fallback;
 	}
 	return fallback;
+}
+
+function requestHostname(authority: string): string {
+	if (!authority || /[,\s/\\]/u.test(authority)) {
+		return '';
+	}
+	try {
+		const parsed = new URL(`http://${authority}`);
+		if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') {
+			return '';
+		}
+		return normalizeHostname(parsed.hostname);
+	} catch {
+		return '';
+	}
+}
+
+function normalizeHostname(hostname: string): string {
+	const normalized = hostname.trim().toLowerCase();
+	if (normalized.startsWith('[') && normalized.endsWith(']')) {
+		return normalized.slice(1, -1);
+	}
+	return normalized;
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+	return LOOPBACK_HOSTS.has(hostname) || LOOPBACK_HOSTS.has(`[${hostname}]`);
 }
 
 function isAddressInfo(address: ReturnType<HttpServer['address']>): address is AddressInfo {

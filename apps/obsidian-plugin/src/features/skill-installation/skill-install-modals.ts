@@ -10,7 +10,7 @@ export class SkillInstallPreviewModal extends Modal {
 		app: App,
 		private plugin: TracekeeperPlugin,
 		private clientId: string,
-		private action: 'install' | 'update',
+		private action: 'install' | 'update' | 'migrate',
 		private onChanged?: () => void
 	) {
 		super(app);
@@ -28,12 +28,20 @@ export class SkillInstallPreviewModal extends Modal {
 		}
 
 		contentEl.createEl('h2', {
-			text: this.action === 'install' ? ui('确认安装 Skill', 'Confirm Skill install') : ui('确认更新 Skill', 'Confirm Skill update'),
+			text: this.action === 'install'
+				? ui('确认安装 Skill', 'Confirm Skill install')
+				: this.action === 'update'
+					? ui('确认更新 Skill', 'Confirm Skill update')
+					: ui('确认迁移 Skill', 'Confirm Skill migration'),
 		});
 		contentEl.createEl('p', {
 			text: ui(
-				'只会写入下列 Tracekeeper bundle 文件；其他文件保持不变。更新前会备份已有受管文件，确认时会重新检查原始 hash。',
-				'Only the listed Tracekeeper bundle files will be written. Other files stay unchanged. Existing managed files are backed up, and original hashes are rechecked at confirmation.'
+				this.action === 'migrate'
+					? '只会将下列 Tracekeeper bundle 文件复制到官方目录；旧目录不会删除或改写。确认时会重新检查目标目录 hash。'
+					: '只会写入下列 Tracekeeper bundle 文件；其他文件保持不变。更新前会备份已有受管文件，确认时会重新检查原始 hash。',
+				this.action === 'migrate'
+					? 'Only the listed Tracekeeper bundle files are copied to the official directory. The legacy directory is never removed or changed. Target hashes are rechecked at confirmation.'
+					: 'Only the listed Tracekeeper bundle files will be written. Other files stay unchanged. Existing managed files are backed up, and original hashes are rechecked at confirmation.'
 			),
 			cls: 'tracekeeper-view__description',
 		});

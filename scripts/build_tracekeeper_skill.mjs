@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const TRACEKEEPER_SKILL_FORMAT_VERSION = 1;
+export const TRACEKEEPER_SKILL_RELEASE_PATH = 'release.json';
 export const TRACEKEEPER_SKILL_SOURCE_FILES = Object.freeze([
 	'SKILL.md',
 	'references/workflow-state-machine.md',
@@ -22,6 +23,40 @@ export function normalizeTracekeeperSkillText(value) {
 
 function sha256(value) {
 	return `sha256:${createHash('sha256').update(value, 'utf8').digest('hex')}`;
+}
+
+function isRecord(value) {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseTracekeeperSkillReleaseMetadata(value) {
+	let parsed;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		throw new Error('Embedded Tracekeeper release metadata is invalid JSON.');
+	}
+	if (
+		!isRecord(parsed)
+		|| typeof parsed.skill_version !== 'string'
+		|| parsed.skill_version.trim() === ''
+		|| typeof parsed.workflow_contract_version !== 'number'
+		|| typeof parsed.minimum_tracekeeper_version !== 'string'
+		|| parsed.minimum_tracekeeper_version.trim() === ''
+	) {
+		throw new Error('Embedded Tracekeeper release metadata has an unsupported shape.');
+	}
+	return {
+		skill_version: parsed.skill_version,
+		workflow_contract_version: parsed.workflow_contract_version,
+		minimum_tracekeeper_version: parsed.minimum_tracekeeper_version,
+	};
+}
+
+export async function readTracekeeperSkillReleaseMetadata(repoRoot = process.cwd()) {
+	const releasePath = path.join(repoRoot, 'skills', 'tracekeeper', TRACEKEEPER_SKILL_RELEASE_PATH);
+	const rawMetadata = await readFile(releasePath, 'utf8');
+	return parseTracekeeperSkillReleaseMetadata(rawMetadata);
 }
 
 function buildFlattenedArtifact(sources) {
@@ -50,6 +85,7 @@ function buildFlattenedArtifact(sources) {
 }
 
 export async function buildTracekeeperSkillBundle(repoRoot = process.cwd()) {
+	const releaseMetadata = await readTracekeeperSkillReleaseMetadata(repoRoot);
 	const skillRoot = path.join(repoRoot, 'skills', 'tracekeeper');
 	const sources = [];
 
@@ -69,9 +105,9 @@ export async function buildTracekeeperSkillBundle(repoRoot = process.cwd()) {
 	const manifest = {
 		format_version: TRACEKEEPER_SKILL_FORMAT_VERSION,
 		name: 'tracekeeper',
-		skill_version: '2.1.0',
-		workflow_contract_version: 3,
-		minimum_tracekeeper_version: '0.2.4',
+		skill_version: releaseMetadata.skill_version,
+		workflow_contract_version: releaseMetadata.workflow_contract_version,
+		minimum_tracekeeper_version: releaseMetadata.minimum_tracekeeper_version,
 		hash_algorithm: 'sha256',
 		bundle_hash: sha256(canonicalBundle),
 		files: sources.map(({ relativePath, sha256: sourceHash }) => ({

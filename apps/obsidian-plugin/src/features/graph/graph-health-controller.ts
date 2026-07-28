@@ -259,7 +259,7 @@ private buildGraphHealthProposalContent(snapshot: GraphHealthSnapshot): string {
 			...hubCandidates,
 			'',
 			'## Review boundary',
-			'- This proposal only creates a Review Queue item.',
+			'- This proposal only creates a Knowledge Change Review record.',
 			'- Do not modify notes, create hubs, or write long-term memory until the user approves the specific writeback.',
 		].join('\n');
 	}

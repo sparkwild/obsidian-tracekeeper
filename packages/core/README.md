@@ -2,7 +2,7 @@
 
 This package implements the shared TypeScript runtime for local Obsidian vault processing.
 
-See the canonical [system architecture](../../docs/architecture/INDEX.md) and [security model](../../docs/security/INDEX.md) for cross-module ownership and trust boundaries.
+See the canonical [system architecture](../../docs/architecture/SYSTEM_ARCHITECTURE.md) and [trust boundaries](../../docs/architecture/TRUST_BOUNDARIES.md) for cross-module ownership and trust boundaries.
 
 ## Features
 

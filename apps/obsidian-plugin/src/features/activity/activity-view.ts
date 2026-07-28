@@ -3,6 +3,7 @@ import type TracekeeperPlugin from '../../main';
 import type { RuntimeViewStatus } from '../../main';
 import type { AgentActivitySnapshot, AgentTaskRecord } from './activity-model';
 import { MemoryRecallPreviewModal } from '../recall/memory-recall-preview-modal';
+import { runtimeViewModel } from '../runtime/runtime-view-model';
 import { pluginDisplayName, ui } from '../../ui/localization';
 import { trimText } from '../shared/markdown-record-parser';
 import { TRACEKEEPER_SKILL_BUNDLE } from '../skill-installation/skill-bundle';
@@ -56,7 +57,6 @@ export class TracekeeperActivityView extends ItemView {
 		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
 		const refreshButton = actions.createEl('button', {
 			text: ui('刷新', 'Refresh'),
-			cls: 'mod-cta',
 		});
 		refreshButton.addEventListener('click', () => {
 			void (async () => {
@@ -90,6 +90,26 @@ export class TracekeeperActivityView extends ItemView {
 		);
 		this.renderStatusItem(statusBar, ui('当前仓库', 'Current repository'), this.formatVaultLabel(snapshot.vaultRoot));
 		this.renderStatusItem(statusBar, ui('刷新时间', 'Last refreshed'), this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt)));
+
+		if (!this.plugin.isOnboardingComplete()) {
+			const onboarding = contentEl.createDiv({ cls: 'tracekeeper-card tracekeeper-onboarding-entry-card' });
+			onboarding.createEl('h3', { text: ui('连接你的 AI Agent', 'Connect your AI agent') });
+			onboarding.createEl('p', {
+				text: ui(
+					'通过可恢复的引导完成本机 MCP 配置、Skill 安装和首次召回验证。所有步骤都由你确认。',
+					'Use the resumable guide to configure local MCP, install the Skill, and verify the first recall. Every step remains under your control.'
+				),
+				cls: 'tracekeeper-view__description',
+			});
+			const onboardingActions = onboarding.createDiv({ cls: 'tracekeeper-action-row' });
+			const continueButton = onboardingActions.createEl('button', {
+				text: ui('继续接入', 'Continue onboarding'),
+				cls: 'mod-cta',
+			});
+			continueButton.addEventListener('click', () => {
+				this.plugin.openSettingsTab();
+			});
+		}
 
 		this.renderMemoryLoopSection(contentEl, snapshot);
 		this.renderWorkflowDiagnosticsSection(contentEl, snapshot.workflowDiagnostics);
@@ -137,8 +157,8 @@ export class TracekeeperActivityView extends ItemView {
 		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
 		const reviewButton = actions.createEl('button', {
 			text: snapshot.actionableReviewQueueItemCount > 0
-				? ui(`处理审核 (${snapshot.actionableReviewQueueItemCount})`, `Review items (${snapshot.actionableReviewQueueItemCount})`)
-				: ui(`查看审核列表 (${snapshot.reviewQueueItemCount})`, `Open review list (${snapshot.reviewQueueItemCount})`),
+				? ui(`处理知识变更 (${snapshot.actionableReviewQueueItemCount})`, `Review knowledge changes (${snapshot.actionableReviewQueueItemCount})`)
+				: ui(`查看知识变更 (${snapshot.reviewQueueItemCount})`, `Open knowledge changes (${snapshot.reviewQueueItemCount})`),
 			cls: [
 				'tracekeeper-review-queue-button',
 				snapshot.actionableReviewQueueItemCount > 0
@@ -159,22 +179,22 @@ export class TracekeeperActivityView extends ItemView {
 
 		const latestProposal = snapshot.recentProposals[0] ?? null;
 		const summary = card.createDiv({ cls: 'tracekeeper-memory-loop-summary' });
-		summary.createEl('span', { text: ui('待处理审核项', 'Action required') });
+		summary.createEl('span', { text: ui('待处理的知识变更', 'Knowledge changes requiring action') });
 		summary.createEl('strong', { text: String(snapshot.actionableReviewQueueItemCount) });
 		summary.createEl('p', {
 			text: snapshot.actionableReviewQueueItemCount > 0
 				? ui(
-					`待审核 ${snapshot.pendingReviewQueueItemCount} · 需修订 ${snapshot.revisionRequestedReviewQueueItemCount} · 全部 ${snapshot.reviewQueueItemCount}`,
-					`${snapshot.pendingReviewQueueItemCount} pending · ${snapshot.revisionRequestedReviewQueueItemCount} revision requested · ${snapshot.reviewQueueItemCount} total`
+					`信息不完整 ${snapshot.incompleteReviewQueueItemCount} · 待审核 ${snapshot.pendingReviewQueueItemCount} · 待写入 ${snapshot.readyToApplyReviewQueueItemCount} · 已退回修改 ${snapshot.revisionRequestedReviewQueueItemCount} · 全部 ${snapshot.reviewQueueItemCount}`,
+					`${snapshot.incompleteReviewQueueItemCount} incomplete · ${snapshot.pendingReviewQueueItemCount} pending review · ${snapshot.readyToApplyReviewQueueItemCount} ready to apply · ${snapshot.revisionRequestedReviewQueueItemCount} returned for revision · ${snapshot.reviewQueueItemCount} total`
 				)
 				: snapshot.reviewQueueItemCount > 0
-					? ui(`暂无待处理项 · 全部 ${snapshot.reviewQueueItemCount}`, `No action needed · ${snapshot.reviewQueueItemCount} total`)
-					: ui('暂无审核项。', 'No review items.'),
+					? ui(`暂无待处理项 · 已退回修改 ${snapshot.revisionRequestedReviewQueueItemCount} · 全部 ${snapshot.reviewQueueItemCount}`, `No action needed · ${snapshot.revisionRequestedReviewQueueItemCount} returned for revision · ${snapshot.reviewQueueItemCount} total`)
+					: ui('暂无知识变更。', 'No knowledge changes.'),
 		});
 		const details = card.createDiv({ cls: 'tracekeeper-detail-grid tracekeeper-memory-loop-grid' });
 		this.renderMemoryLoopDetail(
 			details,
-			ui('最近审核项', 'Latest review item'),
+			ui('最近变更提案', 'Latest change proposal'),
 			latestProposal
 				? `${latestProposal.proposalKind} • ${this.plugin.formatDisplayTime(latestProposal.sortTimestamp)}`
 				: ui('暂无', 'None')
@@ -359,18 +379,16 @@ export class TracekeeperActivityView extends ItemView {
 	}
 
 	private runtimeStatusClass(status: RuntimeViewStatus): string {
-		if (!status.enabled) {
-			return 'tracekeeper-status-pill--runtime tracekeeper-status-pill--disabled';
-		}
-		switch (status.state) {
-			case 'running':
+		switch (runtimeViewModel(status, ui).tone) {
+			case 'success':
 				return 'tracekeeper-status-pill--runtime tracekeeper-status-pill--success';
-			case 'starting':
+			case 'warning':
 				return 'tracekeeper-status-pill--runtime tracekeeper-status-pill--warning';
-			case 'port_conflict':
-			case 'failed':
+			case 'danger':
 				return 'tracekeeper-status-pill--runtime tracekeeper-status-pill--danger';
-			case 'stopped':
+			case 'disabled':
+				return 'tracekeeper-status-pill--runtime tracekeeper-status-pill--disabled';
+			case 'default':
 			default:
 				return 'tracekeeper-status-pill--runtime';
 		}

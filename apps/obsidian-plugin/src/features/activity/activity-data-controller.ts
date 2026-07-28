@@ -1,6 +1,9 @@
 import { App, TFile, TFolder } from 'obsidian';
 import { TRACEKEEPER_AUDIT_DIR, TRACEKEEPER_AUDIT_LOG_PATH } from '@tracekeeper/core';
-import type { MemoryProposalRecord } from '../review/review-view-model';
+import {
+	getReviewProposalAttentionState,
+	type MemoryProposalRecord,
+} from '../review/review-view-model';
 import { memoryProposalStatusLabel } from '../review/review-queue-model';
 import {
 	RUNTIME_LOG_FILTERS,
@@ -90,9 +93,20 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 		]);
 		const recentProposals = reviewQueueItems.slice(0, MAX_ACTIVITY_PROPOSAL_ROWS);
 		const reviewQueueItemCount = reviewQueueItems.length;
-		const pendingReviewQueueItemCount = reviewQueueItems.filter((proposal) => proposal.approvalStatus === 'pending').length;
-		const revisionRequestedReviewQueueItemCount = reviewQueueItems.filter((proposal) => proposal.approvalStatus === 'revision_requested').length;
-		const actionableReviewQueueItemCount = pendingReviewQueueItemCount + revisionRequestedReviewQueueItemCount;
+		const incompleteReviewQueueItemCount = reviewQueueItems.filter(
+			(proposal) => getReviewProposalAttentionState(proposal) === 'incomplete'
+		).length;
+		const pendingReviewQueueItemCount = reviewQueueItems.filter(
+			(proposal) => getReviewProposalAttentionState(proposal) === 'pending_review'
+		).length;
+		const readyToApplyReviewQueueItemCount = reviewQueueItems.filter(
+			(proposal) => getReviewProposalAttentionState(proposal) === 'ready_to_apply'
+		).length;
+		const revisionRequestedReviewQueueItemCount = reviewQueueItems.filter(
+			(proposal) => getReviewProposalAttentionState(proposal) === 'awaiting_revision'
+		).length;
+		const actionableReviewQueueItemCount =
+			incompleteReviewQueueItemCount + pendingReviewQueueItemCount + readyToApplyReviewQueueItemCount;
 		const latestTask = recentTasks[0] ?? null;
 		const structureStatus = this.host.getStructureStatus();
 		const taskFolderMissing =
@@ -125,7 +139,9 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			recentSourceRequests,
 			recentProposals,
 			reviewQueueItemCount,
+			incompleteReviewQueueItemCount,
 			pendingReviewQueueItemCount,
+			readyToApplyReviewQueueItemCount,
 			revisionRequestedReviewQueueItemCount,
 			actionableReviewQueueItemCount,
 			recentAuditEvents,

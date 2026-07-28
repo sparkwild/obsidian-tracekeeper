@@ -21,19 +21,26 @@ try {
 		loader: { '.md': 'text', '.json': 'text' },
 	});
 	const module = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
+
 	const files = new Map();
 	let renameFailureTarget = '';
 	const fileApi = {
 		existsSync: (filePath) => files.has(filePath),
 		readFileSync: (filePath) => {
-			if (!files.has(filePath)) throw new Error(`missing ${filePath}`);
+			if (!files.has(filePath)) {
+				throw new Error(`missing ${filePath}`);
+			}
 			return files.get(filePath);
 		},
 		writeFileSync: (filePath, content) => files.set(filePath, content),
 		mkdirSync: () => undefined,
 		renameSync: (oldPath, newPath) => {
-			if (!files.has(oldPath)) throw new Error(`missing ${oldPath}`);
-			if (files.has(newPath)) throw new Error(`destination exists ${newPath}`);
+			if (!files.has(oldPath)) {
+				throw new Error(`missing ${oldPath}`);
+			}
+			if (files.has(newPath)) {
+				throw new Error(`destination exists ${newPath}`);
+			}
 			if (newPath === renameFailureTarget && oldPath.includes('.tracekeeper-stage-')) {
 				renameFailureTarget = '';
 				throw new Error(`simulated rename failure ${newPath}`);
@@ -43,72 +50,81 @@ try {
 		},
 		rmSync: (target, options = {}) => {
 			for (const key of [...files.keys()]) {
-				if (key === target || (options.recursive && key.startsWith(`${target}/`))) files.delete(key);
+				if (key === target || (options.recursive && key.startsWith(`${target}/`))) {
+					files.delete(key);
+				}
 			}
 		},
 	};
 	let now = new Date('2026-07-23T00:00:00.000Z');
-	const targetDirectory = '/tmp/codex/skills/tracekeeper';
-	const profile = {
-		id: 'codex',
-		displayName: 'Codex',
-		supportsManagedInstall: true,
-		targetDirectory,
-		restartRequired: true,
-		profileLabel: 'Local default profile',
-	};
-	const oldBundle = buildBundle('1.9.0', '# Tracekeeper old\n');
-	const currentBundle = buildBundle('2.0.0', '# Tracekeeper current\n');
-	const oldAdapter = new module.ClientSkillAdapter({
+	const homeDirectory = '/tmp/tracekeeper-user';
+	const primaryDirectory = path.join(homeDirectory, '.agents', 'skills', 'tracekeeper');
+	const legacyDirectory = path.join(homeDirectory, '.codex', 'skills', 'tracekeeper');
+	const claudeCodeDirectory = path.join(homeDirectory, '.claude', 'skills', 'tracekeeper');
+
+	const codexProfile = module.buildClientSkillProfile('codex', 'Codex', homeDirectory, path.join);
+	assert.equal(codexProfile.supportsManagedInstall, true);
+	assert.equal(codexProfile.deliveryMode, 'managed');
+	assert.equal(codexProfile.targetDirectory, primaryDirectory);
+	assert.deepEqual(codexProfile.legacyTargetDirectories, [legacyDirectory]);
+	assert.equal(codexProfile.targetDirectory, path.join(homeDirectory, '.agents', 'skills', 'tracekeeper'));
+
+	const claudeCodeProfile = module.buildClientSkillProfile('claude-code', 'Claude Code', homeDirectory, path.join);
+	assert.equal(claudeCodeProfile.supportsManagedInstall, true);
+	assert.equal(claudeCodeProfile.targetDirectory, claudeCodeDirectory);
+
+	const cursorProfile = module.buildClientSkillProfile('cursor', 'Cursor', homeDirectory, path.join);
+	assert.equal(cursorProfile.supportsManagedInstall, false);
+	assert.equal(cursorProfile.deliveryMode, 'copy-only');
+	assert.equal(cursorProfile.targetDirectory, undefined);
+
+	const legacyBundle = buildBundle('2.0.0', '# Tracekeeper legacy\n');
+	const embeddedBundle = buildBundle('2.1.0', '# Tracekeeper current\n');
+	const preReleaseBundle = buildBundle('2.1.0-rc.1', '# Tracekeeper prerelease\n');
+	const newerBundle = buildBundle('2.2.0', '# Tracekeeper newer\n');
+
+	const emptyAdapter = new module.ClientSkillAdapter({
 		fs: fileApi,
 		path: { dirname: path.dirname, join: path.join },
-		bundle: oldBundle,
+		bundle: embeddedBundle,
 		now: () => now,
 		planTtlMs: 1_000,
 	});
-
-	assert.equal(oldAdapter.detect(profile).state, 'not_installed');
-	const installPlan = oldAdapter.previewInstall(profile);
+	assert.equal(emptyAdapter.detect(codexProfile).state, 'not_installed');
+	const installPlan = emptyAdapter.previewInstall(codexProfile);
 	assert.equal(installPlan.action, 'install');
 	assert.equal(installPlan.canConfirm, true);
 	assert.ok(installPlan.files.every((file) => file.change === 'create'));
-	oldAdapter.confirmInstall(installPlan.planId);
-	files.set(path.join(targetDirectory, 'notes.txt'), 'unrelated user file\n');
-	assert.equal(oldAdapter.detect(profile).fileVerified, true);
+	assert.equal(installPlan.files.some((file) => file.path === 'dist/tracekeeper.flattened.md'), false);
+	emptyAdapter.confirmInstall(installPlan.planId);
+	assert.equal(emptyAdapter.detect(codexProfile).state, 'installed');
 
-	const currentAdapter = new module.ClientSkillAdapter({
+	seedBundle(files, primaryDirectory, legacyBundle);
+	const updateAdapter = new module.ClientSkillAdapter({
 		fs: fileApi,
 		path: { dirname: path.dirname, join: path.join },
-		bundle: currentBundle,
+		bundle: embeddedBundle,
 		now: () => now,
 		planTtlMs: 1_000,
 	});
-	assert.equal(currentAdapter.detect(profile).state, 'update_available');
-	const conflictPlan = currentAdapter.previewUpdate(profile);
-	files.set(path.join(targetDirectory, 'SKILL.md'), `${files.get(path.join(targetDirectory, 'SKILL.md'))}changed after preview\n`);
-	assert.throws(
-		() => currentAdapter.confirmUpdate(conflictPlan.planId),
-		(error) => error instanceof module.ClientSkillPlanConflictError && /changed after preview/.test(error.message)
-	);
-	files.set(path.join(targetDirectory, 'SKILL.md'), oldBundle.installFiles['SKILL.md']);
-
-	const updatePlan = currentAdapter.previewUpdate(profile);
-	const updateResult = currentAdapter.confirmUpdate(updatePlan.planId);
-	assert.equal(updateResult.action, 'update');
-	assert.ok(updateResult.backupDirectory);
-	assert.equal(files.get(path.join(targetDirectory, 'notes.txt')), 'unrelated user file\n');
-	assert.equal(currentAdapter.detect(profile).state, 'installed');
-	assert.equal(currentAdapter.detect(profile).fileVerified, true);
-	assert.ok([...files.keys()].some((filePath) => filePath.startsWith(updateResult.backupDirectory)));
-
-	files.set(path.join(targetDirectory, 'SKILL.md'), '# user customization\n');
-	assert.equal(currentAdapter.detect(profile).state, 'modified');
-	const modifiedPreview = currentAdapter.previewUpdate(profile);
-	assert.equal(modifiedPreview.action, 'conflict');
-	assert.equal(modifiedPreview.canConfirm, false);
-	files.set(path.join(targetDirectory, 'SKILL.md'), currentBundle.installFiles['SKILL.md']);
-
-	const nextBundle = buildBundle('2.1.0', '# Tracekeeper next\n');
+	assert.equal(updateAdapter.detect(codexProfile).state, 'modified');
+	const ownedCodexProfile = {
+		...codexProfile,
+		ownedBundleHash: legacyBundle.manifest.bundle_hash,
+		ownedSkillVersion: legacyBundle.manifest.skill_version,
+	};
+	assert.equal(updateAdapter.detect(ownedCodexProfile).state, 'update_available');
+	assert.equal(updateAdapter.detect(ownedCodexProfile).installedVersion, '2.0.0');
+	const updatePlan = updateAdapter.previewUpdate(ownedCodexProfile);
+	assert.equal(updatePlan.action, 'update');
+	assert.equal(updatePlan.canConfirm, true);
+	const beforeUpdateFiles = new Map(updatePlan.files.map((entry) => [entry.path, entry.change]));
+	assert.equal(beforeUpdateFiles.get('SKILL.md'), 'replace');
+	const updated = updateAdapter.confirmUpdate(updatePlan.planId);
+	assert.equal(updated.action, 'update');
+	assert.equal(updated.backupDirectory !== '', true);
+	assert.equal(updateAdapter.detect(ownedCodexProfile).state, 'installed');
+	const nextBundle = buildBundle('2.2.0', '# Tracekeeper next\n');
 	const nextAdapter = new module.ClientSkillAdapter({
 		fs: fileApi,
 		path: { dirname: path.dirname, join: path.join },
@@ -116,25 +132,128 @@ try {
 		now: () => now,
 		planTtlMs: 1_000,
 	});
+	const currentProfile = {
+		...codexProfile,
+		ownedBundleHash: embeddedBundle.manifest.bundle_hash,
+		ownedSkillVersion: embeddedBundle.manifest.skill_version,
+	};
 	const beforeFailedUpdate = new Map(
-		Object.keys(currentBundle.installFiles).map((filePath) => [filePath, files.get(path.join(targetDirectory, filePath))])
+		Object.keys(embeddedBundle.installFiles).map((filePath) => [filePath, files.get(path.join(primaryDirectory, filePath))])
 	);
-	const failedUpdatePlan = nextAdapter.previewUpdate(profile);
-	renameFailureTarget = path.join(targetDirectory, 'dist/tracekeeper.flattened.md');
+	const failedUpdatePlan = nextAdapter.previewUpdate(currentProfile);
+	renameFailureTarget = path.join(primaryDirectory, 'SKILL.md');
 	assert.throws(() => nextAdapter.confirmUpdate(failedUpdatePlan.planId), /simulated rename failure/);
 	for (const [filePath, content] of beforeFailedUpdate) {
-		assert.equal(files.get(path.join(targetDirectory, filePath)), content);
+		assert.equal(files.get(path.join(primaryDirectory, filePath)), content);
 	}
-	assert.equal(currentAdapter.detect(profile).state, 'installed');
 
-	now = new Date('2026-07-23T00:00:02.000Z');
-	const copyOnly = module.buildClientSkillProfile('cursor', 'Cursor', '/tmp/home', path.join);
-	assert.equal(copyOnly.supportsManagedInstall, false);
-	assert.equal(currentAdapter.previewInstall(copyOnly).action, 'copy_only');
+	files.clear();
+	seedBundle(files, primaryDirectory, preReleaseBundle);
+	const preReleaseAdapter = new module.ClientSkillAdapter({
+		fs: fileApi,
+		path: { dirname: path.dirname, join: path.join },
+		bundle: embeddedBundle,
+		now: () => now,
+		planTtlMs: 1_000,
+	});
+	assert.equal(preReleaseAdapter.detect({
+		...codexProfile,
+		ownedBundleHash: preReleaseBundle.manifest.bundle_hash,
+		ownedSkillVersion: preReleaseBundle.manifest.skill_version,
+	}).state, 'update_available');
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 26 })}\n`);
+	const modifiedAdapter = new module.ClientSkillAdapter({
+		fs: fileApi,
+		path: { dirname: path.dirname, join: path.join },
+		bundle: embeddedBundle,
+		now: () => now,
+		planTtlMs: 1_000,
+	});
+	const installedSkillPath = path.join(primaryDirectory, 'SKILL.md');
+	const installedBundle = files.get(installedSkillPath);
+	files.set(installedSkillPath, `${installedBundle}\n\nuser custom append`);
+	const modifiedState = modifiedAdapter.detect(codexProfile);
+	assert.equal(modifiedState.state, 'modified');
+	assert.equal(modifiedState.fileVerified, false);
+	const modifiedPreview = modifiedAdapter.previewUpdate(codexProfile);
+	assert.equal(modifiedPreview.action, 'conflict');
+	assert.equal(modifiedPreview.canConfirm, false);
+
+	files.set(installedSkillPath, installedBundle);
+	const newerAdapter = new module.ClientSkillAdapter({
+		fs: fileApi,
+		path: { dirname: path.dirname, join: path.join },
+		bundle: embeddedBundle,
+		now: () => now,
+		planTtlMs: 1_000,
+	});
+	seedBundle(files, primaryDirectory, newerBundle);
+	assert.equal(newerAdapter.detect(codexProfile).state, 'newer_than_bundled');
+	assert.equal(newerAdapter.detect(codexProfile).installedVersion, '2.2.0');
+	const newerPreview = newerAdapter.previewUpdate(codexProfile);
+	assert.equal(newerPreview.action, 'none');
+	assert.equal(newerPreview.canConfirm, false);
+
+	const legacyAdapter = new module.ClientSkillAdapter({
+		fs: fileApi,
+		path: { dirname: path.dirname, join: path.join },
+		bundle: embeddedBundle,
+		now: () => now,
+		planTtlMs: 1_000,
+	});
+	files.clear();
+	seedBundle(files, legacyDirectory, legacyBundle);
+	const legacyDetected = legacyAdapter.detect(codexProfile);
+	assert.equal(legacyDetected.state, 'legacy_install');
+	const legacyPreview = legacyAdapter.previewMigrate(codexProfile);
+	assert.equal(legacyPreview.action, 'migrate');
+	assert.equal(legacyPreview.canConfirm, true);
+	const legacyResult = legacyAdapter.confirmMigrate(legacyPreview.planId);
+	assert.equal(legacyResult.action, 'migrate');
+	assert.equal(legacyAdapter.detect(codexProfile).state, 'location_conflict');
+	assert.ok(files.has(path.join(legacyDirectory, 'SKILL.md')));
+	assert.ok(files.has(path.join(primaryDirectory, 'SKILL.md')));
+
+	const conflictAdapter = new module.ClientSkillAdapter({
+		fs: fileApi,
+		path: { dirname: path.dirname, join: path.join },
+		bundle: embeddedBundle,
+		now: () => now,
+		planTtlMs: 1_000,
+	});
+	files.clear();
+	seedBundle(files, primaryDirectory, embeddedBundle);
+	seedBundle(files, legacyDirectory, legacyBundle);
+	const conflictState = conflictAdapter.detect(codexProfile);
+	assert.equal(conflictState.state, 'location_conflict');
+	assert.equal(conflictAdapter.previewInstall(codexProfile).action, 'conflict');
+	assert.equal(conflictAdapter.previewInstall(codexProfile).canConfirm, false);
+
+	const nonDowngradeLegacyAdapter = new module.ClientSkillAdapter({
+		fs: fileApi,
+		path: { dirname: path.dirname, join: path.join },
+		bundle: embeddedBundle,
+		now: () => now,
+		planTtlMs: 1_000,
+	});
+	files.clear();
+	seedBundle(files, legacyDirectory, newerBundle);
+	const nonDowngradeState = nonDowngradeLegacyAdapter.detect(codexProfile);
+	assert.equal(nonDowngradeState.state, 'newer_than_bundled');
+	assert.throws(
+		() => nonDowngradeLegacyAdapter.previewMigrate(codexProfile),
+		(error) => error instanceof module.ClientSkillPlanConflictError && /Expected a Skill install preview/.test(error.message)
+	);
+
+	console.log(JSON.stringify({ result: 'pass', checks: 34 }));
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
+}
+
+function seedBundle(files, targetDirectory, bundle) {
+	for (const [filePath, content] of Object.entries(bundle.installFiles)) {
+		files.set(path.join(targetDirectory, filePath), content);
+	}
 }
 
 function buildBundle(version, skillContent) {
@@ -168,6 +287,6 @@ function buildBundle(version, skillContent) {
 		manifestText,
 		flattened,
 		sourceFiles,
-		installFiles: { ...sourceFiles, 'manifest.json': manifestText, 'dist/tracekeeper.flattened.md': flattened },
+		installFiles: { ...sourceFiles, 'manifest.json': manifestText },
 	};
 }

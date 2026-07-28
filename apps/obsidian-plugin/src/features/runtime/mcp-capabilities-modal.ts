@@ -67,18 +67,18 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 		category: { zh: '检索', en: 'Recall' },
 	},
 	'tracekeeper.review_queue': {
-		title: { zh: '查看审核队列', en: 'Review queue' },
+		title: { zh: '查看知识变更审核', en: 'Knowledge Change Review' },
 		description: {
-			zh: '查看待审核或已批准的审核项；真正写回仍需要单独的审核后写入动作。',
-			en: 'Lists pending or approved review items; durable writeback still requires the separate review-gated apply action.',
+			zh: '查看待审核或已通过的变更提案；真正写入仍需要单独的审核后写入动作。',
+			en: 'Lists pending or approved change proposals; durable writeback still requires the separate review-gated apply action.',
 		},
 		category: { zh: '审核', en: 'Review' },
 	},
 	'tracekeeper.list_review_queue': {
-		title: { zh: '查看审核队列', en: 'List review queue' },
+		title: { zh: '查看知识变更审核', en: 'List Knowledge Change Review' },
 		description: {
-			zh: '读取等待用户确认的审核项；全局记忆默认需要审核，项目记忆可按规则自动保存。',
-			en: 'Reads review items waiting for confirmation; global memory defaults to review, while project memory can auto-save by rule.',
+			zh: '读取等待用户确认的变更提案；全局记忆默认需要审核，项目记忆可按规则自动保存。',
+			en: 'Reads change proposals waiting for confirmation; global memory defaults to review, while project memory can auto-save by rule.',
 		},
 		category: { zh: '审核', en: 'Review' },
 	},
@@ -91,7 +91,7 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 		category: { zh: '资料', en: 'Source' },
 	},
 	'tracekeeper.list_approved_writebacks': {
-		title: { zh: '查看已批准写回', en: 'List approved writebacks' },
+		title: { zh: '查看待写入内容', en: 'List ready-to-apply changes' },
 		description: {
 			zh: '读取已经通过审核、可以由运行时执行写回的候选提案。',
 			en: 'Reads proposals that have already been approved and are candidates for runtime writeback.',
@@ -123,10 +123,10 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 		category: { zh: '资料', en: 'Source' },
 	},
 	'tracekeeper.apply_approved_writeback': {
-		title: { zh: '应用已批准写回', en: 'Apply approved writeback' },
+		title: { zh: '预览并写入', en: 'Preview and apply' },
 		description: {
-			zh: '只对已经批准的审核提案执行写回，把明确批准的内容追加到目标笔记。',
-			en: 'Applies only approved review proposals by appending explicitly approved content to the target note.',
+			zh: '只对已通过审核的变更提案执行写入，把明确确认的内容追加到目标笔记。',
+			en: 'Applies only approved change proposals by appending explicitly confirmed content to the target note.',
 		},
 		category: { zh: '写回', en: 'Writeback' },
 	},

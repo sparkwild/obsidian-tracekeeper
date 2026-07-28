@@ -125,8 +125,8 @@ export class InitializeMemoryStructureModal extends Modal {
 					'Legacy content is already covered by the current structure. You can confirm cleanup now.'
 				)
 				: ui(
-					`将先复制重建 ${plan.copyCount} 个文件；${plan.conflictCount} 个冲突会进入审核队列；旧目录会保留到你再次确认清理。`,
-					`${plan.copyCount} file(s) will be copied first; ${plan.conflictCount} conflict(s) will go to review; legacy folders remain until you confirm cleanup.`
+					`将先复制重建 ${plan.copyCount} 个文件；${plan.conflictCount} 个冲突会进入知识变更审核；旧目录会保留到你再次确认清理。`,
+					`${plan.copyCount} file(s) will be copied first; ${plan.conflictCount} conflict(s) will enter Knowledge Change Review; legacy folders remain until you confirm cleanup.`
 				),
 		});
 		if (plan.uncoveredCount > 0) {
@@ -196,7 +196,7 @@ export class InitializeMemoryStructureModal extends Modal {
 		});
 		const facts = card.createDiv({ cls: 'tracekeeper-detail-grid' });
 		this.renderFact(facts, ui('已复制', 'Copied'), String(result.copiedCount));
-		this.renderFact(facts, ui('审核项', 'Review items'), String(result.reviewCount));
+		this.renderFact(facts, ui('变更提案', 'Change proposals'), String(result.reviewCount));
 		this.renderFact(facts, ui('迁移报告', 'Migration report'), result.reportMdPath);
 
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });

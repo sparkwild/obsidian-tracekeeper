@@ -51,6 +51,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30 * 1000;
 class StreamableHttpMcpRuntime {
     constructor(options = {}) {
         this.server = null;
+        this.stopPromise = null;
         this.sessions = new Map();
         this.state = 'stopped';
         this.startedAt = '';
@@ -95,6 +96,9 @@ class StreamableHttpMcpRuntime {
         });
     }
     async start() {
+        if (this.stopPromise) {
+            await this.stopPromise;
+        }
         if (this.server && this.state === 'running') {
             return this.getStatus();
         }
@@ -152,18 +156,31 @@ class StreamableHttpMcpRuntime {
             });
         });
     }
-    async stop() {
-        for (const session of this.sessions.values()) {
-            this.closeSession(session);
+    stop() {
+        if (this.stopPromise) {
+            return this.stopPromise;
         }
-        this.sessions.clear();
+        const stopPromise = this.stopServer();
+        this.stopPromise = stopPromise;
+        return stopPromise.finally(() => {
+            if (this.stopPromise === stopPromise) {
+                this.stopPromise = null;
+            }
+        });
+    }
+    async stopServer() {
         const server = this.server;
-        this.server = null;
         if (!server) {
             this.state = 'stopped';
             this.startedAt = '';
             return;
         }
+        this.state = 'stopping';
+        for (const session of this.sessions.values()) {
+            this.closeSession(session);
+        }
+        this.sessions.clear();
+        this.server = null;
         await new Promise((resolve) => {
             server.close(() => resolve());
         });
@@ -191,6 +208,10 @@ class StreamableHttpMcpRuntime {
     }
     async handleRequest(request, response) {
         this.pruneExpiredSessions();
+        if (!this.isAllowedHost(request)) {
+            this.writeJson(response, 403, this.errorResponse(null, -32003, 'Forbidden host.'), request);
+            return;
+        }
         const url = this.parseRequestUrl(request);
         if (!url || url.pathname !== this.path) {
             this.writePlain(response, 404, 'Not found.', request);
@@ -427,6 +448,17 @@ class StreamableHttpMcpRuntime {
         const origin = this.firstHeaderValue(request.headers.origin);
         return !origin || this.allowedCorsOrigin(request) !== null;
     }
+    isAllowedHost(request) {
+        const requestHost = requestHostname(this.firstHeaderValue(request.headers.host));
+        const boundHost = normalizeHostname(this.host);
+        if (!requestHost || !boundHost) {
+            return false;
+        }
+        if (isLoopbackHostname(boundHost)) {
+            return isLoopbackHostname(requestHost);
+        }
+        return requestHost === boundHost;
+    }
     allowedCorsOrigin(request) {
         const origin = this.firstHeaderValue(request.headers.origin);
         if (!origin) {
@@ -520,6 +552,31 @@ function toErrorMessage(error, fallback) {
         return error.message || fallback;
     }
     return fallback;
+}
+function requestHostname(authority) {
+    if (!authority || /[,\s/\\]/u.test(authority)) {
+        return '';
+    }
+    try {
+        const parsed = new node_url_1.URL(`http://${authority}`);
+        if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') {
+            return '';
+        }
+        return normalizeHostname(parsed.hostname);
+    }
+    catch {
+        return '';
+    }
+}
+function normalizeHostname(hostname) {
+    const normalized = hostname.trim().toLowerCase();
+    if (normalized.startsWith('[') && normalized.endsWith(']')) {
+        return normalized.slice(1, -1);
+    }
+    return normalized;
+}
+function isLoopbackHostname(hostname) {
+    return LOOPBACK_HOSTS.has(hostname) || LOOPBACK_HOSTS.has(`[${hostname}]`);
 }
 function isAddressInfo(address) {
     return (typeof address === 'object' &&

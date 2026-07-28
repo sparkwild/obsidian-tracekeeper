@@ -1,27 +1,42 @@
 import { randomBytes } from 'node:crypto';
 import {
 	hashSkillFileContent,
-	normalizeSkillFileContent,
 	type EmbeddedTracekeeperSkillBundle,
 	type TracekeeperSkillManifest,
 } from '../features/skill-installation/skill-bundle';
+import {
+	buildClientSkillProfileFromRegistry,
+	type SkillActivationMode,
+	type SkillDeliveryMode,
+} from './client-skill-target-registry';
 
-export type SkillInstallDetectionState = 'not_installed' | 'installed' | 'update_available' | 'modified' | 'unavailable';
-export type SkillInstallAction = 'install' | 'update' | 'conflict' | 'copy_only' | 'none';
+export type SkillInstallDetectionState = 'not_installed' | 'installed' | 'update_available' | 'newer_than_bundled' | 'modified' | 'legacy_install' | 'location_conflict' | 'copy_only' | 'unavailable';
+export type SkillInstallAction = 'install' | 'update' | 'migrate' | 'conflict' | 'copy_only' | 'none';
 export type SkillFileChange = 'create' | 'replace' | 'unchanged';
 
 export interface ClientSkillProfile {
 	id: string;
+	targetId: string;
 	displayName: string;
 	supportsManagedInstall: boolean;
 	targetDirectory?: string;
 	restartRequired: boolean;
 	profileLabel: string;
+	deliveryMode: SkillDeliveryMode;
+	activationMode: SkillActivationMode;
+	legacyTargetDirectories?: readonly string[];
+	ownedBundleHash?: string;
+	ownedSkillVersion?: string;
 }
 
 export interface SkillInstallState {
 	clientId: string;
+	targetId: string;
 	targetDirectory?: string;
+	legacyTargetDirectories: readonly string[];
+	deliveryMode: SkillDeliveryMode;
+	activationMode: SkillActivationMode;
+	restartRequired: boolean;
 	state: SkillInstallDetectionState;
 	fileVerified: boolean;
 	updateAvailable: boolean;
@@ -48,7 +63,7 @@ export interface SkillInstallPlan {
 }
 
 export interface SkillInstallResult {
-	action: 'install' | 'update';
+	action: 'install' | 'update' | 'migrate';
 	clientId: string;
 	targetDirectory: string;
 	backupDirectory: string;
@@ -88,6 +103,14 @@ export class ClientSkillPlanConflictError extends Error {
 	}
 }
 
+interface ManagedDirectoryAnalysis {
+	state: 'installed' | 'update_available' | 'newer_than_bundled' | 'modified';
+	installedVersion: string;
+	fileVerified: boolean;
+	updateAvailable: boolean;
+	detail: string;
+}
+
 export class ClientSkillAdapter {
 	private readonly plans = new Map<string, StoredSkillInstallPlan>();
 	private readonly now: () => Date;
@@ -103,40 +126,40 @@ export class ClientSkillAdapter {
 
 	detect(profile: ClientSkillProfile): SkillInstallState {
 		if (!profile.supportsManagedInstall || !profile.targetDirectory) {
-			return this.state(profile, 'unavailable', false, false, '', 'This client uses copy-only Skill guidance.');
-		}
-		const targetDirectory = profile.targetDirectory;
-		const expectedFiles = this.options.bundle.installFiles;
-		const anyManagedFile = Object.keys(expectedFiles).some((filePath) =>
-			this.options.fs.existsSync(this.resolve(targetDirectory, filePath))
-		);
-		if (!anyManagedFile) {
-			return this.state(profile, 'not_installed', false, false, '', 'Tracekeeper Skill files were not found.');
+			return this.state(profile, 'copy_only', false, false, '', 'This client uses copy-only Skill guidance.');
 		}
 
-		const manifestPath = this.resolve(targetDirectory, 'manifest.json');
-		if (!this.options.fs.existsSync(manifestPath)) {
-			return this.state(profile, 'modified', false, false, '', 'Skill files exist without a verifiable manifest.');
+		const primaryHasManagedFiles = this.hasManagedFiles(profile.targetDirectory);
+		const legacyTargetDirectories = profile.legacyTargetDirectories ?? [];
+		const legacyWithManagedFiles = legacyTargetDirectories.filter((legacyDirectory) => this.hasManagedFiles(legacyDirectory));
+
+		if (primaryHasManagedFiles && legacyWithManagedFiles.length > 0) {
+			return this.state(
+				profile,
+				'location_conflict',
+				false,
+				false,
+				'',
+				`Both managed target and legacy locations exist: ${profile.targetDirectory}, ${legacyWithManagedFiles.join(', ')}`
+			);
 		}
-		let installedManifest: TracekeeperSkillManifest;
-		try {
-			installedManifest = JSON.parse(this.options.fs.readFileSync(manifestPath, 'utf8')) as TracekeeperSkillManifest;
-			if (!this.verifyInstalledManifest(targetDirectory, installedManifest)) {
-				return this.state(profile, 'modified', false, false, installedManifest.skill_version || '', 'Installed Skill content differs from its manifest.');
+
+		if (!primaryHasManagedFiles) {
+			if (legacyWithManagedFiles.length === 0) {
+				return this.state(profile, 'not_installed', false, false, '', 'Tracekeeper Skill files were not found.');
 			}
-		} catch {
-			return this.state(profile, 'modified', false, false, '', 'Installed Skill manifest cannot be verified.');
+			return this.detectLegacyInstall(profile, legacyWithManagedFiles[0]);
 		}
 
-		const matchesEmbedded = Object.entries(expectedFiles).every(([filePath, content]) => {
-			const targetPath = this.resolve(targetDirectory, filePath);
-			return this.options.fs.existsSync(targetPath)
-				&& normalizeSkillFileContent(this.options.fs.readFileSync(targetPath, 'utf8')) === content;
-		});
-		if (matchesEmbedded) {
-			return this.state(profile, 'installed', true, false, installedManifest.skill_version, 'Installed files match the embedded bundle.');
-		}
-		return this.state(profile, 'update_available', false, true, installedManifest.skill_version, 'A verified older official bundle can be updated.');
+		const primaryAnalysis = this.analyzeManagedDirectory(profile.targetDirectory, profile);
+		return this.state(
+			profile,
+			primaryAnalysis.state,
+			primaryAnalysis.fileVerified,
+			primaryAnalysis.updateAvailable,
+			primaryAnalysis.installedVersion,
+			primaryAnalysis.detail
+		);
 	}
 
 	previewInstall(profile: ClientSkillProfile): SkillInstallPlan {
@@ -147,6 +170,10 @@ export class ClientSkillAdapter {
 		return this.preview(profile, 'update');
 	}
 
+	previewMigrate(profile: ClientSkillProfile): SkillInstallPlan {
+		return this.preview(profile, 'migrate');
+	}
+
 	confirmInstall(planId: string): SkillInstallResult {
 		return this.commit(planId, 'install');
 	}
@@ -155,41 +182,101 @@ export class ClientSkillAdapter {
 		return this.commit(planId, 'update');
 	}
 
-	private preview(profile: ClientSkillProfile, requestedAction: 'install' | 'update'): SkillInstallPlan {
+	confirmMigrate(planId: string): SkillInstallResult {
+		return this.commit(planId, 'migrate');
+	}
+
+	private preview(profile: ClientSkillProfile, requestedAction: 'install' | 'update' | 'migrate'): SkillInstallPlan {
 		this.pruneExpiredPlans();
 		const detected = this.detect(profile);
 		if (!profile.supportsManagedInstall || !profile.targetDirectory) {
-			return this.publicPlan(profile, 'copy_only', [], false, 'Use the flattened compatibility Skill or manual bundle instructions.');
+			return this.publicPlan(profile, 'copy_only', [], false, 'Use the flattened compatibility Skill file.');
 		}
-		if (detected.state === 'modified') {
-			return this.publicPlan(profile, 'conflict', this.planFiles(profile.targetDirectory), false, 'Installed files were modified. Automatic overwrite is disabled.');
+		if (detected.state === 'location_conflict') {
+			return this.publicPlan(profile, 'conflict', this.planFiles(profile.targetDirectory), false, 'Primary and legacy managed Skill paths both exist; resolve manually.');
+		}
+		if (detected.state === 'legacy_install') {
+			if (requestedAction !== 'migrate') {
+				throw new ClientSkillPlanConflictError(`Expected a Skill migrate preview.`);
+			}
+			const files = this.planFiles(profile.targetDirectory);
+			const createdAt = this.now();
+			const planId = `client-skill-${randomBytes(12).toString('hex')}`;
+			const plan: StoredSkillInstallPlan = {
+				planId,
+				action: 'migrate',
+				clientId: profile.id,
+				targetDirectory: profile.targetDirectory,
+				files,
+				canConfirm: true,
+				expiresAt: new Date(createdAt.getTime() + this.planTtlMs).toISOString(),
+				detail: 'Copy the embedded Skill bundle from the legacy location into the managed profile location.',
+				originalHashes: new Map(files.map((file) => [file.path, file.originalHash])),
+			};
+			this.plans.set(planId, plan);
+			return stripPrivatePlan(plan);
+		}
+		if (detected.state === 'modified' || detected.state === 'unavailable' || detected.state === 'copy_only') {
+			return this.publicPlan(profile, 'conflict', this.planFiles(profile.targetDirectory), false, detected.detail);
+		}
+		if (detected.state === 'not_installed') {
+			if (requestedAction !== 'install') {
+				throw new ClientSkillPlanConflictError('Expected a Skill install preview.');
+			}
+			const files = this.planFiles(profile.targetDirectory);
+			const createdAt = this.now();
+			const planId = `client-skill-${randomBytes(12).toString('hex')}`;
+			const plan: StoredSkillInstallPlan = {
+				planId,
+				action: requestedAction,
+				clientId: profile.id,
+				targetDirectory: profile.targetDirectory,
+				files,
+				canConfirm: true,
+				expiresAt: new Date(createdAt.getTime() + this.planTtlMs).toISOString(),
+				detail: 'Install the embedded Skill bundle.',
+				originalHashes: new Map(files.map((file) => [file.path, file.originalHash])),
+			};
+			this.plans.set(planId, plan);
+			return stripPrivatePlan(plan);
+		}
+		if (detected.state === 'update_available') {
+			if (requestedAction !== 'update') {
+				throw new ClientSkillPlanConflictError('Expected a Skill update preview.');
+			}
+			const files = this.planFiles(profile.targetDirectory);
+			const createdAt = this.now();
+			const planId = `client-skill-${randomBytes(12).toString('hex')}`;
+			const plan: StoredSkillInstallPlan = {
+				planId,
+				action: 'update',
+				clientId: profile.id,
+				targetDirectory: profile.targetDirectory,
+				files,
+				canConfirm: true,
+				expiresAt: new Date(createdAt.getTime() + this.planTtlMs).toISOString(),
+				detail: 'Update the verified official Skill bundle.',
+				originalHashes: new Map(files.map((file) => [file.path, file.originalHash])),
+			};
+			this.plans.set(planId, plan);
+			return stripPrivatePlan(plan);
 		}
 		if (detected.state === 'installed') {
-			return this.publicPlan(profile, 'none', this.planFiles(profile.targetDirectory), false, 'The embedded Skill bundle is already installed.');
+			if (requestedAction === 'migrate') {
+				throw new ClientSkillPlanConflictError('Expected a Skill install or update preview.');
+			}
+			return this.publicPlan(profile, 'none', this.planFiles(profile.targetDirectory), false, detected.detail);
 		}
-		const action = detected.state === 'update_available' ? 'update' : 'install';
-		if (requestedAction !== action) {
-			throw new ClientSkillPlanConflictError(`Expected a Skill ${action} preview.`);
+		if (detected.state === 'newer_than_bundled') {
+			if (requestedAction === 'migrate') {
+				throw new ClientSkillPlanConflictError('Expected a Skill install preview.');
+			}
+			return this.publicPlan(profile, 'none', this.planFiles(profile.targetDirectory), false, detected.detail);
 		}
-		const files = this.planFiles(profile.targetDirectory);
-		const createdAt = this.now();
-		const planId = `client-skill-${randomBytes(12).toString('hex')}`;
-		const plan: StoredSkillInstallPlan = {
-			planId,
-			action,
-			clientId: profile.id,
-			targetDirectory: profile.targetDirectory,
-			files,
-			canConfirm: true,
-			expiresAt: new Date(createdAt.getTime() + this.planTtlMs).toISOString(),
-			detail: action === 'install' ? 'Install the embedded Skill bundle.' : 'Update the verified official Skill bundle.',
-			originalHashes: new Map(files.map((file) => [file.path, file.originalHash])),
-		};
-		this.plans.set(planId, plan);
-		return stripPrivatePlan(plan);
+		throw new ClientSkillPlanConflictError('This Skill state is not actionable.');
 	}
 
-	private commit(planId: string, expectedAction: 'install' | 'update'): SkillInstallResult {
+	private commit(planId: string, expectedAction: 'install' | 'update' | 'migrate'): SkillInstallResult {
 		const plan = this.plans.get(planId);
 		if (!plan || plan.action !== expectedAction || !plan.targetDirectory || !plan.canConfirm) {
 			throw new ClientSkillPlanConflictError('Skill install plan is missing or does not match the confirmed action.');
@@ -266,6 +353,12 @@ export class ClientSkillAdapter {
 		};
 	}
 
+	private hasManagedFiles(targetDirectory: string): boolean {
+		return Object.keys(this.options.bundle.installFiles).some((filePath) =>
+			this.options.fs.existsSync(this.resolve(targetDirectory, filePath))
+		);
+	}
+
 	private planFiles(targetDirectory: string): SkillInstallPlanFile[] {
 		return Object.entries(this.options.bundle.installFiles).map(([filePath, expected]) => {
 			const originalHash = this.currentHash(targetDirectory, filePath);
@@ -277,6 +370,135 @@ export class ClientSkillAdapter {
 		});
 	}
 
+	private analyzeManagedDirectory(targetDirectory: string, profile?: ClientSkillProfile): ManagedDirectoryAnalysis {
+		const manifestPath = this.resolve(targetDirectory, 'manifest.json');
+		if (!this.options.fs.existsSync(manifestPath)) {
+			return {
+				state: 'modified',
+				installedVersion: '',
+				fileVerified: false,
+				updateAvailable: false,
+				detail: 'Skill files exist without a verifiable manifest.',
+			};
+		}
+		let installedManifest: TracekeeperSkillManifest;
+		try {
+			const parsedManifest: unknown = JSON.parse(this.options.fs.readFileSync(manifestPath, 'utf8'));
+			if (!isTracekeeperManifest(parsedManifest)) {
+				return {
+					state: 'modified',
+					installedVersion: safeString((parsedManifest as { skill_version?: unknown } | null)?.skill_version),
+					fileVerified: false,
+					updateAvailable: false,
+					detail: 'Skill manifest shape is not supported.',
+				};
+			}
+			installedManifest = parsedManifest;
+		} catch {
+			return {
+				state: 'modified',
+				installedVersion: '',
+				fileVerified: false,
+				updateAvailable: false,
+				detail: 'Installed Skill manifest cannot be parsed.',
+			};
+		}
+		if (!this.verifyInstalledManifest(targetDirectory, installedManifest)) {
+			return {
+				state: 'modified',
+				installedVersion: installedManifest.skill_version || '',
+				fileVerified: false,
+				updateAvailable: false,
+				detail: 'Installed Skill content differs from its manifest.',
+			};
+		}
+		const versionComparison = compareVersions(installedManifest.skill_version, this.options.bundle.manifest.skill_version);
+		if (versionComparison === null) {
+			return {
+				state: 'modified',
+				installedVersion: installedManifest.skill_version,
+				fileVerified: false,
+				updateAvailable: false,
+				detail: 'Installed Skill version is not a comparable SemVer.',
+			};
+		}
+		if (versionComparison > 0) {
+			return {
+				state: 'newer_than_bundled',
+				installedVersion: installedManifest.skill_version,
+				fileVerified: true,
+				updateAvailable: false,
+				detail: 'A verified newer Skill version is installed.',
+			};
+		}
+		if (versionComparison === 0) {
+			if (!this.matchesEmbeddedBundle(targetDirectory, installedManifest)) {
+				return {
+					state: 'modified',
+					installedVersion: installedManifest.skill_version,
+					fileVerified: false,
+					updateAvailable: false,
+					detail: 'Installed Skill version matches the embedded version but its content does not.',
+				};
+			}
+			return {
+				state: 'installed',
+				installedVersion: installedManifest.skill_version,
+				fileVerified: true,
+				updateAvailable: false,
+				detail: 'Installed files match the embedded bundle.',
+			};
+		}
+		if (profile && !this.isOwnedBundle(profile, installedManifest)) {
+			return {
+				state: 'modified',
+				installedVersion: installedManifest.skill_version,
+				fileVerified: false,
+				updateAvailable: false,
+				detail: 'A verified older Skill is not owned by this local plugin installation, so automatic overwrite is disabled.',
+			};
+		}
+		return {
+			state: 'update_available',
+			installedVersion: installedManifest.skill_version,
+			fileVerified: true,
+			updateAvailable: true,
+			detail: 'A verified older official bundle can be updated.',
+		};
+	}
+
+	private detectLegacyInstall(profile: ClientSkillProfile, legacyDirectory: string): SkillInstallState {
+		const legacyAnalysis = this.analyzeManagedDirectory(legacyDirectory);
+		if (legacyAnalysis.state === 'newer_than_bundled') {
+			return this.state(
+				profile,
+				'newer_than_bundled',
+				legacyAnalysis.fileVerified,
+				false,
+				legacyAnalysis.installedVersion,
+				`Found newer legacy Skill at ${legacyDirectory}. Migrate is disabled to avoid downgrades.`
+			);
+		}
+		if (legacyAnalysis.state === 'modified') {
+			return this.state(
+				profile,
+				'modified',
+				legacyAnalysis.fileVerified,
+				false,
+				legacyAnalysis.installedVersion,
+				`Found a legacy Tracekeeper Skill path at ${legacyDirectory}, but it is not verifiable against a known manifest. Automatic overwrite is disabled.`
+			);
+		}
+		return this.state(
+			profile,
+			'legacy_install',
+			legacyAnalysis.fileVerified,
+			false,
+			legacyAnalysis.installedVersion,
+			`Found a legacy Tracekeeper Skill path at ${legacyDirectory}. A non-destructive migrate can copy the official bundle to ${profile.targetDirectory}.`
+		);
+	}
+
 	private verifyInstalledManifest(targetDirectory: string, manifest: TracekeeperSkillManifest): boolean {
 		if (!manifest
 			|| manifest.name !== 'tracekeeper'
@@ -284,9 +506,11 @@ export class ClientSkillAdapter {
 			|| !Number.isSafeInteger(manifest.format_version)
 			|| !Array.isArray(manifest.files)
 			|| !manifest.artifacts?.flattened) return false;
-		const paths = [...manifest.files.map((file) => file.path), manifest.artifacts.flattened.path];
+		const paths = manifest.files.map((file) => file.path);
 		if (new Set(paths).size !== paths.length || paths.some((filePath) => !isSafeRelativePath(filePath))) return false;
-		for (const file of [...manifest.files, manifest.artifacts.flattened]) {
+		if (!isSafeRelativePath(manifest.artifacts.flattened.path)
+			|| !/^sha256:[a-f0-9]{64}$/.test(manifest.artifacts.flattened.sha256)) return false;
+		for (const file of manifest.files) {
 			const targetPath = this.resolve(targetDirectory, file.path);
 			if (!this.options.fs.existsSync(targetPath)
 				|| hashSkillFileContent(this.options.fs.readFileSync(targetPath, 'utf8')) !== file.sha256) return false;
@@ -297,6 +521,20 @@ export class ClientSkillAdapter {
 			'',
 		].join('\n');
 		return hashRaw(canonicalBundle) === manifest.bundle_hash;
+	}
+
+	private matchesEmbeddedBundle(targetDirectory: string, manifest: TracekeeperSkillManifest): boolean {
+		if (manifest.bundle_hash !== this.options.bundle.manifest.bundle_hash
+			|| manifest.skill_version !== this.options.bundle.manifest.skill_version) return false;
+		return Object.entries(this.options.bundle.installFiles).every(([filePath, expected]) => (
+			this.currentHash(targetDirectory, filePath) === hashSkillFileContent(expected)
+		));
+	}
+
+	private isOwnedBundle(profile: ClientSkillProfile | undefined, manifest: TracekeeperSkillManifest): boolean {
+		return Boolean(profile
+			&& profile.ownedBundleHash === manifest.bundle_hash
+			&& profile.ownedSkillVersion === manifest.skill_version);
 	}
 
 	private currentHash(targetDirectory: string, filePath: string): string | null {
@@ -321,7 +559,12 @@ export class ClientSkillAdapter {
 	): SkillInstallState {
 		return {
 			clientId: profile.id,
+			targetId: profile.targetId,
 			targetDirectory: profile.targetDirectory,
+			legacyTargetDirectories: profile.legacyTargetDirectories ?? [],
+			deliveryMode: profile.deliveryMode,
+			activationMode: profile.activationMode,
+			restartRequired: profile.restartRequired,
 			state,
 			fileVerified,
 			updateAvailable,
@@ -364,17 +607,87 @@ export function buildClientSkillProfile(
 	homeDirectory: string | undefined,
 	joinPath: (...parts: string[]) => string
 ): ClientSkillProfile {
-	const managed = clientId === 'codex' && Boolean(homeDirectory);
+	const trimmedId = clientId.trim();
+	const resolved = buildClientSkillProfileFromRegistry(trimmedId, displayName || trimmedId, homeDirectory, joinPath);
 	return {
-		id: clientId,
-		displayName,
-		supportsManagedInstall: managed,
-		targetDirectory: managed && homeDirectory
-			? joinPath(homeDirectory, '.codex', 'skills', 'tracekeeper')
-			: undefined,
-		restartRequired: clientId !== 'custom',
-		profileLabel: clientId === 'codex' ? 'Local default profile' : 'Local copy-only profile',
+		id: trimmedId,
+		targetId: resolved.targetId,
+		displayName: resolved.displayName,
+		supportsManagedInstall: resolved.deliveryMode === 'managed' && Boolean(resolved.targetDirectory),
+		targetDirectory: resolved.targetDirectory,
+		restartRequired: resolved.restartRequired,
+		profileLabel: resolved.profileLabel,
+		deliveryMode: resolved.deliveryMode,
+		activationMode: resolved.activationMode,
+		legacyTargetDirectories: resolved.legacyTargetDirectories,
 	};
+}
+
+function isTracekeeperManifest(value: unknown): value is TracekeeperSkillManifest {
+	return typeof value === 'object'
+		&& value !== null
+		&& !Array.isArray(value)
+		&& (value as TracekeeperSkillManifest).name === 'tracekeeper'
+		&& typeof (value as TracekeeperSkillManifest).hash_algorithm === 'string'
+		&& (value as TracekeeperSkillManifest).hash_algorithm !== ''
+		&& Number.isSafeInteger((value as TracekeeperSkillManifest).format_version)
+		&& Array.isArray((value as TracekeeperSkillManifest).files)
+		&& typeof (value as TracekeeperSkillManifest).artifacts === 'object'
+		&& (value as TracekeeperSkillManifest).artifacts !== null
+		&& typeof (value as TracekeeperSkillManifest).artifacts.flattened === 'object'
+		&& (value as TracekeeperSkillManifest).artifacts.flattened !== null;
+}
+
+interface ParsedSemver {
+	major: number;
+	minor: number;
+	patch: number;
+	preRelease: readonly string[];
+}
+
+function compareVersions(left: string, right: string): number | null {
+	const leftVersion = parseVersion(left);
+	const rightVersion = parseVersion(right);
+	if (!leftVersion || !rightVersion) return null;
+	for (const field of ['major', 'minor', 'patch'] as const) {
+		if (leftVersion[field] === rightVersion[field]) continue;
+		return leftVersion[field] < rightVersion[field] ? -1 : 1;
+	}
+	if (leftVersion.preRelease.length === 0 || rightVersion.preRelease.length === 0) {
+		if (leftVersion.preRelease.length === rightVersion.preRelease.length) return 0;
+		return leftVersion.preRelease.length === 0 ? 1 : -1;
+	}
+	const length = Math.max(leftVersion.preRelease.length, rightVersion.preRelease.length);
+	for (let index = 0; index < length; index += 1) {
+		const leftIdentifier = leftVersion.preRelease[index];
+		const rightIdentifier = rightVersion.preRelease[index];
+		if (leftIdentifier === undefined) return -1;
+		if (rightIdentifier === undefined) return 1;
+		if (leftIdentifier === rightIdentifier) continue;
+		const leftNumeric = /^(0|[1-9][0-9]*)$/.test(leftIdentifier);
+		const rightNumeric = /^(0|[1-9][0-9]*)$/.test(rightIdentifier);
+		if (leftNumeric && rightNumeric) {
+			return Number.parseInt(leftIdentifier, 10) < Number.parseInt(rightIdentifier, 10) ? -1 : 1;
+		}
+		if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+		return leftIdentifier < rightIdentifier ? -1 : 1;
+	}
+	return 0;
+}
+
+function parseVersion(value: string): ParsedSemver | null {
+	const matched = value.trim().match(/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
+	if (!matched) return null;
+	return {
+		major: Number.parseInt(matched[1], 10),
+		minor: Number.parseInt(matched[2], 10),
+		patch: Number.parseInt(matched[3], 10),
+		preRelease: matched[4] ? matched[4].split('.') : [],
+	};
+}
+
+function safeString(value: unknown): string {
+	return typeof value === 'string' ? value : '';
 }
 
 function isSafeRelativePath(filePath: string): boolean {

@@ -40,6 +40,8 @@ try {
 	const onboardingViewModel = await import(`${pathToFileURL(viewModelBundle).href}?test=${Date.now()}`);
 	const embeddedBundle = await import(`${pathToFileURL(embeddedBundleOutput).href}?test=${Date.now()}`);
 	const settingsSource = fs.readFileSync('src/features/settings/tracekeeper-setting-tab.ts', 'utf8');
+	const entryModalSource = fs.readFileSync('src/features/onboarding/onboarding-entry-modal.ts', 'utf8');
+	const runtimeStatusSource = fs.readFileSync('src/features/runtime/runtime-status-view.ts', 'utf8');
 	const buildSource = fs.readFileSync('scripts/build.mjs', 'utf8');
 	const skillBundleSource = fs.readFileSync('src/features/skill-installation/skill-bundle.ts', 'utf8');
 	const pluginBundleSource = fs.readFileSync(pluginBundle, 'utf8');
@@ -89,7 +91,21 @@ try {
 	assert.ok(settingsSource.includes('SkillInstallPreviewModal'));
 	assert.ok(settingsSource.includes('not file verification'));
 	assert.ok(settingsSource.includes('Does not prove automatic Skill triggering'));
-	assert.ok(settingsSource.includes('Local single-user default profile (not team RBAC)'));
+	assert.ok(settingsSource.includes('Local single-user managed profile (not team RBAC)'));
+	assert.ok(settingsSource.includes('skillActionForState'));
+	assert.ok(settingsSource.includes('legacy_install'));
+	assert.ok(settingsSource.includes('newer_than_bundled'));
+	assert.equal(settingsSource.includes("clientId === 'codex'"), false);
+	assert.ok(settingsSource.includes('buildOnboardingRecallInstruction'));
+	assert.ok(settingsSource.includes('Local preview does not complete agent connection or first-recall verification.'));
+	assert.ok(entryModalSource.includes('Start connecting Agent'));
+	assert.ok(entryModalSource.includes('Set up later'));
+	assert.ok(entryModalSource.includes('onStartConnectingAgent'));
+	assert.ok(entryModalSource.includes('onSetupLater'));
+	assert.equal(entryModalSource.includes('setMcpRuntimeEnabled'), false);
+	assert.equal(entryModalSource.includes('applyClientConfig'), false);
+	assert.equal(runtimeStatusSource.includes('getMcpConnectionUrl'), false);
+	assert.ok(runtimeStatusSource.includes('status.endpoint'));
 
 	assert.ok(pluginBundleSource.includes('tracekeeper-skill-bundle-v'));
 	assert.ok(pluginBundleSource.includes('"format_version": 1'));
@@ -106,7 +122,7 @@ try {
 		assert.equal(/(?:sk-[A-Za-z0-9_-]{12,}|api_key\s*[:=]\s*[A-Za-z0-9._-]{12,})/i.test(content), false);
 	}
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 29 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 39 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

@@ -53,7 +53,7 @@ export class TracekeeperPermissionPolicyView extends ItemView {
 					ui('查看连接和资料状态', 'Check connection and knowledge base status'),
 					ui('查找相关笔记', 'Find related notes'),
 					ui('读取指定笔记', 'Read a selected note'),
-					ui('查看审核队列和最近记录', 'Review queue and recent activity'),
+					ui('查看知识变更审核和最近记录', 'Knowledge Change Review and recent activity'),
 					ui('检查笔记结构', 'Check note structure'),
 				],
 			},
@@ -69,9 +69,9 @@ export class TracekeeperPermissionPolicyView extends ItemView {
 			{
 				title: ui('必须先审核', 'Needs review first'),
 				items: [
-					ui('全局记忆默认先进入审核队列', 'Global memory enters the review queue by default'),
+					ui('全局记忆默认先进入知识变更审核', 'Global memory enters Knowledge Change Review by default'),
 					ui('项目记忆可按规则自动保存', 'Project memory can auto-save by rule'),
-					ui('批准后的写入会留下记录，方便追溯', 'Approved writes leave records for traceability'),
+					ui('审核通过后的写入会留下记录，方便追溯', 'Approved writes leave records for traceability'),
 				],
 			},
 			{
@@ -114,8 +114,8 @@ export class TracekeeperPermissionPolicyView extends ItemView {
 		source.createEl('h3', { text: ui('使用提示', 'Tip') });
 		source.createEl('p', {
 			text: ui(
-				'如果不确定某条记忆是否应该保存，请选择“修订”，不要直接批准。',
-				'If you are unsure whether a memory should be saved, choose revise instead of approving it.'
+				'如果不确定某条记忆是否应该保存，请选择“退回修改”，不要直接通过审核。',
+				'If you are unsure whether a memory should be saved, return it for revision instead of approving it.'
 			),
 			cls: 'tracekeeper-view__description',
 		});

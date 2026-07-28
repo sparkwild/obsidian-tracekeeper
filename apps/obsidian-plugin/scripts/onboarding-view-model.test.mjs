@@ -13,8 +13,59 @@ try {
 	await build({ entryPoints: [path.resolve('src/features/onboarding/onboarding-view-model.ts')], outfile: output, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent' });
 	const vm = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 	const base = {
-		selectedClientId: 'codex', clientConfiguredAt: '', skillSetupCompletedAt: '', skillCopiedAt: '', skillUserConfirmedAt: '', skillFileVerifiedAt: '', skillVerifiedBundleHash: '', skillUpdateAvailableAt: '', agentRestartCompletedAt: '', connectionVerifiedAt: '', firstRecallCompletedAt: '', firstRecallMatchedCount: 0, firstRecallQuery: '', trackedWorkflowObservedAt: '', trackedWorkflowTaskId: '', lastUpdatedAt: '',
+		selectedClientId: 'codex',
+		entryPromptVersion: 0,
+		entryDeferredAt: '',
+		clientConfiguredAt: '',
+		skillSetupCompletedAt: '',
+		skillCopiedAt: '',
+		skillUserConfirmedAt: '',
+		skillFileVerifiedAt: '',
+		skillVerifiedBundleHash: '',
+		skillUpdateAvailableAt: '',
+		agentRestartCompletedAt: '',
+		connectionVerifiedAt: '',
+		firstRecallCompletedAt: '',
+		firstRecallMatchedCount: 0,
+		firstRecallQuery: '',
+		trackedWorkflowObservedAt: '',
+		trackedWorkflowTaskId: '',
+		lastUpdatedAt: '',
 	};
+	const observed = vm.buildOnboardingObservedEvidence({
+		selectedClient: { clientId: 'codex', configState: 'configured' },
+		principalId: 'principal-codex',
+		onboarding: {
+			...base,
+			selectedClientId: 'codex',
+			firstRecallCompletedAt: '2026-07-22T00:10:00.000Z',
+			firstRecallMatchedCount: 2,
+			firstRecallQuery: 'tracekeeper onboarding',
+			trackedWorkflowObservedAt: '2026-07-22T00:11:00.000Z',
+			trackedWorkflowTaskId: 'task-7',
+		},
+		skillBundleVersion: '2.1.0',
+	});
+	assert.equal(observed.selectedClientId, 'codex');
+	assert.equal(observed.principalId, 'principal-codex');
+	assert.equal(observed.firstRecallQuery, 'tracekeeper onboarding');
+	assert.equal(observed.firstRecallMatchedCount, 2);
+	assert.equal(observed.firstRecallMatchedAt, '2026-07-22T00:10:00.000Z');
+	assert.equal(observed.skillBundleVersion, '2.1.0');
+	assert.equal(observed.trackedWorkflowStatus, 'observed');
+	assert.equal(observed.trackedWorkflowTaskId, 'task-7');
+	const instructionZh = vm.buildOnboardingRecallInstruction({
+		keyword: 'tracekeeper onboarding',
+		localize: (zh) => zh,
+	});
+	assert.ok(instructionZh.instruction.includes('先识别当前仓库/工作区身份'));
+	const instructionEn = vm.buildOnboardingRecallInstruction({
+		keyword: 'tracekeeper onboarding',
+		localize: (_zh, en) => en,
+	});
+	assert.ok(instructionEn.instruction.includes('project-scoped tracekeeper.recall'));
+	assert.ok(instructionEn.instruction.includes('\"tracekeeper onboarding\"'));
+
 	const verified = vm.buildOnboardingContext({
 		vaultReady: true,
 		runtimeState: 'running',
@@ -27,6 +78,16 @@ try {
 	assert.equal(verified.skillFileVerified, true);
 	assert.equal(verified.skillSetupConfirmed, true);
 	assert.equal(verified.skillUserConfirmed, false);
+	const automaticActivation = vm.buildOnboardingContext({
+		vaultReady: true,
+		runtimeState: 'running',
+		runtimeEnabled: true,
+		selectedClient: { clientId: 'codex', configState: 'configured' },
+		skillInstallState: { state: 'installed', fileVerified: true, updateAvailable: false, restartRequired: false },
+		onboarding: base,
+	});
+	assert.equal(automaticActivation.clientReloaded, true);
+	assert.equal(automaticActivation.agentRestartConfirmed, true);
 
 	const selfAttested = vm.buildOnboardingContext({
 		vaultReady: true,
@@ -73,7 +134,7 @@ try {
 
 	const resolved = vm.resolveOnboardingSelectedClient({ ...base, selectedClientId: 'missing' }, [{ clientId: 'codex', configState: 'configured' }], '2026-07-23T00:00:00.000Z');
 	assert.equal(resolved.selectedClientId, 'codex');
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 19 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 30 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

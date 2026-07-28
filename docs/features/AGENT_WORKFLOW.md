@@ -1,4 +1,4 @@
-# Agent Workflow Contract
+# Agent Workflow
 
 This document is the single normative source for Tracekeeper Agent workflow behavior. Skills, MCP instructions, onboarding copy, compatibility artifacts, and ecosystem checks must remain semantically aligned with it.
 

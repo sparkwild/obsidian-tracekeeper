@@ -66,7 +66,7 @@ export class TracekeeperGraphHealthView extends ItemView {
 		});
 
 		const proposalButton = actions.createEl('button', {
-			text: ui('创建 Review Queue 建议', 'Create Review Queue proposal'),
+			text: ui('创建知识变更提案', 'Create knowledge change proposal'),
 		});
 		proposalButton.disabled = !this.hasActionableGraphWork(snapshot);
 		proposalButton.addEventListener('click', () => {
@@ -122,15 +122,15 @@ export class TracekeeperGraphHealthView extends ItemView {
 		try {
 			const path = await this.plugin.createGraphHealthReviewProposal(snapshot);
 			new Notice(path
-				? ui(`已创建审核建议：${path}`, `Review proposal created: ${path}`)
-				: ui('已创建审核建议。', 'Review proposal created.')
+				? ui(`已创建知识变更提案：${path}`, `Knowledge change proposal created: ${path}`)
+				: ui('已创建知识变更提案。', 'Knowledge change proposal created.')
 			);
 			await this.refresh();
 		} catch (error) {
 			console.error('tracekeeper failed to create graph health proposal', error);
-			new Notice(ui('创建审核建议失败。', 'Failed to create review proposal.'));
+			new Notice(ui('创建知识变更提案失败。', 'Failed to create knowledge change proposal.'));
 			button.disabled = false;
-			button.setText(ui('创建 Review Queue 建议', 'Create Review Queue proposal'));
+			button.setText(ui('创建知识变更提案', 'Create knowledge change proposal'));
 		}
 	}
 

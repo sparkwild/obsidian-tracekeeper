@@ -1,7 +1,7 @@
 export type SkillInstallAuditResult = 'success' | 'failed';
 
 export interface SkillInstallAuditInput {
-	action: 'install' | 'update';
+	action: 'install' | 'update' | 'migrate';
 	clientId: string;
 	bundleHash: string;
 	backupCreated: boolean;

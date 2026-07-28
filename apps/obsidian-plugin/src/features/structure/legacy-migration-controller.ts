@@ -128,7 +128,7 @@ async buildLegacyStructurePlan(migrationId: string): Promise<LegacyStructurePlan
 						newPath: 'unmapped',
 						kind: 'archive',
 						action: 'review_existing',
-						reason: ui('已存在迁移审核项。', 'A migration review item already exists.'),
+						reason: ui('已存在迁移变更提案。', 'A migration change proposal already exists.'),
 						isMarkdown,
 					});
 					continue;
@@ -151,7 +151,7 @@ async buildLegacyStructurePlan(migrationId: string): Promise<LegacyStructurePlan
 					newPath: target.newPath,
 					kind: target.kind,
 					action: 'review_existing',
-					reason: ui('已存在迁移审核项。', 'A migration review item already exists.'),
+					reason: ui('已存在迁移变更提案。', 'A migration change proposal already exists.'),
 					isMarkdown,
 				});
 				continue;

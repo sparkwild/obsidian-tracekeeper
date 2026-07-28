@@ -288,7 +288,7 @@ exports.toolContracts = [
             action: {
                 type: 'string',
                 enum: ['list_pending', 'list_approved'],
-                description: 'Review Queue action. Defaults to list_pending.',
+                description: 'Knowledge Change Review action. Defaults to list_pending.',
             },
             scope: {
                 type: 'string',
@@ -456,7 +456,7 @@ exports.toolContracts = [
         world: 'closed',
         workflowRole: 'review',
         useCase: 'apply_approved_writeback',
-        description: '[review-gated apply] Use only after the user approves a Review Queue proposal. Appends approved content to the local Vault target note.',
+        description: '[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content to the local Vault target note.',
         inputSchema: withVaultRoot({
             proposal_id: { type: 'string', description: 'Proposal id to apply.' },
             proposal_path: { type: 'string', description: 'Vault-relative proposal note path.' },

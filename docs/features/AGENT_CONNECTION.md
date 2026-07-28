@@ -1,0 +1,70 @@
+# Agent Connection
+
+Tracekeeper connects a local Agent to the active Obsidian Vault through the
+Obsidian-hosted MCP Runtime. Setup is recoverable, evidence-driven, and explicit
+about which actions the plugin can perform for each client.
+
+## Setup Flow
+
+The target first-run flow is:
+
+1. Check or initialize the Tracekeeper Vault structure.
+2. Confirm that the local MCP Runtime is running.
+3. Select the Agent client.
+4. Preview and apply, or copy, the MCP connection configuration.
+5. Install or display the matching Tracekeeper Skill guidance.
+6. Reload the client when required.
+7. Verify connection and permissions.
+8. Observe one non-empty project-scoped Recall by the selected client principal.
+9. For a workflow-capable client, observe one same-principal
+   `start -> recall -> finish` sequence.
+
+The plugin persists progress so the user can leave and resume the flow. The
+first incomplete setup may show one native Obsidian entry prompt with only
+**Start connecting Agent** and **Set up later**. Opening or dismissing that
+prompt does not configure a client, install a Skill, or write knowledge.
+
+## Evidence States
+
+The UI treats these as independent evidence:
+
+- the Skill bundle is available;
+- guidance was copied;
+- the user confirmed a manual step;
+- managed files match the expected hashes;
+- the client was reloaded;
+- the credential principal connected;
+- an external `tracekeeper.recall` returned at least one match;
+- a complete tracked workflow was observed;
+- an update is available.
+
+A plugin-local Recall preview cannot complete external Recall verification. File
+verification does not prove that a client discovered or automatically used the
+Skill, and one Recall does not prove automatic Skill triggering.
+
+## Client Capabilities
+
+Each managed client receives an independent local credential principal and a
+local capability profile. Profiles are presets over Runtime capabilities, not
+hosted roles or a second authorization system. Rotating a credential or changing
+a profile invalidates only that client's affected evidence.
+
+Automatic client-configuration or Skill installation is available only for
+clients with a verified local placement contract. Other clients receive
+copyable configuration or flattened Skill guidance with honest manual steps.
+
+Managed installation and configuration always use preview, explicit
+confirmation, current-file revalidation, backup, and conflict detection. The
+complete filesystem and credential controls are defined by the
+[knowledge runtime](../architecture/KNOWLEDGE_RUNTIME.md) and
+[trust boundaries](../architecture/TRUST_BOUNDARIES.md).
+
+## Recovery And Visibility
+
+Activity, the command palette, and plugin settings expose recovery entry points.
+The current screen should state what evidence is missing, which client must
+perform the next action, and where the user should return afterward.
+
+Runtime disabled, stopped, transitional, running, port-conflict, and failed
+states must remain distinct. A configured client is not described as connected
+until authenticated Runtime evidence exists.

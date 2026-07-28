@@ -2183,7 +2183,7 @@ function readMemoryProposal(vaultRoot, proposalPath, context) {
     const parsed = (0, core_1.parseMarkdown)(text);
     const frontmatter = parsed.frontmatter.fields;
     if (!isMemoryProposalFrontmatter(frontmatter)) {
-        throw new safety_1.ToolInputError(`Review Queue note is not a memory proposal: ${relative}`);
+        throw new safety_1.ToolInputError(`Knowledge Change Review record is not a memory proposal: ${relative}`);
     }
     return {
         absolutePath,
@@ -5787,14 +5787,14 @@ function buildFinishTaskNextActions(context, reviewProposalMode, proposalResult,
         actions.push(contentText(context, '任务会话已记录；没有提交可长期沉淀的收尾记忆候选。如果之后发现遗漏的长期信息，请将其作为新的 tracekeeper.propose_memory 候选提交，不要再次调用 tracekeeper.finish_task。', 'Task session was recorded with no durable closeout memory candidates. If omitted durable information is discovered later, submit it as a new tracekeeper.propose_memory candidate; do not call tracekeeper.finish_task again.'));
     }
     if (reviewProposalMode === 'off') {
-        actions.push(contentText(context, '任务会话已记录；当前模式不会创建记忆建议或审核队列提案。', 'Task session was recorded; no memory suggestions or Review Queue proposals were created.'));
+        actions.push(contentText(context, '任务会话已记录；当前模式不会创建记忆建议或知识变更审核提案。', 'Task session was recorded; no memory suggestions or Knowledge Change Review proposals were created.'));
     }
     if (reviewProposalMode === 'suggest') {
-        actions.push(contentText(context, '请查看本次响应中的 suggested_memory_updates；没有写入审核队列。', 'Review suggested_memory_updates in this response; nothing was written to the Review Queue.'));
+        actions.push(contentText(context, '请查看本次响应中的 suggested_memory_updates；没有写入知识变更审核。', 'Review suggested_memory_updates in this response; nothing was written to Knowledge Change Review.'));
     }
     if (reviewProposalMode === 'review_queue' || reviewProposalMode === 'auto_propose') {
         if (proposalResult.proposals.length > 0) {
-            actions.push(contentText(context, '请在 Obsidian 审核队列中确认提案后再写入长期记忆。', 'Review queued proposals in Obsidian before durable memory writeback.'));
+            actions.push(contentText(context, '请在 Obsidian 的知识变更审核中确认提案后再写入长期记忆。', 'Review proposed changes in Obsidian Knowledge Change Review before durable memory writeback.'));
         }
         if (proposalResult.autoAppliedMemoryUpdates.length > 0) {
             actions.push(contentText(context, '项目记忆已按用户规则追加保存。', 'Project memory was auto-saved as append-only project memory according to the user rule.'));
@@ -5848,9 +5848,9 @@ function buildMemoryCloseoutSummary(context, status, proposalResult) {
         case 'auto_saved':
             return contentText(context, `已自动保存 ${autoSaved} 条项目记忆更新。`, `${autoSaved} project memory update(s) were auto-saved.`);
         case 'queued':
-            return contentText(context, `${queued} 条记忆候选已进入审核队列。`, `${queued} memory candidate(s) were sent to the Review Queue.`);
+            return contentText(context, `${queued} 条记忆候选已进入知识变更审核。`, `${queued} memory candidate(s) were sent to Knowledge Change Review.`);
         case 'mixed':
-            return contentText(context, `已自动保存 ${autoSaved} 条项目记忆更新，另有 ${queued} 条候选进入审核队列。`, `${autoSaved} project memory update(s) were auto-saved and ${queued} candidate(s) were sent to the Review Queue.`);
+            return contentText(context, `已自动保存 ${autoSaved} 条项目记忆更新，另有 ${queued} 条候选进入知识变更审核。`, `${autoSaved} project memory update(s) were auto-saved and ${queued} candidate(s) were sent to Knowledge Change Review.`);
         case 'ignored':
             return contentText(context, '收尾记忆候选已记录在会话中，但当前模式没有入队或写入。', 'Closeout memory candidates were recorded in the session but not queued or written by the selected mode.');
         case 'empty':

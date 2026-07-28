@@ -168,7 +168,9 @@ export interface AgentActivitySnapshot {
 	recentSourceRequests: SourceRequestRecord[];
 	recentProposals: MemoryProposalRecord[];
 	reviewQueueItemCount: number;
+	incompleteReviewQueueItemCount: number;
 	pendingReviewQueueItemCount: number;
+	readyToApplyReviewQueueItemCount: number;
 	revisionRequestedReviewQueueItemCount: number;
 	actionableReviewQueueItemCount: number;
 	recentAuditEvents: AuditEventRecord[];

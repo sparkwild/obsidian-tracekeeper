@@ -49,8 +49,8 @@ Tracekeeper treats every AI suggestion as a candidate memory proposal. You can i
 3. Continue the resumable **Onboarding** section: choose a client, preview or copy its independent connection, then preview a supported managed Skill install or copy the flattened compatibility Skill.
 4. Restart the Agent when requested, ask it to call Tracekeeper, and verify the recorded connection evidence.
 5. Ask that Agent to run a narrow `tracekeeper.recall` with at least one match, then verify the first-recall evidence in settings.
-6. Review proposed memory, wiki, graph, or migration items in the **Review Queue**.
-7. Edit, approve, reject, or request revisions for Review Queue items before they become durable memory.
+6. Review proposed memory, wiki, graph, or migration changes in **Knowledge Change Review**.
+7. Edit a change proposal, approve it, return it for revision, or do not accept it. An approved change still requires a preview and explicit apply confirmation before it enters the vault.
 
 ## Agent And MCP Connection
 
@@ -58,7 +58,7 @@ Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian i
 
 AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and submit memory updates according to your memory rules. Global memory goes to review by default; project memory can auto-save as an append-only project note when you enable that rule.
 
-For shared use across Codex, Claude, OpenClaw, and other MCP clients, the companion Skill selects `no_track`, `recall_only`, or `tracked_task`. Tracked work starts once, recalls the narrowest useful context, finishes once with the returned task id, and reports whether closeout memory was saved, queued, suggested, or blocked. Recall results label Vault content as knowledge data rather than instructions, and structured MCP actions reduce client-side guesswork. See the [Agent Workflow Contract](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md).
+For shared use across Codex, Claude, OpenClaw, and other MCP clients, the companion Skill selects `no_track`, `recall_only`, or `tracked_task`. Tracked work starts once, recalls the narrowest useful context, finishes once with the returned task id, and reports whether closeout memory was saved, queued, suggested, or blocked. Recall results label Vault content as knowledge data rather than instructions, and structured MCP actions reduce client-side guesswork. See the [Agent Workflow](./docs/features/AGENT_WORKFLOW.md).
 
 The connection is local-first:
 
@@ -70,13 +70,13 @@ The connection is local-first:
 - no vault-outside file access from MCP tools
 - no Obsidian configuration directory reads through MCP tools
 
-## Review Queue
+## Knowledge Change Review
 
-Global long-term memory changes are review-gated by default. When an assistant proposes a durable global update, Tracekeeper stores it as a Review Queue item first. The same queue also surfaces graph-health suggestions and structure-migration conflicts that need human confirmation. You decide whether to approve, reject, or request revision.
+Global long-term memory changes are review-gated by default. When an assistant proposes a durable global update, Tracekeeper stores it first as a change proposal in Knowledge Change Review. The same surface also presents graph-health suggestions and structure-migration conflicts that need human confirmation. You decide whether to approve, return for revision, or not accept a proposal.
 
-Approved writeback is a separate action. Tracekeeper only applies an approved proposal to its target note after that review step has happened.
+Approval and writeback are separate actions. Tracekeeper only applies an approved proposal to its target note after you preview and explicitly confirm the writeback.
 
-Project memory is lighter by default: project-scoped updates can auto-save as append-only entries in `01_knowledge/memory/projects/<project>/memory.md`, with duplicate signatures to avoid repeated writes. Project auto-save still requires a valid Wiki bridge, so memory lines remain connected to topic pages. Task closeout defaults to auto mode: project memory follows the project rule, global memory enters the Review Queue, and summary-only closeouts are recorded without creating empty memory items.
+Project memory is lighter by default: project-scoped updates can auto-save as append-only entries in `01_knowledge/memory/projects/<project>/memory.md`, with duplicate signatures to avoid repeated writes. Project auto-save still requires a valid Wiki bridge, so memory lines remain connected to topic pages. Task closeout defaults to auto mode: project memory follows the project rule, global memory enters Knowledge Change Review, and summary-only closeouts are recorded without creating empty memory items.
 
 ## What It Helps With
 
@@ -97,7 +97,7 @@ The graph health profile is configured in the Tracekeeper settings:
 - `advisory`: graph findings are reported as warnings and suggestions.
 - `strict`: missing graph entry notes, missing recommended hubs, isolated notes, and unresolved graph links become lint errors.
 
-Graph health never creates notes or rewrites links by itself. Use the report, or the Obsidian Graph Health view, to create a Review Queue proposal before adding a vault-level graph index, topic hubs, or explicit `Graph links` sections.
+Graph health never creates notes or rewrites links by itself. Use the report, or the Obsidian Graph Health view, to create a knowledge change proposal before adding a vault-level graph index, topic hubs, or explicit `Graph links` sections.
 
 ## Design Principles
 
@@ -124,12 +124,13 @@ User-confirmed client configuration is the only expected write outside the activ
 ## Documentation
 
 - [Documentation index](./docs/INDEX.md)
-- [Product contract](./docs/product/INDEX.md)
+- [Product overview](./docs/overview/PRODUCT.md)
+- [Feature documentation](./docs/features/INDEX.md)
+- [Technology stack](./docs/technology/TECHNOLOGY_STACK.md)
 - [Architecture](./docs/architecture/INDEX.md)
-- [Agent Workflow Contract](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md)
-- [Security and privacy architecture](./docs/security/INDEX.md)
-- [Engineering and release guide](./docs/engineering/INDEX.md)
-- [Current implementation status](./docs/status/INDEX.md)
+- [Agent Workflow](./docs/features/AGENT_WORKFLOW.md)
+- [Trust boundaries](./docs/architecture/TRUST_BOUNDARIES.md)
+- [Engineering and release guide](./docs/development/ENGINEERING_AND_RELEASE.md)
 
 ## License
 

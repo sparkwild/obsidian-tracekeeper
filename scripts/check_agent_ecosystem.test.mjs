@@ -6,6 +6,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
 	TRACEKEEPER_SKILL_SOURCE_FILES,
+	TRACEKEEPER_SKILL_RELEASE_PATH,
 	writeTracekeeperSkillBundle,
 } from './build_tracekeeper_skill.mjs';
 import { checkAgentEcosystem } from './check_agent_ecosystem.mjs';
@@ -22,8 +23,8 @@ async function createFixture() {
 	const root = await mkdtemp(path.join(os.tmpdir(), 'tracekeeper-agent-ecosystem-'));
 	await writeFixtureFile(
 		root,
-		'docs/architecture/AGENT_WORKFLOW_CONTRACT.md',
-		await readFile(path.join(REPO_ROOT, 'docs/architecture/AGENT_WORKFLOW_CONTRACT.md'), 'utf8'),
+		'docs/features/AGENT_WORKFLOW.md',
+		await readFile(path.join(REPO_ROOT, 'docs/features/AGENT_WORKFLOW.md'), 'utf8'),
 	);
 	for (const relativePath of TRACEKEEPER_SKILL_SOURCE_FILES) {
 		await writeFixtureFile(
@@ -32,16 +33,18 @@ async function createFixture() {
 			await readFile(path.join(REPO_ROOT, 'skills', 'tracekeeper', ...relativePath.split('/')), 'utf8'),
 		);
 	}
-	await writeFixtureFile(root, 'docs/product/INDEX.md', '[Agent workflow](../architecture/AGENT_WORKFLOW_CONTRACT.md)\n');
-	await writeFixtureFile(root, 'docs/architecture/INDEX.md', '[Agent workflow](AGENT_WORKFLOW_CONTRACT.md)\n');
-	await writeFixtureFile(root, 'docs/engineering/INDEX.md', '# Engineering\n');
-	await writeFixtureFile(root, 'docs/status/INDEX.md', '# Status\n');
+	await writeFixtureFile(root, 'docs/features/INDEX.md', '[Agent workflow](AGENT_WORKFLOW.md)\n');
+	await writeFixtureFile(root, 'docs/architecture/SYSTEM_ARCHITECTURE.md', '[Agent workflow](../features/AGENT_WORKFLOW.md)\n');
+	await writeFixtureFile(root, 'docs/development/ENGINEERING_AND_RELEASE.md', '# Engineering\n');
+	await writeFixtureFile(root, `skills/tracekeeper/${TRACEKEEPER_SKILL_RELEASE_PATH}`, await readFile(path.join(REPO_ROOT, 'skills', 'tracekeeper', TRACEKEEPER_SKILL_RELEASE_PATH), 'utf8'));
 	for (const relativePath of [
 		'apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts',
 		'apps/obsidian-plugin/src/features/onboarding/onboarding-state.ts',
 		'apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts',
 		'apps/obsidian-plugin/src/features/skill-installation/skill-install-audit.ts',
+		'apps/obsidian-plugin/src/features/skill-installation/skill-install-receipts.ts',
 		'apps/obsidian-plugin/src/adapters/client-skill-adapter.ts',
+		'apps/obsidian-plugin/src/adapters/client-skill-target-registry.ts',
 		'apps/obsidian-plugin/scripts/build.mjs',
 	]) {
 		await writeFixtureFile(root, relativePath, await readFile(path.join(REPO_ROOT, ...relativePath.split('/')), 'utf8'));

@@ -4,16 +4,18 @@ import { pathToFileURL } from 'node:url';
 import {
 	TRACEKEEPER_SKILL_FLATTENED_PATH,
 	TRACEKEEPER_SKILL_MANIFEST_PATH,
+	TRACEKEEPER_SKILL_RELEASE_PATH,
 	TRACEKEEPER_SKILL_SOURCE_FILES,
 	buildTracekeeperSkillBundle,
+	readTracekeeperSkillReleaseMetadata,
 } from './build_tracekeeper_skill.mjs';
 
 const REQUIRED_PATHS = Object.freeze([
-	'docs/architecture/AGENT_WORKFLOW_CONTRACT.md',
-	'docs/product/INDEX.md',
-	'docs/architecture/INDEX.md',
-	'docs/engineering/INDEX.md',
-	'docs/status/INDEX.md',
+	'docs/features/AGENT_WORKFLOW.md',
+	'docs/features/INDEX.md',
+	'docs/architecture/SYSTEM_ARCHITECTURE.md',
+	'docs/development/ENGINEERING_AND_RELEASE.md',
+	`skills/tracekeeper/${TRACEKEEPER_SKILL_RELEASE_PATH}`,
 	'skills/tracekeeper/SKILL.md',
 	'skills/tracekeeper/references/closeout-fields.md',
 	'skills/tracekeeper/references/ingestion-workflow.md',
@@ -23,7 +25,9 @@ const REQUIRED_PATHS = Object.freeze([
 	'apps/obsidian-plugin/src/features/onboarding/onboarding-state.ts',
 	'apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts',
 	'apps/obsidian-plugin/src/features/skill-installation/skill-install-audit.ts',
+	'apps/obsidian-plugin/src/features/skill-installation/skill-install-receipts.ts',
 	'apps/obsidian-plugin/src/adapters/client-skill-adapter.ts',
+	'apps/obsidian-plugin/src/adapters/client-skill-target-registry.ts',
 	'apps/obsidian-plugin/scripts/build.mjs',
 ]);
 
@@ -137,12 +141,12 @@ function checkUnsafeExamples(contents, errors) {
 	}
 }
 
-function checkManifestShape(manifest, errors) {
+function checkManifestShape(manifest, releaseMetadata, errors) {
 	if (manifest?.format_version !== 1) errors.push('manifest format_version must be 1');
 	if (manifest?.name !== 'tracekeeper') errors.push('manifest name must be tracekeeper');
-	if (manifest?.skill_version !== '2.1.0') errors.push('manifest skill_version must be 2.1.0');
-	if (manifest?.workflow_contract_version !== 3) errors.push('manifest workflow_contract_version must be 3');
-	if (manifest?.minimum_tracekeeper_version !== '0.2.4') errors.push('manifest minimum_tracekeeper_version must be 0.2.4');
+	if (manifest?.skill_version !== releaseMetadata.skill_version) errors.push(`manifest skill_version must be ${releaseMetadata.skill_version}`);
+	if (manifest?.workflow_contract_version !== releaseMetadata.workflow_contract_version) errors.push(`manifest workflow_contract_version must be ${releaseMetadata.workflow_contract_version}`);
+	if (manifest?.minimum_tracekeeper_version !== releaseMetadata.minimum_tracekeeper_version) errors.push(`manifest minimum_tracekeeper_version must be ${releaseMetadata.minimum_tracekeeper_version}`);
 	if (manifest?.hash_algorithm !== 'sha256') errors.push('manifest hash_algorithm must be sha256');
 	if (!Array.isArray(manifest?.files)) {
 		errors.push('manifest files must be an array');
@@ -185,7 +189,7 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 		contents.set(relativePath, await readRequired(repoRoot, relativePath, errors));
 	}
 
-	const contractPath = 'docs/architecture/AGENT_WORKFLOW_CONTRACT.md';
+	const contractPath = 'docs/features/AGENT_WORKFLOW.md';
 	const skillPath = 'skills/tracekeeper/SKILL.md';
 	const flattenedPath = `skills/tracekeeper/${TRACEKEEPER_SKILL_FLATTENED_PATH}`;
 	const contract = contents.get(contractPath) ?? '';
@@ -292,7 +296,13 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	} catch {
 		errors.push('Tracekeeper Skill manifest is not valid JSON');
 	}
-	if (manifest) checkManifestShape(manifest, errors);
+	let releaseMetadata;
+	try {
+		releaseMetadata = await readTracekeeperSkillReleaseMetadata(repoRoot);
+	} catch (error) {
+		errors.push(`could not read Tracekeeper Skill release metadata: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	if (manifest && releaseMetadata) checkManifestShape(manifest, releaseMetadata, errors);
 
 	try {
 		const built = await buildTracekeeperSkillBundle(repoRoot);
@@ -309,6 +319,7 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 			...TRACEKEEPER_SKILL_SOURCE_FILES,
 			TRACEKEEPER_SKILL_MANIFEST_PATH,
 			TRACEKEEPER_SKILL_FLATTENED_PATH,
+			TRACEKEEPER_SKILL_RELEASE_PATH,
 		]);
 		for (const file of listed) {
 			if (file.symlink) errors.push(`symlink is not allowed in the Skill bundle: ${file.path}`);
@@ -334,11 +345,11 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	}
 	checkUnsafeExamples(safetyContents, errors);
 
-	for (const indexPath of ['docs/product/INDEX.md', 'docs/architecture/INDEX.md']) {
+	for (const indexPath of ['docs/features/INDEX.md', 'docs/architecture/SYSTEM_ARCHITECTURE.md']) {
 		requirePattern(
 			contents.get(indexPath) ?? '',
-			/AGENT_WORKFLOW_CONTRACT\.md/,
-			`${indexPath} must link to the Agent Workflow Contract`,
+			/AGENT_WORKFLOW\.md/,
+			`${indexPath} must link to the Agent Workflow`,
 			errors,
 		);
 	}
@@ -347,7 +358,9 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	const onboardingSource = contents.get('apps/obsidian-plugin/src/features/onboarding/onboarding-state.ts') ?? '';
 	const bundleSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts') ?? '';
 	const auditSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-install-audit.ts') ?? '';
+	const receiptSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-install-receipts.ts') ?? '';
 	const adapterSource = contents.get('apps/obsidian-plugin/src/adapters/client-skill-adapter.ts') ?? '';
+	const targetRegistrySource = contents.get('apps/obsidian-plugin/src/adapters/client-skill-target-registry.ts') ?? '';
 	const buildSource = contents.get('apps/obsidian-plugin/scripts/build.mjs') ?? '';
 	for (const [pattern, label] of [
 		[/['"]references\/workflow-state-machine\.md['"]\s*:/, 'plugin bundle does not embed the workflow state machine'],
@@ -362,17 +375,26 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	]) {
 		requirePattern(bundleSource, pattern, label, errors);
 	}
-	for (const state of ['not_installed', 'installed', 'update_available', 'modified', 'unavailable']) {
+	for (const state of ['not_installed', 'installed', 'update_available', 'newer_than_bundled', 'modified', 'legacy_install', 'location_conflict', 'copy_only', 'unavailable']) {
 		requirePattern(adapterSource, new RegExp(`['"]${state}['"]`), `managed Skill adapter is missing state: ${state}`, errors);
 	}
-	for (const pattern of [/planTtlMs/, /originalHashes/, /tracekeeper-backup-/, /Automatic overwrite is disabled/]) {
+	for (const pattern of [/planTtlMs/, /originalHashes/, /tracekeeper-backup-/, /Automatic overwrite is disabled/, /ownedBundleHash/, /ownedSkillVersion/]) {
 		requirePattern(adapterSource, pattern, `managed Skill adapter is missing safety control: ${pattern.source}`, errors);
+	}
+	for (const pattern of [/\.agents/, /\.codex/, /\.claude/, /copy-only/, /activationMode/, /targetId/]) {
+		requirePattern(targetRegistrySource, pattern, `managed Skill target registry is missing contract: ${pattern.source}`, errors);
+	}
+	for (const pattern of [/bundleHash/, /skillVersion/, /installedAt/, /normalizeSkillInstallReceipts/]) {
+		requirePattern(receiptSource, pattern, `managed Skill receipt store is missing contract: ${pattern.source}`, errors);
 	}
 	for (const evidence of ['skillCopiedAt', 'skillUserConfirmedAt', 'skillFileVerifiedAt', 'agentRestartCompletedAt', 'connectionVerifiedAt', 'firstRecallCompletedAt', 'trackedWorkflowObservedAt']) {
 		requirePattern(onboardingSource, new RegExp(`\\b${evidence}\\b`), `onboarding evidence is missing field: ${evidence}`, errors);
 	}
 	for (const label of ['Bundle available', 'Copied', 'User confirmed', 'File verified', 'Client reloaded', 'Connection verified', 'Recall observed', 'Tracked workflow observed', 'Update available']) {
 		requirePattern(settingsSource, new RegExp(label), `settings does not expose Skill evidence: ${label}`, errors);
+	}
+	if (/clientId\s*===\s*['"]codex['"]/.test(settingsSource)) {
+		errors.push('settings must use Skill delivery capability state instead of a Codex-only installation gate');
 	}
 	for (const field of ['action', 'client_id', 'bundle_hash', 'backup_created', 'result', 'timestamp']) {
 		requirePattern(auditSource, new RegExp(`\\b${field}\\b`), `Skill install audit is missing field: ${field}`, errors);

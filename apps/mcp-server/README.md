@@ -5,8 +5,8 @@ This workspace implements Tracekeeper's Streamable HTTP MCP runtime and public t
 Shared contracts:
 
 - [System architecture](../../docs/architecture/INDEX.md)
-- [Agent Workflow Contract](../../docs/architecture/AGENT_WORKFLOW_CONTRACT.md)
-- [Security and permission model](../../docs/security/INDEX.md)
+- [Agent Workflow](../../docs/features/AGENT_WORKFLOW.md)
+- [Trust boundaries](../../docs/architecture/TRUST_BOUNDARIES.md)
 
 ## Protocol Surface
 
@@ -22,7 +22,7 @@ The runtime supports MCP `2025-06-18` and `2025-11-25` over Streamable HTTP. It 
 - Obsidian/loopback CORS allowlist rather than wildcard origins
 - sanitized audit events for write operations
 
-The canonical permission and review invariants live in the [security model](../../docs/security/INDEX.md); do not create a second matrix here.
+The canonical permission and review invariants live in the [trust boundaries](../../docs/architecture/TRUST_BOUNDARIES.md); do not create a second matrix here.
 
 ## Local Development
 
@@ -46,4 +46,4 @@ npm run test
 npm run smoke
 ```
 
-The smoke suite uses a temporary non-network vault fixture and covers authentication, origins, sessions, both protocol versions, capability-filtered tools/resources/prompts, output schemas, structured actions, instruction isolation, scoped recall, safe reads, bounded writes, task closeout, source requests, Review Queue flow, and approved writeback.
+The smoke suite uses a temporary non-network vault fixture and covers authentication, origins, sessions, both protocol versions, capability-filtered tools/resources/prompts, output schemas, structured actions, instruction isolation, scoped recall, safe reads, bounded writes, task closeout, source requests, Knowledge Change Review flow, and approved writeback.

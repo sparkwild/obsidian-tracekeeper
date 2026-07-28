@@ -88,8 +88,8 @@ const RESOURCES: ResourcesResource[] = [
 	{
 		uri: 'tracekeeper://review-queue',
 		name: 'review-queue',
-		title: 'Review queue',
-		description: 'Pending proposal queue snapshots.',
+		title: 'Knowledge Change Review',
+		description: 'Pending knowledge change proposal snapshots.',
 		mimeType: 'text/markdown',
 		read: readReviewQueueResource,
 	},
@@ -583,12 +583,12 @@ async function readActiveContextResource(vaultRoot: string, context: ResourceRea
 
 async function readReviewQueueResource(vaultRoot: string, context: ResourceReadContext): Promise<string> {
 	const safeScope = normalizeNotePath(TRACEKEEPER_REVIEW_QUEUE_DIR, { vaultConfigDir: context.vaultConfigDir });
-	const lines: string[] = ['# Review Queue Resource', `Source path: ${safeScope}`];
+	const lines: string[] = ['# Knowledge Change Review Resource', `Source path: ${safeScope}`];
 
 	if (context.vaultRepository) {
 		const proposals = await context.vaultRepository.listMarkdown(safeScope);
 		if (proposals.length === 0) {
-			return lines.concat('No review queue proposals are currently visible.').join('\n');
+			return lines.concat('No knowledge change proposals are currently visible.').join('\n');
 		}
 
 		for (const proposal of proposals.slice(-MAX_REVIEW_QUEUE_LINES)) {
@@ -608,7 +608,7 @@ async function readReviewQueueResource(vaultRoot: string, context: ResourceReadC
 	try {
 		safeAbsolute = resolveSafeDirectory(vaultRoot, safeScope, context.vaultConfigDir);
 	} catch {
-		return lines.concat('No review queue proposals are currently visible.').join('\n');
+		return lines.concat('No knowledge change proposals are currently visible.').join('\n');
 	}
 
 	let files: string[] = [];
@@ -618,7 +618,7 @@ async function readReviewQueueResource(vaultRoot: string, context: ResourceReadC
 			.sort()
 			.slice(-MAX_REVIEW_QUEUE_LINES);
 	} catch {
-		return lines.concat('No review queue proposals are currently visible.').join('\n');
+		return lines.concat('No knowledge change proposals are currently visible.').join('\n');
 	}
 
 	for (const fileName of files) {
@@ -633,7 +633,7 @@ async function readReviewQueueResource(vaultRoot: string, context: ResourceReadC
 	}
 
 	return boundResourceText(files.length === 0
-		? lines.concat('No review queue proposals are currently visible.').join('\n')
+		? lines.concat('No knowledge change proposals are currently visible.').join('\n')
 		: lines.join('\n'));
 }
 

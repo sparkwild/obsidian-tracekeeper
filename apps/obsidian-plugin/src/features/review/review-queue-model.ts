@@ -1,10 +1,98 @@
 import { TRACEKEEPER_REVIEW_QUEUE_DIR } from '@tracekeeper/core';
-import type { MemoryProposalRecord, MemoryProposalStatus } from './review-view-model';
+import type {
+	MemoryProposalRecord,
+	MemoryProposalStatus,
+	ReviewProposalAttentionState,
+} from './review-view-model';
+import { getReviewProposalAttentionState } from './review-view-model';
 import { ui } from '../../ui/localization';
 
 export const REVIEW_QUEUE_PATH = TRACEKEEPER_REVIEW_QUEUE_DIR;
 
+export type ReviewInboxFilter = 'needs_review' | 'ready_to_apply' | 'awaiting_revision' | 'history' | 'all';
+
 export type ReviewQueueFilter = 'pending' | 'revision_requested' | 'all';
+
+export type ReviewQueueSort = 'attention' | 'newest' | 'oldest' | 'risk';
+
+const REVIEW_QUEUE_DEFAULT_PAGE_SIZE = 20;
+
+const ATTENTION_STATE_RANK: Record<ReviewProposalAttentionState, number> = {
+	incomplete: 0,
+	pending_review: 1,
+	ready_to_apply: 2,
+	awaiting_revision: 3,
+	completed: 4,
+};
+
+const RISK_LEVEL_RANK: Record<string, number> = {
+	critical: 4,
+	high: 3,
+	medium: 2,
+	low: 1,
+	unknown: 0,
+	'': 0,
+};
+
+export const REVIEW_QUEUE_FILTERS: Array<ReviewQueueFilter> = ['pending', 'revision_requested', 'all'];
+
+export const REVIEW_INBOX_FILTERS: Array<ReviewInboxFilter> = [
+	'needs_review',
+	'ready_to_apply',
+	'awaiting_revision',
+	'history',
+	'all',
+];
+
+export interface ReviewQueueQuery {
+	filter: ReviewInboxFilter;
+	search?: string;
+	sort: ReviewQueueSort;
+	pageIndex: number;
+	pageSize: number;
+}
+
+export interface ReviewQueueQueryCounts {
+	needs_review: number;
+	ready_to_apply: number;
+	awaiting_revision: number;
+	history: number;
+	all: number;
+}
+
+export interface ReviewQueuePage {
+	totalItems: number;
+	pageIndex: number;
+	pageSize: number;
+	totalPages: number;
+	hasNext: boolean;
+	hasPrevious: boolean;
+}
+
+export interface ReviewQueueQueryResult {
+	items: MemoryProposalRecord[];
+	counts: ReviewQueueQueryCounts;
+	totalItems: number;
+	page: ReviewQueuePage;
+	query: ReviewQueueQuery;
+}
+
+export interface MemoryReviewQueueSnapshot {
+	proposals: MemoryProposalRecord[];
+	missingReviewQueueFolder: boolean;
+	updatedAt: string;
+}
+
+export interface ReviewQueueDisplaySummary {
+	actionTitle: string;
+	actionDetail: string;
+	targetFile: string;
+	targetPosition: string;
+	changePreview: string;
+	reason: string;
+	sourceLine: string;
+	hasWritebackContent: boolean;
+}
 
 export const isReviewQueuePendingStatus = (status: MemoryProposalStatus): boolean => status === 'pending';
 
@@ -30,6 +118,21 @@ export const reviewQueueFilterLabel = (filter: ReviewQueueFilter): string => {
 	}
 };
 
+export const reviewInboxFilterLabel = (filter: ReviewInboxFilter): string => {
+	switch (filter) {
+		case 'needs_review':
+			return ui('待审核', 'Needs review');
+		case 'ready_to_apply':
+			return ui('待写入', 'Ready to apply');
+		case 'awaiting_revision':
+			return ui('需修订', 'Needs revision');
+		case 'history':
+			return ui('已处理', 'Processed');
+		case 'all':
+			return ui('全部', 'All');
+	}
+};
+
 export const isReviewQueueFilterMatch = (status: MemoryProposalStatus, filter: ReviewQueueFilter): boolean => {
 	if (filter === 'pending') {
 		return isReviewQueuePendingStatus(status);
@@ -40,39 +143,195 @@ export const isReviewQueueFilterMatch = (status: MemoryProposalStatus, filter: R
 	return true;
 };
 
+const normalizeQueryText = (value: string): string => value.trim().toLowerCase();
+
+const matchesSearch = (proposal: MemoryProposalRecord, search: string): boolean => {
+	const normalizedSearch = normalizeQueryText(search);
+	if (!normalizedSearch) {
+		return true;
+	}
+	const candidates = [
+		proposal.proposalId,
+		proposal.proposalKind,
+		proposal.proposedBy,
+		proposal.relatedProject,
+		proposal.taskId,
+		proposal.targetNote,
+		proposal.riskLevel,
+		proposal.snippet,
+		proposal.writebackContent,
+		proposal.revisionComment,
+		proposal.path,
+		...proposal.evidence,
+	]
+		.map((value) => value.toLowerCase())
+		.join(' ');
+
+	return candidates.includes(normalizedSearch);
+};
+
+export const getReviewProposalAttentionFilterMatch = (
+	proposal: MemoryProposalRecord,
+	filter: ReviewInboxFilter
+): boolean => {
+	const attention = getReviewProposalAttentionState(proposal);
+	switch (filter) {
+		case 'needs_review':
+			return attention === 'incomplete' || attention === 'pending_review';
+		case 'ready_to_apply':
+			return attention === 'ready_to_apply';
+		case 'awaiting_revision':
+			return attention === 'awaiting_revision';
+		case 'history':
+			return attention === 'completed';
+		case 'all':
+		default:
+			return true;
+	}
+};
+
+const sortByAttentionState = (a: MemoryProposalRecord, b: MemoryProposalRecord): number => {
+	const attentionRankA = ATTENTION_STATE_RANK[getReviewProposalAttentionState(a)] ?? 10;
+	const attentionRankB = ATTENTION_STATE_RANK[getReviewProposalAttentionState(b)] ?? 10;
+	if (attentionRankA !== attentionRankB) {
+		return attentionRankA - attentionRankB;
+	}
+	return b.sortTimestamp - a.sortTimestamp;
+};
+
+const sortByNewest = (a: MemoryProposalRecord, b: MemoryProposalRecord): number =>
+	b.sortTimestamp - a.sortTimestamp;
+
+const sortByOldest = (a: MemoryProposalRecord, b: MemoryProposalRecord): number =>
+	a.sortTimestamp - b.sortTimestamp;
+
+const riskRank = (proposal: MemoryProposalRecord): number => {
+	const normalized = proposal.riskLevel.toLowerCase();
+	return RISK_LEVEL_RANK[normalized] ?? 0;
+};
+
+const sortByRisk = (a: MemoryProposalRecord, b: MemoryProposalRecord): number => {
+	const rankA = riskRank(a);
+	const rankB = riskRank(b);
+	if (rankA !== rankB) {
+		return rankB - rankA;
+	}
+	return b.sortTimestamp - a.sortTimestamp;
+};
+
+const sortReviewQueue = (
+	proposals: MemoryProposalRecord[],
+	sort: ReviewQueueSort
+): MemoryProposalRecord[] => {
+	switch (sort) {
+		case 'attention':
+			return [...proposals].sort((a, b) => sortByAttentionState(a, b));
+		case 'oldest':
+			return [...proposals].sort(sortByOldest);
+		case 'risk':
+			return [...proposals].sort(sortByRisk);
+		case 'newest':
+		default:
+			return [...proposals].sort(sortByNewest);
+	}
+};
+
+export const paginateReviewQueueItems = (
+	proposals: MemoryProposalRecord[],
+	pageIndex = 0,
+	pageSize = REVIEW_QUEUE_DEFAULT_PAGE_SIZE
+): { proposals: MemoryProposalRecord[]; page: ReviewQueuePage } => {
+	const normalizedSize = Number.isInteger(pageSize) ? Math.max(1, pageSize) : REVIEW_QUEUE_DEFAULT_PAGE_SIZE;
+	const totalItems = proposals.length;
+	const totalPages = Math.ceil(totalItems / normalizedSize);
+	const normalizedIndex = Number.isInteger(pageIndex) ? Math.max(0, pageIndex) : 0;
+	const clampedIndex = totalPages > 0 ? Math.min(normalizedIndex, totalPages - 1) : 0;
+	const offset = clampedIndex * normalizedSize;
+	const page = proposals.slice(offset, offset + normalizedSize);
+	return {
+		proposals: page,
+		page: {
+			totalItems,
+			pageIndex: clampedIndex,
+			pageSize: normalizedSize,
+			totalPages,
+			hasNext: clampedIndex < totalPages - 1,
+			hasPrevious: clampedIndex > 0,
+		},
+	};
+};
+
+export const filterReviewQueueItems = (
+	proposals: MemoryProposalRecord[],
+	query: Partial<ReviewQueueQuery>
+): ReviewQueueQueryResult => {
+	const normalizedQuery: ReviewQueueQuery = {
+		filter: query.filter || 'all',
+		search: query.search || '',
+		sort: query.sort || 'attention',
+		pageIndex: Number.isInteger(query.pageIndex) ? query.pageIndex ?? 0 : 0,
+		pageSize: Number.isInteger(query.pageSize) && (query.pageSize ?? 0) > 0
+			? query.pageSize ?? REVIEW_QUEUE_DEFAULT_PAGE_SIZE
+			: REVIEW_QUEUE_DEFAULT_PAGE_SIZE,
+	};
+
+	const safeSearch = normalizeQueryText(normalizedQuery.search || '');
+	const matchedBySearch = proposals.filter((proposal) => matchesSearch(proposal, safeSearch));
+	const counts: ReviewQueueQueryCounts = {
+		needs_review: 0,
+		ready_to_apply: 0,
+		awaiting_revision: 0,
+		history: 0,
+		all: matchedBySearch.length,
+	};
+
+	for (const proposal of matchedBySearch) {
+		if (getReviewProposalAttentionFilterMatch(proposal, 'needs_review')) {
+			counts.needs_review += 1;
+		}
+		if (getReviewProposalAttentionFilterMatch(proposal, 'ready_to_apply')) {
+			counts.ready_to_apply += 1;
+		}
+		if (getReviewProposalAttentionFilterMatch(proposal, 'awaiting_revision')) {
+			counts.awaiting_revision += 1;
+		}
+		if (getReviewProposalAttentionFilterMatch(proposal, 'history')) {
+			counts.history += 1;
+		}
+	}
+
+	const filtered = matchedBySearch.filter((proposal) =>
+		getReviewProposalAttentionFilterMatch(proposal, normalizedQuery.filter)
+	);
+	const sorted = sortReviewQueue(filtered, normalizedQuery.sort);
+	const { proposals: paged, page } = paginateReviewQueueItems(sorted, normalizedQuery.pageIndex, normalizedQuery.pageSize);
+
+	return {
+		items: paged,
+		counts,
+		totalItems: filtered.length,
+		page: {
+			...page,
+			totalItems: filtered.length,
+		},
+		query: normalizedQuery,
+	};
+};
+
 export const memoryProposalStatusLabel = (status: MemoryProposalStatus): string => {
 	switch (status) {
 		case 'approved':
-			return ui('已批准', 'Approved');
+			return ui('审核通过', 'Approved');
 		case 'rejected':
-			return ui('已拒绝', 'Rejected');
+			return ui('未采纳', 'Not accepted');
 		case 'deferred':
-			return ui('已暂缓', 'Deferred');
+			return ui('暂缓处理', 'Deferred');
 		case 'revision_requested':
-			return ui('需修订', 'Revision requested');
+			return ui('已退回修改', 'Returned for revision');
 		case 'applied':
-			return ui('已写回', 'Applied');
+			return ui('已写入', 'Applied');
 		case 'pending':
 		default:
 			return ui('待审核', 'Pending');
 	}
 };
-
-export interface MemoryReviewQueueSnapshot {
-	proposals: MemoryProposalRecord[];
-	missingReviewQueueFolder: boolean;
-	updatedAt: string;
-}
-
-export interface ReviewQueueDisplaySummary {
-	actionTitle: string;
-	actionDetail: string;
-	targetFile: string;
-	targetPosition: string;
-	changePreview: string;
-	reason: string;
-	sourceLine: string;
-	hasWritebackContent: boolean;
-}
-
-export const REVIEW_QUEUE_FILTERS: Array<ReviewQueueFilter> = ['pending', 'revision_requested', 'all'];

@@ -17,9 +17,17 @@ export class MemoryRecallPreviewModal extends Modal {
 
 	constructor(
 		app: App,
-		private plugin: TracekeeperPlugin
+		private plugin: TracekeeperPlugin,
+		initial?: {
+			query?: string;
+			projectHint?: string;
+			scope?: TracekeeperRecallScope;
+		}
 	) {
 		super(app);
+		this.query = initial?.query?.trim() ?? '';
+		this.projectHint = initial?.projectHint?.trim() ?? '';
+		this.recallScope = initial?.scope ?? 'project';
 	}
 
 	onOpen(): void {

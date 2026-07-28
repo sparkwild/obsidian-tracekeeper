@@ -10,7 +10,6 @@ import {
 import { REVIEW_QUEUE_PATH, type MemoryReviewQueueSnapshot } from './review-queue-model';
 import { escapeAuditValue, normalizeFrontmatterRevisionComment } from '../shared/markdown-record-parser';
 
-const MAX_REVIEW_QUEUE_ROWS = 20;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -113,7 +112,7 @@ async applyApprovedWriteback(proposal: MemoryProposalRecord): Promise<void> {
 		await this.host.refreshGovernanceViews();
 	}
 
-async loadMemoryReviewQueueSnapshot(): Promise<MemoryReviewQueueSnapshot> {
+	async loadMemoryReviewQueueSnapshot(): Promise<MemoryReviewQueueSnapshot> {
 		const folder = this.app.vault.getAbstractFileByPath(REVIEW_QUEUE_PATH);
 		if (!(folder instanceof TFolder)) {
 			return {
@@ -127,8 +126,7 @@ async loadMemoryReviewQueueSnapshot(): Promise<MemoryReviewQueueSnapshot> {
 		const records = await Promise.all(files.map((file) => this.records.readMemoryProposalFile(file)));
 		const proposals = records
 			.filter((record): record is MemoryProposalRecord => Boolean(record))
-			.sort((a, b) => compareProposalRecords(a, b))
-			.slice(0, MAX_REVIEW_QUEUE_ROWS);
+			.sort((a, b) => compareProposalRecords(a, b));
 
 		return {
 			proposals,
@@ -137,7 +135,7 @@ async loadMemoryReviewQueueSnapshot(): Promise<MemoryReviewQueueSnapshot> {
 		};
 	}
 
-async updateMemoryProposalStatus(
+	async updateMemoryProposalStatus(
 		proposal: MemoryProposalRecord,
 		nextStatus: MemoryProposalStatus,
 		options: {
@@ -182,6 +180,43 @@ async updateMemoryProposalStatus(
 			normalizedStatus,
 			revisionComment
 		);
+	}
+
+	async updateMemoryProposalDraft(
+		proposal: MemoryProposalRecord,
+		draft: { targetNote: string; writebackContent: string }
+	): Promise<void> {
+		if (proposal.classification !== 'memory_proposal') {
+			throw new Error('Only memory proposals can be edited from Knowledge Change Review.');
+		}
+		if (proposal.approvalStatus === 'approved' || proposal.approvalStatus === 'applied') {
+			throw new Error('Approved or applied proposals cannot be edited. Return the proposal to review first.');
+		}
+
+		const file = this.app.vault.getAbstractFileByPath(proposal.path);
+		if (!(file instanceof TFile)) {
+			throw new Error(`Cannot update proposal draft: ${proposal.path} is not available.`);
+		}
+
+		const targetNote = draft.targetNote.trim();
+		const writebackContent = draft.writebackContent.replace(/\r\n/g, '\n').trim();
+		await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+			const fields = frontmatter as Record<string, unknown>;
+			fields.target_note = targetNote;
+			fields.writeback_content = writebackContent;
+		});
+
+		const now = new Date().toISOString();
+		await this.host.appendToAuditLog(
+			`## ${now}\n` +
+			'action: memory.proposal.edited\n' +
+			'actor: user\n' +
+			`target: ${proposal.path}\n` +
+			`reason: updated review draft fields for proposal ${proposal.proposalId}\n` +
+			`task_id: ${proposal.taskId || ''}\n` +
+			`timestamp: ${now}\n\n`
+		);
+		await this.host.refreshGovernanceViews();
 	}
 
 async archiveMemoryProposals(proposals: MemoryProposalRecord[]): Promise<number> {

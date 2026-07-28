@@ -13,6 +13,7 @@ export interface OnboardingSkillInstallState {
 	state: string;
 	fileVerified: boolean;
 	updateAvailable: boolean;
+	restartRequired?: boolean;
 }
 
 export interface ResolvedOnboardingSelection {
@@ -28,6 +29,35 @@ export interface BuildOnboardingContextInput {
 	selectedClient: OnboardingClientSelectionProfile | null;
 	skillInstallState?: OnboardingSkillInstallState | null;
 	onboarding: OnboardingSettingsState;
+}
+
+export type OnboardingTrackedWorkflowStatus = 'observed' | 'not_observed';
+
+export interface OnboardingObservedEvidence {
+	selectedClientId: string;
+	principalId: string;
+	firstRecallQuery: string;
+	firstRecallMatchedCount: number;
+	firstRecallMatchedAt: string;
+	skillBundleVersion: string;
+	trackedWorkflowStatus: OnboardingTrackedWorkflowStatus;
+	trackedWorkflowTaskId: string;
+}
+
+export interface BuildOnboardingObservedEvidenceInput {
+	selectedClient: OnboardingClientSelectionProfile | null;
+	principalId: string;
+	onboarding: OnboardingSettingsState;
+	skillBundleVersion: string;
+}
+
+export interface OnboardingRecallInstruction {
+	instruction: string;
+}
+
+export interface BuildOnboardingRecallInstructionInput {
+	keyword: string;
+	localize: (zh: string, en: string) => string;
 }
 
 export const resolveOnboardingSelectedClient = (
@@ -48,6 +78,35 @@ export const resolveOnboardingSelectedClient = (
 	};
 };
 
+export const buildOnboardingObservedEvidence = (input: BuildOnboardingObservedEvidenceInput): OnboardingObservedEvidence => {
+	const observed = input.onboarding.trackedWorkflowObservedAt !== '';
+	return {
+		selectedClientId: input.selectedClient?.clientId || input.onboarding.selectedClientId,
+		principalId: input.principalId,
+		firstRecallQuery: input.onboarding.firstRecallQuery,
+		firstRecallMatchedCount: input.onboarding.firstRecallMatchedCount,
+		firstRecallMatchedAt: input.onboarding.firstRecallCompletedAt,
+		skillBundleVersion: asText(input.skillBundleVersion),
+		trackedWorkflowStatus: observed ? 'observed' : 'not_observed',
+		trackedWorkflowTaskId: observed ? input.onboarding.trackedWorkflowTaskId : '',
+	};
+};
+
+export const buildOnboardingRecallInstruction = (input: BuildOnboardingRecallInstructionInput): OnboardingRecallInstruction => {
+	const keyword = asText(input.keyword) || 'tracekeeper';
+	const query = JSON.stringify(keyword);
+	return {
+		instruction: input.localize(
+			`先识别当前仓库/工作区身份（例如项目名、仓库名或路径），再在该上下文范围执行一次 project-scoped 的 tracekeeper.recall。\n\n`
+			+ `请使用以下窄查询参数，并按原样汇报调用参数，不要先宣称成功。\n\n`
+			+ `{"query": ${query}, "scope": "project", "project_hint": "<推断出的仓库/工作区身份>"}`,
+			`Infer the current repository/workspace identity (for example, project name, repository name, or path), then run one project-scoped tracekeeper.recall call in that context.\n\n`
+			+ `Use the following narrow query payload and report the raw call arguments as-is; do not claim success upfront.\n\n`
+			+ `{"query": ${query}, "scope": "project", "project_hint": "<inferred repo/workspace identity>"}`
+		),
+	};
+};
+
 export const buildOnboardingContext = (input: BuildOnboardingContextInput): OnboardingProgressContext => {
 	const hasExplicitInvalidConfig = input.selectedClient?.configState === 'needs_update'
 		|| input.selectedClient?.configState === 'not_configured';
@@ -60,7 +119,8 @@ export const buildOnboardingContext = (input: BuildOnboardingContextInput): Onbo
 	const liveFileVerified = input.skillInstallState?.fileVerified === true;
 	const updateAvailable = input.skillInstallState?.updateAvailable === true;
 	const userConfirmed = input.onboarding.skillUserConfirmedAt !== '';
-	const clientReloaded = input.onboarding.agentRestartCompletedAt !== '';
+	const clientReloaded = input.onboarding.agentRestartCompletedAt !== ''
+		|| (liveFileVerified && input.skillInstallState?.restartRequired === false);
 	const recallObserved = hasOnboardingRecallResult(input.onboarding);
 	return {
 		vaultReady: input.vaultReady,
@@ -189,3 +249,5 @@ export const onboardingContextDescription = (
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const asText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');

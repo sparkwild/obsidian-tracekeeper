@@ -1,7 +1,8 @@
-import { ItemView, WorkspaceLeaf } from 'obsidian';
+import { ItemView, Notice, WorkspaceLeaf } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import { ui } from '../../ui/localization';
-import { TRACEKEEPER_RUNTIME_STATUS_VIEW } from '../../ui/view-types';
+import { TRACEKEEPER_RUNTIME_LOG_VIEW, TRACEKEEPER_RUNTIME_STATUS_VIEW } from '../../ui/view-types';
+import { runtimeViewModel } from './runtime-view-model';
 
 export class TracekeeperRuntimeStatusView extends ItemView {
 	constructor(
@@ -33,33 +34,32 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
-		await this.render();
+		await this.refresh();
 	}
 
-	private async render() {
+	async refresh(): Promise<void> {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass('tracekeeper-view-root');
 		const status = this.plugin.getRuntimeViewStatus();
+		const runtime = runtimeViewModel(status, ui);
 		const indexStatus = await this.plugin.getKnowledgeIndexViewStatus();
 
-		contentEl.createEl('h2', { text: ui('连接状态', 'Connection status'), cls: 'tracekeeper-view__title' });
+		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
+		header.createEl('h2', { text: ui('连接状态', 'Connection status'), cls: 'tracekeeper-view__title' });
+		const headerActions = header.createDiv({ cls: 'tracekeeper-action-row' });
+		const refresh = headerActions.createEl('button', { text: ui('刷新', 'Refresh') });
+		refresh.addEventListener('click', () => {
+			void this.refresh();
+		});
 		contentEl.createEl('p', {
-			text: status.enabled
-				? ui(
-					'MCP 服务由 Obsidian 桌面端托管，开启后随 Obsidian 运行。',
-					'The MCP service is hosted by desktop Obsidian and runs while Obsidian is open.'
-				)
-				: ui(
-					'MCP 服务已在设置中关闭，需要连接 AI 工具时可重新开启。',
-					'MCP service is off in settings. Turn it back on when AI tools need to connect.'
-				),
+			text: runtime.detail,
 			cls: 'tracekeeper-view__description',
 		});
 
 		const detailGrid = contentEl.createDiv({ cls: 'tracekeeper-detail-grid' });
-		this.renderDetail(detailGrid, ui('MCP 服务', 'MCP service'), status.label);
-		this.renderDetail(detailGrid, ui('连接地址', 'Connection URL'), this.plugin.getMcpConnectionUrl());
+		this.renderDetail(detailGrid, ui('MCP 服务', 'MCP service'), runtime.label);
+		this.renderDetail(detailGrid, ui('连接端点', 'Connection endpoint'), status.endpoint);
 		this.renderDetail(detailGrid, ui('绑定范围', 'Binding'), ui('仅本机 127.0.0.1', 'Localhost only, 127.0.0.1'));
 		this.renderDetail(detailGrid, ui('生命周期', 'Lifecycle'), status.enabled
 			? ui('开启后随 Obsidian 运行', 'Runs while Obsidian is open')
@@ -90,6 +90,40 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 		if (status.lastError) {
 			this.renderDetail(detailGrid, ui('最近错误', 'Last error'), status.lastError);
 		}
+
+		const actions = contentEl.createDiv({ cls: 'tracekeeper-action-row' });
+		if (runtime.primaryAction !== 'none') {
+			const action = actions.createEl('button', {
+				text: runtime.primaryAction === 'enable'
+					? ui('开启 MCP 服务', 'Enable MCP service')
+					: ui('重新启动', 'Retry start'),
+				cls: 'mod-cta',
+			});
+			action.disabled = runtime.busy;
+			action.addEventListener('click', () => {
+				void (async () => {
+					action.disabled = true;
+					try {
+						await this.plugin.ensureMcpRuntimeRunning();
+						await this.refresh();
+					} catch (error) {
+						console.error('tracekeeper failed to recover MCP Runtime from status view', error);
+						new Notice(error instanceof Error ? error.message : ui('MCP 服务启动失败。', 'Failed to start MCP service.'));
+						action.disabled = false;
+					}
+				})();
+			});
+		}
+		if (runtime.canOpenLogs) {
+			const logs = actions.createEl('button', { text: ui('查看运行日志', 'Open runtime log') });
+			logs.addEventListener('click', () => {
+				void this.plugin.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);
+			});
+		}
+		const settings = actions.createEl('button', { text: ui('打开设置', 'Open settings') });
+		settings.addEventListener('click', () => {
+			this.plugin.openSettingsTab();
+		});
 	}
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {

@@ -10,13 +10,20 @@ import {
 	type OnboardingProgressContext,
 	type OnboardingStep,
 } from '../onboarding/onboarding-state';
-import { onboardingContextDescription, onboardingStepLabel } from '../onboarding/onboarding-view-model';
+import {
+	buildOnboardingObservedEvidence,
+	buildOnboardingRecallInstruction,
+	findOnboardingRuntimePrincipal,
+	onboardingContextDescription,
+	onboardingStepLabel,
+} from '../onboarding/onboarding-view-model';
 import { MemoryRecallPreviewModal } from '../recall/memory-recall-preview-modal';
 import { ClientConfigPreviewModal, ClientCredentialRotateConfirmModal } from '../client-config/client-config-modals';
 import { McpCapabilitiesModal } from '../runtime/mcp-capabilities-modal';
 import { RuntimeTokenRegenerateConfirmModal } from '../runtime/runtime-confirmation-modals';
 import { RuntimeLogCleanupModal } from '../runtime/runtime-log-view';
 import { DEFAULT_MCP_HOST, DEFAULT_MCP_PORT } from '../runtime/runtime-defaults';
+import { runtimeViewModel } from '../runtime/runtime-view-model';
 import {
 	AUTO_REFRESH_INTERVAL_OPTIONS,
 	MEMORY_PROPOSAL_RULES,
@@ -31,12 +38,19 @@ import {
 } from './settings-model';
 import { ui } from '../../ui/localization';
 import { TRACEKEEPER_RUNTIME_LOG_VIEW } from '../../ui/view-types';
-import type { SkillInstallState } from '../../adapters/client-skill-adapter';
+import type { SkillInstallAction, SkillInstallState } from '../../adapters/client-skill-adapter';
 import { SkillInstallPreviewModal } from '../skill-installation/skill-install-modals';
 import {
 	type RuntimeCredentialCapabilityProfile,
 	RUNTIME_CREDENTIAL_PRESET_DEFINITIONS,
 } from '../settings/runtime-credentials';
+
+const skillActionForState = (state: SkillInstallState): Extract<SkillInstallAction, 'install' | 'update' | 'migrate'> | null => {
+	if (state.state === 'not_installed') return 'install';
+	if (state.state === 'update_available') return 'update';
+	if (state.state === 'legacy_install') return 'migrate';
+	return null;
+};
 
 export class TracekeeperSettingTab extends PluginSettingTab {
 	constructor(
@@ -66,12 +80,12 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		containerEl.addClass('tracekeeper-settings-root');
 		this.renderOnboardingSection(containerEl, snapshot, context, nextStep, skillInstallState);
 		this.renderConnectionInfoSection(containerEl, snapshot);
-		this.renderTokenSection(containerEl);
 		this.renderAgentClientConfigSection(containerEl, snapshot);
 		this.renderViewRefreshSection(containerEl);
 		this.renderNoteContentSection(containerEl);
 		this.renderMemoryRulesSection(containerEl);
 		this.renderAdvancedMaintenanceSection(containerEl);
+		this.renderTokenSection(containerEl);
 	}
 
 	private renderAgentClientConfigSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
@@ -98,11 +112,11 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			ui('首次接入引导', 'Onboarding'),
 			ui('按以下步骤完成首轮接入，后续可随时从已完成步骤继续。', 'Complete onboarding steps to enable first run and resume automatically.')
 		);
-		const actions = section.createDiv({ cls: 'tracekeeper-settings-grid' });
+		const steps = section.createDiv({ cls: 'tracekeeper-onboarding-steps' });
 		for (const [index, stepId] of ONBOARDING_STEP_SEQUENCE.entries()) {
 			const done = isOnboardingStepCompleted(stepId, this.plugin.settings.onboarding, context);
 			const active = nextStep === stepId;
-			const row = actions.createDiv({ cls: 'tracekeeper-action-row' });
+			const row = steps.createDiv({ cls: 'tracekeeper-onboarding-step' });
 			row.createEl('span', { text: `${index + 1}. ${onboardingStepLabel(stepId, ui)}` });
 			row.createEl('span', {
 				text: done
@@ -117,20 +131,32 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			text: onboardingContextDescription(context, ui),
 			cls: 'tracekeeper-view__description',
 		});
-		const evidence = section.createDiv({ cls: 'tracekeeper-settings-grid' });
-		const profileLabel = this.plugin.settings.onboarding.selectedClientId === 'codex'
-			? ui('本地单用户默认 Profile（不是团队 RBAC）', 'Local single-user default profile (not team RBAC)')
+		const evidence = section.createDiv({ cls: 'tracekeeper-skill-evidence' });
+		evidence.createEl('h4', { text: ui('Skill 接入状态', 'Skill setup status') });
+		const profileLabel = skillInstallState.deliveryMode === 'managed'
+			? ui('本地单用户受管 Profile（不是团队 RBAC）', 'Local single-user managed profile (not team RBAC)')
 			: ui('本地单用户复制 Profile（不是团队 RBAC）', 'Local single-user copy-only profile (not team RBAC)');
+		const activationDetail = skillInstallState.activationMode === 'automatic_with_restart_fallback'
+			? ui('客户端通常会自动识别；若未出现再重启。', 'The client normally detects changes automatically; restart only if it does not appear.')
+			: ui('完成设置后需要在客户端中重启或重新加载。', 'Restart or reload the client after setup.');
 		this.renderSkillEvidence(evidence, ui('Profile', 'Profile'), profileLabel, true);
 		this.renderSkillEvidence(evidence, ui('Bundle 可用', 'Bundle available'), `v${skillInstallState.expectedVersion}`, context.skillAvailable);
 		this.renderSkillEvidence(evidence, ui('已复制', 'Copied'), ui('人工复制事件', 'Manual copy event'), context.skillCopied);
 		this.renderSkillEvidence(evidence, ui('用户确认', 'User confirmed'), ui('人工自证，不等于文件验证', 'Self-attested, not file verification'), context.skillUserConfirmed);
 		this.renderSkillEvidence(evidence, ui('文件验证', 'File verified'), skillInstallState.detail, context.skillFileVerified);
-		this.renderSkillEvidence(evidence, ui('客户端已重载', 'Client reloaded'), ui('人工确认或客户端证据', 'User confirmation or client evidence'), context.clientReloaded);
+		this.renderSkillEvidence(
+			evidence,
+			skillInstallState.restartRequired ? ui('客户端已重载', 'Client reloaded') : ui('客户端自动识别', 'Client auto-detection'),
+			skillInstallState.restartRequired ? ui('人工确认或客户端证据', 'User confirmation or client evidence') : activationDetail,
+			context.clientReloaded
+		);
 		this.renderSkillEvidence(evidence, ui('连接验证', 'Connection verified'), ui('Principal MCP 审计证据', 'Principal MCP audit evidence'), context.connectionVerified);
 		this.renderSkillEvidence(evidence, ui('Recall 已观察', 'Recall observed'), ui('不证明 Skill 自动触发', 'Does not prove automatic Skill triggering'), context.recallObserved);
 		this.renderSkillEvidence(evidence, ui('完整工作流已观察', 'Tracked workflow observed'), ui('同 Principal 的 start → recall → finish', 'Same-principal start → recall → finish'), context.trackedWorkflowObserved);
 		this.renderSkillEvidence(evidence, ui('存在更新', 'Update available'), skillInstallState.detail, context.skillUpdateAvailable, true);
+		if (context.recallObserved) {
+			this.renderObservedEvidence(section, snapshot, skillInstallState.expectedVersion);
+		}
 
 		const actionWrap = section.createDiv({ cls: 'tracekeeper-action-row' });
 		if (nextStep === 'vault_check') {
@@ -140,12 +166,26 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			});
 		}
 		if (nextStep === 'runtime') {
-			const openService = actionWrap.createEl('button', { text: ui('开启 MCP 服务', 'Enable MCP service') });
+			const runtime = runtimeViewModel(snapshot.runtimeStatus, ui);
+			section.createEl('p', {
+				text: runtime.detail,
+				cls: 'tracekeeper-view__description',
+			});
+			const openService = actionWrap.createEl('button', {
+				text: runtime.primaryAction === 'enable'
+					? ui('开启 MCP 服务', 'Enable MCP service')
+					: ui('重新启动 MCP 服务', 'Retry MCP service'),
+				cls: 'mod-cta',
+			});
+			openService.disabled = runtime.busy;
 			openService.addEventListener('click', () => {
-				void this.plugin.setMcpRuntimeEnabled(true)
+				openService.disabled = true;
+				void this.plugin.ensureMcpRuntimeRunning()
 					.then(() => this.renderSettings())
 					.catch((error) => {
 						console.error('tracekeeper failed to enable MCP service from onboarding', error);
+						openService.disabled = false;
+						new Notice(error instanceof Error ? error.message : ui('MCP 服务启动失败。', 'Failed to start MCP service.'));
 					});
 			});
 		}
@@ -189,20 +229,30 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 								});
 						});
 					}
-			}
+		}
 			if (nextStep === 'skill_setup') {
 				const clientId = this.plugin.settings.onboarding.selectedClientId;
-				if (clientId === 'codex' && (skillInstallState.state === 'not_installed' || skillInstallState.state === 'update_available')) {
-					const mode = skillInstallState.state === 'update_available' ? 'update' : 'install';
+				const action = skillActionForState(skillInstallState);
+				if (action) {
+					const actionText = action === 'install'
+						? ui('安装', 'Install')
+						: action === 'update'
+							? ui('更新', 'Update')
+							: ui('迁移', 'Migrate');
+					const legacyDirectory = skillInstallState.legacyTargetDirectories[0];
 					new Setting(section)
-						.setName(mode === 'install' ? ui('安装完整 Skill bundle', 'Install complete Skill bundle') : ui('更新完整 Skill bundle', 'Update complete Skill bundle'))
+						.setName(ui(`${actionText}完整 Skill bundle`, `${actionText} complete Skill bundle`))
 						.setDesc(ui(
-							`先预览目标目录和文件清单；只有再次确认后才写入。目标：${skillInstallState.targetDirectory || ''}`,
-							`Preview the target directory and files first. Nothing is written until confirmation. Target: ${skillInstallState.targetDirectory || ''}`
+							action === 'migrate'
+								? `旧目录会保留不变；先预览后才将官方 bundle 复制到目标目录。旧目录：${legacyDirectory || ''}；目标：${skillInstallState.targetDirectory || ''}`
+								: `先预览目标目录和文件清单；只有再次确认后才写入。目标：${skillInstallState.targetDirectory || ''}`,
+							action === 'migrate'
+								? `The legacy directory remains unchanged. Preview before copying the official bundle to the target. Legacy: ${legacyDirectory || ''}; target: ${skillInstallState.targetDirectory || ''}`
+								: `Preview the target directory and files first. Nothing is written until confirmation. Target: ${skillInstallState.targetDirectory || ''}`
 						))
 						.addButton((button) => button
-							.setButtonText(mode === 'install' ? ui('预览安装', 'Preview install') : ui('预览更新', 'Preview update'))
-							.onClick(() => new SkillInstallPreviewModal(this.app, this.plugin, clientId, mode, () => {
+							.setButtonText(ui(`预览${actionText}`, `Preview ${actionText.toLowerCase()}`))
+							.onClick(() => new SkillInstallPreviewModal(this.app, this.plugin, clientId, action, () => {
 								void this.renderSettings();
 							}).open()));
 				}
@@ -214,6 +264,26 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 							'Automatic overwrite is disabled. Preserve or move the existing directory, or compare it manually before installing.'
 						));
 				}
+				if (skillInstallState.state === 'newer_than_bundled') {
+					new Setting(section)
+						.setName(ui('检测到更高版本', 'Newer Skill version detected'))
+						.setDesc(ui(
+							`当前安装版本 v${skillInstallState.installedVersion} 高于插件内置版本 v${skillInstallState.expectedVersion}，已保留且不会降级。`,
+							`Installed v${skillInstallState.installedVersion} is newer than bundled v${skillInstallState.expectedVersion}; it is preserved and will not be downgraded.`
+						));
+				}
+				if (skillInstallState.state === 'location_conflict') {
+					new Setting(section)
+						.setName(ui('检测到多个 Skill 目录', 'Multiple Skill locations detected'))
+						.setDesc(ui(
+							'官方目录和旧目录同时存在。为避免误删或覆盖，请先在文件系统中保留需要的版本并手动清理重复目录。',
+							'Both official and legacy directories exist. To avoid deletion or overwrite, keep the desired version and manually resolve the duplicate directories first.'
+						));
+				}
+				section.createEl('p', {
+					text: activationDetail,
+					cls: 'tracekeeper-view__description',
+				});
 				new Setting(section)
 					.setName(ui('复制单文件兼容 Skill', 'Copy flattened compatibility Skill'))
 					.setDesc(ui(
@@ -291,6 +361,41 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				),
 				cls: 'tracekeeper-view__description',
 			});
+			let recallKeyword = this.plugin.settings.onboarding.firstRecallQuery;
+			let copyInstructionButton: HTMLButtonElement | null = null;
+			new Setting(section)
+				.setName(ui('已知关键词', 'Known keyword'))
+				.setDesc(ui(
+					'输入当前知识库中确定存在的项目、功能、决策或问题关键词。',
+					'Enter a project, feature, decision, or issue keyword known to exist in this vault.'
+				))
+				.addText((text) => {
+					text
+						.setPlaceholder(ui('例如：知识索引', 'For example: knowledge index'))
+						.setValue(recallKeyword)
+						.onChange((value) => {
+							recallKeyword = value.trim();
+							if (copyInstructionButton) {
+								copyInstructionButton.disabled = recallKeyword.length === 0;
+							}
+						});
+				})
+				.addButton((button) => {
+					copyInstructionButton = button.buttonEl;
+					copyInstructionButton.disabled = recallKeyword.length === 0;
+					button
+						.setButtonText(ui('复制测试指令', 'Copy test instruction'))
+						.onClick(() => {
+							const instruction = buildOnboardingRecallInstruction({
+								keyword: recallKeyword,
+								localize: ui,
+							}).instruction;
+							void this.plugin.copyToClipboard(
+								instruction,
+								ui('已复制首次召回测试指令。', 'First-recall test instruction copied.')
+							);
+						});
+				});
 			const firstRecallAction = actionWrap.createEl('button', { text: ui('验证 Agent 首次召回', 'Verify agent recall') });
 			firstRecallAction.addEventListener('click', () => {
 				void this.plugin.verifyOnboardingFirstRecall()
@@ -335,8 +440,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		verified: boolean,
 		warningWhenTrue = false
 	): void {
-		const row = container.createDiv({ cls: 'tracekeeper-action-row' });
-		const description = row.createDiv();
+		const row = container.createDiv({ cls: 'tracekeeper-skill-evidence__row' });
+		const description = row.createDiv({ cls: 'tracekeeper-skill-evidence__description' });
 		description.createEl('strong', { text: label });
 		description.createEl('div', { text: detail, cls: 'tracekeeper-view__description' });
 		row.createEl('span', {
@@ -347,27 +452,86 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		});
 	}
 
+	private renderObservedEvidence(
+		container: HTMLElement,
+		snapshot: AgentConnectionsSnapshot,
+		skillBundleVersion: string
+	): void {
+		const selectedClient = this.plugin.getOnboardingSelectedClient(snapshot);
+		const principalId = findOnboardingRuntimePrincipal(
+			this.plugin.settings.runtimeCredentials,
+			this.plugin.settings.onboarding.selectedClientId
+		);
+		const evidence = buildOnboardingObservedEvidence({
+			selectedClient,
+			principalId,
+			onboarding: this.plugin.settings.onboarding,
+			skillBundleVersion,
+		});
+		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-onboarding-evidence' });
+		card.createEl('h4', { text: ui('已观察到的 Agent 证据', 'Observed agent evidence') });
+		const details = card.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderDetail(details, ui('客户端', 'Client'), selectedClient?.displayName || evidence.selectedClientId);
+		this.renderDetail(details, 'Principal', evidence.principalId);
+		this.renderDetail(details, ui('Recall 查询', 'Recall query'), evidence.firstRecallQuery);
+		this.renderDetail(details, ui('命中数量', 'Matched count'), String(evidence.firstRecallMatchedCount));
+		this.renderDetail(
+			details,
+			ui('观察时间', 'Observed at'),
+			evidence.firstRecallMatchedAt
+				? this.plugin.formatDisplayTime(Date.parse(evidence.firstRecallMatchedAt))
+				: ui('未知', 'Unknown')
+		);
+		this.renderDetail(details, ui('Skill bundle', 'Skill bundle'), `v${evidence.skillBundleVersion}`);
+		this.renderDetail(
+			details,
+			ui('完整工作流', 'Tracked workflow'),
+			evidence.trackedWorkflowStatus === 'observed'
+				? ui('已观察', 'Observed')
+				: ui('未观察', 'Not observed')
+		);
+		if (evidence.trackedWorkflowTaskId) {
+			this.renderDetail(details, 'Task ID', evidence.trackedWorkflowTaskId);
+		}
+		const note = card.createEl('p', {
+			text: ui(
+				'这些状态来自所选 Principal 的本地审计记录。本地预览不会完成 Agent 连接或首次 Recall 验证。',
+				'These states come from local audit records for the selected principal. Local preview does not complete agent connection or first-recall verification.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+		note.setAttr('role', 'note');
+		const actions = card.createDiv({ cls: 'tracekeeper-action-row' });
+		const preview = actions.createEl('button', { text: ui('本地预览同一查询', 'Preview the same query locally') });
+		preview.addEventListener('click', () => {
+			new MemoryRecallPreviewModal(this.app, this.plugin, {
+				query: evidence.firstRecallQuery,
+				scope: 'project',
+			}).open();
+		});
+	}
+
 	private renderConnectionInfoSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
 		const section = this.createSection(
 			container,
 			ui('MCP 服务', 'MCP service'),
-			ui('控制本机服务开关、设置端口，并复制 Agent 连接地址。', 'Control the local service, set the port, and copy the agent connection URL.')
+			ui('查看 Obsidian 托管的本机服务状态，并在需要时恢复连接。', 'Review the local service hosted by Obsidian and recover it when needed.')
 		);
-		this.renderRuntimeEnabledSetting(section);
+		this.renderRuntimeEnabledSetting(section, snapshot);
 		this.renderCapabilitiesSetting(section);
-		this.renderPortSetting(section, snapshot.connectionUrl);
+		this.renderPortSetting(section, snapshot.runtimeStatus.endpoint);
 	}
 
-	private renderRuntimeEnabledSetting(container: HTMLElement): void {
+	private renderRuntimeEnabledSetting(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
 		const enabled = this.plugin.settings.mcpRuntimeEnabled;
+		const runtime = runtimeViewModel(snapshot.runtimeStatus, ui);
 		new Setting(container)
-			.setName(ui('服务开关', 'Service'))
-			.setDesc(enabled
-				? ui('已开启，AI 工具可以通过本机地址连接。', 'On. AI tools can connect through the local address.')
-				: ui('已关闭，AI 工具暂时无法连接。', 'Off. AI tools cannot connect right now.'))
+			.setName(`${ui('服务状态', 'Service status')}: ${runtime.label}`)
+			.setDesc(runtime.detail)
 			.addToggle((toggle) =>
 				toggle
 					.setValue(enabled)
+					.setDisabled(runtime.busy)
 					.onChange((value: boolean) => {
 						void this.plugin.setMcpRuntimeEnabled(value)
 							.then(() => this.renderSettings())
@@ -376,6 +540,27 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 							});
 					})
 			);
+		if (runtime.primaryAction === 'retry') {
+			new Setting(container)
+				.setName(ui('恢复服务', 'Recover service'))
+				.setDesc(ui(
+					'重新创建由当前 Obsidian Vault 托管的 MCP Runtime。',
+					'Recreate the MCP Runtime hosted by the current Obsidian vault.'
+				))
+				.addButton((button) => button
+					.setButtonText(ui('重新启动', 'Retry start'))
+					.setCta()
+					.onClick(() => {
+						button.setDisabled(true);
+						void this.plugin.ensureMcpRuntimeRunning()
+							.then(() => this.renderSettings())
+							.catch((error) => {
+								console.error('tracekeeper failed to recover MCP service', error);
+								button.setDisabled(false);
+								new Notice(error instanceof Error ? error.message : ui('MCP 服务启动失败。', 'Failed to start MCP service.'));
+							});
+					}));
+		}
 	}
 
 	private renderCapabilitiesSetting(container: HTMLElement): void {
@@ -392,11 +577,15 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	}
 
 	private renderTokenSection(container: HTMLElement): void {
-		const section = this.createSection(
-			container,
-			ui('令牌管理', 'Token management'),
-			ui('此处显示旧版共享令牌；每个 Agent 的独立凭据在对应配置行中轮换。', 'This is the legacy shared token. Rotate an independent Agent credential from its configuration row.')
-		);
+		const section = container.createEl('details', { cls: 'tracekeeper-settings-section tracekeeper-legacy-credentials' });
+		section.createEl('summary', { text: ui('高级兼容：旧版共享凭据', 'Advanced compatibility: legacy shared credential') });
+		section.createEl('p', {
+			text: ui(
+				'仅用于旧配置迁移。新 Agent 应使用各自配置行中的独立凭据。',
+				'For legacy configuration migration only. New agents should use the independent credential in their configuration row.'
+			),
+			cls: 'tracekeeper-settings-section__description',
+		});
 		const runtimeToken = this.plugin.settings.runtimeToken;
 		const runtimeTokenCreatedAt = this.plugin.formatDisplayTime(Date.parse(this.plugin.settings.runtimeTokenCreatedAt));
 		const row = section.createDiv({ cls: 'tracekeeper-settings-token-row' });
@@ -427,8 +616,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			container,
 			ui('视图刷新', 'View refresh'),
 			ui(
-				'活动页和审核队列打开时会自动同步最新任务、记忆和审核状态。',
-				'When activity or review queue views are open, Tracekeeper keeps task, memory, and review status in sync.'
+				'活动页和知识变更审核打开时会自动同步最新任务、记忆和审核状态。',
+				'When Activity or Knowledge Change Review is open, Tracekeeper keeps task, memory, and review status in sync.'
 			)
 		);
 		new Setting(section)
@@ -516,7 +705,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('全局记忆', 'Global memory'))
 			.setDesc(ui(
-				'通用偏好、长期决策等默认进入审核队列；也可以改为自动保存或不接收。',
+				'通用偏好、长期决策等默认进入知识变更审核；也可以改为自动保存或不接收。',
 				'General preferences and long-term decisions go to review by default; you can also auto-save or ignore them.'
 			))
 			.addDropdown((dropdown) => {
@@ -558,8 +747,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('任务结束记忆提案', 'Task closeout memory proposals'))
 			.setDesc(ui(
-				'自动会让项目记忆按规则保存、全局记忆进入审核队列；审核会统一进入审核队列；忽略不生成提案。',
-				'Auto saves project memory by rule and sends global memory to the review queue; Review sends all updates to the review queue; Ignore creates no proposals.'
+				'自动会让项目记忆按规则保存、全局记忆进入知识变更审核；审核会统一进入知识变更审核；忽略不生成提案。',
+				'Auto saves project memory by rule and sends global memory to Knowledge Change Review; Review sends all updates there; Ignore creates no proposals.'
 			))
 			.addDropdown((dropdown) => {
 				for (const mode of TASK_MEMORY_PROPOSAL_MODES) {
@@ -635,42 +824,65 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	}
 
 	private renderPortSetting(container: HTMLElement, connectionUrl: string): void {
-		new Setting(container)
-			.setName(ui('连接地址', 'Connection URL'))
+		let draftPort = String(this.plugin.settings.mcpPort);
+		let applyButton: HTMLButtonElement | null = null;
+		const setting = new Setting(container)
+			.setName(ui('MCP 端点', 'MCP endpoint'))
 			.setDesc(ui(
-				`http://${DEFAULT_MCP_HOST}:${this.plugin.settings.mcpPort || DEFAULT_MCP_PORT}`,
-				`http://${DEFAULT_MCP_HOST}:${this.plugin.settings.mcpPort || DEFAULT_MCP_PORT}`
+				`端点：${connectionUrl}。修改端口后需要点击“应用并重启”。`,
+				`Endpoint: ${connectionUrl}. Select “Apply and restart” after changing the port.`
 			))
 			.addText((text) =>
 				text
 					.setPlaceholder(String(DEFAULT_MCP_PORT))
 					.setValue(String(this.plugin.settings.mcpPort))
 					.onChange((value: string) => {
-						const parsed = Number.parseInt(value.trim(), 10);
-						if (!Number.isFinite(parsed) || parsed < 1 || parsed > 65535) {
+						draftPort = value.trim();
+						const parsed = /^\d+$/.test(draftPort) ? Number.parseInt(draftPort, 10) : Number.NaN;
+						if (applyButton) {
+							applyButton.disabled = !Number.isSafeInteger(parsed)
+								|| parsed < 1
+								|| parsed > 65535
+								|| parsed === this.plugin.settings.mcpPort;
+						}
+					})
+			)
+			.addButton((button) => {
+				applyButton = button.buttonEl;
+				applyButton.disabled = true;
+				button
+					.setButtonText(ui('应用并重启', 'Apply and restart'))
+					.onClick(() => {
+						const parsed = /^\d+$/.test(draftPort) ? Number.parseInt(draftPort, 10) : Number.NaN;
+						if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 65535) {
+							new Notice(ui('请输入 1 到 65535 之间的端口。', 'Enter a port between 1 and 65535.'));
 							return;
 						}
+						applyButton!.disabled = true;
 						this.plugin.settings.mcpPort = parsed;
 						void this.plugin.saveSettings()
 							.then(() => this.plugin.restartMcpRuntime())
 							.then(() => this.renderSettings())
 							.catch((error) => {
 								console.error('tracekeeper failed to update MCP port', error);
+								applyButton!.disabled = false;
+								new Notice(error instanceof Error ? error.message : ui('应用端口失败。', 'Failed to apply port.'));
 							});
-					})
-			)
+					});
+			})
 			.addExtraButton((button) =>
 				button
 					.setIcon('rotate-ccw')
 					.setTooltip(ui('恢复默认', 'Restore default'))
 					.onClick(() => {
-						this.plugin.settings.mcpPort = DEFAULT_MCP_PORT;
-						void this.plugin.saveSettings()
-							.then(() => this.plugin.restartMcpRuntime())
-							.then(() => this.renderSettings())
-							.catch((error) => {
-								console.error('tracekeeper failed to restore default MCP port', error);
-							});
+						draftPort = String(DEFAULT_MCP_PORT);
+						const input = setting.controlEl.querySelector('input');
+						if (input) {
+							input.value = draftPort;
+						}
+						if (applyButton) {
+							applyButton.disabled = this.plugin.settings.mcpPort === DEFAULT_MCP_PORT;
+						}
 					})
 			)
 			.addExtraButton((button) =>

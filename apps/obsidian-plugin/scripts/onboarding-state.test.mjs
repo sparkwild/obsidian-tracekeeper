@@ -16,6 +16,27 @@ try {
 	const legacy = stateModule.normalizeOnboardingSettingsState({ selectedClientId: 'codex', skillSetupCompletedAt: legacyTime });
 	assert.equal(legacy.skillUserConfirmedAt, legacyTime);
 	assert.equal(legacy.skillFileVerifiedAt, '');
+	assert.equal(legacy.entryPromptVersion, 0);
+	assert.equal(legacy.entryDeferredAt, '');
+	assert.equal(stateModule.shouldShowOnboardingEntryPrompt(legacy), true);
+
+	const deferred = stateModule.markOnboardingEntryPromptDeferred(legacy);
+	assert.equal(deferred.entryPromptVersion, stateModule.CURRENT_ONBOARDING_ENTRY_PROMPT_VERSION);
+	assert.ok(deferred.entryDeferredAt);
+	assert.equal(stateModule.shouldShowOnboardingEntryPrompt(deferred), false);
+	const reopened = stateModule.markOnboardingEntryPromptOpened(deferred);
+	assert.equal(reopened.entryPromptVersion, stateModule.CURRENT_ONBOARDING_ENTRY_PROMPT_VERSION);
+	assert.equal(reopened.entryDeferredAt, '');
+	assert.equal(stateModule.shouldShowOnboardingEntryPrompt(reopened), false);
+
+	const migrated = stateModule.normalizeOnboardingSettingsState({
+		selectedClientId: 'codex',
+		entryPromptVersion: '1',
+		entryDeferredAt: legacyTime,
+	});
+	assert.equal(migrated.entryPromptVersion, 1);
+	assert.equal(migrated.entryDeferredAt, legacyTime);
+	assert.equal(stateModule.shouldShowOnboardingEntryPrompt(migrated), false);
 
 	let state = stateModule.normalizeOnboardingSettingsState({ selectedClientId: 'codex' });
 	state = stateModule.markSkillCopied(state);
@@ -60,7 +81,9 @@ try {
 	const reset = stateModule.resetOnboardingState();
 	assert.equal(reset.skillUserConfirmedAt, '');
 	assert.equal(reset.trackedWorkflowObservedAt, '');
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 19 })}\n`);
+	assert.equal(reset.entryPromptVersion, 0);
+	assert.equal(reset.entryDeferredAt, '');
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 30 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

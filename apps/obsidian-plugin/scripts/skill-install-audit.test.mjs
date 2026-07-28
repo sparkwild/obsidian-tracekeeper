@@ -36,6 +36,16 @@ try {
 	assert.equal(success.includes('/Users/'), false);
 	assert.equal(success.includes('token='), false);
 
+	const migration = audit.buildSkillInstallAuditEntry({
+		action: 'migrate',
+		clientId: 'codex',
+		bundleHash: hash,
+		backupCreated: false,
+		result: 'success',
+		timestamp: '2026-07-23T00:00:00.000Z',
+	});
+	assert.match(migration, /action: skill_migrate/);
+
 	const failed = audit.buildSkillInstallAuditEntry({
 		action: 'install',
 		clientId: 'codex\ntoken=secret/path',

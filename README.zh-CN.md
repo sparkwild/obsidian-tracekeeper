@@ -40,7 +40,7 @@ AI 可以帮助回忆上下文、草拟提案、整理长期记忆，但是否�
 
 个人知识库经常卡在两个极端：有价值的内容停留在一次性对话里，无法沉淀；或者自动化写入太积极，把 vault 变得混乱。Tracekeeper 选择站在中间。
 
-Tracekeeper 会把 AI 给出的整理结果当成候选记忆提案。你可以在熟悉的 Obsidian 环境里检查它、修改它、批准它，或者拒绝它。
+Tracekeeper 会把 AI 给出的整理结果当成候选记忆提案。你可以在熟悉的 Obsidian 环境里检查它、修改它、通过审核、退回修改或不采纳。
 
 ## 首次使用
 
@@ -49,16 +49,16 @@ Tracekeeper 会把 AI 给出的整理结果当成候选记忆提案。你可以�
 3. 在可恢复的 **首次安装引导** 中选择 Agent，预览或复制它的独立连接配置；受支持客户端可预览安装完整 Skill bundle，其他客户端可复制单文件兼容 Skill。
 4. 按提示重启 Agent，让它调用 Tracekeeper，再由插件核验该客户端留下的真实连接证据。
 5. 让这个 Agent 执行一次至少命中一条笔记的窄范围 `tracekeeper.recall`，随后在设置中核验首次召回证据。
-6. 在 **Review Queue** 中查看需要审核的记忆、wiki、图谱或迁移候选项。
-7. 逐条审阅、调整、批准、拒绝或要求修订。
+6. 在 **知识变更审核** 中查看需要处理的记忆、Wiki、图谱或迁移候选变更。
+7. 逐条编辑提案、通过审核、退回修改或不采纳；通过审核后仍需预览并明确确认写入。
 
 ## Agent 与 MCP 连接
 
 Tracekeeper 在桌面端 Obsidian 开启时提供本机 Streamable HTTP MCP Runtime。Runtime 默认绑定 loopback 地址，并为每个受管理的 Agent 客户端生成独立的 credential principal；本地 capability profile 决定该凭据能够发现和调用哪些公开工具，它只是预设，不是团队 RBAC。设置页可以单独轮换一个客户端凭据而不影响其他 Agent，旧版共享 token 仍保留迁移兼容。
 
-AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 vault 上下文、构建 context pack、记录有限范围内的工作笔记，并按你的记忆规则提交更新。全局记忆默认进入审核队列；项目记忆可以按规则自动追加保存到项目记忆笔记。
+AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 vault 上下文、构建 context pack、记录有限范围内的工作笔记，并按你的记忆规则提交更新。全局记忆默认进入知识变更审核；项目记忆可以按规则自动追加保存到项目记忆笔记。
 
-Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选择 `no_track`、`recall_only` 或 `tracked_task`；tracked 工作只启动一次、使用返回的 task id、召回最小必要上下文并只结束一次。它不会保存 token、授予权限或复制 MCP 实现。召回内容会明确标记为知识数据而非指令，结构化 MCP action 则减少客户端二次猜测。参见 [Agent 工作流契约](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md)。
+Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选择 `no_track`、`recall_only` 或 `tracked_task`；tracked 工作只启动一次、使用返回的 task id、召回最小必要上下文并只结束一次。它不会保存 token、授予权限或复制 MCP 实现。召回内容会明确标记为知识数据而非指令，结构化 MCP action 则减少客户端二次猜测。参见 [Agent 工作流](./docs/features/AGENT_WORKFLOW.md)。
 
 连接是 local-first 的：
 
@@ -70,13 +70,13 @@ Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选
 - MCP tools 不能访问 vault 外文件
 - MCP tools 不能读取 Obsidian 配置目录
 
-## Review Queue
+## 知识变更审核
 
-全局长期记忆默认必须先进入 Review Queue。AI 助手提出的全局 durable memory 更新会先成为候选项；图谱健康建议和结构迁移冲突也会进入同一个队列等待你确认。你可以决定批准、拒绝或要求修订。
+全局长期记忆默认必须先进入知识变更审核。AI 助手提出的全局 durable memory 更新会先成为变更提案；图谱健康建议和结构迁移冲突也会进入同一个审核界面等待你确认。你可以决定通过审核、退回修改或不采纳。
 
-批准写回是独立动作。只有候选项已通过审核后，Tracekeeper 才会把已批准内容应用到对应目标笔记。
+审核通过和写入是两个独立动作。只有提案通过审核、完成预览并经你明确确认后，Tracekeeper 才会把内容写入对应目标笔记。
 
-项目记忆默认更轻量：项目级更新可以自动追加到 `01_knowledge/memory/projects/<project>/memory.md`，并使用内容签名避免重复写入。项目自动保存仍然要求有效的 Wiki 主题链接，避免记忆线和知识主题脱节。任务收尾默认使用自动模式：项目记忆按项目规则处理，全局记忆进入 Review Queue，只有 summary 的收尾只记录会话，不生成空记忆项。
+项目记忆默认更轻量：项目级更新可以自动追加到 `01_knowledge/memory/projects/<project>/memory.md`，并使用内容签名避免重复写入。项目自动保存仍然要求有效的 Wiki 主题链接，避免记忆线和知识主题脱节。任务收尾默认使用自动模式：项目记忆按项目规则处理，全局记忆进入知识变更审核，只有 summary 的收尾只记录会话，不生成空记忆项。
 
 ## 适合场景
 
@@ -97,7 +97,7 @@ Tracekeeper 通过只读的 `tracekeeper.lint` 统一检查 Obsidian wikilink �
 - `advisory`：图谱问题只作为 warning 和建议。
 - `strict`：缺少入口、缺少推荐 hub、孤立节点和未解析图谱链接会成为 lint error。
 
-图谱健康不会自动创建笔记或改写链接。你可以在插件的图谱健康视图中查看结果，并显式创建 Review Queue 建议，再决定是否补全全库入口、主题 hub 或 `Graph links` 段落。
+图谱健康不会自动创建笔记或改写链接。你可以在插件的图谱健康视图中查看结果，并显式创建知识变更提案，再决定是否补全全库入口、主题 hub 或 `Graph links` 段落。
 
 ## 设计原则
 
@@ -114,7 +114,7 @@ MCP 写入范围被刻意限制：
 
 - 工作记录只写入 Tracekeeper 控制的 vault 目录
 - 生成记录不会覆盖已有笔记
-- 已批准写回只会追加到对应 proposal 指向的已有目标笔记
+- 已审核通过的内容只会追加到对应 proposal 指向的已有目标笔记
 - 多步骤任务和审核写回具备幂等标识、操作日志，并在 Runtime 启动时继续恢复
 - Session 绑定 credential principal，并受请求体大小、会话数量和空闲时间上限约束
 - MCP 不提供删除、重命名、批量重写和系统命令执行能力
@@ -124,12 +124,13 @@ MCP 写入范围被刻意限制：
 ## 项目文档
 
 - [文档总索引](./docs/INDEX.md)
-- [产品契约](./docs/product/INDEX.md)
+- [产品概览](./docs/overview/PRODUCT.md)
+- [功能文档](./docs/features/INDEX.md)
+- [技术栈](./docs/technology/TECHNOLOGY_STACK.md)
 - [系统架构](./docs/architecture/INDEX.md)
-- [Agent 工作流契约](./docs/architecture/AGENT_WORKFLOW_CONTRACT.md)
-- [安全与隐私架构](./docs/security/INDEX.md)
-- [工程与发布指南](./docs/engineering/INDEX.md)
-- [当前实现状态](./docs/status/INDEX.md)
+- [Agent 工作流](./docs/features/AGENT_WORKFLOW.md)
+- [信任边界](./docs/architecture/TRUST_BOUNDARIES.md)
+- [工程与发布指南](./docs/development/ENGINEERING_AND_RELEASE.md)
 
 ## 许可证
 

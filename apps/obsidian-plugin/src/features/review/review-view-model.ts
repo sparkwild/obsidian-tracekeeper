@@ -10,6 +10,13 @@ export type MemoryProposalStatus =
 	| 'revision_requested'
 	| 'applied';
 
+export type ReviewProposalAttentionState =
+	| 'incomplete'
+	| 'pending_review'
+	| 'awaiting_revision'
+	| 'ready_to_apply'
+	| 'completed';
+
 export type ReviewQueueItemType =
 	| 'memory_proposal'
 	| 'legacy_migration_review'
@@ -36,12 +43,54 @@ export interface MemoryProposalRecord {
 	writebackContent: string;
 }
 
+export interface ReviewProposalValidity {
+	hasTargetNote: boolean;
+	hasWritebackContent: boolean;
+	missingTargetNote: boolean;
+	missingWritebackContent: boolean;
+	isComplete: boolean;
+}
+
 interface MemoryProposalParseInput {
 	filePath: string;
 	fields: ParsedRecord;
 	body: string;
 	fileMtime?: number;
 }
+
+const INVALID_PROPOSAL_VALUE = new Set([
+	'',
+	'null',
+	'undefined',
+	'unknown',
+	'none',
+	'not specified',
+	'not specified.',
+	'not specified?',
+	'none specified',
+	'not available',
+	'not linked',
+	'na',
+	'n/a',
+	'unknown value',
+	'未指定',
+	'未知',
+	'空白',
+	'未填',
+	'未关联',
+]);
+
+const normalizeProposalText = (value: string): string => {
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return '';
+	}
+	const normalized = trimmed.toLowerCase().replace(/\s+/g, ' ');
+	if (INVALID_PROPOSAL_VALUE.has(normalized)) {
+		return '';
+	}
+	return trimmed;
+};
 
 export const normalizeProposalStatus = (rawStatus?: string): MemoryProposalStatus => {
 	const status = (rawStatus || 'pending').toLowerCase().trim();
@@ -63,13 +112,18 @@ export const normalizeProposalStatus = (rawStatus?: string): MemoryProposalStatu
 const firstString = (values: ParsedRecord, keys: string[]): string => {
 	for (const key of keys) {
 		const value = values[key];
-		if (typeof value === 'string' && value.trim()) {
-			return value.trim();
+		if (typeof value === 'string') {
+			const normalized = normalizeProposalText(value);
+			if (normalized) {
+				return normalized;
+			}
 		}
 		if (Array.isArray(value)) {
-			const first = value.find((entry) => Boolean(entry && entry.trim()));
+			const first = value.find(
+				(entry): boolean => Boolean(typeof entry === 'string' && normalizeProposalText(entry))
+			);
 			if (first) {
-				return first;
+				return normalizeProposalText(first.toString());
 			}
 		}
 	}
@@ -82,10 +136,17 @@ const readStringList = (values: ParsedRecord, keys: string[]): string[] => {
 		const value = values[key];
 		if (!value) continue;
 		if (Array.isArray(value)) {
-			items.push(...value.filter(Boolean));
+			items.push(
+				...value
+					.filter((entry): entry is string => typeof entry === 'string')
+					.map((entry) => normalizeProposalText(entry))
+					.filter(Boolean)
+			);
 			continue;
 		}
-		items.push(...value.split(',').map((entry) => entry.trim()).filter(Boolean));
+		items.push(
+			...value.split(',').map((entry) => normalizeProposalText(entry)).filter(Boolean)
+		);
 	}
 	return [...new Set(items)];
 };
@@ -95,13 +156,16 @@ const readMultilineString = (values: ParsedRecord, keys: string[]): string => {
 		const value = values[key];
 		if (Array.isArray(value)) {
 			const joined = value.join('\n').trim();
-			if (joined) {
+			if (joined && normalizeProposalText(joined)) {
 				return joined;
 			}
 			continue;
 		}
-		if (typeof value === 'string' && value.trim()) {
-			return value.replace(/\\n/g, '\n').trim();
+		if (typeof value === 'string') {
+			const normalized = normalizeProposalText(value.replace(/\\n/g, '\n'));
+			if (normalized) {
+				return normalized;
+			}
 		}
 	}
 	return '';
@@ -156,6 +220,50 @@ const extractSectionText = (body: string, sectionNames: string[]): string => {
 	return '';
 };
 
+const isMeaningfulProposalValue = (value: string): boolean => Boolean(normalizeProposalText(value));
+
+export const getReviewProposalValidity = (proposal: MemoryProposalRecord): ReviewProposalValidity => {
+	if (proposal.classification !== 'memory_proposal') {
+		return {
+			hasTargetNote: true,
+			hasWritebackContent: true,
+			missingTargetNote: false,
+			missingWritebackContent: false,
+			isComplete: true,
+		};
+	}
+
+	const hasTargetNote = isMeaningfulProposalValue(proposal.targetNote);
+	const hasWritebackContent = isMeaningfulProposalValue(proposal.writebackContent);
+	return {
+		hasTargetNote,
+		hasWritebackContent,
+		missingTargetNote: !hasTargetNote,
+		missingWritebackContent: !hasWritebackContent,
+		isComplete: hasTargetNote && hasWritebackContent,
+	};
+};
+
+export const getReviewProposalAttentionState = (proposal: MemoryProposalRecord): ReviewProposalAttentionState => {
+	if (proposal.approvalStatus === 'approved') {
+		return proposal.classification === 'memory_proposal' ? 'ready_to_apply' : 'completed';
+	}
+	const validity = getReviewProposalValidity(proposal);
+	if (proposal.approvalStatus === 'revision_requested') {
+		return 'awaiting_revision';
+	}
+	if (proposal.approvalStatus === 'applied' || proposal.approvalStatus === 'rejected' || proposal.approvalStatus === 'deferred') {
+		return 'completed';
+	}
+	if (proposal.approvalStatus === 'pending') {
+		if (!validity.isComplete && proposal.classification === 'memory_proposal') {
+			return 'incomplete';
+		}
+		return 'pending_review';
+	}
+	return 'pending_review';
+};
+
 const snippetFromText = (text: string, fallback: string = ''): string => {
 	const lines = text
 		.split('\n')
@@ -188,9 +296,10 @@ export const compareProposalRecords = (a: MemoryProposalRecord, b: MemoryProposa
 export const extractMemoryProposalWritebackContent = (data: ParsedRecord, body: string): string => {
 	const frontmatterWriteback = readMultilineString(data, ['writeback_content', 'writebackContent']);
 	if (frontmatterWriteback) {
-		return frontmatterWriteback.replace(/\\n/g, '\n').trim();
+		return normalizeProposalText(frontmatterWriteback.replace(/\\n/g, '\n'));
 	}
-	return extractSectionText(body, ['Writeback', 'Approved writeback', 'Writeback content', '写回', '已批准写回', '写回内容']);
+	const section = extractSectionText(body, ['Writeback', 'Approved writeback', 'Writeback content', '写回', '已批准写回', '写回内容']);
+	return normalizeProposalText(section);
 };
 
 export const parseMemoryProposalRecord = ({

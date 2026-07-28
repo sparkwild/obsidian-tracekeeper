@@ -287,7 +287,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "review";
     readonly useCase: "apply_approved_writeback";
-    readonly description: "[review-gated apply] Use only after the user approves a Review Queue proposal. Appends approved content to the local Vault target note.";
+    readonly description: "[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content to the local Vault target note.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly outputSchema: ToolOutputSchema;

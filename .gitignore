@@ -11,3 +11,5 @@ apps/obsidian-plugin/main.js.map
 apps/**/node_modules/
 apps/obsidian-plugin/node_modules/
 packages/**/node_modules
+
+.specs/

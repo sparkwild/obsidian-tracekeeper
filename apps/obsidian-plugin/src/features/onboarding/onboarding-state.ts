@@ -8,6 +8,8 @@ export const ONBOARDING_STEP_SEQUENCE = [
 	'first_recall',
 ] as const;
 
+export const CURRENT_ONBOARDING_ENTRY_PROMPT_VERSION = 1;
+
 export type OnboardingStep = (typeof ONBOARDING_STEP_SEQUENCE)[number] | 'complete';
 
 export interface OnboardingProgressContext {
@@ -30,6 +32,8 @@ export interface OnboardingProgressContext {
 
 export interface OnboardingSettingsState {
 	selectedClientId: string;
+	entryPromptVersion: number;
+	entryDeferredAt: string;
 	clientConfiguredAt: string;
 	skillSetupCompletedAt: string;
 	skillCopiedAt: string;
@@ -74,6 +78,8 @@ export interface OnboardingTrackedWorkflowEvidence {
 
 export const DEFAULT_ONBOARDING_SETTINGS: OnboardingSettingsState = {
 	selectedClientId: 'codex',
+	entryPromptVersion: 0,
+	entryDeferredAt: '',
 	clientConfiguredAt: '',
 	skillSetupCompletedAt: '',
 	skillCopiedAt: '',
@@ -111,6 +117,8 @@ export const normalizeOnboardingSettingsState = (raw: unknown): OnboardingSettin
 	const userConfirmation = asTimestamp(rawState.skillUserConfirmedAt) || legacySkillConfirmation;
 	return {
 		selectedClientId: asString(rawState.selectedClientId) || DEFAULT_ONBOARDING_SETTINGS.selectedClientId,
+		entryPromptVersion: asNonNegativeInteger(rawState.entryPromptVersion, DEFAULT_ONBOARDING_SETTINGS.entryPromptVersion),
+		entryDeferredAt: asTimestamp(rawState.entryDeferredAt),
 		clientConfiguredAt: asTimestamp(rawState.clientConfiguredAt),
 		skillSetupCompletedAt: legacySkillConfirmation || userConfirmation,
 		skillCopiedAt: asTimestamp(rawState.skillCopiedAt),
@@ -128,6 +136,22 @@ export const normalizeOnboardingSettingsState = (raw: unknown): OnboardingSettin
 		lastUpdatedAt: asTimestamp(rawState.lastUpdatedAt) || new Date().toISOString(),
 	};
 };
+
+export const shouldShowOnboardingEntryPrompt = (state: OnboardingSettingsState): boolean =>
+	state.entryPromptVersion < CURRENT_ONBOARDING_ENTRY_PROMPT_VERSION
+	&& asTimestamp(state.entryDeferredAt) === '';
+
+export const markOnboardingEntryPromptDeferred = (state: OnboardingSettingsState): OnboardingSettingsState =>
+	timestamped(state, {
+		entryPromptVersion: CURRENT_ONBOARDING_ENTRY_PROMPT_VERSION,
+		entryDeferredAt: new Date().toISOString(),
+	});
+
+export const markOnboardingEntryPromptOpened = (state: OnboardingSettingsState): OnboardingSettingsState =>
+	timestamped(state, {
+		entryPromptVersion: CURRENT_ONBOARDING_ENTRY_PROMPT_VERSION,
+		entryDeferredAt: '',
+	});
 
 const stepIsCompleted = (
 	state: OnboardingSettingsState,

@@ -1,4 +1,4 @@
-import { App, Modal, Notice } from 'obsidian';
+import { App, Modal, Notice, Setting } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import type { ApprovedWritebackPreview } from './review-queue-controller';
 import type { MemoryProposalRecord } from './review-view-model';
@@ -25,8 +25,8 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 	onOpen(): void {
 		void super.onOpen();
 		this.titleEl.setText(this.editingExistingRevision
-			? ui('编辑修订说明', 'Edit revision comment')
-			: ui('要求修订', 'Request revision'));
+			? ui('编辑修改说明', 'Edit revision note')
+			: ui('退回修改', 'Return for revision'));
 		this.render();
 	}
 
@@ -42,14 +42,14 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 					'Add or edit what should change so the next Agent can understand the issue and revise the proposal.'
 				)
 				: ui(
-					'请说明需要修改的内容或发现的问题。提交后该提案将标记为“需修订”。',
-					'Describe what should be changed. Submitting will mark this proposal as Revision requested.'
+					'请说明需要修改的内容或发现的问题。提交后该提案将标记为“已退回修改”。',
+					'Describe what should be changed. Submitting will mark this proposal as returned for revision.'
 				),
 			cls: 'tracekeeper-view__description',
 		});
 
 		const help = contentEl.createDiv({ cls: 'tracekeeper-review-revision-modal__help' });
-		help.createEl('strong', { text: ui('修订说明', 'Revision comment') });
+		help.createEl('strong', { text: ui('修改说明', 'Revision note') });
 		help.createEl('small', { text: ui('支持多行输入，至少填写一行内容。', 'Supports multiline input; at least one line is required.') });
 
 		const textarea = contentEl.createEl('textarea', {
@@ -64,7 +64,7 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 		});
 
 		this.statusText = contentEl.createEl('p', {
-			text: ui('请先填写修订说明。', 'Please enter a revision comment.'),
+			text: ui('请先填写修改说明。', 'Please enter a revision note.'),
 			cls: 'tracekeeper-view__description',
 		});
 
@@ -91,28 +91,28 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 			this.submitButton.setText(
 				hasComment
 					? this.getSubmitLabel()
-					: ui('请输入修订说明', 'Enter revision comment')
+					: ui('请输入修改说明', 'Enter revision note')
 			);
 		}
 		if (this.statusText) {
 			this.statusText.setText(
 				hasComment
 					? this.getReadyStatusText()
-					: ui('请先填写修订说明。', 'Please enter a revision comment.')
+					: ui('请先填写修改说明。', 'Please enter a revision note.')
 			);
 		}
 	}
 
 	private getSubmitLabel(): string {
 		return this.editingExistingRevision
-			? ui('保存修订说明', 'Save revision comment')
-			: ui('提交修订说明', 'Submit revision');
+			? ui('保存修改说明', 'Save revision note')
+			: ui('确认退回修改', 'Return for revision');
 	}
 
 	private getReadyStatusText(): string {
 		return this.editingExistingRevision
-			? ui('保存后会更新该项的修订说明。', "Save to update this item's revision comment.")
-			: ui('提交后会将该项标记为“需修订”。', 'Submit to mark this item as Revision requested.');
+			? ui('保存后会更新该提案的修改说明。', "Save to update this proposal's revision note.")
+			: ui('确认后会将该提案标记为“已退回修改”。', 'Confirm to mark this proposal as returned for revision.');
 	}
 
 	private async submit(): Promise<void> {
@@ -133,15 +133,144 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 			await this.plugin.updateMemoryProposalStatus(this.proposal, 'revision_requested', {
 				revisionComment: normalizedComment,
 			});
-			new Notice(ui('已提交修订说明。', 'Revision comment submitted.'));
+			new Notice(ui('已退回修改。', 'Proposal returned for revision.'));
 			await this.onUpdated();
 			this.close();
 		} catch (error) {
 			console.error('tracekeeper failed to request revision', error);
 			this.submitting = false;
-			new Notice(ui('提交修订说明失败。', 'Failed to submit revision comment.'));
+			new Notice(ui('退回修改失败。', 'Failed to return proposal for revision.'));
 			this.updateSubmitState();
 		}
+	}
+}
+
+export class ReviewQueueEditProposalModal extends Modal {
+	private targetNote: string;
+	private writebackContent: string;
+	private saving = false;
+	private saveButton: HTMLButtonElement | null = null;
+
+	constructor(
+		app: App,
+		private plugin: TracekeeperPlugin,
+		private proposal: MemoryProposalRecord,
+		private onUpdated: () => Promise<void> | void
+	) {
+		super(app);
+		this.targetNote = proposal.targetNote;
+		this.writebackContent = proposal.writebackContent;
+	}
+
+	onOpen(): void {
+		void super.onOpen();
+		this.titleEl.setText(ui('编辑变更提案', 'Edit change proposal'));
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('tracekeeper-review-edit-modal');
+		contentEl.createEl('p', {
+			text: ui(
+				'编辑只会更新变更提案，不会写入目标笔记。保存后仍需通过审核、预览并再次确认写入。',
+				'Editing only updates the change proposal. Saving does not write to the target note; approval, preview, and a second confirmation are still required.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+
+		new Setting(contentEl)
+			.setName(ui('目标笔记', 'Target note'))
+			.setDesc(ui('使用相对 Vault 路径，例如 01_knowledge/projects/example.md。', 'Use a vault-relative path, for example 01_knowledge/projects/example.md.'))
+			.addText((text) => {
+				text.setPlaceholder('01_knowledge/...')
+					.setValue(this.targetNote)
+					.onChange((value) => {
+						this.targetNote = value;
+					});
+				text.inputEl.addClass('tracekeeper-review-edit-modal__target');
+			});
+
+		const writebackLabel = contentEl.createDiv({ cls: 'tracekeeper-review-edit-modal__label' });
+		writebackLabel.createEl('strong', { text: ui('拟写入内容', 'Proposed writeback') });
+		writebackLabel.createEl('small', {
+			text: ui('可直接编辑 Markdown。留空保存后，该提案会显示为“信息不完整”。', 'Edit Markdown directly. Saving an empty value marks this proposal as incomplete.'),
+		});
+		const textarea = contentEl.createEl('textarea', {
+			text: this.writebackContent,
+			cls: 'tracekeeper-review-edit-modal__textarea',
+		});
+		textarea.value = this.writebackContent;
+		textarea.rows = 12;
+		textarea.addEventListener('input', () => {
+			this.writebackContent = textarea.value;
+		});
+
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		actions.createEl('button', { text: ui('取消', 'Cancel') }).addEventListener('click', () => this.close());
+		this.saveButton = actions.createEl('button', {
+			text: ui('保存草稿', 'Save draft'),
+			cls: 'mod-cta',
+		});
+		this.saveButton.addEventListener('click', () => {
+			void this.save();
+		});
+	}
+
+	private async save(): Promise<void> {
+		if (!this.saveButton || this.saving) {
+			return;
+		}
+		this.saving = true;
+		this.saveButton.disabled = true;
+		this.saveButton.setText(ui('保存中...', 'Saving...'));
+		try {
+			await this.plugin.updateMemoryProposalDraft(this.proposal, {
+				targetNote: this.targetNote,
+				writebackContent: this.writebackContent,
+			});
+			new Notice(ui('写回草稿已保存。', 'Writeback draft saved.'));
+			await this.onUpdated();
+			this.close();
+		} catch (error) {
+			console.error('tracekeeper failed to update review proposal draft', error);
+			this.saving = false;
+			this.saveButton.disabled = false;
+			this.saveButton.setText(ui('保存草稿', 'Save draft'));
+			new Notice(ui('保存写回草稿失败。', 'Failed to save writeback draft.'));
+		}
+	}
+}
+
+export class ReviewQueueConfirmModal extends Modal {
+	constructor(
+		app: App,
+		private title: string,
+		private message: string,
+		private confirmLabel: string,
+		private onConfirmed: () => Promise<void> | void
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		void super.onOpen();
+		this.titleEl.setText(this.title);
+		this.contentEl.empty();
+		this.contentEl.createEl('p', { text: this.message });
+		const actions = this.contentEl.createDiv({ cls: 'modal-button-container' });
+		actions.createEl('button', { text: ui('取消', 'Cancel') }).addEventListener('click', () => this.close());
+		const confirm = actions.createEl('button', { text: this.confirmLabel, cls: 'mod-warning' });
+		confirm.addEventListener('click', () => {
+			void (async () => {
+				confirm.disabled = true;
+				try {
+					await this.onConfirmed();
+					this.close();
+				} catch (error) {
+					console.error('tracekeeper failed to confirm review queue action', error);
+					confirm.disabled = false;
+					new Notice(ui('操作失败。', 'Action failed.'));
+				}
+			})();
+		});
 	}
 }
 
@@ -157,7 +286,7 @@ export class ApprovedWritebackApplyModal extends Modal {
 
 	onOpen(): void {
 		void super.onOpen();
-		this.titleEl.setText(ui('应用已批准写回', 'Apply approved writeback'));
+		this.titleEl.setText(ui('预览并写入', 'Preview and apply'));
 		void this.renderPreview();
 	}
 
@@ -174,7 +303,7 @@ export class ApprovedWritebackApplyModal extends Modal {
 			console.error('tracekeeper failed to preview approved writeback', error);
 			contentEl.empty();
 			contentEl.createEl('p', {
-				text: ui('生成写回预览失败，请检查该提案是否仍处于已批准状态。', 'Failed to generate writeback preview. Check whether this proposal is still approved.'),
+				text: ui('生成写入预览失败，请检查该提案是否仍处于审核通过状态。', 'Failed to generate writeback preview. Check whether this proposal is still approved.'),
 			});
 			const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 			actions.createEl('button', { text: ui('关闭', 'Close') }).addEventListener('click', () => this.close());
@@ -197,21 +326,21 @@ export class ApprovedWritebackApplyModal extends Modal {
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel'), cls: 'mod-warning' });
 		cancel.addEventListener('click', () => this.close());
-		const confirm = actions.createEl('button', { text: ui('确认写回', 'Apply writeback'), cls: 'mod-cta' });
+		const confirm = actions.createEl('button', { text: ui('确认写入', 'Confirm apply'), cls: 'mod-cta' });
 		confirm.addEventListener('click', () => {
 			void (async () => {
 				confirm.disabled = true;
 				confirm.setText(ui('写回中...', 'Applying...'));
 				try {
 					await this.plugin.applyApprovedWriteback(this.proposal);
-					new Notice(ui('已应用写回。', 'Approved writeback applied.'));
+					new Notice(ui('已写入目标笔记。', 'Change applied to the target note.'));
 					this.onApplied();
 					this.close();
 				} catch (error) {
 					console.error('tracekeeper failed to apply approved writeback', error);
-					new Notice(ui('应用写回失败。', 'Failed to apply writeback.'));
+					new Notice(ui('写入失败。', 'Failed to apply change.'));
 					confirm.disabled = false;
-					confirm.setText(ui('确认写回', 'Apply writeback'));
+					confirm.setText(ui('确认写入', 'Confirm apply'));
 				}
 			})();
 		});
