@@ -39,6 +39,14 @@ may edit an unapproved proposal, approve it, return it for revision, or not
 accept it. Approval confirms the content; applying it remains a separate,
 previewed, explicitly confirmed action.
 
+An incomplete proposal is a remediation item, not a review-ready change. A
+missing, invalid, or unavailable target must be resolved from existing
+Vault-local Memory/Wiki candidates, and writable content must be present, before
+approval is available. The review detail presents the available task and source
+evidence, current target context, and an expected append diff. Approval still
+does not write; apply generates a fresh preview and requires a separate
+confirmation.
+
 Project memory may use an opt-in lighter rule:
 
 - fresh installations start with project memory in Knowledge Change Review;

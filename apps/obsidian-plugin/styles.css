@@ -1034,6 +1034,9 @@ button.tracekeeper-review-inbox__row input[type='checkbox'] {
 .tracekeeper-review-inbox__notice,
 .tracekeeper-review-inbox__summary,
 .tracekeeper-review-inbox__target,
+.tracekeeper-review-inbox__target-context,
+.tracekeeper-review-inbox__decision-context,
+.tracekeeper-review-inbox__candidates,
 .tracekeeper-review-inbox__writeback,
 .tracekeeper-review-inbox__revision {
 	display: grid;
@@ -1055,7 +1058,10 @@ button.tracekeeper-review-inbox__row input[type='checkbox'] {
 }
 
 .tracekeeper-review-inbox__summary p,
-.tracekeeper-review-inbox__revision p {
+.tracekeeper-review-inbox__revision p,
+.tracekeeper-review-inbox__target-context p,
+.tracekeeper-review-inbox__decision-context p,
+.tracekeeper-review-inbox__candidates p {
 	margin: 0;
 	overflow-wrap: anywhere;
 }
@@ -1089,6 +1095,71 @@ button.tracekeeper-review-inbox__row input[type='checkbox'] {
 	color: var(--text-warning);
 }
 
+.tracekeeper-review-inbox__diff {
+	color: var(--text-normal);
+	font-family: var(--font-monospace);
+}
+
+.tracekeeper-review-inbox__decision-context,
+.tracekeeper-review-inbox__candidates {
+	gap: 10px;
+}
+
+.tracekeeper-review-context-list,
+.tracekeeper-review-candidate-list {
+	display: grid;
+	gap: 8px;
+}
+
+.tracekeeper-review-context-card,
+.tracekeeper-review-candidate {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+	padding: 9px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+}
+
+.tracekeeper-review-context-card p,
+.tracekeeper-review-candidate p {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-review-context-card button {
+	justify-self: start;
+}
+
+.tracekeeper-review-candidate {
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+}
+
+.tracekeeper-review-candidate > div {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+}
+
+.tracekeeper-review-candidate code,
+.tracekeeper-review-edit-modal__target-context code {
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+.tracekeeper-review-candidate small,
+.tracekeeper-review-edit-modal__target-section small {
+	color: var(--text-muted);
+}
+
+.tracekeeper-review-inbox__candidate-warning {
+	color: var(--text-warning);
+}
+
 .tracekeeper-review-inbox__source {
 	display: grid;
 	gap: 8px;
@@ -1107,6 +1178,27 @@ button.tracekeeper-review-inbox__row input[type='checkbox'] {
 
 .tracekeeper-review-edit-modal__target {
 	width: 100%;
+}
+
+.tracekeeper-review-edit-modal__target-section,
+.tracekeeper-review-edit-modal__target-context {
+	display: grid;
+	gap: 6px;
+}
+
+.tracekeeper-review-edit-modal__target-context {
+	margin-top: 4px;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+}
+
+.tracekeeper-review-edit-modal__target-context p {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 12px;
+	white-space: pre-wrap;
 }
 
 .tracekeeper-review-edit-modal__label {
@@ -1723,5 +1815,13 @@ button.tracekeeper-review-queue-button--action:focus {
 
 	.tracekeeper-review-inbox__source > div {
 		grid-template-columns: 1fr;
+	}
+
+	.tracekeeper-review-candidate {
+		grid-template-columns: 1fr;
+	}
+
+	.tracekeeper-review-candidate button {
+		width: 100%;
 	}
 }

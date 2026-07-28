@@ -16,9 +16,13 @@ const makeProposal = (overrides = {}) => ({
 	proposalKind: overrides.proposalKind || 'memory',
 	proposedBy: overrides.proposedBy || 'agent',
 	relatedProject: overrides.relatedProject || '',
+	memoryScope: overrides.memoryScope || '',
 	taskId: overrides.taskId || '',
+	sourceSessionNote: overrides.sourceSessionNote || '',
 	targetNote: overrides.targetNote || '',
 	evidence: [],
+	relatedSources: [],
+	rationale: overrides.rationale || '',
 	riskLevel: overrides.riskLevel || 'unknown',
 	approvalStatus: overrides.approvalStatus || 'pending',
 	created: overrides.created || '',
@@ -34,7 +38,7 @@ const makeProposal = (overrides = {}) => ({
 const baseProposals = [
 	makeProposal({
 		proposalId: 'pending-complete',
-		targetNote: 'notes/complete.md',
+		targetNote: '01_knowledge/memory/projects/project-alpha/memory.md',
 		writebackContent: 'append this\nline',
 		approvalStatus: 'pending',
 		relatedProject: 'project alpha',
@@ -51,7 +55,7 @@ const baseProposals = [
 	}),
 	makeProposal({
 		proposalId: 'revision-needed',
-		targetNote: 'notes/revision.md',
+		targetNote: '01_knowledge/wiki/revision.md',
 		writebackContent: 'append this',
 		approvalStatus: 'revision_requested',
 		relatedProject: 'project alpha',
@@ -59,7 +63,7 @@ const baseProposals = [
 	}),
 	makeProposal({
 		proposalId: 'approved-ready',
-		targetNote: 'notes/ready.md',
+		targetNote: '01_knowledge/memory/global/ready.md',
 		writebackContent: 'append this',
 		approvalStatus: 'approved',
 		relatedProject: 'project alpha',
@@ -67,7 +71,7 @@ const baseProposals = [
 	}),
 	makeProposal({
 		proposalId: 'history-item',
-		targetNote: 'notes/history.md',
+		targetNote: '01_knowledge/wiki/history.md',
 		writebackContent: 'append this',
 		approvalStatus: 'applied',
 		relatedProject: 'project gamma',
@@ -78,7 +82,7 @@ const baseProposals = [
 const riskProposals = [
 	makeProposal({
 		proposalId: 'risk-low',
-		targetNote: 'notes/risk-low.md',
+		targetNote: '01_knowledge/wiki/risk-low.md',
 		writebackContent: 'append',
 		approvalStatus: 'pending',
 		riskLevel: 'low',
@@ -86,7 +90,7 @@ const riskProposals = [
 	}),
 	makeProposal({
 		proposalId: 'risk-high',
-		targetNote: 'notes/risk-high.md',
+		targetNote: '01_knowledge/wiki/risk-high.md',
 		writebackContent: 'append',
 		approvalStatus: 'pending',
 		riskLevel: 'high',
@@ -94,7 +98,7 @@ const riskProposals = [
 	}),
 	makeProposal({
 		proposalId: 'risk-medium',
-		targetNote: 'notes/risk-medium.md',
+		targetNote: '01_knowledge/wiki/risk-medium.md',
 		writebackContent: 'append',
 		approvalStatus: 'pending',
 		riskLevel: 'medium',
@@ -105,7 +109,7 @@ const riskProposals = [
 const pagedProposals = Array.from({ length: 21 }, (_, index) => makeProposal({
 	proposalId: `page-${index + 1}`,
 	approvalStatus: 'approved',
-	targetNote: `notes/page-${index + 1}.md`,
+	targetNote: `01_knowledge/wiki/page-${index + 1}.md`,
 	writebackContent: 'append',
 	riskLevel: 'low',
 	sortTimestamp: 10000 + index,
@@ -139,7 +143,18 @@ try {
 					}));
 					build.onLoad({ filter: /^tracekeeper-core-stub$/, namespace: 'tracekeeper-core-stub' }, () => ({
 						loader: 'js',
-						contents: 'export const TRACEKEEPER_REVIEW_QUEUE_DIR = \"review_queue\";',
+						contents: `
+							export const TRACEKEEPER_REVIEW_QUEUE_DIR = 'review_queue';
+							export const KNOWLEDGE_INDEX_PATH = '01_knowledge/index.md';
+							export const KNOWLEDGE_MEMORY_DIR = '01_knowledge/memory';
+							export const KNOWLEDGE_WIKI_DIR = '01_knowledge/wiki';
+							export const normalizeKnowledgePath = (value) => value.replace(/\\\\/g, '/').trim().replace(/^\\.\\//, '').replace(/^\\/+/, '').replace(/\\/+/g, '/');
+							export const startsWithPathPrefix = (value, prefix) => {
+								const normalized = normalizeKnowledgePath(value);
+								const normalizedPrefix = normalizeKnowledgePath(prefix).replace(/\\/+$/, '');
+								return normalized === normalizedPrefix || normalized.startsWith(normalizedPrefix + '/');
+							};
+						`,
 					}));
 				},
 			},
@@ -148,6 +163,17 @@ try {
 
 	const queueModule = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 
+	const filteredNeedsCompletion = queueModule.filterReviewQueueItems([...baseProposals], {
+		filter: 'needs_completion',
+		sort: 'attention',
+		search: '',
+		pageIndex: 0,
+		pageSize: 20,
+	});
+	assert.equal(filteredNeedsCompletion.totalItems, 1);
+	assert.equal(filteredNeedsCompletion.counts.needs_completion, 1);
+	assert.equal(filteredNeedsCompletion.items[0].proposalId, 'pending-incomplete');
+
 	const filteredNeedsReview = queueModule.filterReviewQueueItems([...baseProposals], {
 		filter: 'needs_review',
 		sort: 'attention',
@@ -155,10 +181,32 @@ try {
 		pageIndex: 0,
 		pageSize: 20,
 	});
-	assert.equal(filteredNeedsReview.totalItems, 2);
-	assert.equal(filteredNeedsReview.counts.needs_review, 2);
-	assert.equal(filteredNeedsReview.items[0].proposalId, 'pending-incomplete');
-	assert.equal(filteredNeedsReview.items[1].proposalId, 'pending-complete');
+	assert.equal(filteredNeedsReview.totalItems, 1);
+	assert.equal(filteredNeedsReview.counts.needs_review, 1);
+	assert.equal(filteredNeedsReview.items[0].proposalId, 'pending-complete');
+
+	const unresolvedContexts = {
+		[baseProposals[0].path]: {
+			target: { exists: false },
+		},
+	};
+	const unresolvedCompletion = queueModule.filterReviewQueueItems([...baseProposals], {
+		filter: 'needs_completion',
+		sort: 'attention',
+		search: '',
+		pageIndex: 0,
+		pageSize: 20,
+	}, unresolvedContexts);
+	assert.equal(unresolvedCompletion.totalItems, 2);
+	assert.equal(unresolvedCompletion.items.some((item) => item.proposalId === 'pending-complete'), true);
+	const unresolvedReview = queueModule.filterReviewQueueItems([...baseProposals], {
+		filter: 'needs_review',
+		sort: 'attention',
+		search: '',
+		pageIndex: 0,
+		pageSize: 20,
+	}, unresolvedContexts);
+	assert.equal(unresolvedReview.totalItems, 0);
 
 	const ready = queueModule.filterReviewQueueItems([...baseProposals], {
 		filter: 'ready_to_apply',
@@ -250,7 +298,7 @@ try {
 	assert.equal(pageTwo.page.pageIndex, 1);
 	assert.equal(pageTwo.page.hasPrevious, true);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 19 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 24 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

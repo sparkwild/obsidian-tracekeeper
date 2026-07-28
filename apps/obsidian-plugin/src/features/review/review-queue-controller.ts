@@ -3,12 +3,21 @@ import { ARCHIVE_REVIEW_QUEUE_DIR } from '@tracekeeper/core';
 import type { ActivityRecordRepository } from '../activity/activity-record-repository';
 import {
 	compareProposalRecords,
+	getReviewProposalValidity,
 	normalizeProposalStatus,
 	type MemoryProposalRecord,
 	type MemoryProposalStatus,
 } from './review-view-model';
 import { REVIEW_QUEUE_PATH, type MemoryReviewQueueSnapshot } from './review-queue-model';
 import { escapeAuditValue, normalizeFrontmatterRevisionComment } from '../shared/markdown-record-parser';
+import {
+	buildReviewProposalContexts,
+	type ReviewKnowledgeSnapshot,
+} from './review-context-model';
+import {
+	isReviewRemediationTargetPath,
+	normalizeReviewTargetPath,
+} from './review-target-policy';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -27,6 +36,7 @@ export interface ReviewQueueControllerHost {
 	appendToAuditLog(entry: string): Promise<void>;
 	ensureFolderExists(path: string): Promise<void>;
 	normalizeVaultPath(path: string): string;
+	loadReviewKnowledgeSnapshot(): Promise<ReviewKnowledgeSnapshot>;
 }
 
 export class ReviewQueueController {
@@ -117,19 +127,45 @@ async applyApprovedWriteback(proposal: MemoryProposalRecord): Promise<void> {
 		if (!(folder instanceof TFolder)) {
 			return {
 				proposals: [],
+				contexts: {},
+				indexState: 'initializing',
 				missingReviewQueueFolder: true,
 				updatedAt: new Date().toISOString(),
 			};
 		}
 
 		const files = this.records.collectMarkdownFiles(folder);
-		const records = await Promise.all(files.map((file) => this.records.readMemoryProposalFile(file)));
+		const [records, knowledge, tasks] = await Promise.all([
+			Promise.all(files.map((file) => this.records.readMemoryProposalFile(file))),
+			this.host.loadReviewKnowledgeSnapshot(),
+			this.records.readRecentAgentTasks(200),
+		]);
 		const proposals = records
 			.filter((record): record is MemoryProposalRecord => Boolean(record))
 			.sort((a, b) => compareProposalRecords(a, b));
+		const availableKnowledge = {
+			...knowledge,
+			notes: knowledge.notes.filter((note) =>
+				this.app.vault.getAbstractFileByPath(note.path) instanceof TFile
+			),
+		};
+		const existingTargetPaths = new Set(
+			proposals
+				.map((proposal) => normalizeReviewTargetPath(proposal.targetNote))
+				.filter((path) =>
+					Boolean(path && this.app.vault.getAbstractFileByPath(path) instanceof TFile)
+				)
+		);
 
 		return {
 			proposals,
+			contexts: buildReviewProposalContexts({
+				proposals,
+				knowledge: availableKnowledge,
+				tasks,
+				existingTargetPaths,
+			}),
+			indexState: knowledge.state,
 			missingReviewQueueFolder: false,
 			updatedAt: new Date().toISOString(),
 		};
@@ -151,6 +187,21 @@ async applyApprovedWriteback(proposal: MemoryProposalRecord): Promise<void> {
 		const normalizedStatus = normalizeProposalStatus(nextStatus);
 		const revisionComment = options.revisionComment?.trim();
 		const now = new Date().toISOString();
+		const currentProposal = await this.records.readMemoryProposalFile(file);
+		if (!currentProposal) {
+			throw new Error(`Cannot update proposal status: ${proposal.path} is not a readable review item.`);
+		}
+		if (normalizedStatus === 'approved' && currentProposal.classification === 'memory_proposal') {
+			const normalizedTarget = normalizeReviewTargetPath(currentProposal.targetNote);
+			const targetExists = Boolean(
+				normalizedTarget
+				&& this.app.vault.getAbstractFileByPath(normalizedTarget) instanceof TFile
+			);
+			const validity = getReviewProposalValidity(currentProposal, { exists: targetExists });
+			if (!validity.isComplete) {
+				throw new Error('Incomplete proposals cannot be approved. Resolve the target and writeback content first.');
+			}
+		}
 
 		await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 			(frontmatter as Record<string, unknown>).approval_status = normalizedStatus;
@@ -171,11 +222,11 @@ async applyApprovedWriteback(proposal: MemoryProposalRecord): Promise<void> {
 		});
 		await this.appendProposalStatusAuditEvent(
 			{
-				...proposal,
+				...currentProposal,
 				approvalStatus: normalizedStatus,
-				revisionComment: options.clearRevision ? '' : revisionComment ? revisionComment : proposal.revisionComment,
-				revisionRequestedAt: options.clearRevision ? '' : normalizedStatus === 'revision_requested' ? now : proposal.revisionRequestedAt,
-				revisionRequestedBy: options.clearRevision ? '' : normalizedStatus === 'revision_requested' ? 'user' : proposal.revisionRequestedBy,
+				revisionComment: options.clearRevision ? '' : revisionComment ? revisionComment : currentProposal.revisionComment,
+				revisionRequestedAt: options.clearRevision ? '' : normalizedStatus === 'revision_requested' ? now : currentProposal.revisionRequestedAt,
+				revisionRequestedBy: options.clearRevision ? '' : normalizedStatus === 'revision_requested' ? 'user' : currentProposal.revisionRequestedBy,
 			},
 			normalizedStatus,
 			revisionComment
@@ -189,20 +240,37 @@ async applyApprovedWriteback(proposal: MemoryProposalRecord): Promise<void> {
 		if (proposal.classification !== 'memory_proposal') {
 			throw new Error('Only memory proposals can be edited from Knowledge Change Review.');
 		}
-		if (proposal.approvalStatus === 'approved' || proposal.approvalStatus === 'applied') {
-			throw new Error('Approved or applied proposals cannot be edited. Return the proposal to review first.');
-		}
 
 		const file = this.app.vault.getAbstractFileByPath(proposal.path);
 		if (!(file instanceof TFile)) {
 			throw new Error(`Cannot update proposal draft: ${proposal.path} is not available.`);
 		}
+		const currentProposal = await this.records.readMemoryProposalFile(file);
+		if (!currentProposal) {
+			throw new Error(`Cannot update proposal draft: ${proposal.path} is not readable.`);
+		}
+		if (currentProposal.approvalStatus === 'approved' || currentProposal.approvalStatus === 'applied') {
+			throw new Error('Approved or applied proposals cannot be edited. Return the proposal to review first.');
+		}
 
 		const targetNote = draft.targetNote.trim();
 		const writebackContent = draft.writebackContent.replace(/\r\n/g, '\n').trim();
+		const normalizedTarget = normalizeReviewTargetPath(targetNote);
+		const normalizedCurrentTarget = normalizeReviewTargetPath(currentProposal.targetNote);
+		if (targetNote && !normalizedTarget) {
+			throw new Error('Proposal target must be a Vault-relative Markdown path.');
+		}
+		if (normalizedTarget && normalizedTarget !== normalizedCurrentTarget) {
+			if (!isReviewRemediationTargetPath(normalizedTarget)) {
+				throw new Error('Proposal remediation targets must stay inside Tracekeeper Memory or Wiki.');
+			}
+			if (!(this.app.vault.getAbstractFileByPath(normalizedTarget) instanceof TFile)) {
+				throw new Error('Proposal remediation target must be an existing Memory or Wiki note.');
+			}
+		}
 		await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 			const fields = frontmatter as Record<string, unknown>;
-			fields.target_note = targetNote;
+			fields.target_note = normalizedTarget;
 			fields.writeback_content = writebackContent;
 		});
 
@@ -212,8 +280,8 @@ async applyApprovedWriteback(proposal: MemoryProposalRecord): Promise<void> {
 			'action: memory.proposal.edited\n' +
 			'actor: user\n' +
 			`target: ${proposal.path}\n` +
-			`reason: updated review draft fields for proposal ${proposal.proposalId}\n` +
-			`task_id: ${proposal.taskId || ''}\n` +
+			`reason: updated review draft fields for proposal ${currentProposal.proposalId}\n` +
+			`task_id: ${currentProposal.taskId || ''}\n` +
 			`timestamp: ${now}\n\n`
 		);
 		await this.host.refreshGovernanceViews();

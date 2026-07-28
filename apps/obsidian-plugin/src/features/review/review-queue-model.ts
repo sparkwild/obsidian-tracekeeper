@@ -5,11 +5,18 @@ import type {
 	ReviewProposalAttentionState,
 } from './review-view-model';
 import { getReviewProposalAttentionState } from './review-view-model';
+import type { ReviewProposalContext } from './review-context-model';
 import { ui } from '../../ui/localization';
 
 export const REVIEW_QUEUE_PATH = TRACEKEEPER_REVIEW_QUEUE_DIR;
 
-export type ReviewInboxFilter = 'needs_review' | 'ready_to_apply' | 'awaiting_revision' | 'history' | 'all';
+export type ReviewInboxFilter =
+	| 'needs_completion'
+	| 'needs_review'
+	| 'ready_to_apply'
+	| 'awaiting_revision'
+	| 'history'
+	| 'all';
 
 export type ReviewQueueFilter = 'pending' | 'revision_requested' | 'all';
 
@@ -37,6 +44,7 @@ const RISK_LEVEL_RANK: Record<string, number> = {
 export const REVIEW_QUEUE_FILTERS: Array<ReviewQueueFilter> = ['pending', 'revision_requested', 'all'];
 
 export const REVIEW_INBOX_FILTERS: Array<ReviewInboxFilter> = [
+	'needs_completion',
 	'needs_review',
 	'ready_to_apply',
 	'awaiting_revision',
@@ -53,6 +61,7 @@ export interface ReviewQueueQuery {
 }
 
 export interface ReviewQueueQueryCounts {
+	needs_completion: number;
 	needs_review: number;
 	ready_to_apply: number;
 	awaiting_revision: number;
@@ -79,6 +88,8 @@ export interface ReviewQueueQueryResult {
 
 export interface MemoryReviewQueueSnapshot {
 	proposals: MemoryProposalRecord[];
+	contexts: Record<string, ReviewProposalContext>;
+	indexState: string;
 	missingReviewQueueFolder: boolean;
 	updatedAt: string;
 }
@@ -120,6 +131,8 @@ export const reviewQueueFilterLabel = (filter: ReviewQueueFilter): string => {
 
 export const reviewInboxFilterLabel = (filter: ReviewInboxFilter): string => {
 	switch (filter) {
+		case 'needs_completion':
+			return ui('待补全', 'Needs completion');
 		case 'needs_review':
 			return ui('待审核', 'Needs review');
 		case 'ready_to_apply':
@@ -155,14 +168,18 @@ const matchesSearch = (proposal: MemoryProposalRecord, search: string): boolean 
 		proposal.proposalKind,
 		proposal.proposedBy,
 		proposal.relatedProject,
+		proposal.memoryScope,
 		proposal.taskId,
+		proposal.sourceSessionNote,
 		proposal.targetNote,
 		proposal.riskLevel,
 		proposal.snippet,
 		proposal.writebackContent,
 		proposal.revisionComment,
+		proposal.rationale,
 		proposal.path,
 		...proposal.evidence,
+		...proposal.relatedSources,
 	]
 		.map((value) => value.toLowerCase())
 		.join(' ');
@@ -172,12 +189,18 @@ const matchesSearch = (proposal: MemoryProposalRecord, search: string): boolean 
 
 export const getReviewProposalAttentionFilterMatch = (
 	proposal: MemoryProposalRecord,
-	filter: ReviewInboxFilter
+	filter: ReviewInboxFilter,
+	context?: ReviewProposalContext
 ): boolean => {
-	const attention = getReviewProposalAttentionState(proposal);
+	const attention = getReviewProposalAttentionState(
+		proposal,
+		context ? { exists: context.target.exists } : {}
+	);
 	switch (filter) {
+		case 'needs_completion':
+			return attention === 'incomplete';
 		case 'needs_review':
-			return attention === 'incomplete' || attention === 'pending_review';
+			return attention === 'pending_review';
 		case 'ready_to_apply':
 			return attention === 'ready_to_apply';
 		case 'awaiting_revision':
@@ -190,9 +213,17 @@ export const getReviewProposalAttentionFilterMatch = (
 	}
 };
 
-const sortByAttentionState = (a: MemoryProposalRecord, b: MemoryProposalRecord): number => {
-	const attentionRankA = ATTENTION_STATE_RANK[getReviewProposalAttentionState(a)] ?? 10;
-	const attentionRankB = ATTENTION_STATE_RANK[getReviewProposalAttentionState(b)] ?? 10;
+const sortByAttentionState = (
+	a: MemoryProposalRecord,
+	b: MemoryProposalRecord,
+	contexts: Record<string, ReviewProposalContext>
+): number => {
+	const attentionRankA = ATTENTION_STATE_RANK[
+		getReviewProposalAttentionState(a, contexts[a.path] ? { exists: contexts[a.path].target.exists } : {})
+	] ?? 10;
+	const attentionRankB = ATTENTION_STATE_RANK[
+		getReviewProposalAttentionState(b, contexts[b.path] ? { exists: contexts[b.path].target.exists } : {})
+	] ?? 10;
 	if (attentionRankA !== attentionRankB) {
 		return attentionRankA - attentionRankB;
 	}
@@ -221,11 +252,12 @@ const sortByRisk = (a: MemoryProposalRecord, b: MemoryProposalRecord): number =>
 
 const sortReviewQueue = (
 	proposals: MemoryProposalRecord[],
-	sort: ReviewQueueSort
+	sort: ReviewQueueSort,
+	contexts: Record<string, ReviewProposalContext>
 ): MemoryProposalRecord[] => {
 	switch (sort) {
 		case 'attention':
-			return [...proposals].sort((a, b) => sortByAttentionState(a, b));
+			return [...proposals].sort((a, b) => sortByAttentionState(a, b, contexts));
 		case 'oldest':
 			return [...proposals].sort(sortByOldest);
 		case 'risk':
@@ -263,7 +295,8 @@ export const paginateReviewQueueItems = (
 
 export const filterReviewQueueItems = (
 	proposals: MemoryProposalRecord[],
-	query: Partial<ReviewQueueQuery>
+	query: Partial<ReviewQueueQuery>,
+	contexts: Record<string, ReviewProposalContext> = {}
 ): ReviewQueueQueryResult => {
 	const normalizedQuery: ReviewQueueQuery = {
 		filter: query.filter || 'all',
@@ -278,6 +311,7 @@ export const filterReviewQueueItems = (
 	const safeSearch = normalizeQueryText(normalizedQuery.search || '');
 	const matchedBySearch = proposals.filter((proposal) => matchesSearch(proposal, safeSearch));
 	const counts: ReviewQueueQueryCounts = {
+		needs_completion: 0,
 		needs_review: 0,
 		ready_to_apply: 0,
 		awaiting_revision: 0,
@@ -286,24 +320,32 @@ export const filterReviewQueueItems = (
 	};
 
 	for (const proposal of matchedBySearch) {
-		if (getReviewProposalAttentionFilterMatch(proposal, 'needs_review')) {
+		const context = contexts[proposal.path];
+		if (getReviewProposalAttentionFilterMatch(proposal, 'needs_completion', context)) {
+			counts.needs_completion += 1;
+		}
+		if (getReviewProposalAttentionFilterMatch(proposal, 'needs_review', context)) {
 			counts.needs_review += 1;
 		}
-		if (getReviewProposalAttentionFilterMatch(proposal, 'ready_to_apply')) {
+		if (getReviewProposalAttentionFilterMatch(proposal, 'ready_to_apply', context)) {
 			counts.ready_to_apply += 1;
 		}
-		if (getReviewProposalAttentionFilterMatch(proposal, 'awaiting_revision')) {
+		if (getReviewProposalAttentionFilterMatch(proposal, 'awaiting_revision', context)) {
 			counts.awaiting_revision += 1;
 		}
-		if (getReviewProposalAttentionFilterMatch(proposal, 'history')) {
+		if (getReviewProposalAttentionFilterMatch(proposal, 'history', context)) {
 			counts.history += 1;
 		}
 	}
 
 	const filtered = matchedBySearch.filter((proposal) =>
-		getReviewProposalAttentionFilterMatch(proposal, normalizedQuery.filter)
+		getReviewProposalAttentionFilterMatch(
+			proposal,
+			normalizedQuery.filter,
+			contexts[proposal.path]
+		)
 	);
-	const sorted = sortReviewQueue(filtered, normalizedQuery.sort);
+	const sorted = sortReviewQueue(filtered, normalizedQuery.sort, contexts);
 	const { proposals: paged, page } = paginateReviewQueueItems(sorted, normalizedQuery.pageIndex, normalizedQuery.pageSize);
 
 	return {

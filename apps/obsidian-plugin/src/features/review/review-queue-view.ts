@@ -23,6 +23,11 @@ import {
 	ReviewQueueEditProposalModal,
 	ReviewQueueRequestRevisionModal,
 } from './review-modals';
+import type {
+	ReviewProposalContext,
+	ReviewSourceContext,
+	ReviewTargetCandidate,
+} from './review-context-model';
 import { ui } from '../../ui/localization';
 import { TRACEKEEPER_REVIEW_QUEUE_VIEW } from '../../ui/view-types';
 import { trimText } from '../shared/markdown-record-parser';
@@ -30,8 +35,9 @@ import { trimText } from '../shared/markdown-record-parser';
 const REVIEW_PAGE_SIZE = 18;
 
 export class TracekeeperReviewQueueView extends ItemView {
-	private activeFilter: ReviewInboxFilter = 'needs_review';
+	private activeFilter: ReviewInboxFilter = 'needs_completion';
 	private activeSort: ReviewQueueSort = 'attention';
+	private filterExplicitlySelected = false;
 	private searchQuery = '';
 	private pageIndex = 0;
 	private selectedProposalPath = '';
@@ -126,13 +132,32 @@ export class TracekeeperReviewQueueView extends ItemView {
 			return;
 		}
 
-		const result = filterReviewQueueItems(snapshot.proposals, {
+		let result = filterReviewQueueItems(snapshot.proposals, {
 			filter: this.activeFilter,
 			search: this.searchQuery,
 			sort: this.activeSort,
 			pageIndex: this.pageIndex,
 			pageSize: REVIEW_PAGE_SIZE,
-		});
+		}, snapshot.contexts);
+		if (result.totalItems === 0 && !this.searchQuery && !this.filterExplicitlySelected) {
+			const fallback = ([
+				'needs_completion',
+				'needs_review',
+				'ready_to_apply',
+				'awaiting_revision',
+				'history',
+			] as ReviewInboxFilter[]).find((filter) => result.counts[filter] > 0);
+			if (fallback && fallback !== this.activeFilter) {
+				this.activeFilter = fallback;
+				result = filterReviewQueueItems(snapshot.proposals, {
+					filter: this.activeFilter,
+					search: this.searchQuery,
+					sort: this.activeSort,
+					pageIndex: 0,
+					pageSize: REVIEW_PAGE_SIZE,
+				}, snapshot.contexts);
+			}
+		}
 		this.pageIndex = result.page.pageIndex;
 		const selected = this.resolveSelectedProposal(result.items);
 
@@ -146,7 +171,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 		const detail = inbox.createDiv({ cls: 'tracekeeper-review-inbox__detail' });
 		if (selected) {
-			this.renderDetail(detail, selected);
+			this.renderDetail(detail, selected, snapshot.contexts[selected.path]);
 		} else {
 			this.renderEmptyState(
 				detail,
@@ -187,13 +212,14 @@ export class TracekeeperReviewQueueView extends ItemView {
 	): void {
 		const controls = container.createDiv({ cls: 'tracekeeper-review-inbox__controls' });
 		const filters = controls.createDiv({ cls: 'tracekeeper-review-inbox__filters' });
-		for (const filter of ['needs_review', 'ready_to_apply', 'awaiting_revision', 'history', 'all'] as ReviewInboxFilter[]) {
+		for (const filter of ['needs_completion', 'needs_review', 'ready_to_apply', 'awaiting_revision', 'history', 'all'] as ReviewInboxFilter[]) {
 			const button = filters.createEl('button', {
 				text: `${reviewInboxFilterLabel(filter)} (${counts[filter]})`,
 				cls: this.activeFilter === filter ? 'is-active' : '',
 			});
 			button.addEventListener('click', () => {
 				this.activeFilter = filter;
+				this.filterExplicitlySelected = true;
 				this.pageIndex = 0;
 				this.selectedProposalPath = '';
 				void this.render(snapshot);
@@ -339,7 +365,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 			const body = row.createDiv({ cls: 'tracekeeper-review-inbox__row-body' });
 			const title = body.createDiv({ cls: 'tracekeeper-review-inbox__row-title' });
 			title.createEl('strong', { text: this.proposalTitle(proposal) });
-			this.renderAttentionBadge(title, proposal);
+			this.renderAttentionBadge(title, proposal, snapshot.contexts[proposal.path]);
 			body.createEl('p', {
 				text: trimText(proposal.writebackContent || proposal.snippet || this.reviewReason(proposal), 140),
 			});
@@ -375,14 +401,18 @@ export class TracekeeperReviewQueueView extends ItemView {
 		});
 	}
 
-	private renderDetail(container: HTMLElement, proposal: MemoryProposalRecord): void {
+	private renderDetail(
+		container: HTMLElement,
+		proposal: MemoryProposalRecord,
+		context?: ReviewProposalContext
+	): void {
 		container.addClass('tracekeeper-review-inbox__detail-panel');
 		const header = container.createDiv({ cls: 'tracekeeper-review-inbox__detail-header' });
 		const title = header.createDiv();
 		title.createEl('span', { text: this.reviewQueueItemTypeLabel(proposal.classification), cls: 'tracekeeper-review-inbox__eyebrow' });
 		title.createEl('h3', { text: this.proposalTitle(proposal) });
 		const badges = header.createDiv({ cls: 'tracekeeper-badge-row' });
-		this.renderAttentionBadge(badges, proposal);
+		this.renderAttentionBadge(badges, proposal, context);
 		if (proposal.riskLevel && proposal.riskLevel !== 'unknown') {
 			badges.createEl('span', {
 				text: this.plugin.formatRiskLabel(proposal.riskLevel),
@@ -390,8 +420,11 @@ export class TracekeeperReviewQueueView extends ItemView {
 			});
 		}
 
-		const status = getReviewProposalAttentionState(proposal);
-		const validity = getReviewProposalValidity(proposal);
+		const status = getReviewProposalAttentionState(
+			proposal,
+			context ? { exists: context.target.exists } : {}
+		);
+		const validity = context?.validity || getReviewProposalValidity(proposal);
 		if (status === 'incomplete') {
 			const notice = container.createDiv({ cls: 'tracekeeper-review-inbox__notice tracekeeper-review-inbox__notice--warning' });
 			notice.setText(this.incompleteMessage(validity));
@@ -399,21 +432,44 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 		const summary = container.createDiv({ cls: 'tracekeeper-review-inbox__summary' });
 		summary.createEl('strong', { text: ui('变更理由', 'Change rationale') });
-		summary.createEl('p', { text: this.reviewReason(proposal) });
+		summary.createEl('p', { text: proposal.rationale || this.reviewReason(proposal) });
+
+		this.renderDecisionContext(container, proposal, context);
 
 		const target = container.createDiv({ cls: 'tracekeeper-review-inbox__target' });
 		target.createEl('span', { text: ui('目标笔记', 'Target note') });
 		target.createEl('code', { text: proposal.targetNote || ui('尚未指定，需要补全。', 'Not specified; needs completion.') });
-		if (proposal.targetNote) {
+		if (context?.target.exists) {
 			const openTarget = target.createEl('button', { text: ui('打开目标', 'Open target') });
 			openTarget.addEventListener('click', () => void this.openTargetNote(proposal));
 		}
 
-		const writeback = container.createDiv({ cls: 'tracekeeper-review-inbox__writeback' });
-		writeback.createEl('strong', { text: ui('拟写入内容', 'Proposed writeback') });
-		writeback.createEl('pre', {
-			text: proposal.writebackContent || ui('尚未提供可写入内容。', 'No writable content has been provided.'),
-			cls: proposal.writebackContent ? '' : 'is-empty',
+		if (context?.target.exists) {
+			const targetContext = container.createDiv({ cls: 'tracekeeper-review-inbox__target-context' });
+			targetContext.createEl('strong', { text: ui('当前目标上下文', 'Current target context') });
+			targetContext.createEl('p', {
+				text: context.target.excerpt || ui('索引中没有可显示的正文摘要。', 'No body excerpt is available in the index.'),
+			});
+		}
+
+		if (status === 'incomplete' && context) {
+			this.renderTargetCandidates(container, proposal, context);
+		}
+
+		const preview = container.createDiv({ cls: 'tracekeeper-review-inbox__writeback' });
+		preview.createEl('strong', { text: ui('预计追加差异', 'Expected append diff') });
+		preview.createEl('small', {
+			text: ui(
+				'这是审核前的差异视图；通过审核不会写入。最终写入仍会重新生成预览并要求确认。',
+				'This is a pre-approval diff. Approval does not write. Apply will generate a fresh preview and require confirmation.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+		preview.createEl('pre', {
+			text: context?.diffPreview
+				|| proposal.writebackContent
+				|| ui('尚未提供可写入内容。', 'No writable content has been provided.'),
+			cls: proposal.writebackContent ? 'tracekeeper-review-inbox__diff' : 'is-empty',
 		});
 
 		if (proposal.revisionComment) {
@@ -423,7 +479,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 		}
 
 		const actions = container.createDiv({ cls: 'tracekeeper-action-row tracekeeper-review-inbox__actions' });
-		this.renderDetailActions(actions, proposal, status, validity.isComplete);
+		this.renderDetailActions(actions, proposal, status, validity.isComplete, context);
 
 		const source = container.createEl('details', { cls: 'tracekeeper-advanced-details' });
 		source.createEl('summary', { text: ui('提案来源与记录', 'Proposal source and record'), cls: 'tracekeeper-advanced-summary' });
@@ -438,18 +494,187 @@ export class TracekeeperReviewQueueView extends ItemView {
 		if (proposal.taskId) {
 			this.renderSourceLine(sourceDetails, ui('任务', 'Task'), proposal.taskId);
 		}
+		if (proposal.sourceSessionNote) {
+			this.renderSourceLine(sourceDetails, ui('收尾记录', 'Final note'), proposal.sourceSessionNote);
+		}
 		if (proposal.evidence.length > 0) {
 			this.renderSourceLine(sourceDetails, ui('证据', 'Evidence'), proposal.evidence.join('\n'));
 		}
+		if (proposal.relatedSources.length > 0) {
+			this.renderSourceLine(sourceDetails, ui('相关资料', 'Related sources'), proposal.relatedSources.join('\n'));
+		}
 		const open = sourceDetails.createEl('button', { text: ui('查看原始记录', 'View original record') });
 		open.addEventListener('click', () => void this.openReviewQueueItem(proposal));
+	}
+
+	private renderDecisionContext(
+		container: HTMLElement,
+		proposal: MemoryProposalRecord,
+		context?: ReviewProposalContext
+	): void {
+		const evidence = container.createDiv({ cls: 'tracekeeper-review-inbox__decision-context' });
+		evidence.createEl('strong', { text: ui('任务与资料依据', 'Task and source evidence') });
+		if (context?.task) {
+			const task = evidence.createDiv({ cls: 'tracekeeper-review-context-card' });
+			task.createEl('span', { text: ui('任务', 'Task'), cls: 'tracekeeper-review-inbox__eyebrow' });
+			task.createEl('strong', { text: context.task.objective || context.task.taskId });
+			task.createEl('p', {
+				text: [
+					context.task.status,
+					context.task.summary,
+				].filter(Boolean).join(' · '),
+			});
+			const openTask = task.createEl('button', { text: ui('打开任务记录', 'Open task record') });
+			openTask.addEventListener('click', () => {
+				void this.openMarkdownPath(
+					context.task?.path || '',
+					ui('没有找到任务记录。', 'Task record was not found.')
+				);
+			});
+		} else if (proposal.taskId) {
+			evidence.createEl('p', {
+				text: ui(
+					`任务 ${proposal.taskId} 的摘要当前不可用，可在原始提案记录中核对引用。`,
+					`A summary for task ${proposal.taskId} is unavailable. Check the reference in the original proposal record.`
+				),
+				cls: 'tracekeeper-view__description',
+			});
+		}
+
+		if (context?.sources.length) {
+			const sources = evidence.createDiv({ cls: 'tracekeeper-review-context-list' });
+			for (const source of context.sources.slice(0, 4)) {
+				this.renderSourceContext(sources, source);
+			}
+		}
+		if (!context?.task && !context?.sources.length && proposal.evidence.length === 0) {
+			evidence.createEl('p', {
+				text: ui(
+					'此提案没有可关联的任务或资料摘要；请重点核对变更理由和目标差异。',
+					'No task or source summary is linked. Review the rationale and target diff carefully.'
+				),
+				cls: 'tracekeeper-view__description',
+			});
+		}
+		if (proposal.evidence.length > 0) {
+			evidence.createEl('p', {
+				text: `${ui('补充证据', 'Additional evidence')}: ${proposal.evidence.join(' · ')}`,
+				cls: 'tracekeeper-view__description',
+			});
+		}
+	}
+
+	private renderSourceContext(container: HTMLElement, source: ReviewSourceContext): void {
+		const card = container.createDiv({ cls: 'tracekeeper-review-context-card' });
+		card.createEl('span', { text: ui('资料', 'Source'), cls: 'tracekeeper-review-inbox__eyebrow' });
+		card.createEl('strong', { text: source.title || source.path });
+		if (source.sourceKind || source.source) {
+			card.createEl('small', {
+				text: [source.sourceKind, source.source].filter(Boolean).join(' · '),
+			});
+		}
+		if (source.summary) {
+			card.createEl('p', { text: source.summary });
+		}
+		const openSource = card.createEl('button', { text: ui('打开资料', 'Open source') });
+		openSource.addEventListener('click', () => {
+			void this.openMarkdownPath(
+				source.path,
+				ui('没有找到资料记录。', 'Source record was not found.')
+			);
+		});
+	}
+
+	private renderTargetCandidates(
+		container: HTMLElement,
+		proposal: MemoryProposalRecord,
+		context: ReviewProposalContext
+	): void {
+		const candidates = container.createDiv({ cls: 'tracekeeper-review-inbox__candidates' });
+		candidates.createEl('strong', { text: ui('受限目标候选', 'Constrained target candidates') });
+		candidates.createEl('p', {
+			text: ui(
+				'候选只来自当前 Vault 中已存在的 Memory/Wiki 笔记。选择候选只会补全提案，不会写入目标。',
+				'Candidates come only from existing Memory/Wiki notes in this Vault. Selecting one only completes the proposal; it does not write to the target.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+		if (context.indexState !== 'ready') {
+			candidates.createEl('p', {
+				text: ui(
+					'知识索引尚未就绪，候选列表可能不完整。请等待索引完成后刷新。',
+					'The knowledge index is not ready, so candidates may be incomplete. Refresh after indexing finishes.'
+				),
+				cls: 'tracekeeper-review-inbox__candidate-warning',
+			});
+		}
+		if (context.targetCandidates.length === 0) {
+			candidates.createEl('p', {
+				text: ui(
+					'当前没有安全候选。请退回修改，让 Agent 使用已验证的 Memory/Wiki 目标重新提交。',
+					'No safe candidate is available. Return the proposal for revision so the Agent can resubmit with a verified Memory/Wiki target.'
+				),
+				cls: 'tracekeeper-review-inbox__candidate-warning',
+			});
+			return;
+		}
+		const list = candidates.createDiv({ cls: 'tracekeeper-review-candidate-list' });
+		for (const candidate of context.targetCandidates) {
+			this.renderTargetCandidate(list, proposal, context, candidate);
+		}
+	}
+
+	private renderTargetCandidate(
+		container: HTMLElement,
+		proposal: MemoryProposalRecord,
+		context: ReviewProposalContext,
+		candidate: ReviewTargetCandidate
+	): void {
+		const item = container.createDiv({ cls: 'tracekeeper-review-candidate' });
+		const details = item.createDiv();
+		details.createEl('strong', { text: candidate.title || candidate.path });
+		details.createEl('code', { text: candidate.path });
+		details.createEl('small', { text: this.targetCandidateReason(candidate) });
+		if (candidate.excerpt) {
+			details.createEl('p', { text: trimText(candidate.excerpt, 180) });
+		}
+		const choose = item.createEl('button', { text: ui('选择并补全', 'Select and complete') });
+		choose.addEventListener('click', () => {
+			new ReviewQueueEditProposalModal(
+				this.app,
+				this.plugin,
+				proposal,
+				context,
+				() => this.refresh(),
+				candidate.path
+			).open();
+		});
+	}
+
+	private targetCandidateReason(candidate: ReviewTargetCandidate): string {
+		const kind = candidate.kind === 'project_memory'
+			? ui('项目记忆', 'Project memory')
+			: candidate.kind === 'global_memory'
+				? ui('全局记忆', 'Global memory')
+				: 'Wiki';
+		const reason = candidate.reason === 'current'
+			? ui('当前目标', 'Current target')
+			: candidate.reason === 'project_match'
+				? ui('项目匹配', 'Project match')
+				: candidate.reason === 'scope_match'
+					? ui('范围匹配', 'Scope match')
+					: candidate.reason === 'related_match'
+						? ui('内容相关', 'Related content')
+						: ui('可用候选', 'Available candidate');
+		return `${kind} · ${reason}`;
 	}
 
 	private renderDetailActions(
 		container: HTMLElement,
 		proposal: MemoryProposalRecord,
 		status: ReviewProposalAttentionState,
-		isComplete: boolean
+		isComplete: boolean,
+		context?: ReviewProposalContext
 	): void {
 		if (proposal.classification !== 'memory_proposal') {
 			if (status === 'pending_review') {
@@ -461,20 +686,31 @@ export class TracekeeperReviewQueueView extends ItemView {
 		}
 
 		if (status === 'incomplete') {
-			this.addEditAction(container, proposal, ui('补全信息', 'Complete information'), true);
+			if (proposal.approvalStatus === 'approved') {
+				this.addStatusAction(
+					container,
+					proposal,
+					'pending',
+					ui('撤回通过并补全', 'Withdraw approval and complete'),
+					'',
+					'needs_completion'
+				);
+				return;
+			}
+			this.addEditAction(container, proposal, context, ui('补全提案', 'Complete proposal'), true);
 			this.addRevisionAction(container, proposal);
 			this.addStatusAction(container, proposal, 'rejected', ui('不采纳', 'Do not accept'), 'mod-warning');
 			return;
 		}
 		if (status === 'pending_review') {
-			this.addEditAction(container, proposal, ui('编辑提案', 'Edit proposal'));
+			this.addEditAction(container, proposal, context, ui('编辑提案', 'Edit proposal'));
 			this.addRevisionAction(container, proposal);
 			this.addStatusAction(container, proposal, 'rejected', ui('不采纳', 'Do not accept'), 'mod-warning');
 			this.addStatusAction(container, proposal, 'approved', ui('通过审核', 'Approve'), 'mod-cta', 'ready_to_apply');
 			return;
 		}
 		if (status === 'awaiting_revision') {
-			this.addEditAction(container, proposal, ui('编辑提案', 'Edit proposal'));
+			this.addEditAction(container, proposal, context, ui('编辑提案', 'Edit proposal'));
 			this.addRevisionAction(container, proposal);
 			this.addStatusAction(container, proposal, 'pending', ui('重新审核', 'Review again'), '', 'needs_review', { clearRevision: true });
 			return;
@@ -500,10 +736,22 @@ export class TracekeeperReviewQueueView extends ItemView {
 		}
 	}
 
-	private addEditAction(container: HTMLElement, proposal: MemoryProposalRecord, label: string, primary = false): void {
+	private addEditAction(
+		container: HTMLElement,
+		proposal: MemoryProposalRecord,
+		context: ReviewProposalContext | undefined,
+		label: string,
+		primary = false
+	): void {
 		const edit = container.createEl('button', { text: label, cls: primary ? 'mod-cta' : '' });
 		edit.addEventListener('click', () => {
-			new ReviewQueueEditProposalModal(this.app, this.plugin, proposal, () => this.refresh()).open();
+			new ReviewQueueEditProposalModal(
+				this.app,
+				this.plugin,
+				proposal,
+				context,
+				() => this.refresh()
+			).open();
 		});
 	}
 
@@ -566,8 +814,15 @@ export class TracekeeperReviewQueueView extends ItemView {
 		return selected;
 	}
 
-	private renderAttentionBadge(container: HTMLElement, proposal: MemoryProposalRecord): void {
-		const state = getReviewProposalAttentionState(proposal);
+	private renderAttentionBadge(
+		container: HTMLElement,
+		proposal: MemoryProposalRecord,
+		context?: ReviewProposalContext
+	): void {
+		const state = getReviewProposalAttentionState(
+			proposal,
+			context ? { exists: context.target.exists } : {}
+		);
 		const className = state === 'incomplete'
 			? 'tracekeeper-badge tracekeeper-badge--warning'
 			: state === 'ready_to_apply'
@@ -581,7 +836,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 	private attentionStateLabel(state: ReviewProposalAttentionState): string {
 		switch (state) {
 		case 'incomplete':
-				return ui('信息不完整', 'Information incomplete');
+				return ui('待补全，不能审核', 'Needs completion; not reviewable');
 			case 'pending_review':
 				return ui('待审核', 'Needs review');
 		case 'ready_to_apply':
@@ -595,12 +850,24 @@ export class TracekeeperReviewQueueView extends ItemView {
 	}
 
 	private incompleteMessage(validity: ReturnType<typeof getReviewProposalValidity>): string {
+		if (validity.invalidTargetNote) {
+			return ui(
+				'此提案的目标不在受支持的本地知识区域。请选择现有 Memory/Wiki 候选，或退回修改。',
+				'The target is outside the supported local knowledge area. Select an existing Memory/Wiki candidate or return the proposal for revision.'
+			);
+		}
+		if (validity.missingTargetEvidence) {
+			return ui(
+				'目标路径已填写，但对应 Markdown 不存在。请选择现有 Memory/Wiki 候选后再审核。',
+				'The target path is present, but its Markdown does not exist. Select an existing Memory/Wiki candidate before review.'
+			);
+		}
 		if (validity.missingTargetNote && validity.missingWritebackContent) {
-			return ui('此提案缺少目标笔记和拟写入内容。请先补全信息，再决定是否通过审核。', 'This proposal is missing both a target note and writeback content. Complete the information before deciding whether to approve.');
+			return ui('此提案缺少目标笔记和拟写入内容。它不会进入正常审核，请先补全。', 'This proposal is missing both a target note and writeback content. It cannot enter normal review until completed.');
 		}
 		return validity.missingTargetNote
-			? ui('此提案缺少目标笔记。请先补全信息，再决定是否通过审核。', 'This proposal is missing a target note. Complete the information before deciding whether to approve.')
-			: ui('此提案缺少拟写入内容。请先补全信息，再决定是否通过审核。', 'This proposal is missing writeback content. Complete the information before deciding whether to approve.');
+			? ui('此提案缺少目标笔记。请选择受限候选后再进入审核。', 'This proposal is missing a target note. Select a constrained candidate before review.')
+			: ui('此提案缺少拟写入内容。请先补全内容，再进入审核。', 'This proposal is missing writeback content. Complete it before review.');
 	}
 
 	private proposalTitle(proposal: MemoryProposalRecord): string {
@@ -665,12 +932,10 @@ export class TracekeeperReviewQueueView extends ItemView {
 	}
 
 	private async openReviewQueueItem(proposal: MemoryProposalRecord): Promise<void> {
-		const file = this.app.vault.getAbstractFileByPath(proposal.path);
-		if (!(file instanceof TFile)) {
-			new Notice(ui('没有找到变更提案记录。', 'Change proposal record was not found.'));
-			return;
-		}
-		await this.app.workspace.getLeaf(false).openFile(file);
+		await this.openMarkdownPath(
+			proposal.path,
+			ui('没有找到变更提案记录。', 'Change proposal record was not found.')
+		);
 	}
 
 	private async openTargetNote(proposal: MemoryProposalRecord): Promise<void> {
@@ -680,6 +945,15 @@ export class TracekeeperReviewQueueView extends ItemView {
 			return;
 		}
 		await this.app.workspace.getLeaf(false).openFile(target);
+	}
+
+	private async openMarkdownPath(path: string, missingMessage: string): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) {
+			new Notice(missingMessage);
+			return;
+		}
+		await this.app.workspace.getLeaf(false).openFile(file);
 	}
 
 	private renderEmptyState(container: HTMLElement, title: string, detail: string): void {

@@ -223,6 +223,7 @@ import { ActivityRecordRepository } from './features/activity/activity-record-re
 import { GraphHealthController } from './features/graph/graph-health-controller';
 import type { GraphHealthSnapshot } from './features/graph/graph-health-model';
 import { ReviewQueueController, type ApprovedWritebackPreview } from './features/review/review-queue-controller';
+import type { ReviewKnowledgeSnapshot } from './features/review/review-context-model';
 import {
 	KNOWLEDGE_RELATIONSHIP_READ_LIMIT,
 	buildMemoryInspectorSnapshot,
@@ -523,6 +524,7 @@ export default class TracekeeperPlugin extends Plugin {
 			appendToAuditLog: (entry) => this.appendToAuditLog(entry),
 			ensureFolderExists: (path) => this.ensureFolderExists(path),
 			normalizeVaultPath: (path) => this.normalizeVaultPath(path),
+			loadReviewKnowledgeSnapshot: () => this.loadReviewKnowledgeSnapshot(),
 		});
 		this.activityDataController = new ActivityDataController(this.app, {
 			readRecentAgentTasks: (limit) => this.activityRecordRepository.readRecentAgentTasks(limit),
@@ -1678,6 +1680,19 @@ export default class TracekeeperPlugin extends Plugin {
 			lastRebuild: snapshot?.last_rebuild ?? '',
 			notes: snapshot ? Array.from(snapshot.notes.values()) : [],
 			errors: scan?.errors ?? [],
+		};
+	}
+
+	private async loadReviewKnowledgeSnapshot(): Promise<ReviewKnowledgeSnapshot> {
+		const evidence = await this.loadKnowledgeIndexEvidence();
+		return {
+			state: evidence.state,
+			notes: evidence.notes.map((note) => ({
+				path: note.path,
+				title: note.title,
+				excerpt: note.excerptSource,
+				frontmatter: { ...note.frontmatter },
+			})),
 		};
 	}
 

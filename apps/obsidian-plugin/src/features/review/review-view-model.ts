@@ -1,3 +1,5 @@
+import { isReviewApprovalTargetPath } from './review-target-policy';
+
 type ParsedRecordValue = string | string[];
 
 type ParsedRecord = Record<string, ParsedRecordValue>;
@@ -29,11 +31,13 @@ export interface MemoryProposalRecord {
 	proposalKind: string;
 	proposedBy: string;
 	relatedProject: string;
+	memoryScope: string;
 	taskId: string;
 	sourceSessionNote: string;
 	targetNote: string;
 	evidence: string[];
 	relatedSources: string[];
+	rationale: string;
 	riskLevel: string;
 	approvalStatus: MemoryProposalStatus;
 	created: string;
@@ -47,10 +51,19 @@ export interface MemoryProposalRecord {
 
 export interface ReviewProposalValidity {
 	hasTargetNote: boolean;
+	targetPathAllowed: boolean;
+	targetExists: boolean;
+	targetResolved: boolean;
 	hasWritebackContent: boolean;
 	missingTargetNote: boolean;
+	invalidTargetNote: boolean;
+	missingTargetEvidence: boolean;
 	missingWritebackContent: boolean;
 	isComplete: boolean;
+}
+
+export interface ReviewProposalTargetResolution {
+	exists?: boolean;
 }
 
 interface MemoryProposalParseInput {
@@ -224,33 +237,55 @@ const extractSectionText = (body: string, sectionNames: string[]): string => {
 
 const isMeaningfulProposalValue = (value: string): boolean => Boolean(normalizeProposalText(value));
 
-export const getReviewProposalValidity = (proposal: MemoryProposalRecord): ReviewProposalValidity => {
+export const getReviewProposalValidity = (
+	proposal: MemoryProposalRecord,
+	targetResolution: ReviewProposalTargetResolution = {}
+): ReviewProposalValidity => {
 	if (proposal.classification !== 'memory_proposal') {
 		return {
 			hasTargetNote: true,
+			targetPathAllowed: true,
+			targetExists: true,
+			targetResolved: true,
 			hasWritebackContent: true,
 			missingTargetNote: false,
+			invalidTargetNote: false,
+			missingTargetEvidence: false,
 			missingWritebackContent: false,
 			isComplete: true,
 		};
 	}
 
 	const hasTargetNote = isMeaningfulProposalValue(proposal.targetNote);
+	const targetPathAllowed = hasTargetNote && isReviewApprovalTargetPath(proposal.targetNote);
+	const targetExists = hasTargetNote && targetResolution.exists !== false;
+	const targetResolved = hasTargetNote && targetPathAllowed && targetExists;
 	const hasWritebackContent = isMeaningfulProposalValue(proposal.writebackContent);
 	return {
 		hasTargetNote,
+		targetPathAllowed,
+		targetExists,
+		targetResolved,
 		hasWritebackContent,
 		missingTargetNote: !hasTargetNote,
+		invalidTargetNote: hasTargetNote && !targetPathAllowed,
+		missingTargetEvidence: hasTargetNote && targetPathAllowed && !targetExists,
 		missingWritebackContent: !hasWritebackContent,
-		isComplete: hasTargetNote && hasWritebackContent,
+		isComplete: targetResolved && hasWritebackContent,
 	};
 };
 
-export const getReviewProposalAttentionState = (proposal: MemoryProposalRecord): ReviewProposalAttentionState => {
+export const getReviewProposalAttentionState = (
+	proposal: MemoryProposalRecord,
+	targetResolution: ReviewProposalTargetResolution = {}
+): ReviewProposalAttentionState => {
+	const validity = getReviewProposalValidity(proposal, targetResolution);
 	if (proposal.approvalStatus === 'approved') {
+		if (proposal.classification === 'memory_proposal' && !validity.isComplete) {
+			return 'incomplete';
+		}
 		return proposal.classification === 'memory_proposal' ? 'ready_to_apply' : 'completed';
 	}
-	const validity = getReviewProposalValidity(proposal);
 	if (proposal.approvalStatus === 'revision_requested') {
 		return 'awaiting_revision';
 	}
@@ -304,6 +339,27 @@ export const extractMemoryProposalWritebackContent = (data: ParsedRecord, body: 
 	return normalizeProposalText(section);
 };
 
+export const extractMemoryProposalRationale = (data: ParsedRecord, body: string): string => {
+	const frontmatterRationale = readMultilineString(data, [
+		'rationale',
+		'change_rationale',
+		'changeRationale',
+		'reason',
+		'purpose',
+	]);
+	if (frontmatterRationale) {
+		return normalizeProposalText(frontmatterRationale.replace(/\\n/g, '\n'));
+	}
+	const section = extractSectionText(body, [
+		'Rationale',
+		'Change rationale',
+		'Reason',
+		'变更理由',
+		'理由',
+	]);
+	return normalizeProposalText(section);
+};
+
 export const parseMemoryProposalRecord = ({
 	filePath,
 	fields,
@@ -337,6 +393,7 @@ export const parseMemoryProposalRecord = ({
 	const revisionRequestedAt = firstString(fields, ['revision_requested_at', 'revisionRequestedAt']);
 	const revisionRequestedBy = firstString(fields, ['revision_requested_by', 'revisionRequestedBy']);
 	const writebackContent = extractMemoryProposalWritebackContent(fields, body);
+	const rationale = extractMemoryProposalRationale(fields, body);
 
 	return {
 		path: filePath,
@@ -345,11 +402,13 @@ export const parseMemoryProposalRecord = ({
 		proposalKind: proposalKind || classification,
 		proposedBy: firstString(fields, ['proposed_by', 'proposedBy']) || 'unknown',
 		relatedProject: firstString(fields, ['related_project', 'relatedProject', 'project_hint', 'projectHint']) || '',
+		memoryScope: firstString(fields, ['memory_scope', 'memoryScope']) || '',
 		taskId: firstString(fields, ['task_id', 'taskId']) || '',
 		sourceSessionNote: firstString(fields, ['proposal_source_session_note', 'proposalSourceSessionNote', 'session_note', 'sessionNote']) || '',
 		targetNote: firstString(fields, ['target_note', 'targetNote', 'target_path', 'targetPath']) || '',
 		evidence: readStringList(fields, ['evidence']),
 		relatedSources: readStringList(fields, ['related_sources', 'relatedSources']),
+		rationale,
 		riskLevel: firstString(fields, ['risk_level', 'riskLevel', 'risk']) || 'unknown',
 		approvalStatus,
 		created,

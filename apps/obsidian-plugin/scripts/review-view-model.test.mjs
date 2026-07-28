@@ -17,6 +17,31 @@ try {
 		platform: 'node',
 		format: 'esm',
 		logLevel: 'silent',
+		plugins: [
+			{
+				name: 'tracekeeper-core-stub',
+				setup(build) {
+					build.onResolve({ filter: /^@tracekeeper\/core$/ }, () => ({
+						path: 'tracekeeper-core-stub',
+						namespace: 'tracekeeper-core-stub',
+					}));
+					build.onLoad({ filter: /^tracekeeper-core-stub$/, namespace: 'tracekeeper-core-stub' }, () => ({
+						loader: 'js',
+						contents: `
+							export const KNOWLEDGE_INDEX_PATH = '01_knowledge/index.md';
+							export const KNOWLEDGE_MEMORY_DIR = '01_knowledge/memory';
+							export const KNOWLEDGE_WIKI_DIR = '01_knowledge/wiki';
+							export const normalizeKnowledgePath = (value) => value.replace(/\\\\/g, '/').trim().replace(/^\\.\\//, '').replace(/^\\/+/, '').replace(/\\/+/g, '/');
+							export const startsWithPathPrefix = (value, prefix) => {
+								const normalized = normalizeKnowledgePath(value);
+								const normalizedPrefix = normalizeKnowledgePath(prefix).replace(/\\/+$/, '');
+								return normalized === normalizedPrefix || normalized.startsWith(normalizedPrefix + '/');
+							};
+						`,
+					}));
+				},
+			},
+		],
 	});
 
 	const reviewModule = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
@@ -35,13 +60,14 @@ try {
 			approval_status: 'pending_review',
 			proposed_by: 'trace-operator',
 			related_project: 'tracekeeper',
-			target_note: 'projects/tracekeeper/index.md',
+			target_note: '01_knowledge/memory/projects/tracekeeper/memory.md',
 			task_id: 'task-42',
 			evidence: ['e1', 'e2', 'e1'],
 			related_sources: ['01_knowledge/sources/web/a.md', '01_knowledge/sources/web/a.md'],
 			proposal_source_session_note: '00_tracekeeper/work/sessions/task-42.md',
 			risk_level: 'low',
 			writeback_content: 'frontmatter line1\\nfrontmatter line2',
+			rationale: 'Preserve a durable implementation decision.',
 			revision_requested_by: 'agent',
 			revision_requested_at: '2026-01-01T00:00:00Z',
 			revision_comment: 'please keep scope',
@@ -52,14 +78,15 @@ try {
 	assert.equal(memoryProposal?.classification, 'memory_proposal');
 	assert.equal(memoryProposal?.proposalId, 'prop-1');
 	assert.equal(memoryProposal?.approvalStatus, 'pending');
-	assert.equal(memoryProposal?.targetNote, 'projects/tracekeeper/index.md');
+	assert.equal(memoryProposal?.targetNote, '01_knowledge/memory/projects/tracekeeper/memory.md');
 	assert.equal(memoryProposal?.riskLevel, 'low');
 	assert.equal(memoryProposal?.revisionRequestedBy, 'agent');
 	assert.equal(memoryProposal?.evidence.length, 2);
 	assert.deepEqual(memoryProposal?.relatedSources, ['01_knowledge/sources/web/a.md']);
 	assert.equal(memoryProposal?.sourceSessionNote, '00_tracekeeper/work/sessions/task-42.md');
+	assert.equal(memoryProposal?.rationale, 'Preserve a durable implementation decision.');
 	assert.equal(memoryProposal?.writebackContent, 'frontmatter line1\nfrontmatter line2');
-	assert.equal(memoryProposal?.targetNote, 'projects/tracekeeper/index.md');
+	assert.equal(memoryProposal?.targetNote, '01_knowledge/memory/projects/tracekeeper/memory.md');
 
 	const invalidTarget = reviewModule.parseMemoryProposalRecord({
 		filePath: 'review_queue/invalid-target.md',
@@ -82,7 +109,7 @@ try {
 		fields: {
 			type: 'memory-proposal',
 			approval_status: 'pending',
-			target_note: 'notes/target.md',
+			target_note: '01_knowledge/wiki/guides/target.md',
 			writeback_content: 'unknown',
 		},
 		body: '# Missing writeback\n',
@@ -93,6 +120,24 @@ try {
 	assert.equal(validity.missingWritebackContent, true);
 	assert.equal(validity.isComplete, false);
 	assert.equal(reviewModule.getReviewProposalAttentionState(missingWriteback), 'incomplete');
+	const unresolvedTarget = reviewModule.getReviewProposalValidity(
+		{ ...memoryProposal, approvalStatus: 'pending' },
+		{ exists: false }
+	);
+	assert.equal(unresolvedTarget.targetPathAllowed, true);
+	assert.equal(unresolvedTarget.targetExists, false);
+	assert.equal(unresolvedTarget.missingTargetEvidence, true);
+	assert.equal(unresolvedTarget.isComplete, false);
+
+	const outsideTarget = {
+		...memoryProposal,
+		targetNote: '00_tracekeeper/work/tasks/task-42.md',
+		approvalStatus: 'pending',
+	};
+	const outsideValidity = reviewModule.getReviewProposalValidity(outsideTarget);
+	assert.equal(outsideValidity.invalidTargetNote, true);
+	assert.equal(outsideValidity.isComplete, false);
+	assert.equal(reviewModule.getReviewProposalAttentionState({ ...outsideTarget, approvalStatus: 'approved' }), 'incomplete');
 
 	const legacyPlaceholders = reviewModule.parseMemoryProposalRecord({
 		filePath: 'review_queue/legacy-placeholders.md',
@@ -125,19 +170,19 @@ try {
 	const pending = reviewModule.parseMemoryProposalRecord({
 		filePath: 'review_queue/pending.md',
 		fileMtime: 1700000100000,
-		fields: { type: 'memory-proposal', approval_status: 'pending', proposal_id: 'p1', target_note: 'a.md' },
+		fields: { type: 'memory-proposal', approval_status: 'pending', proposal_id: 'p1', target_note: '01_knowledge/wiki/a.md' },
 		body: 'pending',
 	});
 	const applied = reviewModule.parseMemoryProposalRecord({
 		filePath: 'review_queue/applied.md',
 		fileMtime: 1700000000000,
-		fields: { type: 'memory-proposal', approval_status: 'applied', proposal_id: 'p2', target_note: 'b.md' },
+		fields: { type: 'memory-proposal', approval_status: 'applied', proposal_id: 'p2', target_note: '01_knowledge/wiki/b.md' },
 		body: 'applied',
 	});
 	const rejected = reviewModule.parseMemoryProposalRecord({
 		filePath: 'review_queue/rejected.md',
 		fileMtime: 1700000200000,
-		fields: { type: 'memory-proposal', approval_status: 'rejected', proposal_id: 'p3', target_note: 'c.md' },
+		fields: { type: 'memory-proposal', approval_status: 'rejected', proposal_id: 'p3', target_note: '01_knowledge/wiki/c.md' },
 		body: 'rejected',
 	});
 
@@ -150,7 +195,7 @@ try {
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...invalidTarget, approvalStatus: 'pending' }), 'incomplete');
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...legacyProposal, approvalStatus: 'approved' }), 'completed');
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 29 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 37 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

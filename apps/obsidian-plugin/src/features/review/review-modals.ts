@@ -1,7 +1,8 @@
-import { App, Modal, Notice, Setting } from 'obsidian';
+import { App, Modal, Notice } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import type { ApprovedWritebackPreview } from './review-queue-controller';
 import type { MemoryProposalRecord } from './review-view-model';
+import type { ReviewProposalContext, ReviewTargetCandidate } from './review-context-model';
 import { ui } from '../../ui/localization';
 
 export class ReviewQueueRequestRevisionModal extends Modal {
@@ -150,15 +151,18 @@ export class ReviewQueueEditProposalModal extends Modal {
 	private writebackContent: string;
 	private saving = false;
 	private saveButton: HTMLButtonElement | null = null;
+	private targetContextEl: HTMLElement | null = null;
 
 	constructor(
 		app: App,
 		private plugin: TracekeeperPlugin,
 		private proposal: MemoryProposalRecord,
-		private onUpdated: () => Promise<void> | void
+		private context: ReviewProposalContext | undefined,
+		private onUpdated: () => Promise<void> | void,
+		preferredTarget = ''
 	) {
 		super(app);
-		this.targetNote = proposal.targetNote;
+		this.targetNote = preferredTarget || proposal.targetNote;
 		this.writebackContent = proposal.writebackContent;
 	}
 
@@ -176,17 +180,7 @@ export class ReviewQueueEditProposalModal extends Modal {
 			cls: 'tracekeeper-view__description',
 		});
 
-		new Setting(contentEl)
-			.setName(ui('目标笔记', 'Target note'))
-			.setDesc(ui('使用相对 Vault 路径，例如 01_knowledge/projects/example.md。', 'Use a vault-relative path, for example 01_knowledge/projects/example.md.'))
-			.addText((text) => {
-				text.setPlaceholder('01_knowledge/...')
-					.setValue(this.targetNote)
-					.onChange((value) => {
-						this.targetNote = value;
-					});
-				text.inputEl.addClass('tracekeeper-review-edit-modal__target');
-			});
+		this.renderTargetPicker(contentEl);
 
 		const writebackLabel = contentEl.createDiv({ cls: 'tracekeeper-review-edit-modal__label' });
 		writebackLabel.createEl('strong', { text: ui('拟写入内容', 'Proposed writeback') });
@@ -206,12 +200,107 @@ export class ReviewQueueEditProposalModal extends Modal {
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		actions.createEl('button', { text: ui('取消', 'Cancel') }).addEventListener('click', () => this.close());
 		this.saveButton = actions.createEl('button', {
-			text: ui('保存草稿', 'Save draft'),
+			text: ui('保存提案草稿', 'Save proposal draft'),
 			cls: 'mod-cta',
 		});
 		this.saveButton.addEventListener('click', () => {
 			void this.save();
 		});
+	}
+
+	private renderTargetPicker(container: HTMLElement): void {
+		const section = container.createDiv({ cls: 'tracekeeper-review-edit-modal__target-section' });
+		section.createEl('strong', { text: ui('目标笔记', 'Target note') });
+		section.createEl('small', {
+			text: ui(
+				'只能选择当前 Vault 中已存在的 Memory/Wiki 候选，不接受手写任意路径。',
+				'Choose only an existing Memory/Wiki candidate from this Vault. Arbitrary paths are not accepted.'
+			),
+		});
+
+		const candidates = this.availableCandidates();
+		if (candidates.length === 0) {
+			section.createEl('p', {
+				text: ui(
+					'没有可用的受限目标候选。你仍可补全拟写入内容，然后退回修改，让 Agent 提供已验证目标。',
+					'No constrained target candidate is available. You may complete the writeback content, then return the proposal for revision so the Agent can provide a verified target.'
+				),
+				cls: 'tracekeeper-review-inbox__candidate-warning',
+			});
+			if (this.targetNote) {
+				section.createEl('code', { text: this.targetNote });
+			}
+			return;
+		}
+
+		const select = section.createEl('select', {
+			cls: 'tracekeeper-review-edit-modal__target',
+		}) as HTMLSelectElement;
+		select.setAttr('aria-label', ui('选择受限目标笔记', 'Select constrained target note'));
+		const empty = select.createEl('option', {
+			text: ui('请选择 Memory/Wiki 目标', 'Select a Memory/Wiki target'),
+			value: '',
+		});
+		empty.value = '';
+		for (const candidate of candidates) {
+			const option = select.createEl('option', {
+				text: `${candidate.title || candidate.path} — ${candidate.path}`,
+				value: candidate.path,
+			});
+			option.value = candidate.path;
+		}
+		select.value = candidates.some((candidate) => candidate.path === this.targetNote)
+			? this.targetNote
+			: '';
+		this.targetNote = select.value;
+		select.addEventListener('change', () => {
+			this.targetNote = select.value;
+			this.renderSelectedTargetContext();
+		});
+
+		this.targetContextEl = section.createDiv({ cls: 'tracekeeper-review-edit-modal__target-context' });
+		this.renderSelectedTargetContext();
+	}
+
+	private availableCandidates(): ReviewTargetCandidate[] {
+		const candidates = [...(this.context?.targetCandidates || [])];
+		if (
+			this.context?.target.exists
+			&& this.context.target.path
+			&& !candidates.some((candidate) => candidate.path === this.context?.target.path)
+		) {
+			candidates.unshift({
+				path: this.context.target.path,
+				title: this.context.target.title || this.context.target.path,
+				kind: this.context.target.path.includes('/wiki/')
+					? 'wiki'
+					: this.context.target.path.includes('/memory/projects/')
+						? 'project_memory'
+						: 'global_memory',
+				reason: 'current',
+				excerpt: this.context.target.excerpt,
+			});
+		}
+		return candidates;
+	}
+
+	private renderSelectedTargetContext(): void {
+		if (!this.targetContextEl) {
+			return;
+		}
+		this.targetContextEl.empty();
+		const selected = this.availableCandidates().find((candidate) => candidate.path === this.targetNote);
+		if (!selected) {
+			this.targetContextEl.createEl('p', {
+				text: ui('尚未选择目标。保存后提案仍会保持“待补全”。', 'No target selected. The proposal will remain in Needs completion after saving.'),
+				cls: 'tracekeeper-view__description',
+			});
+			return;
+		}
+		this.targetContextEl.createEl('code', { text: selected.path });
+		if (selected.excerpt) {
+			this.targetContextEl.createEl('p', { text: selected.excerpt });
+		}
 	}
 
 	private async save(): Promise<void> {
@@ -226,15 +315,15 @@ export class ReviewQueueEditProposalModal extends Modal {
 				targetNote: this.targetNote,
 				writebackContent: this.writebackContent,
 			});
-			new Notice(ui('写回草稿已保存。', 'Writeback draft saved.'));
+			new Notice(ui('提案草稿已保存；尚未写入目标笔记。', 'Proposal draft saved; the target note was not written.'));
 			await this.onUpdated();
 			this.close();
 		} catch (error) {
 			console.error('tracekeeper failed to update review proposal draft', error);
 			this.saving = false;
 			this.saveButton.disabled = false;
-			this.saveButton.setText(ui('保存草稿', 'Save draft'));
-			new Notice(ui('保存写回草稿失败。', 'Failed to save writeback draft.'));
+			this.saveButton.setText(ui('保存提案草稿', 'Save proposal draft'));
+			new Notice(ui('保存提案草稿失败。', 'Failed to save proposal draft.'));
 		}
 	}
 }
