@@ -2,6 +2,11 @@ import { ItemView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import type { RuntimeViewStatus } from '../../main';
 import type { AgentActivitySnapshot, AgentTaskRecord } from './activity-model';
+import {
+	buildActivityAgentSummary,
+	selectActivityPrimaryAction,
+	type ActivityPrimaryAction,
+} from './activity-view-model';
 import { MemoryRecallPreviewModal } from '../recall/memory-recall-preview-modal';
 import { runtimeViewModel } from '../runtime/runtime-view-model';
 import { pluginDisplayName, ui } from '../../ui/localization';
@@ -11,9 +16,12 @@ import {
 	TRACEKEEPER_ACTIVITY_VIEW,
 	TRACEKEEPER_REVIEW_QUEUE_VIEW,
 	TRACEKEEPER_RUNTIME_LOG_VIEW,
+	TRACEKEEPER_RUNTIME_STATUS_VIEW,
 } from '../../ui/view-types';
 
 export class TracekeeperActivityView extends ItemView {
+	private advancedDiagnosticsEl: HTMLDetailsElement | null = null;
+
 	constructor(
 		leaf: WorkspaceLeaf,
 		private plugin: TracekeeperPlugin
@@ -50,6 +58,7 @@ export class TracekeeperActivityView extends ItemView {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass('tracekeeper-view-root');
+		this.advancedDiagnosticsEl = null;
 
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
 		const heading = header.createDiv();
@@ -73,14 +82,7 @@ export class TracekeeperActivityView extends ItemView {
 				}
 			})();
 		});
-		if (snapshot.structureStatus.state !== 'initialized') {
-			const initializeButton = actions.createEl('button', {
-				text: ui('校验知识库结构', 'Check structure'),
-			});
-			initializeButton.addEventListener('click', () => {
-				void this.plugin.openInitializeMemoryStructureModal();
-			});
-		}
+		const agentSummary = buildActivityAgentSummary(snapshot.recentAgents);
 		const statusBar = contentEl.createDiv({ cls: 'tracekeeper-status-bar' });
 		this.renderStatusItem(
 			statusBar,
@@ -88,33 +90,39 @@ export class TracekeeperActivityView extends ItemView {
 			snapshot.runtimeStatus.label,
 			this.runtimeStatusClass(snapshot.runtimeStatus)
 		);
+		this.renderStatusItem(
+			statusBar,
+			ui('认证 Agent', 'Authenticated Agent'),
+			agentSummary.latestAgent
+				? `${agentSummary.latestAgent.displayName} · ${this.plugin.formatDisplayTime(agentSummary.latestAgent.sortTimestamp)}`
+				: ui('未观察到认证活动', 'No authenticated activity observed'),
+			agentSummary.state === 'observed'
+				? 'tracekeeper-status-pill--agent tracekeeper-status-pill--success'
+				: 'tracekeeper-status-pill--agent tracekeeper-status-pill--disabled'
+		);
 		this.renderStatusItem(statusBar, ui('当前仓库', 'Current repository'), this.formatVaultLabel(snapshot.vaultRoot));
 		this.renderStatusItem(statusBar, ui('刷新时间', 'Last refreshed'), this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt)));
 
-		if (!this.plugin.isOnboardingComplete()) {
-			const onboarding = contentEl.createDiv({ cls: 'tracekeeper-card tracekeeper-onboarding-entry-card' });
-			onboarding.createEl('h3', { text: ui('连接你的 AI Agent', 'Connect your AI agent') });
-			onboarding.createEl('p', {
-				text: ui(
-					'通过可恢复的引导完成本机 MCP 配置、Skill 安装和首次召回验证。所有步骤都由你确认。',
-					'Use the resumable guide to configure local MCP, install the Skill, and verify the first recall. Every step remains under your control.'
-				),
-				cls: 'tracekeeper-view__description',
-			});
-			const onboardingActions = onboarding.createDiv({ cls: 'tracekeeper-action-row' });
-			const continueButton = onboardingActions.createEl('button', {
-				text: ui('继续接入', 'Continue onboarding'),
-				cls: 'mod-cta',
-			});
-			continueButton.addEventListener('click', () => {
-				this.plugin.openSettingsTab();
-			});
-		}
+		this.renderAgentConnectionSection(contentEl, snapshot);
 
+		const primaryAction = selectActivityPrimaryAction({
+			structureState: snapshot.structureStatus.state,
+			runtimeStatus: snapshot.runtimeStatus,
+			onboardingComplete: this.plugin.isOnboardingComplete(),
+			actionableReviewQueueItemCount: snapshot.actionableReviewQueueItemCount,
+			agedWorkflowCount: snapshot.workflowDiagnostics.agedWorkflowCount,
+			permissionDeniedCount: snapshot.workflowDiagnostics.permissionDeniedCount,
+		});
+		this.renderPrimaryAction(contentEl, snapshot, primaryAction);
+		this.renderLatestTaskSection(contentEl, snapshot);
 		this.renderMemoryLoopSection(contentEl, snapshot);
+		this.renderSourceActivitySection(contentEl, snapshot);
+		this.renderRuntimeLogSection(contentEl, snapshot);
 		this.renderWorkflowDiagnosticsSection(contentEl, snapshot.workflowDiagnostics);
+	}
 
-		const currentSection = contentEl.createDiv({ cls: 'tracekeeper-card' });
+	private renderLatestTaskSection(container: HTMLElement, snapshot: AgentActivitySnapshot): void {
+		const currentSection = container.createDiv({ cls: 'tracekeeper-card' });
 		currentSection.createEl('h3', { text: ui('最后一次执行的任务', 'Last task') });
 		if (!snapshot.latestTask) {
 			this.renderEmptyState(
@@ -125,8 +133,10 @@ export class TracekeeperActivityView extends ItemView {
 		} else {
 			this.renderTaskEntry(currentSection, snapshot.latestTask, true);
 		}
+	}
 
-		const timeline = contentEl.createDiv({ cls: 'tracekeeper-card' });
+	private renderRuntimeLogSection(container: HTMLElement, snapshot: AgentActivitySnapshot): void {
+		const timeline = container.createDiv({ cls: 'tracekeeper-card' });
 		const timelineHeader = timeline.createDiv({ cls: 'tracekeeper-card__header' });
 		timelineHeader.createEl('h3', { text: ui('运行日志', 'Runtime log') });
 		const viewAllButton = timelineHeader.createEl('button', {
@@ -150,6 +160,216 @@ export class TracekeeperActivityView extends ItemView {
 		}
 	}
 
+	private renderAgentConnectionSection(container: HTMLElement, snapshot: AgentActivitySnapshot): void {
+		const summary = buildActivityAgentSummary(snapshot.recentAgents);
+		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-agent-connection-card' });
+		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
+		header.createEl('h3', { text: ui('Agent 认证状态', 'Agent authentication') });
+		header.createEl('span', {
+			text: summary.state === 'observed'
+				? ui('已观察到认证活动', 'Authenticated activity observed')
+				: ui('暂无认证证据', 'No authenticated evidence'),
+			cls: `tracekeeper-badge ${
+				summary.state === 'observed'
+					? 'tracekeeper-badge--success'
+					: 'tracekeeper-badge--muted'
+			}`,
+		});
+		card.createEl('p', {
+			text: summary.state === 'observed'
+				? ui(
+					'以下状态来自本地审计中最近一次通过凭据认证的调用，不代表 Agent 此刻仍保持连接。',
+					'This status comes from the most recent credential-authenticated call in the local audit. It does not imply the Agent is still connected now.'
+				)
+				: snapshot.runtimeStatus.state === 'running'
+					? ui(
+						'MCP 服务可用，但还没有观察到 Agent 使用有效凭据调用 Tracekeeper。服务运行不等于 Agent 已连接。',
+						'The MCP service is available, but no Agent call with valid credentials has been observed. A running service does not mean an Agent is connected.'
+					)
+					: ui(
+						'尚未观察到 Agent 的认证调用；请先恢复 MCP 服务，再由所选 Agent 完成验证。',
+						'No authenticated Agent call has been observed. Recover the MCP service, then verify with the selected Agent.'
+					),
+			cls: 'tracekeeper-view__description',
+		});
+
+		const details = card.createDiv({ cls: 'tracekeeper-detail-grid tracekeeper-connection-detail-grid' });
+		this.renderMemoryLoopDetail(
+			details,
+			ui('所选 Agent', 'Selected Agent'),
+			this.plugin.getSelectedAgentClientLabel()
+		);
+		if (summary.latestAgent) {
+			this.renderMemoryLoopDetail(
+				details,
+				ui('最近认证客户端', 'Latest authenticated client'),
+				summary.latestAgent.displayName
+			);
+			this.renderMemoryLoopDetail(
+				details,
+				ui('最近观察时间', 'Last observed'),
+				this.plugin.formatDisplayTime(summary.latestAgent.sortTimestamp)
+			);
+			this.renderMemoryLoopDetail(
+				details,
+				ui('最近操作', 'Latest action'),
+				summary.latestAgent.lastToolCall
+					? this.plugin.formatToolDisplayName(summary.latestAgent.lastToolCall)
+					: ui('建立认证连接', 'Authenticated connection')
+			);
+		}
+	}
+
+	private renderPrimaryAction(
+		container: HTMLElement,
+		snapshot: AgentActivitySnapshot,
+		action: ActivityPrimaryAction
+	): void {
+		if (action === 'none') {
+			return;
+		}
+
+		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-primary-action-card' });
+		card.createEl('span', { text: ui('下一步', 'Next action'), cls: 'tracekeeper-primary-action-card__eyebrow' });
+		const title = this.primaryActionTitle(action, snapshot);
+		card.createEl('h3', { text: title });
+		card.createEl('p', {
+			text: this.primaryActionDetail(action, snapshot),
+			cls: 'tracekeeper-view__description',
+		});
+		const button = card.createEl('button', { text: title, cls: 'mod-cta' });
+		button.addEventListener('click', () => {
+			void this.runPrimaryAction(action, snapshot, button);
+		});
+	}
+
+	private primaryActionTitle(action: ActivityPrimaryAction, snapshot: AgentActivitySnapshot): string {
+		switch (action) {
+			case 'repair_structure':
+				return ui('修复知识库结构', 'Repair knowledge structure');
+			case 'recover_runtime':
+				return snapshot.runtimeStatus.state === 'port_conflict'
+					? ui('解决端口冲突', 'Resolve port conflict')
+					: ui('恢复 MCP 服务', 'Recover MCP service');
+			case 'continue_onboarding':
+				return ui('继续 Agent 接入', 'Continue Agent onboarding');
+			case 'review_changes':
+				return ui(
+					`处理知识变更 (${snapshot.actionableReviewQueueItemCount})`,
+					`Review knowledge changes (${snapshot.actionableReviewQueueItemCount})`
+				);
+			case 'inspect_diagnostics':
+				return ui('检查工作流异常', 'Inspect workflow issues');
+			case 'none':
+			default:
+				return '';
+		}
+	}
+
+	private primaryActionDetail(action: ActivityPrimaryAction, snapshot: AgentActivitySnapshot): string {
+		switch (action) {
+			case 'repair_structure':
+				return snapshot.structureStatus.detail;
+			case 'recover_runtime':
+				return snapshot.runtimeStatus.detail;
+			case 'continue_onboarding':
+				return ui(
+					'完成所选 Agent 的配置、Skill、认证调用和首次 Recall 验证。',
+					'Finish configuration, Skill setup, authenticated use, and first Recall verification for the selected Agent.'
+				);
+			case 'review_changes':
+				return ui(
+					'知识变更正在等待补全、审核或明确写入，请先处理最早的待办项。',
+					'Knowledge changes are waiting for completion, review, or explicit writeback. Handle the oldest actionable item first.'
+				);
+			case 'inspect_diagnostics':
+				return ui(
+					'本地审计发现超时工作流或权限拒绝；展开高级诊断查看观察到的证据。',
+					'The local audit found an aged workflow or permission denial. Open advanced diagnostics to inspect the observed evidence.'
+				);
+			case 'none':
+			default:
+				return '';
+		}
+	}
+
+	private async runPrimaryAction(
+		action: ActivityPrimaryAction,
+		snapshot: AgentActivitySnapshot,
+		button: HTMLButtonElement
+	): Promise<void> {
+		switch (action) {
+			case 'repair_structure':
+				this.plugin.openInitializeMemoryStructureModal();
+				return;
+			case 'recover_runtime':
+				if (snapshot.runtimeStatus.state === 'port_conflict') {
+					await this.plugin.openPluginView(TRACEKEEPER_RUNTIME_STATUS_VIEW);
+					return;
+				}
+				button.disabled = true;
+				try {
+					await this.plugin.ensureMcpRuntimeRunning();
+					await this.refresh();
+				} catch (error) {
+					console.error('tracekeeper failed to recover MCP Runtime from Activity', error);
+					new Notice(error instanceof Error ? error.message : ui('MCP 服务启动失败。', 'Failed to start MCP service.'));
+					button.disabled = false;
+				}
+				return;
+			case 'continue_onboarding':
+				this.plugin.openSettingsTab();
+				return;
+			case 'review_changes':
+				await this.plugin.openPluginView(TRACEKEEPER_REVIEW_QUEUE_VIEW);
+				return;
+			case 'inspect_diagnostics':
+				if (this.advancedDiagnosticsEl) {
+					this.advancedDiagnosticsEl.open = true;
+					this.advancedDiagnosticsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+				}
+				return;
+			case 'none':
+			default:
+				return;
+		}
+	}
+
+	private renderSourceActivitySection(container: HTMLElement, snapshot: AgentActivitySnapshot): void {
+		const card = container.createDiv({ cls: 'tracekeeper-card' });
+		card.createEl('h3', { text: ui('资料活动', 'Source activity') });
+		const pendingRequests = snapshot.recentSourceRequests.filter((request) =>
+			this.isSourceRequestPending(request.status)
+		);
+		const latestCapture = snapshot.recentSourceCaptures[0] ?? null;
+		if (!latestCapture && pendingRequests.length === 0) {
+			this.renderEmptyState(
+				card,
+				ui('还没有资料活动。', 'No source activity yet.'),
+				ui('Agent 保存资料或提出资料请求后会显示在这里。', 'Captured sources and material requests appear here after Agent activity.')
+			);
+			return;
+		}
+		const details = card.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderMemoryLoopDetail(
+			details,
+			ui('近期保存资料', 'Recent captured sources'),
+			String(snapshot.recentSourceCaptures.length)
+		);
+		this.renderMemoryLoopDetail(
+			details,
+			ui('待处理资料请求', 'Pending material requests'),
+			String(pendingRequests.length)
+		);
+		this.renderMemoryLoopDetail(
+			details,
+			ui('最近资料', 'Latest source'),
+			latestCapture
+				? `${latestCapture.title || latestCapture.source || ui('未命名资料', 'Untitled source')} · ${this.plugin.formatDisplayTime(latestCapture.sortTimestamp)}`
+				: ui('暂无已保存资料', 'No captured source')
+		);
+	}
+
 	private renderMemoryLoopSection(container: HTMLElement, snapshot: AgentActivitySnapshot): void {
 		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-memory-loop-card' });
 		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
@@ -161,10 +381,7 @@ export class TracekeeperActivityView extends ItemView {
 				: ui(`查看知识变更 (${snapshot.reviewQueueItemCount})`, `Open knowledge changes (${snapshot.reviewQueueItemCount})`),
 			cls: [
 				'tracekeeper-review-queue-button',
-				snapshot.actionableReviewQueueItemCount > 0
-					? 'tracekeeper-review-queue-button--action'
-					: '',
-				snapshot.reviewQueueItemCount > 0 && snapshot.actionableReviewQueueItemCount === 0
+				snapshot.reviewQueueItemCount > 0
 					? 'tracekeeper-review-queue-button--has-items'
 					: '',
 			].filter(Boolean).join(' '),
@@ -209,10 +426,24 @@ export class TracekeeperActivityView extends ItemView {
 	}
 
 	private renderWorkflowDiagnosticsSection(container: HTMLElement, diagnostics: AgentActivitySnapshot['workflowDiagnostics']): void {
-		const card = container.createDiv({ cls: 'tracekeeper-card' });
-		card.createEl('h3', { text: ui('工作流诊断', 'Workflow diagnostics') });
+		const card = container.createEl('details', {
+			cls: 'tracekeeper-card tracekeeper-activity-diagnostics',
+		});
+		this.advancedDiagnosticsEl = card;
+		card.createEl('summary', {
+			text: ui('高级诊断', 'Advanced diagnostics'),
+			cls: 'tracekeeper-activity-diagnostics__summary',
+		});
+		const body = card.createDiv({ cls: 'tracekeeper-activity-diagnostics__body' });
+		body.createEl('p', {
+			text: ui(
+				'用于排查 Agent 工作流、权限和本地 Runtime；日常使用无需展开。',
+				'Use this to investigate Agent workflows, permissions, and the local Runtime. It is not required for daily use.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
 
-		const metrics = card.createDiv({ cls: 'tracekeeper-detail-grid' });
+		const metrics = body.createDiv({ cls: 'tracekeeper-detail-grid' });
 		this.renderMetricCard(
 			metrics,
 			ui('活跃工作流', 'Active workflows'),
@@ -257,7 +488,7 @@ export class TracekeeperActivityView extends ItemView {
 			ui('来自工具调用的失败次数', 'Tool-call failures from permission checks')
 		);
 
-		const detailSection = card.createDiv({ cls: 'tracekeeper-detail-grid tracekeeper-memory-loop-grid' });
+		const detailSection = body.createDiv({ cls: 'tracekeeper-detail-grid tracekeeper-memory-loop-grid' });
 		this.renderWorkflowDiagnosticsDetail(detailSection, diagnostics);
 		this.renderMetricCard(
 			detailSection,
@@ -276,7 +507,7 @@ export class TracekeeperActivityView extends ItemView {
 				: ui('基于最近审计事件', 'From recent audit events')
 		);
 
-		const evalRow = card.createDiv({ cls: 'tracekeeper-action-row' });
+		const evalRow = body.createDiv({ cls: 'tracekeeper-action-row' });
 		const evalDescription = evalRow.createDiv();
 		evalDescription.createEl('strong', { text: ui('本地主动性 Eval', 'Local initiative Eval') });
 		evalDescription.createEl('div', {
@@ -297,7 +528,7 @@ export class TracekeeperActivityView extends ItemView {
 			});
 		});
 
-		card.createEl('p', {
+		body.createEl('p', {
 			text: ui(
 				'仅统计真实调用 Tracekeeper 的本地审计事件，不能代表漏调用率；清理审计会缩短历史。数据不会上传，这些指标只用于诊断，不用于用户绩效评分。',
 				'Only locally audited Tracekeeper calls are counted, so this is not a missed-call rate. Audit cleanup shortens history. Nothing is uploaded, and these diagnostics are not user performance scoring.'

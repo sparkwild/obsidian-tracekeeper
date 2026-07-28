@@ -19,6 +19,10 @@ The target first-run flow is:
 9. For a workflow-capable client, observe one same-principal
    `start -> recall -> finish` sequence.
 
+A selected principal without `workflow.manage` follows the supported
+Recall-only path. The UI must state that tracked closeout is unavailable and
+must not ask that principal to call lifecycle tools.
+
 The plugin persists progress so the user can leave and resume the flow. The
 first incomplete setup may show one native Obsidian entry prompt with only
 **Start connecting Agent** and **Set up later**. Opening or dismissing that
@@ -35,7 +39,8 @@ The UI treats these as independent evidence:
 - the client was reloaded;
 - the credential principal connected;
 - an external `tracekeeper.recall` returned at least one match;
-- a complete tracked workflow was observed;
+- a complete tracked workflow was observed when the selected principal has
+  `workflow.manage`;
 - an update is available.
 
 A plugin-local Recall preview cannot complete external Recall verification. File
@@ -68,3 +73,17 @@ perform the next action, and where the user should return afterward.
 Runtime disabled, stopped, transitional, running, port-conflict, and failed
 states must remain distinct. A configured client is not described as connected
 until authenticated Runtime evidence exists.
+
+The normal Activity and connection-status surfaces show MCP service availability
+separately from authenticated Agent evidence. Recent evidence is identified by a
+client-facing label and last-observed time from the local audit; it is not
+presented as proof that the client remains online. Selected or configured clients
+with no authenticated-call evidence remain explicitly unverified.
+
+Activity exposes at most one visually dominant next action. Structure repair and
+Runtime recovery take priority over incomplete onboarding, actionable knowledge
+changes, and observed workflow failures. The latest task, knowledge-change state,
+and source activity remain visible before the advanced diagnostics section.
+Principal identifiers, lifecycle ratios, latency percentiles, evaluator commands,
+and aggregate counters are collapsed by default. These diagnostics use only
+locally observed calls, do not measure missed calls, and are never uploaded.

@@ -57,21 +57,34 @@ try {
 	assert.equal(observed.trackedWorkflowTaskId, 'task-7');
 	const instructionZh = vm.buildOnboardingRecallInstruction({
 		keyword: 'tracekeeper onboarding',
+		workflowManageAvailable: true,
 		localize: (zh) => zh,
 	});
-	assert.ok(instructionZh.instruction.includes('先识别当前仓库/工作区身份'));
+	assert.ok(instructionZh.instruction.includes('端到端验证'));
+	assert.ok(instructionZh.instruction.includes('next_actions'));
+	assert.ok(instructionZh.instruction.includes('repo_path'));
+	assert.equal(/"project_hint"\s*:/.test(instructionZh.instruction), false);
 	const instructionEn = vm.buildOnboardingRecallInstruction({
 		keyword: 'tracekeeper onboarding',
+		workflowManageAvailable: true,
 		localize: (_zh, en) => en,
 	});
-	assert.ok(instructionEn.instruction.includes('project-scoped tracekeeper.recall'));
+	assert.ok(instructionEn.instruction.includes('end-to-end verification'));
 	assert.ok(instructionEn.instruction.includes('\"tracekeeper onboarding\"'));
+	const recallOnlyInstruction = vm.buildOnboardingRecallInstruction({
+		keyword: 'tracekeeper onboarding',
+		workflowManageAvailable: false,
+		localize: (_zh, en) => en,
+	});
+	assert.ok(recallOnlyInstruction.instruction.includes('does not have workflow.manage'));
+	assert.ok(recallOnlyInstruction.instruction.includes('repo_path'));
+	assert.ok(recallOnlyInstruction.instruction.includes('do not call tracekeeper.start_task'));
 
 	const verified = vm.buildOnboardingContext({
 		vaultReady: true,
 		runtimeState: 'running',
 		runtimeEnabled: true,
-		selectedClient: { clientId: 'codex', configState: 'configured' },
+		selectedClient: { clientId: 'codex', configState: 'configured', runtimeCapabilities: ['vault.read', 'workflow.manage'] },
 		skillInstallState: { state: 'installed', fileVerified: true, updateAvailable: false },
 		onboarding: { ...base, agentRestartCompletedAt: '2026-07-23T00:00:00.000Z' },
 	});
@@ -80,25 +93,28 @@ try {
 	assert.equal(verified.skillSetupConfirmed, true);
 	assert.equal(verified.skillUserConfirmed, false);
 	assert.equal(verified.memoryPolicyConfirmed, false);
+	assert.equal(verified.workflowManageAvailable, true);
 	const memoryPolicyConfirmed = vm.buildOnboardingContext({
 		vaultReady: true,
 		runtimeState: 'running',
 		runtimeEnabled: true,
-		selectedClient: { clientId: 'codex', configState: 'configured' },
+		selectedClient: { clientId: 'codex', configState: 'configured', runtimeCapabilities: ['vault.read'] },
 		skillInstallState: { state: 'installed', fileVerified: true, updateAvailable: false },
 		onboarding: { ...base, memoryPolicyConfirmedAt: '2026-07-23T00:00:00.000Z' },
 	});
 	assert.equal(memoryPolicyConfirmed.memoryPolicyConfirmed, true);
+	assert.equal(memoryPolicyConfirmed.workflowManageAvailable, false);
 	const automaticActivation = vm.buildOnboardingContext({
 		vaultReady: true,
 		runtimeState: 'running',
 		runtimeEnabled: true,
-		selectedClient: { clientId: 'codex', configState: 'configured' },
+		selectedClient: { clientId: 'codex', configState: 'configured', runtimeCapabilities: ['*'] },
 		skillInstallState: { state: 'installed', fileVerified: true, updateAvailable: false, restartRequired: false },
 		onboarding: base,
 	});
 	assert.equal(automaticActivation.clientReloaded, true);
 	assert.equal(automaticActivation.agentRestartConfirmed, true);
+	assert.equal(automaticActivation.workflowManageAvailable, true);
 
 	const selfAttested = vm.buildOnboardingContext({
 		vaultReady: true,
@@ -140,6 +156,18 @@ try {
 	assert.equal(behaviorCleared.connectionVerifiedAt, '');
 	assert.equal(behaviorCleared.firstRecallCompletedAt, '');
 	assert.equal(behaviorCleared.trackedWorkflowObservedAt, '');
+	const runtimeCleared = vm.clearOnboardingRuntimeEvidence({
+		...base,
+		clientConfiguredAt: '2026-07-23T00:00:00.000Z',
+		firstRecallCompletedAt: '2026-07-23T00:03:00.000Z',
+		trackedWorkflowObservedAt: '2026-07-23T00:04:00.000Z',
+	}, '2026-07-23T01:00:00.000Z');
+	assert.equal(runtimeCleared.clientConfiguredAt, '');
+	assert.equal(runtimeCleared.firstRecallCompletedAt, '');
+	assert.equal(runtimeCleared.trackedWorkflowObservedAt, '');
+	assert.equal(vm.hasWorkflowManageCapability(['vault.read']), false);
+	assert.equal(vm.hasWorkflowManageCapability(['workflow.manage']), true);
+	assert.equal(vm.hasWorkflowManageCapability(['*']), true);
 	assert.equal(vm.parseOnboardingRecallQuery('{"query":"tracekeeper"}'), 'tracekeeper');
 	assert.equal(vm.findOnboardingRuntimePrincipal([{ clientId: 'codex', id: 'principal-codex' }], 'codex'), 'principal-codex');
 

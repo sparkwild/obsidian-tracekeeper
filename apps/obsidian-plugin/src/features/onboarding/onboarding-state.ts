@@ -7,6 +7,7 @@ export const ONBOARDING_STEP_SEQUENCE = [
 	'agent_restart',
 	'connection_verification',
 	'first_recall',
+	'tracked_workflow',
 ] as const;
 
 export const CURRENT_ONBOARDING_ENTRY_PROMPT_VERSION = 1;
@@ -29,6 +30,7 @@ export interface OnboardingProgressContext {
 	skillUpdateAvailable: boolean;
 	clientReloaded: boolean;
 	recallObserved: boolean;
+	workflowManageAvailable: boolean;
 	trackedWorkflowObserved: boolean;
 }
 
@@ -172,10 +174,17 @@ const stepIsCompleted = (
 		case 'agent_restart': return context.agentRestartConfirmed;
 		case 'connection_verification': return context.connectionVerified;
 		case 'first_recall': return context.firstRecallCompleted && asNonNegativeInteger(state.firstRecallMatchedCount, 0) > 0;
-		case 'complete': return ONBOARDING_STEP_SEQUENCE.every((currentStep) => stepIsCompleted(state, context, currentStep));
+		case 'tracked_workflow': return !context.workflowManageAvailable || context.trackedWorkflowObserved;
+		case 'complete': return getOnboardingStepSequence(context).every((currentStep) => stepIsCompleted(state, context, currentStep));
 		default: return false;
 	}
 };
+
+export const getOnboardingStepSequence = (
+	context: Pick<OnboardingProgressContext, 'workflowManageAvailable'>
+): readonly Exclude<OnboardingStep, 'complete'>[] => context.workflowManageAvailable
+	? ONBOARDING_STEP_SEQUENCE
+	: ONBOARDING_STEP_SEQUENCE.filter((step) => step !== 'tracked_workflow');
 
 export const isOnboardingStepCompleted = (
 	step: OnboardingStep,
@@ -186,7 +195,7 @@ export const isOnboardingStepCompleted = (
 export const getNextOnboardingStep = (
 	state: OnboardingSettingsState,
 	context: OnboardingProgressContext
-): OnboardingStep => ONBOARDING_STEP_SEQUENCE.find((step) => !stepIsCompleted(state, context, step)) || 'complete';
+): OnboardingStep => getOnboardingStepSequence(context).find((step) => !stepIsCompleted(state, context, step)) || 'complete';
 
 export const hasOnboardingRecallResult = (state: OnboardingSettingsState): boolean =>
 	state.firstRecallCompletedAt !== '' && asNonNegativeInteger(state.firstRecallMatchedCount, 0) > 0;

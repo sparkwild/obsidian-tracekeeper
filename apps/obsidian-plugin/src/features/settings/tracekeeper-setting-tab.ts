@@ -4,7 +4,7 @@ import type { AgentConnectionsSnapshot } from '../activity/activity-model';
 import type { GeneratedClientConfig } from '../client-config/client-config';
 import { clientConfigStatusClass } from '../client-config/client-config';
 import {
-	ONBOARDING_STEP_SEQUENCE,
+	getOnboardingStepSequence,
 	getNextOnboardingStep,
 	isOnboardingStepCompleted,
 	type OnboardingProgressContext,
@@ -111,7 +111,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			ui('按以下步骤完成首轮接入，后续可随时从已完成步骤继续。', 'Complete onboarding steps to enable first run and resume automatically.')
 		);
 		const steps = section.createDiv({ cls: 'tracekeeper-onboarding-steps' });
-		for (const [index, stepId] of ONBOARDING_STEP_SEQUENCE.entries()) {
+		for (const [index, stepId] of getOnboardingStepSequence(context).entries()) {
 			const done = isOnboardingStepCompleted(stepId, this.plugin.settings.onboarding, context);
 			const active = nextStep === stepId;
 			const row = steps.createDiv({ cls: 'tracekeeper-onboarding-step' });
@@ -156,7 +156,11 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		);
 		this.renderSkillEvidence(evidence, ui('连接验证', 'Connection verified'), ui('Principal MCP 审计证据', 'Principal MCP audit evidence'), context.connectionVerified);
 		this.renderSkillEvidence(evidence, ui('Recall 已观察', 'Recall observed'), ui('不证明 Skill 自动触发', 'Does not prove automatic Skill triggering'), context.recallObserved);
-		this.renderSkillEvidence(evidence, ui('完整工作流已观察', 'Tracked workflow observed'), ui('同 Principal 的 start → recall → finish', 'Same-principal start → recall → finish'), context.trackedWorkflowObserved);
+		if (context.workflowManageAvailable) {
+			this.renderSkillEvidence(evidence, ui('完整工作流已观察', 'Tracked workflow observed'), ui('同 Principal 的 start → recall → finish', 'Same-principal start → recall → finish'), context.trackedWorkflowObserved);
+		} else {
+			this.renderSkillEvidence(evidence, ui('Recall-only 能力限制', 'Recall-only capability limit'), ui('所选 Principal 没有 workflow.manage；无需也不能验证 tracked closeout。', 'The selected principal does not have workflow.manage; tracked closeout is neither required nor available.'), true);
+		}
 		this.renderSkillEvidence(evidence, ui('存在更新', 'Update available'), skillInstallState.detail, context.skillUpdateAvailable, true);
 		if (context.recallObserved) {
 			this.renderObservedEvidence(section, snapshot, skillInstallState.expectedVersion);
@@ -428,6 +432,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.onClick(() => {
 							const instruction = buildOnboardingRecallInstruction({
 								keyword: recallKeyword,
+								workflowManageAvailable: context.workflowManageAvailable,
 								localize: ui,
 							}).instruction;
 							void this.plugin.copyToClipboard(
@@ -449,7 +454,14 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 					});
 			});
 		}
-		if (context.recallObserved && !context.trackedWorkflowObserved) {
+		if (nextStep === 'tracked_workflow') {
+			section.createEl('p', {
+				text: ui(
+					'请让所选 Principal 完成同一任务的 start → recall → finish；必须使用 Runtime 返回的 task_id 和 Recall 指令。',
+					'Have the selected principal complete start → recall → finish for one task, using the Runtime-returned task_id and Recall instruction.'
+				),
+				cls: 'tracekeeper-view__description',
+			});
 			const workflowAction = actionWrap.createEl('button', { text: ui('验证完整 tracked workflow', 'Verify tracked workflow') });
 			workflowAction.addEventListener('click', () => {
 				void this.plugin.verifyOnboardingTrackedWorkflow()

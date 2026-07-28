@@ -132,6 +132,16 @@
 	color: var(--text-muted);
 }
 
+.tracekeeper-status-pill--agent {
+	border-color: var(--background-modifier-border);
+	box-shadow: inset 3px 0 0 var(--background-modifier-border);
+}
+
+.tracekeeper-status-pill--agent.tracekeeper-status-pill--success {
+	border-color: var(--text-success);
+	box-shadow: inset 3px 0 0 var(--text-success);
+}
+
 .tracekeeper-detail--description strong {
 	color: var(--text-normal);
 	font-size: 13px;
@@ -157,6 +167,28 @@
 
 .tracekeeper-card {
 	margin-top: 12px;
+}
+
+.tracekeeper-primary-action-card {
+	border-color: var(--interactive-accent);
+	background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-secondary));
+	box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+.tracekeeper-primary-action-card h3 {
+	margin: 2px 0 6px;
+}
+
+.tracekeeper-primary-action-card__eyebrow {
+	color: var(--interactive-accent);
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.tracekeeper-agent-connection-card .tracekeeper-connection-detail-grid {
+	margin-bottom: 0;
 }
 
 .tracekeeper-connection-panel {
@@ -1454,6 +1486,25 @@ button.tracekeeper-review-queue-button--action:focus {
 	cursor: pointer;
 	color: var(--text-muted);
 	font-size: 12px;
+}
+
+.tracekeeper-activity-diagnostics {
+	padding: 0;
+}
+
+.tracekeeper-activity-diagnostics__summary {
+	padding: 10px;
+	cursor: pointer;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.tracekeeper-activity-diagnostics[open] > .tracekeeper-activity-diagnostics__summary {
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tracekeeper-activity-diagnostics__body {
+	padding: 10px;
 }
 
 .tracekeeper-advanced-list {

@@ -40,6 +40,7 @@ async function createFixture() {
 	for (const relativePath of [
 		'apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts',
 		'apps/obsidian-plugin/src/features/onboarding/onboarding-state.ts',
+		'apps/obsidian-plugin/src/features/onboarding/onboarding-view-model.ts',
 		'apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts',
 		'apps/obsidian-plugin/src/features/skill-installation/skill-install-audit.ts',
 		'apps/obsidian-plugin/src/features/skill-installation/skill-install-receipts.ts',
@@ -78,6 +79,23 @@ test('rejects an incomplete plugin Skill bundle integration', async () => {
 		const result = await checkAgentEcosystem(root);
 		assert.equal(result.ok, false);
 		assert.match(result.errors.join('\n'), /failure recovery guidance/);
+	});
+});
+
+test('rejects onboarding guidance that drifts from project Recall or workflow capability contracts', async () => {
+	await withFixture(async (root) => {
+		const onboardingViewModelPath = path.join(root, 'apps/obsidian-plugin/src/features/onboarding/onboarding-view-model.ts');
+		const onboardingViewModel = await readFile(onboardingViewModelPath, 'utf8');
+		await writeFile(
+			onboardingViewModelPath,
+			onboardingViewModel
+				.replace(/repo_path/g, 'project_hint')
+				.replace(/workflow\.manage/g, 'workflow.disabled'),
+			'utf8',
+		);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(result.errors.join('\n'), /(plugin-generated onboarding guidance|project_hint)/);
 	});
 });
 

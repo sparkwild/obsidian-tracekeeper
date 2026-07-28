@@ -1864,6 +1864,7 @@ export default class TracekeeperPlugin extends Plugin {
 			selectedClient: selectedClient ? {
 				clientId: selectedClient.clientId,
 				configState: selectedClient.configState,
+				runtimeCapabilities: selectedClient.runtimeCapabilities,
 			} : null,
 			skillInstallState: this.getSkillInstallState(this.settings.onboarding.selectedClientId),
 			onboarding: this.settings.onboarding,
@@ -1882,6 +1883,7 @@ export default class TracekeeperPlugin extends Plugin {
 			selectedClient: selectedClient ? {
 				clientId: selectedClient.clientId,
 				configState: selectedClient.configState,
+				runtimeCapabilities: selectedClient.runtimeCapabilities,
 			} : null,
 			skillInstallState: this.getSkillInstallState(selectedClient?.clientId ?? ''),
 			onboarding: this.settings.onboarding,
@@ -2311,13 +2313,7 @@ export default class TracekeeperPlugin extends Plugin {
 				installedAt: new Date().toISOString(),
 			});
 			this.settings.onboarding = markSkillFileVerified(this.settings.onboarding, result.bundleHash);
-			this.settings.onboarding.agentRestartCompletedAt = '';
-			this.settings.onboarding.connectionVerifiedAt = '';
-			this.settings.onboarding.firstRecallCompletedAt = '';
-			this.settings.onboarding.firstRecallMatchedCount = 0;
-			this.settings.onboarding.firstRecallQuery = '';
-			this.settings.onboarding.trackedWorkflowObservedAt = '';
-			this.settings.onboarding.trackedWorkflowTaskId = '';
+			this.settings.onboarding = clearOnboardingAgentBehaviorEvidence(this.settings.onboarding);
 			await this.persistOnboardingState();
 			await this.appendToAuditLog(buildSkillInstallAuditEntry({
 				action,
@@ -2359,12 +2355,9 @@ export default class TracekeeperPlugin extends Plugin {
 		try {
 			const result = this.requireClientConfigAdapter(config).applyConfirmedChange(planId);
 			if (config.clientId) {
-				this.settings.onboarding = markClientConfigured(this.settings.onboarding, config.clientId);
-				this.settings.onboarding.agentRestartCompletedAt = '';
-				this.settings.onboarding.connectionVerifiedAt = '';
-				this.settings.onboarding.firstRecallCompletedAt = '';
-				this.settings.onboarding.firstRecallMatchedCount = 0;
-				this.settings.onboarding.firstRecallQuery = '';
+				this.settings.onboarding = clearOnboardingAgentBehaviorEvidence(
+					markClientConfigured(this.settings.onboarding, config.clientId)
+				);
 				await this.persistOnboardingState();
 			}
 			this.queueClientConfigAuditEvent('client_config_applied', config, 'success', result.backupPath);
@@ -2688,7 +2681,13 @@ export default class TracekeeperPlugin extends Plugin {
 	formatAgentDisplayName(clientName: string, agentId = ''): string {
 		const raw = (clientName || agentId || '').trim();
 		const normalized = raw.toLowerCase();
-		if (!normalized) {
+		const compact = raw.replace(/-/g, '');
+		if (
+			!normalized
+			|| normalized === 'unknown'
+			|| normalized === 'legacy-shared-token'
+			|| (compact.length >= 24 && /^[a-f0-9]+$/i.test(compact))
+		) {
 			return ui('AI 工具', 'AI tool');
 		}
 		if (normalized.includes('codex')) {
@@ -2707,6 +2706,12 @@ export default class TracekeeperPlugin extends Plugin {
 			return raw;
 		}
 		return trimText(raw, 28);
+	}
+
+	getSelectedAgentClientLabel(): string {
+		const selectedClientId = this.settings.onboarding.selectedClientId;
+		const selectedClient = this.getClientProfiles().find((profile) => profile.id === selectedClientId);
+		return selectedClient?.displayName || this.formatAgentDisplayName(selectedClientId);
 	}
 
 	formatResultLabel(status: string): string {

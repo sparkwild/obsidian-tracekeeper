@@ -7,6 +7,7 @@ import {
 export interface OnboardingClientSelectionProfile {
 	clientId: string;
 	configState?: string;
+	runtimeCapabilities?: readonly string[];
 }
 
 export interface OnboardingSkillInstallState {
@@ -57,6 +58,7 @@ export interface OnboardingRecallInstruction {
 
 export interface BuildOnboardingRecallInstructionInput {
 	keyword: string;
+	workflowManageAvailable: boolean;
 	localize: (zh: string, en: string) => string;
 }
 
@@ -95,17 +97,40 @@ export const buildOnboardingObservedEvidence = (input: BuildOnboardingObservedEv
 export const buildOnboardingRecallInstruction = (input: BuildOnboardingRecallInstructionInput): OnboardingRecallInstruction => {
 	const keyword = asText(input.keyword) || 'tracekeeper';
 	const query = JSON.stringify(keyword);
+	const recallPayload = `{"query": ${query}, "scope": "project", "repo_path": "<absolute repository/workspace path>"}`;
 	return {
-		instruction: input.localize(
-			`先识别当前仓库/工作区身份（例如项目名、仓库名或路径），再在该上下文范围执行一次 project-scoped 的 tracekeeper.recall。\n\n`
-			+ `请使用以下窄查询参数，并按原样汇报调用参数，不要先宣称成功。\n\n`
-			+ `{"query": ${query}, "scope": "project", "project_hint": "<推断出的仓库/工作区身份>"}`,
-			`Infer the current repository/workspace identity (for example, project name, repository name, or path), then run one project-scoped tracekeeper.recall call in that context.\n\n`
-			+ `Use the following narrow query payload and report the raw call arguments as-is; do not claim success upfront.\n\n`
-			+ `{"query": ${query}, "scope": "project", "project_hint": "<inferred repo/workspace identity>"}`
-		),
+		instruction: input.workflowManageAvailable
+			? input.localize(
+				`请使用所选 Agent Principal 完成一次端到端验证：\n\n`
+				+ `1. 恰好调用一次 tracekeeper.start_task，并保留 Runtime 返回的真实 task_id。\n`
+				+ `2. 严格复制该响应中的 next_actions 或 recommended_recall 参数执行 Recall，不要自行重建项目路由。\n`
+				+ `3. 恰好调用一次 tracekeeper.finish_task，并使用同一个 task_id。\n\n`
+				+ `已知项目的路径应作为 repo_path 传递；只有已知规范项目名时才传 project_hint，绝不能把路径写入 project_hint。项目 Recall 的参数形状如下：\n\n`
+				+ `${recallPayload}\n\n`
+				+ `按原样汇报每次调用的参数和结果，不要先宣称成功。`,
+				`Use the selected Agent principal for one end-to-end verification:\n\n`
+				+ `1. Call tracekeeper.start_task exactly once and keep the real task_id returned by the Runtime.\n`
+				+ `2. Copy the next_actions or recommended_recall arguments from that response exactly; do not reconstruct project routing.\n`
+				+ `3. Call tracekeeper.finish_task exactly once with that same task_id.\n\n`
+				+ `Pass a known project path as repo_path. Pass project_hint only for a known canonical project name; never put a path in project_hint. The project Recall argument shape is:\n\n`
+				+ `${recallPayload}\n\n`
+				+ `Report each raw call argument and result as-is; do not claim success upfront.`,
+			)
+			: input.localize(
+				`所选 Principal 仅支持 Recall，不具备 workflow.manage，因此不要调用 tracekeeper.start_task 或 tracekeeper.finish_task。\n\n`
+				+ `先识别当前仓库或工作区，然后执行一次 project-scoped 的 tracekeeper.recall：\n\n`
+				+ `${recallPayload}\n\n`
+				+ `只有已知规范项目名时才添加 project_hint，绝不能把路径写入 project_hint。按原样汇报调用参数和结果，不要先宣称成功。`,
+				`The selected principal supports Recall only and does not have workflow.manage, so do not call tracekeeper.start_task or tracekeeper.finish_task.\n\n`
+				+ `Identify the current repository or workspace, then run one project-scoped tracekeeper.recall:\n\n`
+				+ `${recallPayload}\n\n`
+				+ `Add project_hint only for a known canonical project name; never put a path in project_hint. Report the raw call arguments and result as-is; do not claim success upfront.`,
+			),
 	};
 };
+
+export const hasWorkflowManageCapability = (capabilities: readonly string[] | undefined): boolean =>
+	Boolean(capabilities?.includes('*') || capabilities?.includes('workflow.manage'));
 
 export const buildOnboardingContext = (input: BuildOnboardingContextInput): OnboardingProgressContext => {
 	const hasExplicitInvalidConfig = input.selectedClient?.configState === 'needs_update'
@@ -138,6 +163,7 @@ export const buildOnboardingContext = (input: BuildOnboardingContextInput): Onbo
 		skillUpdateAvailable: updateAvailable,
 		clientReloaded,
 		recallObserved,
+		workflowManageAvailable: hasWorkflowManageCapability(input.selectedClient?.runtimeCapabilities),
 		trackedWorkflowObserved: input.onboarding.trackedWorkflowObservedAt !== '',
 	};
 };
@@ -223,6 +249,7 @@ export const onboardingStepLabel = (
 		case 'agent_restart': return localize('重启客户端', 'Restart client');
 		case 'connection_verification': return localize('验证 MCP 连接', 'Verify MCP connection');
 		case 'first_recall': return localize('执行首个召回', 'Run first recall');
+		case 'tracked_workflow': return localize('观察完整任务工作流', 'Observe complete task workflow');
 		default: return localize('完成', 'Done');
 	}
 };
@@ -240,9 +267,12 @@ export const onboardingContextDescription = (
 		context.agentRestartConfirmed,
 		context.connectionVerified,
 		context.firstRecallCompleted,
+		...(context.workflowManageAvailable ? [context.trackedWorkflowObserved] : []),
 	];
 	if (required.every(Boolean)) {
-		return localize('首次引导已完成，可直接开始有意义任务。', 'Onboarding is complete. You can start meaningful work.');
+		return context.workflowManageAvailable
+			? localize('首次引导已完成，可直接开始有意义任务。', 'Onboarding is complete. You can start meaningful work.')
+			: localize('Recall-only 引导已完成；所选 Principal 不支持 tracked closeout。', 'Recall-only onboarding is complete; the selected principal does not support tracked closeout.');
 	}
 	const pending = required.filter((value) => !value).length;
 	return context.vaultReady && pending > 0

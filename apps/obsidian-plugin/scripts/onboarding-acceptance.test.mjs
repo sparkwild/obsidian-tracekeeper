@@ -50,6 +50,7 @@ try {
 	assert.equal(onboardingState.ONBOARDING_STEP_SEQUENCE[3], 'skill_setup');
 	assert.equal(onboardingState.ONBOARDING_STEP_SEQUENCE[4], 'memory_policy');
 	assert.equal(onboardingState.ONBOARDING_STEP_SEQUENCE[5], 'agent_restart');
+	assert.equal(onboardingState.ONBOARDING_STEP_SEQUENCE[8], 'tracked_workflow');
 	const migrated = onboardingState.normalizeOnboardingSettingsState({
 		selectedClientId: 'codex',
 		skillSetupCompletedAt: '2026-07-22T00:00:00.000Z',
@@ -70,7 +71,7 @@ try {
 		vaultReady: true,
 		runtimeState: 'running',
 		runtimeEnabled: true,
-		selectedClient: { clientId: 'codex', configState: 'configured' },
+		selectedClient: { clientId: 'codex', configState: 'configured', runtimeCapabilities: ['vault.read', 'workflow.manage'] },
 		skillInstallState: { state: 'installed', fileVerified: true, updateAvailable: false },
 		onboarding: evidenceState,
 	});
@@ -78,6 +79,7 @@ try {
 	assert.equal(context.skillUserConfirmed, false);
 	assert.equal(context.recallObserved, true);
 	assert.equal(context.trackedWorkflowObserved, false);
+	assert.equal(context.workflowManageAvailable, true);
 	assert.equal(context.memoryPolicyConfirmed, false);
 	assert.equal(onboardingState.getNextOnboardingStep(evidenceState, context), 'memory_policy');
 	const confirmedPolicyState = {
@@ -88,11 +90,36 @@ try {
 		vaultReady: true,
 		runtimeState: 'running',
 		runtimeEnabled: true,
-		selectedClient: { clientId: 'codex', configState: 'configured' },
+		selectedClient: { clientId: 'codex', configState: 'configured', runtimeCapabilities: ['vault.read', 'workflow.manage'] },
 		skillInstallState: { state: 'installed', fileVerified: true, updateAvailable: false },
 		onboarding: confirmedPolicyState,
 	});
-	assert.equal(onboardingState.getNextOnboardingStep(confirmedPolicyState, confirmedPolicyContext), 'complete');
+	assert.equal(onboardingState.getNextOnboardingStep(confirmedPolicyState, confirmedPolicyContext), 'tracked_workflow');
+	const trackedWorkflowState = {
+		...confirmedPolicyState,
+		trackedWorkflowObservedAt: '2026-07-22T00:00:05.000Z',
+		trackedWorkflowTaskId: 'task-onboarding',
+	};
+	const trackedWorkflowContext = onboardingViewModel.buildOnboardingContext({
+		vaultReady: true,
+		runtimeState: 'running',
+		runtimeEnabled: true,
+		selectedClient: { clientId: 'codex', configState: 'configured', runtimeCapabilities: ['vault.read', 'workflow.manage'] },
+		skillInstallState: { state: 'installed', fileVerified: true, updateAvailable: false },
+		onboarding: trackedWorkflowState,
+	});
+	assert.equal(onboardingState.getNextOnboardingStep(trackedWorkflowState, trackedWorkflowContext), 'complete');
+	const recallOnlyContext = onboardingViewModel.buildOnboardingContext({
+		vaultReady: true,
+		runtimeState: 'running',
+		runtimeEnabled: true,
+		selectedClient: { clientId: 'maintenance', configState: 'configured', runtimeCapabilities: ['vault.read'] },
+		skillInstallState: { state: 'installed', fileVerified: true, updateAvailable: false },
+		onboarding: { ...confirmedPolicyState, selectedClientId: 'maintenance' },
+	});
+	assert.equal(recallOnlyContext.workflowManageAvailable, false);
+	assert.equal(onboardingState.getOnboardingStepSequence(recallOnlyContext).includes('tracked_workflow'), false);
+	assert.equal(onboardingState.getNextOnboardingStep({ ...confirmedPolicyState, selectedClientId: 'maintenance' }, recallOnlyContext), 'complete');
 
 	assert.ok(buildSource.includes('checkTracekeeperSkillBundle'));
 	assert.ok(buildSource.includes("'.json': 'text'"));
@@ -118,6 +145,9 @@ try {
 	assert.ok(settingsSource.includes('newer_than_bundled'));
 	assert.equal(settingsSource.includes("clientId === 'codex'"), false);
 	assert.ok(settingsSource.includes('buildOnboardingRecallInstruction'));
+	assert.ok(settingsSource.includes('Recall-only capability limit'));
+	assert.ok(mainSource.includes('runtimeCapabilities: selectedClient.runtimeCapabilities'));
+	assert.ok(mainSource.includes('clearOnboardingAgentBehaviorEvidence'));
 	assert.ok(settingsSource.includes('Local preview does not complete agent connection or first-recall verification.'));
 	assert.ok(entryModalSource.includes('Start connecting Agent'));
 	assert.ok(entryModalSource.includes('Set up later'));

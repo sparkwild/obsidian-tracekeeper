@@ -23,6 +23,7 @@ const REQUIRED_PATHS = Object.freeze([
 	'skills/tracekeeper/dist/tracekeeper.flattened.md',
 	'apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts',
 	'apps/obsidian-plugin/src/features/onboarding/onboarding-state.ts',
+	'apps/obsidian-plugin/src/features/onboarding/onboarding-view-model.ts',
 	'apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts',
 	'apps/obsidian-plugin/src/features/skill-installation/skill-install-audit.ts',
 	'apps/obsidian-plugin/src/features/skill-installation/skill-install-receipts.ts',
@@ -356,6 +357,7 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 
 	const settingsSource = contents.get('apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts') ?? '';
 	const onboardingSource = contents.get('apps/obsidian-plugin/src/features/onboarding/onboarding-state.ts') ?? '';
+	const onboardingViewModelSource = contents.get('apps/obsidian-plugin/src/features/onboarding/onboarding-view-model.ts') ?? '';
 	const bundleSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts') ?? '';
 	const auditSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-install-audit.ts') ?? '';
 	const receiptSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-install-receipts.ts') ?? '';
@@ -389,6 +391,18 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	}
 	for (const evidence of ['skillCopiedAt', 'skillUserConfirmedAt', 'skillFileVerifiedAt', 'agentRestartCompletedAt', 'connectionVerifiedAt', 'firstRecallCompletedAt', 'trackedWorkflowObservedAt']) {
 		requirePattern(onboardingSource, new RegExp(`\\b${evidence}\\b`), `onboarding evidence is missing field: ${evidence}`, errors);
+	}
+	for (const pattern of [/['"]tracked_workflow['"]/, /workflowManageAvailable/, /getOnboardingStepSequence/]) {
+		requirePattern(onboardingSource, pattern, `onboarding completion semantics are missing contract: ${pattern.source}`, errors);
+	}
+	for (const pattern of [/runtimeCapabilities/, /workflow\.manage/, /\brepo_path\b/, /next_actions|recommended_recall/]) {
+		requirePattern(onboardingViewModelSource, pattern, `plugin-generated onboarding guidance is missing contract: ${pattern.source}`, errors);
+	}
+	if (/\\?"project_hint\\?"\s*:\s*\\?"[^"\n]*(?:路径|path|仓库|工作区|repo|workspace)/i.test(onboardingViewModelSource)) {
+		errors.push('plugin-generated onboarding guidance must not place a repository or workspace path in project_hint');
+	}
+	if (!/workflowManageAvailable/.test(settingsSource) || !/Recall-only capability limit/.test(settingsSource)) {
+		errors.push('settings must expose the Recall-only capability limit instead of requiring unavailable lifecycle tools');
 	}
 	for (const label of ['Bundle available', 'Copied', 'User confirmed', 'File verified', 'Client reloaded', 'Connection verified', 'Recall observed', 'Tracked workflow observed', 'Update available']) {
 		requirePattern(settingsSource, new RegExp(label), `settings does not expose Skill evidence: ${label}`, errors);

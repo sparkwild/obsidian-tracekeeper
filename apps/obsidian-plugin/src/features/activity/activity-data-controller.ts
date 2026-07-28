@@ -118,10 +118,10 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 		const recentToolCallRecords = recentAuditEvents
 			.filter((event) => this.isToolCallAuditEvent(event))
 			.map((event) => this.toAgentToolCallRecord(event));
-		const recentAgentCount = this.buildRecentAgentConnections(
+		const recentAgents = this.buildRecentAgentConnections(
 			recentAuditEvents,
 			recentToolCallRecords
-		).length;
+		);
 		const timelineItems = recentAuditEvents
 			.filter((event) => !this.isConnectionAuditEvent(event))
 			.map((event) => this.toActivityTimelineAuditItem(event))
@@ -147,7 +147,8 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			recentAuditEvents,
 			workflowDiagnostics,
 			timelineItems,
-			recentAgentCount,
+			recentAgents,
+			recentAgentCount: recentAgents.length,
 			recentToolCallCount: recentToolCallRecords.length,
 			missingTaskFolder: taskFolderMissing,
 			missingAuditSources: auditLogMissing && auditDirMissing,
@@ -575,6 +576,7 @@ buildRecentAgentConnections(
 				agentId: agentId || 'unknown',
 				sessionId: sessionId || agentId || 'unknown',
 				clientName: clientName || 'unknown',
+				displayName: this.host.formatAgentDisplayName(clientName, agentId),
 				transport: 'streamable-http',
 				status: 'seen',
 				lastSeen: timestamp,
@@ -583,6 +585,11 @@ buildRecentAgentConnections(
 				permissionProfile: 'read-only default + controlled write',
 				sortTimestamp,
 			};
+			next.principalId = principalId || next.principalId;
+			next.agentId = agentId || next.agentId;
+			next.sessionId = sessionId || agentId || next.sessionId;
+			next.clientName = clientName || next.clientName;
+			next.displayName = this.host.formatAgentDisplayName(next.clientName, next.agentId);
 			next.lastSeen = timestamp || next.lastSeen;
 			next.sortTimestamp = sortTimestamp || next.sortTimestamp;
 			agents.set(key, next);

@@ -176,6 +176,7 @@ export interface AgentActivitySnapshot {
 	recentAuditEvents: AuditEventRecord[];
 	workflowDiagnostics: AgentWorkflowDiagnostics;
 	timelineItems: ActivityTimelineItem[];
+	recentAgents: AgentConnectionRecord[];
 	recentAgentCount: number;
 	recentToolCallCount: number;
 	missingTaskFolder: boolean;
@@ -188,6 +189,7 @@ export interface AgentConnectionRecord {
 	agentId: string;
 	sessionId: string;
 	clientName: string;
+	displayName: string;
 	transport: string;
 	status: string;
 	lastSeen: string;
