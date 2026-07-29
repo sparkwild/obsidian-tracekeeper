@@ -33,8 +33,11 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.LOCAL_TRUST_CAPABILITIES = exports.LOCAL_TRUST_PRINCIPAL_ID = void 0;
 exports.appendConnectionAuditEvent = appendConnectionAuditEvent;
+exports.appendRuntimeDiagnosticAuditEvent = appendRuntimeDiagnosticAuditEvent;
 exports.recordToolCallAuditEvent = recordToolCallAuditEvent;
+exports.recordRejectedToolCallAuditEvent = recordRejectedToolCallAuditEvent;
 exports.toolDefinitions = toolDefinitions;
 exports.toolPrompts = toolPrompts;
 exports.callTool = callTool;
@@ -49,6 +52,14 @@ const result_validation_1 = require("./result-validation");
 const safety_1 = require("./safety");
 const apply_approved_writeback_1 = require("./application/apply-approved-writeback");
 const project_identity_1 = require("./application/project-identity");
+const observed_client_1 = require("./observed-client");
+exports.LOCAL_TRUST_PRINCIPAL_ID = 'local-user';
+exports.LOCAL_TRUST_CAPABILITIES = [
+    'vault.read',
+    'workflow.manage',
+    'vault.write',
+    'memory.propose',
+];
 const REVIEW_QUEUE_PREFIX = core_1.TRACEKEEPER_REVIEW_QUEUE_DIR;
 const AUDIT_LOG_PATH = core_1.TRACEKEEPER_AUDIT_LOG_PATH;
 const MAX_LIST_QUEUE_ITEMS = 20;
@@ -3829,8 +3840,30 @@ function appendConnectionAuditEvent(vaultRoot, input) {
         agentId: input.agentId,
         sessionId: input.sessionId,
         clientName: input.clientName,
+        resultStatus: 'success',
         transport: input.transport,
         runtimeVersion: input.runtimeVersion,
+        metadata: {
+            audit_schema_version: 2,
+            observed_client_name_raw: input.clientName,
+            observed_client_type: input.observedClientType,
+            observed_client_version: input.clientVersion,
+            connected_at: now,
+        },
+    });
+}
+function appendRuntimeDiagnosticAuditEvent(vaultRoot, reason) {
+    return appendAuditEvent(vaultRoot, {
+        type: 'runtime-diagnostic',
+        event: 'runtime-diagnostic',
+        action: 'mcp.request_rejected',
+        actor: 'tracekeeper-runtime',
+        resultStatus: 'failed',
+        transport: 'streamable-http',
+        metadata: {
+            audit_schema_version: 2,
+            diagnostic_reason: reason,
+        },
     });
 }
 function recordToolCallAuditEvent(vaultRoot, input) {
@@ -3854,6 +3887,13 @@ function recordToolCallAuditEvent(vaultRoot, input) {
         runtimeVersion: input.runtimeVersion,
         argsSummary: input.argsSummary,
         metadata: {
+            audit_schema_version: 2,
+            observed_client_name_raw: input.clientName,
+            observed_client_type: input.observedClientType
+                || (0, observed_client_1.normalizeObservedClientType)(input.clientName),
+            observed_client_version: input.clientVersion,
+            last_used_at: input.resultStatus === 'success' ? now : undefined,
+            last_successful_tool: input.resultStatus === 'success' ? input.toolName : undefined,
             result_summary: input.resultSummary,
             ...input.workflowMetadata,
         },
@@ -3883,10 +3923,48 @@ async function recordToolCallAuditEventAsync(vaultRoot, input, context) {
         runtimeVersion: input.runtimeVersion,
         argsSummary: input.argsSummary,
         metadata: {
+            audit_schema_version: 2,
+            observed_client_name_raw: input.clientName,
+            observed_client_type: input.observedClientType
+                || (0, observed_client_1.normalizeObservedClientType)(input.clientName),
+            observed_client_version: input.clientVersion,
+            last_used_at: input.resultStatus === 'success' ? now : undefined,
+            last_successful_tool: input.resultStatus === 'success' ? input.toolName : undefined,
             result_summary: input.resultSummary,
             ...input.workflowMetadata,
         },
     }, context);
+}
+async function recordRejectedToolCallAuditEvent(context, reason) {
+    const vaultRoot = resolveAuditVaultRoot({}, context);
+    if (!vaultRoot) {
+        return;
+    }
+    try {
+        await recordToolCallAuditEventAsync(vaultRoot, {
+            toolName: 'unknown',
+            resultStatus: 'failed',
+            targetPaths: [],
+            durationMs: 0,
+            riskLevel: 'rejected',
+            agentId: context.agentId || 'unknown session id',
+            principalId: context.principalId,
+            sessionId: context.sessionId,
+            clientName: context.clientName ?? null,
+            clientVersion: context.clientVersion,
+            observedClientType: context.observedClientType,
+            transport: context.transport,
+            runtimeVersion: context.runtimeVersion,
+            argsSummary: '',
+            resultSummary: 'MCP tools/call was rejected before tool execution.',
+            workflowMetadata: {
+                diagnostic_reason: reason,
+            },
+        }, context);
+    }
+    catch {
+        // Rejection diagnostics are best effort.
+    }
 }
 function makeToolResultForWrite(tool, payload) {
     return {
@@ -4033,12 +4111,15 @@ function toolPrompts() {
 async function callTool(name, rawParams, context = {}) {
     const requestName = typeof name === 'string' ? name.trim() : '';
     if (!requestName) {
+        await recordRejectedToolCallAuditEvent(context, 'tool_call_invalid_name');
         return toolError('Tool name is required.');
     }
     if (!isToolName(requestName)) {
+        await recordRejectedToolCallAuditEvent(context, 'tool_call_unknown');
         return toolError(`Unknown tool: ${requestName}`);
     }
     if (!(0, protocol_1.isRecord)(rawParams)) {
+        await recordRejectedToolCallAuditEvent(context, 'tool_call_invalid_arguments');
         return validateToolResult(requestName, decorateToolResult(requestName, toolError('Tool arguments must be an object.'), context));
     }
     const args = rawParams;
@@ -4057,7 +4138,7 @@ async function callTool(name, rawParams, context = {}) {
         if (contract &&
             (!capabilities ||
                 (!capabilities.includes('*') && !capabilities.includes(contract.capability)))) {
-            throw new safety_1.ToolInputError(`Credential principal ${context.principalId || 'unknown'} lacks capability ${contract.capability} for ${requestName}.`);
+            throw new safety_1.ToolInputError(`Runtime principal ${context.principalId || 'unknown'} lacks capability ${contract.capability} for ${requestName}.`);
         }
         const handler = TOOL_HANDLERS[requestName];
         const result = await handler(args, context);
@@ -4094,6 +4175,8 @@ async function callTool(name, rawParams, context = {}) {
                     principalId: context.principalId,
                     sessionId,
                     clientName,
+                    clientVersion: context.clientVersion,
+                    observedClientType: context.observedClientType,
                     transport: context.transport,
                     runtimeVersion: context.runtimeVersion,
                     argsSummary,
@@ -4121,8 +4204,8 @@ async function recoverPendingOperations(vaultRoot, context = {}) {
         const result = await callTool(request.tool, request.args, {
             ...context,
             defaultVaultRoot: vaultRoot,
-            principalId: context.principalId || 'runtime-recovery',
-            credentialCapabilities: context.credentialCapabilities || ['*'],
+            principalId: context.principalId || exports.LOCAL_TRUST_PRINCIPAL_ID,
+            credentialCapabilities: context.credentialCapabilities || exports.LOCAL_TRUST_CAPABILITIES,
             agentId: context.agentId || 'tracekeeper-recovery',
             clientName: context.clientName || 'tracekeeper-runtime-recovery',
             transport: context.transport || 'runtime-recovery',

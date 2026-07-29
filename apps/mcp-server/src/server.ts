@@ -5,8 +5,6 @@ interface ServerArgs {
 	vaultConfigDir?: string;
 	host?: string;
 	port?: number;
-	token?: string;
-	allowMissingTokenForDev?: boolean;
 	graphProfile?: string;
 	contentLanguage?: string;
 }
@@ -39,10 +37,8 @@ function parseArgs(argv: string[]): ServerArgs {
 			index += 1;
 			continue;
 		}
-		if (value === '--token' && next) {
-			result.token = next;
-			index += 1;
-			continue;
+		if (value === '--token' || value === '--allow-missing-token-for-dev') {
+			throw new Error('Plaintext MCP token options are not supported. Set TRACEKEEPER_MCP_TOKEN in the process environment.');
 		}
 		if ((value === '--graph-profile' || value === '--graphProfile') && next) {
 			result.graphProfile = next;
@@ -53,9 +49,6 @@ function parseArgs(argv: string[]): ServerArgs {
 			result.contentLanguage = next;
 			index += 1;
 			continue;
-		}
-		if (value === '--allow-missing-token-for-dev') {
-			result.allowMissingTokenForDev = true;
 		}
 	}
 	return result;
@@ -73,9 +66,13 @@ function toErrorMessage(error: unknown): string {
 
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2));
-	const runtime = new StreamableHttpMcpRuntime(args);
+	const serviceToken = process.env.TRACEKEEPER_MCP_TOKEN || '';
+	const runtime = new StreamableHttpMcpRuntime({
+		...args,
+		localTrust: true,
+		serviceToken,
+	});
 	const status = await runtime.start();
-	process.stdout.write(`${JSON.stringify({ ok: true, endpoint: status.endpoint })}\n`);
 
 	const stop = async () => {
 		await runtime.stop();
@@ -87,6 +84,7 @@ async function main(): Promise<void> {
 	process.once('SIGTERM', () => {
 		void stop();
 	});
+	process.stdout.write(`${JSON.stringify({ ok: true, endpoint: status.endpoint })}\n`);
 }
 
 void main().catch((error) => {

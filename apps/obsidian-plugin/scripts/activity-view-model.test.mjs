@@ -20,7 +20,6 @@ const runtimeStatus = (overrides = {}) => ({
 const actionInput = (overrides = {}) => ({
 	structureState: 'initialized',
 	runtimeStatus: runtimeStatus(),
-	onboardingComplete: true,
 	actionableReviewQueueItemCount: 0,
 	agedWorkflowCount: 0,
 	permissionDeniedCount: 0,
@@ -32,11 +31,18 @@ const agent = (overrides = {}) => ({
 	agentId: 'codex',
 	sessionId: 'session-codex',
 	clientName: 'codex',
+	observedClientNameRaw: 'Codex',
+	observedClientType: 'codex',
+	observedClientVersion: '1.2.3',
 	displayName: 'Codex',
 	transport: 'streamable-http',
 	status: 'active',
 	lastSeen: '2026-07-28T03:00:00.000Z',
 	lastToolCall: 'recall',
+	connectedAt: '2026-07-28T02:00:00.000Z',
+	resultStatus: 'success',
+	lastUsedAt: '2026-07-28T03:00:00.000Z',
+	lastSuccessfulTool: 'tracekeeper.recall',
 	runtimeVersion: '0.2.4',
 	permissionProfile: 'knowledge-assistant',
 	sortTimestamp: Date.parse('2026-07-28T03:00:00.000Z'),
@@ -54,6 +60,7 @@ try {
 	});
 	const {
 		buildActivityAgentSummary,
+		buildSuccessfullyUsedAgentSummary,
 		selectActivityPrimaryAction,
 	} = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 
@@ -61,7 +68,6 @@ try {
 		selectActivityPrimaryAction(actionInput({
 			structureState: 'partial',
 			runtimeStatus: runtimeStatus({ enabled: false, state: 'stopped' }),
-			onboardingComplete: false,
 			actionableReviewQueueItemCount: 3,
 		})),
 		'repair_structure'
@@ -69,17 +75,15 @@ try {
 	assert.equal(
 		selectActivityPrimaryAction(actionInput({
 			runtimeStatus: runtimeStatus({ enabled: true, state: 'failed', lastError: 'boom' }),
-			onboardingComplete: false,
 			actionableReviewQueueItemCount: 3,
 		})),
 		'recover_runtime'
 	);
 	assert.equal(
 		selectActivityPrimaryAction(actionInput({
-			onboardingComplete: false,
 			actionableReviewQueueItemCount: 3,
 		})),
-		'continue_onboarding'
+		'review_changes'
 	);
 	assert.equal(
 		selectActivityPrimaryAction(actionInput({
@@ -95,7 +99,6 @@ try {
 	assert.equal(
 		selectActivityPrimaryAction(actionInput({
 			runtimeStatus: runtimeStatus({ state: 'starting' }),
-			onboardingComplete: false,
 		})),
 		'none'
 	);
@@ -103,20 +106,104 @@ try {
 
 	assert.deepEqual(buildActivityAgentSummary([]), {
 		state: 'not_observed',
-		latestAgent: null,
+		observedAgentCount: 0,
+		agentGroups: [],
 	});
 	const latest = agent();
-	const older = agent({
+	const earlierCodexSession = agent({
+		agentId: 'codex-session-two',
+		sessionId: 'session-codex-two',
+		lastToolCall: 'start_task',
+		sortTimestamp: Date.parse('2026-07-27T12:00:00.000Z'),
+	});
+	const claude = agent({
+		principalId: 'principal-codex',
 		clientName: 'claude-code',
+		observedClientNameRaw: 'Claude Code',
+		observedClientType: 'claude-code',
 		displayName: 'Claude Code',
+		connectedAt: '2026-07-27T02:00:00.000Z',
+		lastUsedAt: '',
+		lastSuccessfulTool: '',
 		sortTimestamp: Date.parse('2026-07-27T03:00:00.000Z'),
 	});
-	assert.deepEqual(buildActivityAgentSummary([latest, older]), {
+	assert.deepEqual(buildActivityAgentSummary([latest, earlierCodexSession, claude]), {
 		state: 'observed',
-		latestAgent: latest,
+		observedAgentCount: 2,
+		agentGroups: [
+			{
+				displayName: 'Codex',
+				observedClientType: 'codex',
+				sessionCount: 2,
+				lastConnectedAt: Date.parse('2026-07-28T02:00:00.000Z'),
+				lastUsedAt: Date.parse('2026-07-28T03:00:00.000Z'),
+				sortTimestamp: Date.parse('2026-07-28T03:00:00.000Z'),
+			},
+			{
+				displayName: 'Claude Code',
+				observedClientType: 'claude-code',
+				sessionCount: 1,
+				lastConnectedAt: Date.parse('2026-07-27T02:00:00.000Z'),
+				lastUsedAt: 0,
+				sortTimestamp: Date.parse('2026-07-27T03:00:00.000Z'),
+			},
+		],
 	});
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 9 })}\n`);
+	const toolCallOnly = agent({
+		clientName: 'cursor',
+		observedClientNameRaw: 'Cursor',
+		observedClientType: 'cursor',
+		displayName: 'Cursor',
+		connectedAt: '',
+	});
+	const failedUse = agent({
+		clientName: 'custom',
+		observedClientNameRaw: 'Custom client',
+		observedClientType: 'custom',
+		displayName: 'Custom client',
+		resultStatus: 'failed',
+	});
+	const pluginDirect = agent({
+		agentId: 'tracekeeper-plugin-ui',
+		sessionId: 'plugin-ui-session',
+		clientName: 'tracekeeper-plugin-ui',
+		observedClientNameRaw: 'tracekeeper-plugin-ui',
+		observedClientType: 'custom',
+		displayName: 'Custom client',
+		transport: 'obsidian-direct',
+	});
+	const sessionless = agent({
+		agentId: 'legacy-agent',
+		sessionId: '',
+	});
+	assert.deepEqual(
+		buildSuccessfullyUsedAgentSummary([
+			latest,
+			earlierCodexSession,
+			claude,
+			toolCallOnly,
+			failedUse,
+			pluginDirect,
+			sessionless,
+		]),
+		{
+			state: 'observed',
+			observedAgentCount: 1,
+			agentGroups: [
+				{
+					displayName: 'Codex',
+					observedClientType: 'codex',
+					sessionCount: 2,
+					lastConnectedAt: Date.parse('2026-07-28T02:00:00.000Z'),
+					lastUsedAt: Date.parse('2026-07-28T03:00:00.000Z'),
+					sortTimestamp: Date.parse('2026-07-28T03:00:00.000Z'),
+				},
+			],
+		}
+	);
+
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 15 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

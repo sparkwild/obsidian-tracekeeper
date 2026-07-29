@@ -81,6 +81,18 @@ import {
 	resolveProjectIdentity,
 	type ResolvedProjectIdentity,
 } from './application/project-identity';
+import {
+	normalizeObservedClientType,
+	type ObservedClientType,
+} from './observed-client';
+
+export const LOCAL_TRUST_PRINCIPAL_ID = 'local-user';
+export const LOCAL_TRUST_CAPABILITIES = [
+	'vault.read',
+	'workflow.manage',
+	'vault.write',
+	'memory.propose',
+] as const satisfies readonly ToolCapability[];
 
 const REVIEW_QUEUE_PREFIX = TRACEKEEPER_REVIEW_QUEUE_DIR;
 const AUDIT_LOG_PATH = TRACEKEEPER_AUDIT_LOG_PATH;
@@ -143,6 +155,8 @@ export interface ToolInvocationContext extends ToolContext {
 	agentId?: string;
 	sessionId?: string;
 	clientName?: string | null;
+	clientVersion?: string | null;
+	observedClientType?: ObservedClientType;
 	transport?: string;
 	runtimeVersion?: string;
 	operationFailureInjection?: OperationFailureInjection;
@@ -182,6 +196,8 @@ interface ConnectionAuditEventInput {
 	agentId: string;
 	sessionId?: string;
 	clientName: string | null;
+	clientVersion: string | null;
+	observedClientType: ObservedClientType;
 	transport: string;
 	runtimeVersion: string;
 }
@@ -196,6 +212,8 @@ interface ToolCallAuditEventInput {
 	principalId?: string;
 	sessionId?: string;
 	clientName: string | null;
+	clientVersion?: string | null;
+	observedClientType?: ObservedClientType;
 	transport?: string;
 	runtimeVersion?: string;
 	argsSummary: string;
@@ -5044,8 +5062,34 @@ export function appendConnectionAuditEvent(vaultRoot: string, input: ConnectionA
 		agentId: input.agentId,
 		sessionId: input.sessionId,
 		clientName: input.clientName,
+		resultStatus: 'success',
 		transport: input.transport,
 		runtimeVersion: input.runtimeVersion,
+		metadata: {
+			audit_schema_version: 2,
+			observed_client_name_raw: input.clientName,
+			observed_client_type: input.observedClientType,
+			observed_client_version: input.clientVersion,
+			connected_at: now,
+		},
+	});
+}
+
+export function appendRuntimeDiagnosticAuditEvent(
+	vaultRoot: string,
+	reason: 'auth_missing' | 'auth_invalid' | 'query_token_rejected'
+): { path: string } {
+	return appendAuditEvent(vaultRoot, {
+		type: 'runtime-diagnostic',
+		event: 'runtime-diagnostic',
+		action: 'mcp.request_rejected',
+		actor: 'tracekeeper-runtime',
+		resultStatus: 'failed',
+		transport: 'streamable-http',
+		metadata: {
+			audit_schema_version: 2,
+			diagnostic_reason: reason,
+		},
 	});
 }
 
@@ -5070,6 +5114,13 @@ export function recordToolCallAuditEvent(vaultRoot: string, input: ToolCallAudit
 		runtimeVersion: input.runtimeVersion,
 		argsSummary: input.argsSummary,
 		metadata: {
+			audit_schema_version: 2,
+			observed_client_name_raw: input.clientName,
+			observed_client_type: input.observedClientType
+				|| normalizeObservedClientType(input.clientName),
+			observed_client_version: input.clientVersion,
+			last_used_at: input.resultStatus === 'success' ? now : undefined,
+			last_successful_tool: input.resultStatus === 'success' ? input.toolName : undefined,
 			result_summary: input.resultSummary,
 			...input.workflowMetadata,
 		},
@@ -5105,10 +5156,51 @@ async function recordToolCallAuditEventAsync(
 		runtimeVersion: input.runtimeVersion,
 		argsSummary: input.argsSummary,
 		metadata: {
+			audit_schema_version: 2,
+			observed_client_name_raw: input.clientName,
+			observed_client_type: input.observedClientType
+				|| normalizeObservedClientType(input.clientName),
+			observed_client_version: input.clientVersion,
+			last_used_at: input.resultStatus === 'success' ? now : undefined,
+			last_successful_tool: input.resultStatus === 'success' ? input.toolName : undefined,
 			result_summary: input.resultSummary,
 			...input.workflowMetadata,
 		},
 	}, context);
+}
+
+export async function recordRejectedToolCallAuditEvent(
+	context: ToolInvocationContext,
+	reason: 'tool_call_invalid_name' | 'tool_call_invalid_arguments' | 'tool_call_unknown'
+): Promise<void> {
+	const vaultRoot = resolveAuditVaultRoot({}, context);
+	if (!vaultRoot) {
+		return;
+	}
+	try {
+		await recordToolCallAuditEventAsync(vaultRoot, {
+			toolName: 'unknown',
+			resultStatus: 'failed',
+			targetPaths: [],
+			durationMs: 0,
+			riskLevel: 'rejected',
+			agentId: context.agentId || 'unknown session id',
+			principalId: context.principalId,
+			sessionId: context.sessionId,
+			clientName: context.clientName ?? null,
+			clientVersion: context.clientVersion,
+			observedClientType: context.observedClientType,
+			transport: context.transport,
+			runtimeVersion: context.runtimeVersion,
+			argsSummary: '',
+			resultSummary: 'MCP tools/call was rejected before tool execution.',
+			workflowMetadata: {
+				diagnostic_reason: reason,
+			},
+		}, context);
+	} catch {
+		// Rejection diagnostics are best effort.
+	}
 }
 
 function makeToolResultForWrite(tool: string, payload: ReturnType<typeof buildAndWriteNote>) {
@@ -5270,12 +5362,15 @@ export async function callTool(
 ): Promise<McpStructuredToolResult> {
 	const requestName = typeof name === 'string' ? name.trim() : '';
 	if (!requestName) {
+		await recordRejectedToolCallAuditEvent(context, 'tool_call_invalid_name');
 		return toolError('Tool name is required.');
 	}
 	if (!isToolName(requestName)) {
+		await recordRejectedToolCallAuditEvent(context, 'tool_call_unknown');
 		return toolError(`Unknown tool: ${requestName}`);
 	}
 	if (!isRecord(rawParams)) {
+		await recordRejectedToolCallAuditEvent(context, 'tool_call_invalid_arguments');
 		return validateToolResult(
 			requestName,
 			decorateToolResult(requestName, toolError('Tool arguments must be an object.'), context)
@@ -5304,7 +5399,7 @@ export async function callTool(
 			)
 		) {
 			throw new ToolInputError(
-				`Credential principal ${context.principalId || 'unknown'} lacks capability ${contract.capability} for ${requestName}.`
+				`Runtime principal ${context.principalId || 'unknown'} lacks capability ${contract.capability} for ${requestName}.`
 			);
 		}
 		const handler = TOOL_HANDLERS[requestName];
@@ -5338,6 +5433,8 @@ export async function callTool(
 					principalId: context.principalId,
 					sessionId,
 					clientName,
+					clientVersion: context.clientVersion,
+					observedClientType: context.observedClientType,
 					transport: context.transport,
 					runtimeVersion: context.runtimeVersion,
 					argsSummary,
@@ -5383,8 +5480,8 @@ export async function recoverPendingOperations(
 		const result = await callTool(request.tool, request.args, {
 			...context,
 			defaultVaultRoot: vaultRoot,
-			principalId: context.principalId || 'runtime-recovery',
-			credentialCapabilities: context.credentialCapabilities || ['*'],
+			principalId: context.principalId || LOCAL_TRUST_PRINCIPAL_ID,
+			credentialCapabilities: context.credentialCapabilities || LOCAL_TRUST_CAPABILITIES,
 			agentId: context.agentId || 'tracekeeper-recovery',
 			clientName: context.clientName || 'tracekeeper-runtime-recovery',
 			transport: context.transport || 'runtime-recovery',

@@ -3,10 +3,15 @@ import { createServer, type IncomingMessage, type Server as HttpServer, type Ser
 import type { AddressInfo } from 'node:net';
 import * as crypto from 'node:crypto';
 import { URL } from 'node:url';
-import type { ToolCapability } from '@tracekeeper/contracts';
 import type { VaultRepository } from '@tracekeeper/core';
 import type { JsonRpcResponse } from './protocol';
-import { recoverPendingOperations, type ToolInvocationContext } from './tools';
+import {
+	LOCAL_TRUST_CAPABILITIES,
+	LOCAL_TRUST_PRINCIPAL_ID,
+	appendRuntimeDiagnosticAuditEvent,
+	recoverPendingOperations,
+	type ToolInvocationContext,
+} from './tools';
 import {
 	McpConnectionState,
 	McpJsonRpcHandler,
@@ -16,19 +21,12 @@ import {
 
 export type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed' | 'port_conflict';
 
-export interface RuntimeCredential {
-	id: string;
-	token: string;
-	capabilities?: readonly (ToolCapability | '*')[];
-}
-
 export interface StreamableHttpRuntimeOptions {
+	localTrust?: boolean;
+	serviceToken: string;
 	host?: string;
 	port?: number;
 	path?: string;
-	token?: string;
-	credentials?: readonly RuntimeCredential[];
-	allowMissingTokenForDev?: boolean;
 	maxRequestBytes?: number;
 	maxSessions?: number;
 	maxStreamsPerSession?: number;
@@ -59,7 +57,6 @@ export interface StreamableHttpRuntimeStatus {
 	sessionIdleTtlMs: number;
 	maxStreamsPerSession: number;
 	requestTimeoutMs: number;
-	credentialCount: number;
 	recovery: RuntimeRecoveryStatus | null;
 }
 
@@ -76,15 +73,6 @@ interface RuntimeSession extends McpConnectionState {
 	streams: Set<ServerResponse>;
 }
 
-interface AuthenticatedPrincipal {
-	id: string;
-	capabilities: readonly string[];
-}
-
-interface StoredCredential extends AuthenticatedPrincipal {
-	tokenHash: Buffer;
-}
-
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PATH = '/mcp';
@@ -93,13 +81,13 @@ const DEFAULT_MAX_SESSIONS = 32;
 const DEFAULT_MAX_STREAMS_PER_SESSION = 2;
 const DEFAULT_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30 * 1000;
+const MIN_SERVICE_TOKEN_BYTES = 32;
 
 export class StreamableHttpMcpRuntime {
 	private host: string;
 	private port: number;
 	private path: string;
-	private credentials: StoredCredential[];
-	private allowMissingTokenForDev: boolean;
+	private serviceTokenHash: Buffer;
 	private maxRequestBytes: number;
 	private maxSessions: number;
 	private maxStreamsPerSession: number;
@@ -117,15 +105,17 @@ export class StreamableHttpMcpRuntime {
 	private lastError = '';
 	private recoveryStatus: RuntimeRecoveryStatus | null = null;
 
-	constructor(options: StreamableHttpRuntimeOptions = {}) {
+	constructor(options: StreamableHttpRuntimeOptions) {
+		if (options.localTrust !== true) {
+			throw new Error('MCP Runtime requires explicit localTrust: true.');
+		}
 		this.host = options.host || DEFAULT_HOST;
+		if (this.host !== DEFAULT_HOST) {
+			throw new Error(`MCP Runtime local trust requires host ${DEFAULT_HOST}.`);
+		}
 		this.port = options.port ?? 58437;
 		this.path = options.path || DEFAULT_PATH;
-		this.allowMissingTokenForDev = options.allowMissingTokenForDev === true;
-		this.credentials = normalizeCredentials(options.credentials, options.token);
-		if (this.credentials.length === 0 && !this.allowMissingTokenForDev) {
-			throw new Error('MCP Runtime token is required. Pass a generated token or explicitly enable allowMissingTokenForDev for local development only.');
-		}
+		this.serviceTokenHash = hashServiceToken(options.serviceToken);
 		this.maxRequestBytes = normalizePositiveLimit(options.maxRequestBytes, DEFAULT_MAX_REQUEST_BYTES, 'maxRequestBytes');
 		this.maxSessions = normalizePositiveLimit(options.maxSessions, DEFAULT_MAX_SESSIONS, 'maxSessions');
 		this.maxStreamsPerSession = normalizePositiveLimit(options.maxStreamsPerSession, DEFAULT_MAX_STREAMS_PER_SESSION, 'maxStreamsPerSession');
@@ -142,6 +132,8 @@ export class StreamableHttpMcpRuntime {
 			contentLanguage: options.contentLanguage,
 			contentLanguageSource: options.contentLanguageSource,
 			runtimeVersion: this.runtimeVersion,
+			principalId: LOCAL_TRUST_PRINCIPAL_ID,
+			credentialCapabilities: LOCAL_TRUST_CAPABILITIES,
 		};
 		this.handler = new McpJsonRpcHandler({
 			defaultVaultRoot: options.defaultVaultRoot,
@@ -268,7 +260,6 @@ export class StreamableHttpMcpRuntime {
 			sessionIdleTtlMs: this.sessionIdleTtlMs,
 			maxStreamsPerSession: this.maxStreamsPerSession,
 			requestTimeoutMs: this.requestTimeoutMs,
-			credentialCount: this.credentials.length,
 			recovery: this.recoveryStatus ? { ...this.recoveryStatus } : null,
 		};
 	}
@@ -290,9 +281,18 @@ export class StreamableHttpMcpRuntime {
 			return;
 		}
 
-		const principal = this.authenticate(request, url);
-		if (!principal) {
-			this.writeJson(response, 401, this.errorResponse(null, -32001, 'Invalid MCP runtime token.'), request);
+		if (url.searchParams.has('token')) {
+			this.recordRequestRejection('query_token_rejected');
+			this.writeJson(
+				response,
+				400,
+				this.errorResponse(
+					null,
+					-32000,
+					'Legacy MCP credentials are not supported. Remove the token query and configure an Authorization Bearer header.'
+				),
+				request
+			);
 			return;
 		}
 
@@ -301,20 +301,26 @@ export class StreamableHttpMcpRuntime {
 			response.end();
 			return;
 		}
+		const bearerStatus = this.serviceBearerStatus(request);
+		if (bearerStatus !== 'valid') {
+			this.recordRequestRejection(bearerStatus === 'missing' ? 'auth_missing' : 'auth_invalid');
+			this.writeJson(response, 401, this.errorResponse(null, -32001, 'Unauthorized MCP request.'), request);
+			return;
+		}
 		if (request.method === 'POST') {
 			if (!this.hasJsonContentType(request)) {
 				this.writeJson(response, 415, this.errorResponse(null, -32015, 'Content-Type must be application/json.'), request);
 				return;
 			}
-			await this.handlePost(request, response, principal);
+			await this.handlePost(request, response);
 			return;
 		}
 		if (request.method === 'GET') {
-			this.handleGet(request, response, principal);
+			this.handleGet(request, response);
 			return;
 		}
 		if (request.method === 'DELETE') {
-			this.handleDelete(request, response, principal);
+			this.handleDelete(request, response);
 			return;
 		}
 
@@ -323,8 +329,7 @@ export class StreamableHttpMcpRuntime {
 
 	private async handlePost(
 		request: IncomingMessage,
-		response: ServerResponse,
-		principal: AuthenticatedPrincipal
+		response: ServerResponse
 	): Promise<void> {
 		let body = '';
 		try {
@@ -361,8 +366,8 @@ export class StreamableHttpMcpRuntime {
 			return;
 		}
 		const session = isInitialize
-			? this.createSession(principal)
-			: this.requireSession(request, response, principal);
+			? this.createSession()
+			: this.requireSession(request, response);
 		if (!session) {
 			return;
 		}
@@ -380,8 +385,8 @@ export class StreamableHttpMcpRuntime {
 		this.writeJson(response, 200, result, request);
 	}
 
-	private handleGet(request: IncomingMessage, response: ServerResponse, principal: AuthenticatedPrincipal): void {
-		const session = this.requireSession(request, response, principal);
+	private handleGet(request: IncomingMessage, response: ServerResponse): void {
+		const session = this.requireSession(request, response);
 		if (!session) {
 			return;
 		}
@@ -401,8 +406,8 @@ export class StreamableHttpMcpRuntime {
 		});
 	}
 
-	private handleDelete(request: IncomingMessage, response: ServerResponse, principal: AuthenticatedPrincipal): void {
-		const session = this.requireSession(request, response, principal);
+	private handleDelete(request: IncomingMessage, response: ServerResponse): void {
+		const session = this.requireSession(request, response);
 		if (!session) {
 			return;
 		}
@@ -412,14 +417,16 @@ export class StreamableHttpMcpRuntime {
 		response.end();
 	}
 
-	private createSession(principal: AuthenticatedPrincipal): RuntimeSession {
+	private createSession(): RuntimeSession {
 		const sessionId = crypto.randomUUID();
 		const session: RuntimeSession = {
 			sessionId,
-			principalId: principal.id,
-			credentialCapabilities: principal.capabilities,
+			principalId: LOCAL_TRUST_PRINCIPAL_ID,
+			credentialCapabilities: LOCAL_TRUST_CAPABILITIES,
 			agentId: sessionId,
 			clientName: null,
+			clientVersion: null,
+			observedClientType: 'unknown',
 			initialized: false,
 			createdAt: Date.now(),
 			lastSeenAt: Date.now(),
@@ -431,8 +438,7 @@ export class StreamableHttpMcpRuntime {
 
 	private requireSession(
 		request: IncomingMessage,
-		response: ServerResponse,
-		principal: AuthenticatedPrincipal
+		response: ServerResponse
 	): RuntimeSession | null {
 		const sessionId = this.firstHeaderValue(request.headers['mcp-session-id']);
 		if (!sessionId) {
@@ -442,10 +448,6 @@ export class StreamableHttpMcpRuntime {
 		const session = this.sessions.get(sessionId);
 		if (!session) {
 			this.writeJson(response, 404, this.errorResponse(null, -32004, 'Unknown MCP session.'), request);
-			return null;
-		}
-		if (session.principalId !== principal.id) {
-			this.writeJson(response, 403, this.errorResponse(null, -32003, 'MCP session belongs to another credential principal.'), request);
 			return null;
 		}
 		const requestedProtocolVersion = this.firstHeaderValue(request.headers['mcp-protocol-version']);
@@ -578,20 +580,28 @@ export class StreamableHttpMcpRuntime {
 		}
 	}
 
-	private authenticate(request: IncomingMessage, url: URL): AuthenticatedPrincipal | null {
-		const queryToken = url.searchParams.get('token') || '';
+	private serviceBearerStatus(request: IncomingMessage): 'valid' | 'missing' | 'invalid' {
 		const authorization = this.firstHeaderValue(request.headers.authorization);
-		const bearerToken = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : '';
-		const presentedToken = queryToken || bearerToken;
-		for (const credential of this.credentials) {
-			if (safeTokenEqualsHash(presentedToken, credential.tokenHash)) {
-				return { id: credential.id, capabilities: credential.capabilities };
-			}
+		if (!authorization) {
+			return 'missing';
 		}
-		if (this.credentials.length === 0 && this.allowMissingTokenForDev) {
-			return { id: 'development-no-token', capabilities: ['*'] };
+		const match = /^Bearer ([^\s]+)$/iu.exec(authorization);
+		if (!match) {
+			return 'invalid';
 		}
-		return null;
+		const presentedHash = crypto.createHash('sha256').update(match[1], 'utf8').digest();
+		return crypto.timingSafeEqual(presentedHash, this.serviceTokenHash) ? 'valid' : 'invalid';
+	}
+
+	private recordRequestRejection(reason: 'auth_missing' | 'auth_invalid' | 'query_token_rejected'): void {
+		if (!this.defaultVaultRoot) {
+			return;
+		}
+		try {
+			appendRuntimeDiagnosticAuditEvent(this.defaultVaultRoot, reason);
+		} catch {
+			// Best-effort diagnostics must not change HTTP rejection behavior.
+		}
 	}
 
 	private pruneExpiredSessions(): void {
@@ -729,48 +739,13 @@ function normalizePositiveLimit(value: number | undefined, fallback: number, nam
 	return resolved;
 }
 
-function normalizeCredentials(
-	configured: readonly RuntimeCredential[] | undefined,
-	legacyToken: string | undefined
-): StoredCredential[] {
-	const credentials: StoredCredential[] = [];
-	const ids = new Set<string>();
-	const tokens = new Set<string>();
-	const addCredential = (credential: RuntimeCredential): void => {
-		const id = credential.id.trim();
-		const token = credential.token.trim();
-		if (!id || !token) {
-			throw new Error('Runtime credentials require non-empty id and token values.');
-		}
-		if (ids.has(id)) {
-			throw new Error(`Duplicate runtime credential id: ${id}`);
-		}
-		if (tokens.has(token)) {
-			throw new Error(`Duplicate runtime credential token for principal: ${id}`);
-		}
-		ids.add(id);
-		tokens.add(token);
-		credentials.push({
-			id,
-			tokenHash: hashToken(token),
-			capabilities: [...new Set(credential.capabilities?.length ? credential.capabilities : ['*'])],
-		});
-	};
-
-	for (const credential of configured || []) {
-		addCredential(credential);
+function hashServiceToken(serviceToken: string): Buffer {
+	if (
+		typeof serviceToken !== 'string' ||
+		Buffer.byteLength(serviceToken, 'utf8') < MIN_SERVICE_TOKEN_BYTES ||
+		/\s/u.test(serviceToken)
+	) {
+		throw new Error(`serviceToken must contain at least ${MIN_SERVICE_TOKEN_BYTES} non-whitespace UTF-8 bytes.`);
 	}
-	const normalizedLegacyToken = (legacyToken || '').trim();
-	if (normalizedLegacyToken && !tokens.has(normalizedLegacyToken)) {
-		addCredential({ id: 'legacy-shared-token', token: normalizedLegacyToken, capabilities: ['*'] });
-	}
-	return credentials;
-}
-
-function hashToken(token: string): Buffer {
-	return crypto.createHash('sha256').update(token).digest();
-}
-
-function safeTokenEqualsHash(presentedToken: string, expectedHash: Buffer): boolean {
-	return crypto.timingSafeEqual(hashToken(presentedToken), expectedHash);
+	return crypto.createHash('sha256').update(serviceToken, 'utf8').digest();
 }

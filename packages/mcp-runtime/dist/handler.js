@@ -39,6 +39,7 @@ const path = __importStar(require("node:path"));
 const core_1 = require("@tracekeeper/core");
 const protocol_1 = require("./protocol");
 const tools_1 = require("./tools");
+const observed_client_1 = require("./observed-client");
 const safety_1 = require("./safety");
 exports.MCP_PROTOCOL_VERSION = '2025-06-18';
 exports.SUPPORTED_MCP_PROTOCOL_VERSIONS = ['2025-11-25', exports.MCP_PROTOCOL_VERSION];
@@ -297,7 +298,7 @@ class McpJsonRpcHandler {
         if (!this.hasCapability(state, capability)) {
             throw new protocol_1.RpcError({
                 code: -32602,
-                message: `Credential principal ${state.principalId || 'unknown'} lacks capability ${capability} for ${method}.`,
+                message: `Runtime principal ${state.principalId || 'unknown'} lacks capability ${capability} for ${method}.`,
             });
         }
     }
@@ -309,12 +310,17 @@ class McpJsonRpcHandler {
         const name = params.name;
         const argumentsValue = params.arguments ?? {};
         if (typeof name !== 'string' || name.trim() === '') {
+            await (0, tools_1.recordRejectedToolCallAuditEvent)(this.buildToolInvocationContext(state), 'tool_call_invalid_name');
             throw new protocol_1.RpcError({ code: -32602, message: '`name` is required for tools/call.' });
         }
         if (!(0, protocol_1.isRecord)(argumentsValue)) {
+            await (0, tools_1.recordRejectedToolCallAuditEvent)(this.buildToolInvocationContext(state), 'tool_call_invalid_arguments');
             throw new protocol_1.RpcError({ code: -32602, message: '`arguments` must be an object.' });
         }
-        const toolInvocationContext = {
+        return await (0, tools_1.callTool)(name, argumentsValue, this.buildToolInvocationContext(state));
+    }
+    buildToolInvocationContext(state) {
+        return {
             defaultVaultRoot: this.defaultVaultRoot,
             vaultConfigDir: this.vaultConfigDir,
             vaultRepository: this.vaultRepository,
@@ -328,14 +334,17 @@ class McpJsonRpcHandler {
             agentId: state.agentId,
             sessionId: state.sessionId,
             clientName: state.clientName,
+            clientVersion: state.clientVersion,
+            observedClientType: state.observedClientType,
             transport: this.transport,
             runtimeVersion: this.runtimeVersion,
         };
-        return await (0, tools_1.callTool)(name, argumentsValue, toolInvocationContext);
     }
     captureConnection(params, state) {
         state.agentId = this.extractAgentIdFromInitialize(params, state.sessionId);
         state.clientName = this.extractClientNameFromInitialize(params);
+        state.clientVersion = this.extractClientVersionFromInitialize(params);
+        state.observedClientType = (0, observed_client_1.normalizeObservedClientType)(state.clientName);
         state.initialized = true;
         if (!this.defaultVaultRoot) {
             return;
@@ -346,6 +355,8 @@ class McpJsonRpcHandler {
                 agentId: state.agentId,
                 sessionId: state.sessionId,
                 clientName: state.clientName,
+                clientVersion: state.clientVersion,
+                observedClientType: state.observedClientType,
                 transport: this.transport,
                 runtimeVersion: this.runtimeVersion,
             });
@@ -395,6 +406,23 @@ class McpJsonRpcHandler {
         for (const name of names) {
             if (typeof name === 'string' && name.trim() !== '') {
                 return name.trim();
+            }
+        }
+        return null;
+    }
+    extractClientVersionFromInitialize(params) {
+        const clientInfo = (0, protocol_1.isRecord)(params.clientInfo) ? params.clientInfo : {};
+        const versions = [
+            params.version,
+            params.client_version,
+            params.clientVersion,
+            clientInfo.version,
+            clientInfo.client_version,
+            clientInfo.clientVersion,
+        ];
+        for (const version of versions) {
+            if (typeof version === 'string' && version.trim() !== '') {
+                return version.trim();
             }
         }
         return null;

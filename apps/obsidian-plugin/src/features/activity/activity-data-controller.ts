@@ -40,6 +40,7 @@ import {
 } from './activity-model';
 import { ui } from '../../ui/localization';
 import { buildAgentWorkflowDiagnostics } from './activity-workflow-diagnostics';
+import { buildRecentObservedClientConnections } from './activity-observed-client';
 
 type ParsedRecordValue = string | string[];
 type ParsedRecord = Record<string, ParsedRecordValue>;
@@ -381,6 +382,7 @@ private toRuntimeLogItem(event: AuditEventRecord): RuntimeLogItem {
 			event.riskLevel ? this.host.formatRiskLabel(event.riskLevel) : '',
 		].filter(Boolean);
 		const body = event.reason
+			|| event.diagnosticReason
 			|| event.argsSummary
 			|| event.targetPaths.join(', ')
 			|| event.target
@@ -513,7 +515,7 @@ private toActivityTimelineAuditItem(event: AuditEventRecord): ActivityTimelineIt
 					? ui('建立连接', 'Connected')
 					: this.runtimeLogTitle(event, 'record'),
 			meta: event.resultStatus ? this.host.formatResultLabel(event.resultStatus) : event.actor,
-			body: event.reason || event.snippet,
+			body: event.reason || event.diagnosticReason || event.snippet,
 			path: event.target || event.path,
 		};
 	}
@@ -546,16 +548,24 @@ private normalizeAuditToolName(eventType: string, action: string, toolName: stri
 			principalId: event.principalId,
 			taskId: event.taskId,
 			agentId: event.agentId || 'unknown',
-			sessionId: event.sessionId || event.agentId || 'unknown',
+			sessionId: event.sessionId,
 			clientName: event.clientName || 'unknown',
+			observedClientNameRaw: event.observedClientNameRaw || event.clientName,
+			observedClientType: event.observedClientType,
+			observedClientVersion: event.observedClientVersion,
 			toolName: event.toolName || event.action || 'unknown',
 			resultStatus: event.resultStatus || 'unknown',
 			targetPaths: event.targetPaths,
 			timestamp: event.timestamp,
+			lastUsedAt: event.lastUsedAt,
+			lastSuccessfulTool: event.lastSuccessfulTool,
+			transport: event.transport,
 			durationMs: event.durationMs,
 			riskLevel: event.riskLevel || 'unknown',
 			argsSummary: event.argsSummary,
 			resultSummary: event.resultSummary,
+			scopeMode: event.scopeMode,
+			matchedCount: event.matchedCount,
 			sortTimestamp: event.sortTimestamp,
 		};
 	}
@@ -564,52 +574,7 @@ buildRecentAgentConnections(
 		auditEvents: AuditEventRecord[],
 		toolCalls: AgentToolCallRecord[]
 	): AgentConnectionRecord[] {
-		const agents = new Map<string, AgentConnectionRecord>();
-		const upsertAgent = (principalId: string, agentId: string, sessionId: string, clientName: string, timestamp: string, sortTimestamp: number) => {
-			const key = `${clientName || 'unknown'}::${sessionId || agentId || 'unknown'}`;
-			const existing = agents.get(key);
-			if (existing && existing.sortTimestamp >= sortTimestamp) {
-				return existing;
-			}
-			const next = existing || {
-				principalId,
-				agentId: agentId || 'unknown',
-				sessionId: sessionId || agentId || 'unknown',
-				clientName: clientName || 'unknown',
-				displayName: this.host.formatAgentDisplayName(clientName, agentId),
-				transport: 'streamable-http',
-				status: 'seen',
-				lastSeen: timestamp,
-				lastToolCall: '',
-				runtimeVersion: '',
-				permissionProfile: 'read-only default + controlled write',
-				sortTimestamp,
-			};
-			next.principalId = principalId || next.principalId;
-			next.agentId = agentId || next.agentId;
-			next.sessionId = sessionId || agentId || next.sessionId;
-			next.clientName = clientName || next.clientName;
-			next.displayName = this.host.formatAgentDisplayName(next.clientName, next.agentId);
-			next.lastSeen = timestamp || next.lastSeen;
-			next.sortTimestamp = sortTimestamp || next.sortTimestamp;
-			agents.set(key, next);
-			return next;
-		};
-
-		for (const event of auditEvents.filter((item) => this.isConnectionAuditEvent(item))) {
-			const agent = upsertAgent(event.principalId, event.agentId, event.sessionId, event.clientName, event.timestamp, event.sortTimestamp);
-			agent.transport = event.transport || agent.transport;
-			agent.runtimeVersion = event.runtimeVersion || agent.runtimeVersion;
-			agent.status = event.resultStatus || 'connected';
-		}
-
-		for (const call of toolCalls) {
-			const agent = upsertAgent(call.principalId, call.agentId, call.sessionId, call.clientName, call.timestamp, call.sortTimestamp);
-			agent.lastToolCall = call.toolName;
-			agent.status = call.resultStatus === 'failed' ? 'warning' : 'active';
-		}
-
-		return [...agents.values()].sort((a, b) => b.sortTimestamp - a.sortTimestamp);
+		return buildRecentObservedClientConnections(auditEvents, toolCalls);
 	}
 
 async readRecentAuditEvents(limit: number): Promise<AuditEventRecord[]> {
@@ -693,6 +658,14 @@ private async readAuditMarkdownFile(file: TFile): Promise<AuditEventRecord[]> {
 					agentId: this.host.firstString(data, ['agent_id', 'agentId', 'session_id', 'sessionId']),
 					sessionId: this.host.firstString(data, ['session_id', 'sessionId']),
 					clientName: this.host.firstString(data, ['client_name', 'clientName', 'client']),
+					auditSchemaVersion: this.host.firstString(data, ['audit_schema_version', 'auditSchemaVersion']),
+					observedClientNameRaw: this.host.firstString(data, ['observed_client_name_raw', 'observedClientNameRaw']),
+					observedClientType: this.host.firstString(data, ['observed_client_type', 'observedClientType']),
+					observedClientVersion: this.host.firstString(data, ['observed_client_version', 'observedClientVersion']),
+					connectedAt: this.host.firstString(data, ['connected_at', 'connectedAt']),
+					lastUsedAt: this.host.firstString(data, ['last_used_at', 'lastUsedAt']),
+					lastSuccessfulTool: this.host.firstString(data, ['last_successful_tool', 'lastSuccessfulTool']),
+					diagnosticReason: this.host.firstString(data, ['diagnostic_reason', 'diagnosticReason']),
 					toolName,
 					resultStatus: this.host.firstString(data, ['result_status', 'resultStatus', 'result', 'status']),
 					targetPaths: this.host.readStringList(data, ['target_paths', 'targetPaths', 'target_path', 'targetPath', 'target']),
@@ -774,6 +747,14 @@ private parseAuditLogSections(content: string, sourcePath: string): AuditEventRe
 				agentId: this.host.firstString(row, ['agent_id', 'agentId', 'session_id', 'sessionId']),
 				sessionId: this.host.firstString(row, ['session_id', 'sessionId']),
 				clientName: this.host.firstString(row, ['client_name', 'clientName', 'client']),
+				auditSchemaVersion: this.host.firstString(row, ['audit_schema_version', 'auditSchemaVersion']),
+				observedClientNameRaw: this.host.firstString(row, ['observed_client_name_raw', 'observedClientNameRaw']),
+				observedClientType: this.host.firstString(row, ['observed_client_type', 'observedClientType']),
+				observedClientVersion: this.host.firstString(row, ['observed_client_version', 'observedClientVersion']),
+				connectedAt: this.host.firstString(row, ['connected_at', 'connectedAt']),
+				lastUsedAt: this.host.firstString(row, ['last_used_at', 'lastUsedAt']),
+				lastSuccessfulTool: this.host.firstString(row, ['last_successful_tool', 'lastSuccessfulTool']),
+				diagnosticReason: this.host.firstString(row, ['diagnostic_reason', 'diagnosticReason']),
 				toolName,
 				resultStatus: this.host.firstString(row, ['result_status', 'resultStatus', 'result', 'status']),
 				targetPaths: this.host.readStringList(row, ['target_paths', 'targetPaths', 'target_path', 'targetPath', 'target']),

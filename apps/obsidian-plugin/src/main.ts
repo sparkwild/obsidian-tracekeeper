@@ -9,12 +9,11 @@ import {
 	TFolder,
 	getLanguage,
 } from 'obsidian';
-import { randomBytes } from 'node:crypto';
 import {
+	LOCAL_TRUST_CAPABILITIES,
 	StreamableHttpMcpRuntime,
 	type StreamableHttpRuntimeStatus,
 	type RuntimeState,
-	type RuntimeCredential,
 } from '@tracekeeper/mcp-runtime';
 import { LocalToolExecutor } from './composition/local-tool-executor';
 import {
@@ -58,10 +57,10 @@ import { ObsidianVaultRepository } from './adapters/obsidian-vault-repository';
 import {
 	DEFAULT_ONBOARDING_SETTINGS,
 	OnboardingSettingsState,
+	findOnboardingConnectionEvidence,
 	findOnboardingRecallEvidence,
 	findOnboardingTrackedWorkflowEvidence,
 	getNextOnboardingStep,
-	hasOnboardingConnectionEvidence,
 	markAgentRestartDone,
 	markClientConfigured,
 	markConnectionVerified,
@@ -79,7 +78,7 @@ import {
 	shouldShowOnboardingEntryPrompt,
 } from './features/onboarding/onboarding-state';
 import {
-	buildClientConfigText,
+	buildClientConfigTexts,
 	buildClientProfiles,
 	type ClientConfigState,
 	type ClientProfile,
@@ -109,19 +108,15 @@ import {
 	type SkillInstallReceipts,
 } from './features/skill-installation/skill-install-receipts';
 import {
-	capabilitiesForRuntimeProfile,
-	normalizeRuntimeCredentialProfileAndCapabilities,
-	runtimeCapabilitiesToPublicTools,
-	rotateClientRuntimeCredential,
-	type RuntimeCredentialCapabilityProfile,
-} from './features/settings/runtime-credentials';
+	isRuntimeAccessToken,
+	normalizeLocalTrustSettings,
+	stripLegacyConnectionSettings,
+} from './features/settings/local-trust-settings';
 import {
-	findOnboardingRuntimePrincipal,
 	onboardingEvidenceNotBefore,
 	parseOnboardingRecallQuery,
 	clearOnboardingAgentBehaviorEvidence,
 	clearOnboardingClientEvidence,
-	clearOnboardingRuntimeEvidence,
 	resolveOnboardingSelectedClient,
 	buildOnboardingContext,
 } from './features/onboarding/onboarding-view-model';
@@ -186,6 +181,10 @@ import { TracekeeperMemoryInspectorView } from './features/memory/memory-inspect
 import { TracekeeperRuntimeLogView } from './features/runtime/runtime-log-view';
 import { TracekeeperRuntimeStatusView } from './features/runtime/runtime-status-view';
 import { McpRuntimeLifecycleController } from './features/runtime/runtime-lifecycle-controller';
+import {
+	RuntimeAccessResetController,
+	type RuntimeAccessResetResult,
+} from './features/runtime/runtime-access-reset-controller';
 import { runtimeViewModel } from './features/runtime/runtime-view-model';
 import { TracekeeperPermissionPolicyView } from './features/permissions/permission-policy-view';
 import { TracekeeperSettingTab } from './features/settings/tracekeeper-setting-tab';
@@ -234,9 +233,6 @@ import {
 	type SourceStatusQuery,
 	type SourceStatusSnapshot,
 } from './features/observability/knowledge-observability-model';
-
-
-const MANAGED_AGENT_CLIENT_IDS = ['codex', 'claude-code', 'claude-desktop', 'cursor', 'custom'] as const;
 const CONTROL_FILE_PATHS = [
 	TRACEKEEPER_SYSTEM_PATH,
 	TRACEKEEPER_MEMORY_POLICY_PATH,
@@ -376,6 +372,7 @@ function buildKnowledgeEntryFiles(language: ResolvedNoteContentLanguage): BaseSt
 
 export interface RuntimeViewStatus {
 	enabled: boolean;
+	accessProtected: boolean;
 	state: RuntimeState;
 	label: string;
 	detail: string;
@@ -425,11 +422,9 @@ interface TracekeeperSettings {
 	defaultAgentScope: string;
 	mcpRuntimeEnabled: boolean;
 	mcpPort: number;
+	runtimeAccessToken: string;
 	onboarding: OnboardingSettingsState;
 	skillInstallReceipts: SkillInstallReceipts;
-	runtimeToken: string;
-	runtimeTokenCreatedAt: string;
-	runtimeCredentials: StoredRuntimeCredential[];
 	graphProfile: GraphProfile;
 	globalMemoryRule: MemoryProposalRule;
 	projectMemoryRule: MemoryProposalRule;
@@ -439,25 +434,17 @@ interface TracekeeperSettings {
 	autoRefreshIntervalSeconds: number;
 }
 
-interface StoredRuntimeCredential extends RuntimeCredential {
-	clientId: string;
-	createdAt: string;
-	capabilityProfile?: RuntimeCredentialCapabilityProfile;
-}
-
 const DEFAULT_SETTINGS: TracekeeperSettings = {
 	memoryRulesVersion: MEMORY_RULES_VERSION,
 	defaultAgentScope: 'vault',
 	mcpRuntimeEnabled: true,
 	mcpPort: DEFAULT_MCP_PORT,
+	runtimeAccessToken: '',
 	onboarding: {
 		...DEFAULT_ONBOARDING_SETTINGS,
 		selectedClientId: 'codex',
 	},
 	skillInstallReceipts: {},
-	runtimeToken: '',
-	runtimeTokenCreatedAt: '',
-	runtimeCredentials: [],
 	graphProfile: 'advisory',
 	globalMemoryRule: 'review_queue',
 	projectMemoryRule: 'review_queue',
@@ -470,6 +457,16 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 export default class TracekeeperPlugin extends Plugin {
 	settings: TracekeeperSettings = DEFAULT_SETTINGS;
 	private readonly mcpRuntimeLifecycle = new McpRuntimeLifecycleController();
+	private readonly runtimeAccessResetController = new RuntimeAccessResetController({
+		getAccessToken: () => this.settings.runtimeAccessToken,
+		setAccessToken: (value) => {
+			this.settings.runtimeAccessToken = value;
+		},
+		isRuntimeEnabled: () => this.settings.mcpRuntimeEnabled,
+		stopRuntime: () => this.stopMcpRuntimeForAccessReset(),
+		persistSettings: () => this.saveSettings(),
+		startRuntime: () => this.startMcpRuntimeForAccessReset(),
+	});
 	private localToolExecutor!: LocalToolExecutor;
 	private vaultRepository!: ObsidianVaultRepository;
 	private knowledgeIndex: ObsidianKnowledgeIndexAdapter | null = null;
@@ -497,7 +494,6 @@ export default class TracekeeperPlugin extends Plugin {
 		sessionIdleTtlMs: 30 * 60 * 1000,
 		maxStreamsPerSession: DEFAULT_MCP_MAX_STREAMS_PER_SESSION,
 		requestTimeoutMs: DEFAULT_MCP_REQUEST_TIMEOUT_MS,
-		credentialCount: 0,
 		recovery: null,
 	};
 
@@ -556,7 +552,8 @@ export default class TracekeeperPlugin extends Plugin {
 			? new ClientConfigAdapter({
 				fs: desktopApi.fs,
 				path: desktopApi.path,
-				getConnectionUrl: (clientId) => this.getMcpConnectionUrl(clientId),
+				getConnectionUrl: () => this.getMcpConnectionUrl(),
+				getAccessToken: () => this.settings.runtimeAccessToken,
 			})
 			: null;
 		this.clientSkillAdapter = desktopApi
@@ -724,7 +721,9 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private normalizeSettings(raw: unknown): TracekeeperSettings {
-		const saved = raw && typeof raw === 'object' ? raw as Partial<TracekeeperSettings> & Record<string, unknown> : {};
+		const saved = normalizeLocalTrustSettings(raw) as Partial<TracekeeperSettings>
+			& Record<string, unknown>
+			& { runtimeAccessToken: string };
 		const next: TracekeeperSettings = { ...DEFAULT_SETTINGS };
 		const legacyEndpoint = typeof saved.mcpHttpEndpoint === 'string' ? saved.mcpHttpEndpoint.trim() : '';
 		if (legacyEndpoint && !LEGACY_DEFAULT_MCP_HTTP_ENDPOINTS.includes(legacyEndpoint)) {
@@ -740,12 +739,7 @@ export default class TracekeeperPlugin extends Plugin {
 			? saved.mcpRuntimeEnabled
 			: DEFAULT_SETTINGS.mcpRuntimeEnabled;
 		next.mcpPort = this.normalizePort(saved.mcpPort ?? next.mcpPort);
-		const savedRuntimeToken = typeof saved.runtimeToken === 'string' ? saved.runtimeToken.trim() : '';
-		next.runtimeToken = savedRuntimeToken || this.generateRuntimeToken();
-		next.runtimeTokenCreatedAt = savedRuntimeToken
-			? this.normalizeTimestamp(saved.runtimeTokenCreatedAt)
-			: new Date().toISOString();
-		next.runtimeCredentials = this.normalizeRuntimeCredentials(saved.runtimeCredentials, next.runtimeToken);
+		next.runtimeAccessToken = saved.runtimeAccessToken;
 		next.graphProfile = normalizeGraphProfileValue(saved.graphProfile);
 		next.onboarding = normalizeOnboardingSettingsState(saved.onboarding);
 		next.skillInstallReceipts = normalizeSkillInstallReceipts(saved.skillInstallReceipts);
@@ -760,69 +754,6 @@ export default class TracekeeperPlugin extends Plugin {
 			: DEFAULT_SETTINGS.autoRefreshEnabled;
 		next.autoRefreshIntervalSeconds = this.normalizeAutoRefreshInterval(saved.autoRefreshIntervalSeconds);
 		return next;
-	}
-
-	private normalizeRuntimeCredentials(raw: unknown, legacyToken: string): StoredRuntimeCredential[] {
-		const credentials = new Map<string, StoredRuntimeCredential>();
-		if (Array.isArray(raw)) {
-			for (const entry of raw) {
-				if (!this.isRecord(entry)) {
-					continue;
-				}
-				const id = typeof entry.id === 'string' ? entry.id.trim() : '';
-				const clientId = typeof entry.clientId === 'string' ? entry.clientId.trim() : '';
-				const token = typeof entry.token === 'string' ? entry.token.trim() : '';
-				if (!id || !clientId || !token || credentials.has(clientId)) {
-					continue;
-				}
-				const normalized = normalizeRuntimeCredentialProfileAndCapabilities(entry);
-				credentials.set(clientId, {
-					id,
-					clientId,
-					token,
-					capabilities: normalized.capabilities,
-					capabilityProfile: normalized.profile,
-					createdAt: this.normalizeTimestamp(entry.createdAt),
-				});
-			}
-		}
-
-		const now = new Date().toISOString();
-		const legacyFallback = normalizeRuntimeCredentialProfileAndCapabilities({
-			capabilities: ['*'],
-		});
-		const managedDefault = normalizeRuntimeCredentialProfileAndCapabilities({
-			capabilityProfile: 'knowledge_assistant',
-		});
-		credentials.set('legacy', {
-			id: 'legacy-shared-token',
-			clientId: 'legacy',
-			token: legacyToken,
-			capabilities: legacyFallback.capabilities,
-			capabilityProfile: legacyFallback.profile,
-			createdAt: this.normalizeTimestamp(credentials.get('legacy')?.createdAt) || now,
-		});
-		for (const clientId of MANAGED_AGENT_CLIENT_IDS) {
-			if (!credentials.has(clientId)) {
-				credentials.set(clientId, {
-					id: `client-${clientId}`,
-					clientId,
-					token: this.generateRuntimeToken(),
-					capabilities: managedDefault.capabilities,
-					capabilityProfile: managedDefault.profile,
-					createdAt: now,
-				});
-			}
-		}
-		return Array.from(credentials.values());
-	}
-
-	private normalizeTimestamp(value: unknown): string {
-		const trimmed = typeof value === 'string' ? value.trim() : '';
-		if (trimmed && Number.isFinite(Date.parse(trimmed))) {
-			return trimmed;
-		}
-		return new Date().toISOString();
 	}
 
 	private normalizePort(value: unknown): number {
@@ -894,21 +825,6 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 	}
 
-	private generateRuntimeToken(): string {
-		return randomBytes(24).toString('hex');
-	}
-
-	formatRuntimeToken(value: string): string {
-		const trimmed = value.trim();
-		if (!trimmed) {
-			return ui('未生成', 'Not generated');
-		}
-		if (trimmed.length <= 12) {
-			return `${trimmed.slice(0, 2)}••••${trimmed.slice(-2)}`;
-		}
-		return `${trimmed.slice(0, 6)}••••${trimmed.slice(-6)}`;
-	}
-
 	async restartMcpRuntime(): Promise<void> {
 		if (this.settings.mcpRuntimeEnabled) {
 			await this.replaceMcpRuntime();
@@ -916,6 +832,18 @@ export default class TracekeeperPlugin extends Plugin {
 			await this.stopMcpRuntime();
 		}
 		await this.refreshGovernanceViews();
+	}
+
+	async resetRuntimeAccessCredential(): Promise<RuntimeAccessResetResult> {
+		try {
+			return await this.runtimeAccessResetController.reset();
+		} finally {
+			try {
+				await this.refreshGovernanceViews();
+			} catch {
+				console.error('tracekeeper failed to refresh views after access credential reset');
+			}
+		}
 	}
 
 	async setMcpRuntimeEnabled(enabled: boolean): Promise<void> {
@@ -949,91 +877,6 @@ export default class TracekeeperPlugin extends Plugin {
 			await this.replaceMcpRuntime();
 		}
 		await this.refreshGovernanceViews();
-	}
-
-	async regenerateRuntimeToken(): Promise<void> {
-		const createdAt = new Date().toISOString();
-		this.settings.runtimeToken = this.generateRuntimeToken();
-		this.settings.runtimeTokenCreatedAt = createdAt;
-		this.settings.runtimeCredentials = this.settings.runtimeCredentials.map((credential) => ({
-			...credential,
-			token: credential.clientId === 'legacy' ? this.settings.runtimeToken : this.generateRuntimeToken(),
-			createdAt,
-		}));
-		this.settings.onboarding = clearOnboardingRuntimeEvidence(this.settings.onboarding, createdAt);
-		await this.saveSettings();
-		new Notice(ui('本地连接令牌已重新生成，请更新已配置的 AI 工具。', 'Local connection token regenerated. Update configured AI tools.'));
-		await this.restartMcpRuntime();
-	}
-
-	async rotateRuntimeCredential(clientId: string): Promise<void> {
-		if (!MANAGED_AGENT_CLIENT_IDS.includes(clientId as typeof MANAGED_AGENT_CLIENT_IDS[number])) {
-			throw new Error(`Unknown managed Agent client: ${clientId}`);
-		}
-		const createdAt = new Date().toISOString();
-		this.settings.runtimeCredentials = rotateClientRuntimeCredential(
-			this.settings.runtimeCredentials,
-			clientId,
-			this.generateRuntimeToken(),
-			createdAt
-		);
-		if (this.settings.onboarding.selectedClientId === clientId) {
-			this.settings.onboarding = clearOnboardingRuntimeEvidence(this.settings.onboarding, createdAt);
-		}
-		await this.saveSettings();
-		new Notice(ui(
-			'该 Agent 的旧凭据已撤销，请更新其连接配置；其他 Agent 不受影响。',
-			'The previous credential for this Agent was revoked. Update its connection config; other Agents are unaffected.'
-		));
-		await this.restartMcpRuntime();
-	}
-
-	async setRuntimeCredentialProfile(
-		clientId: string,
-		profile: RuntimeCredentialCapabilityProfile
-	): Promise<void> {
-		if (!MANAGED_AGENT_CLIENT_IDS.includes(clientId as typeof MANAGED_AGENT_CLIENT_IDS[number])) {
-			throw new Error(`Unknown managed Agent client: ${clientId}`);
-		}
-		if (profile === 'custom') {
-			throw new Error('Custom capability sets are preserved but are not editable from this preset selector.');
-		}
-		const createdAt = new Date().toISOString();
-		let updated = false;
-		const original = this.settings.runtimeCredentials.find((credential) => credential.clientId === clientId);
-		if (!original) {
-			throw new Error(`Missing runtime credential for managed client: ${clientId}`);
-		}
-		const normalizedOriginal = normalizeRuntimeCredentialProfileAndCapabilities(original);
-		const nextCapabilities = capabilitiesForRuntimeProfile(profile, normalizedOriginal.capabilities);
-		const hasSameCapabilities = nextCapabilities.length === normalizedOriginal.capabilities.length
-			&& nextCapabilities.every((capability, index) => capability === normalizedOriginal.capabilities[index]);
-		if (normalizedOriginal.profile === profile && hasSameCapabilities) {
-			return;
-		}
-		this.settings.runtimeCredentials = this.settings.runtimeCredentials.map((credential) => {
-			if (credential.clientId !== clientId) {
-				return credential;
-			}
-			updated = true;
-			return {
-				...credential,
-				capabilityProfile: profile,
-				capabilities: nextCapabilities,
-			};
-		});
-		if (!updated) {
-			throw new Error(`Missing runtime credential for managed client: ${clientId}`);
-		}
-		if (this.settings.onboarding.selectedClientId === clientId) {
-			this.settings.onboarding = clearOnboardingAgentBehaviorEvidence(this.settings.onboarding, createdAt);
-		}
-		await this.saveSettings();
-		await this.restartMcpRuntime();
-		new Notice(ui(
-			'该 Agent 的能力预设已更新，请重新连接或重启客户端。',
-			'Agent capability profile updated. Reconnect or restart the client.'
-		));
 	}
 
 	async setAutoRefreshEnabled(enabled: boolean): Promise<void> {
@@ -1218,14 +1061,36 @@ export default class TracekeeperPlugin extends Plugin {
 		));
 	}
 
+	private async stopMcpRuntimeForAccessReset(): Promise<void> {
+		await this.mcpRuntimeLifecycle.stop();
+		this.runtimeStatus = this.createStoppedRuntimeStatus();
+	}
+
+	private async startMcpRuntimeForAccessReset(): Promise<void> {
+		try {
+			const status = await this.mcpRuntimeLifecycle.start(
+				() => this.createMcpRuntime()
+			);
+			if (!status || status.state !== 'running') {
+				throw new Error('MCP Runtime did not reach the running state.');
+			}
+			this.runtimeStatus = status;
+		} catch (error) {
+			this.runtimeStatus = this.mcpRuntimeLifecycle.getStatus()
+				?? this.createStoppedRuntimeStatus();
+			throw error;
+		}
+	}
+
 	private createMcpRuntime(): StreamableHttpMcpRuntime {
 		const vaultRoot = this.getVaultRoot();
 		const noteContentLanguage = this.resolveNoteContentLanguage();
 		const runtimeOptions: StreamableHttpRuntimeOptionsWithGraphProfile = {
+			localTrust: true,
+			serviceToken: this.settings.runtimeAccessToken,
 			host: DEFAULT_MCP_HOST,
 			port: this.settings.mcpPort,
 			path: DEFAULT_MCP_PATH,
-			credentials: this.settings.runtimeCredentials,
 			maxStreamsPerSession: DEFAULT_MCP_MAX_STREAMS_PER_SESSION,
 			requestTimeoutMs: DEFAULT_MCP_REQUEST_TIMEOUT_MS,
 			defaultVaultRoot: vaultRoot,
@@ -1300,7 +1165,6 @@ export default class TracekeeperPlugin extends Plugin {
 			sessionIdleTtlMs: 30 * 60 * 1000,
 			maxStreamsPerSession: DEFAULT_MCP_MAX_STREAMS_PER_SESSION,
 			requestTimeoutMs: DEFAULT_MCP_REQUEST_TIMEOUT_MS,
-			credentialCount: this.settings.runtimeCredentials.length,
 			recovery: null,
 		};
 	}
@@ -1823,16 +1687,17 @@ export default class TracekeeperPlugin extends Plugin {
 	private buildClientConfigs(): GeneratedClientConfig[] {
 		return this.getClientProfiles().map((profile) => {
 			const status = this.readClientConfigStatus(profile);
-			const runtimeCredential = this.settings.runtimeCredentials.find((credential) => credential.clientId === profile.id);
-			const normalizedRuntimeCredential = normalizeRuntimeCredentialProfileAndCapabilities(runtimeCredential ?? {});
-			const runtimeCapabilities = normalizedRuntimeCredential.capabilities;
-			const runtimeProfile = normalizedRuntimeCredential.profile;
+			const configTexts = buildClientConfigTexts(
+				profile,
+				this.getMcpConnectionUrl(),
+				this.settings.runtimeAccessToken
+			);
 			return {
 				clientId: profile.id,
 				displayName: profile.displayName,
 				description: profile.description,
 				transport: profile.preferredTransport,
-				configText: buildClientConfigText(profile, (clientId) => this.getMcpConnectionUrl(clientId)),
+				...configTexts,
 				supportsAutoConfigure: profile.supportsAutoConfigure,
 				restartRequired: profile.restartRequired,
 				configFormat: profile.configFormat,
@@ -1840,9 +1705,6 @@ export default class TracekeeperPlugin extends Plugin {
 				configState: status.state,
 				configStatusLabel: status.label,
 				configStatusDetail: status.detail,
-				runtimeCapabilityProfile: runtimeProfile,
-				runtimeCapabilities,
-				runtimePublicTools: runtimeCapabilitiesToPublicTools(runtimeCapabilities),
 			};
 		});
 	}
@@ -1891,12 +1753,8 @@ export default class TracekeeperPlugin extends Plugin {
 		return `http://${DEFAULT_MCP_HOST}:${this.settings.mcpPort || DEFAULT_MCP_PORT}${DEFAULT_MCP_PATH}`;
 	}
 
-	getMcpConnectionUrl(clientId = 'legacy'): string {
-		const token = this.settings.runtimeCredentials.find((credential) => credential.clientId === clientId)?.token
-			|| this.settings.runtimeToken
-			|| '';
-		const endpoint = this.getMcpHttpEndpoint();
-		return token ? `${endpoint}?token=${encodeURIComponent(token)}` : endpoint;
+	getMcpConnectionUrl(): string {
+		return this.getMcpHttpEndpoint();
 	}
 
 	getRuntimeViewStatus(): RuntimeViewStatus {
@@ -1910,6 +1768,7 @@ export default class TracekeeperPlugin extends Plugin {
 		}, ui);
 		return {
 			enabled,
+			accessProtected: isRuntimeAccessToken(this.settings.runtimeAccessToken),
 			state: status.state,
 			label: viewModel.label,
 			detail: viewModel.detail,
@@ -1955,7 +1814,7 @@ export default class TracekeeperPlugin extends Plugin {
 			selectedClient: selectedClient ? {
 				clientId: selectedClient.clientId,
 				configState: selectedClient.configState,
-				runtimeCapabilities: selectedClient.runtimeCapabilities,
+				runtimeCapabilities: LOCAL_TRUST_CAPABILITIES,
 			} : null,
 			skillInstallState: this.getSkillInstallState(this.settings.onboarding.selectedClientId),
 			onboarding: this.settings.onboarding,
@@ -1964,9 +1823,16 @@ export default class TracekeeperPlugin extends Plugin {
 
 	isOnboardingComplete(): boolean {
 		const clientConfigs = this.buildClientConfigs();
+		const resolved = resolveOnboardingSelectedClient(
+			this.settings.onboarding,
+			clientConfigs.map((config) => ({
+				clientId: config.clientId,
+				configState: config.configState,
+			}))
+		);
 		const selectedClient = clientConfigs.find((client) =>
-			client.clientId === this.settings.onboarding.selectedClientId
-		) ?? clientConfigs[0] ?? null;
+			client.clientId === resolved.selectedClientId
+		) ?? null;
 		const context = buildOnboardingContext({
 			vaultReady: this.isVaultStructureReady(),
 			runtimeState: this.getRuntimeViewStatus().state,
@@ -1974,12 +1840,12 @@ export default class TracekeeperPlugin extends Plugin {
 			selectedClient: selectedClient ? {
 				clientId: selectedClient.clientId,
 				configState: selectedClient.configState,
-				runtimeCapabilities: selectedClient.runtimeCapabilities,
+				runtimeCapabilities: LOCAL_TRUST_CAPABILITIES,
 			} : null,
 			skillInstallState: this.getSkillInstallState(selectedClient?.clientId ?? ''),
-			onboarding: this.settings.onboarding,
+			onboarding: resolved.state,
 		});
-		return getNextOnboardingStep(this.settings.onboarding, context) === 'complete';
+		return getNextOnboardingStep(resolved.state, context) === 'complete';
 	}
 
 	getOnboardingSelectedClient(snapshot: AgentConnectionsSnapshot): GeneratedClientConfig | null {
@@ -2085,56 +1951,60 @@ export default class TracekeeperPlugin extends Plugin {
 		if (!this.settings.mcpRuntimeEnabled || this.getRuntimeViewStatus().state !== 'running') {
 			throw new Error(ui('请先启动 MCP 服务，再进行连接验证。', 'Enable and start MCP service before connection verification.'));
 		}
-		const principalId = findOnboardingRuntimePrincipal(
-			this.settings.runtimeCredentials,
-			this.settings.onboarding.selectedClientId
-		);
 		const snapshot = await this.loadAgentConnectionsSnapshot();
 		const notBefore = onboardingEvidenceNotBefore(this.settings.onboarding);
-		if (!hasOnboardingConnectionEvidence(snapshot.recentAgents, principalId, notBefore)) {
+		const connection = findOnboardingConnectionEvidence(snapshot.recentAgents, notBefore);
+		if (!connection) {
 			throw new Error(ui(
-				'尚未发现所选 Agent 使用其独立凭据建立的 MCP 会话。请重启 Agent 并让它调用一次 Tracekeeper。',
-				'No MCP session from the selected agent credential was found. Restart the agent and ask it to call Tracekeeper once.'
+				'尚未发现携带有效本机访问凭据且成功 initialize 的 MCP Session。请重启 AI 工具并让它调用一次 Tracekeeper。',
+				'No successfully initialized MCP Session with valid local access was found. Restart the AI tool and ask it to call Tracekeeper once.'
 			));
 		}
-		if (!this.settings.onboarding.connectionVerifiedAt) {
-			this.settings.onboarding = markConnectionVerified(this.settings.onboarding);
+		if (this.settings.onboarding.connectionVerifiedSessionId !== connection.sessionId
+			|| this.settings.onboarding.connectionVerifiedAt !== connection.connectedAt) {
+			this.settings.onboarding = markConnectionVerified(
+				this.settings.onboarding,
+				connection.sessionId,
+				connection.connectedAt
+			);
 			await this.persistOnboardingState();
 		}
 	}
 
 	async verifyOnboardingFirstRecall(): Promise<void> {
-		const principalId = findOnboardingRuntimePrincipal(
-			this.settings.runtimeCredentials,
-			this.settings.onboarding.selectedClientId
-		);
 		const snapshot = await this.loadAgentConnectionsSnapshot();
-		const notBefore = onboardingEvidenceNotBefore(this.settings.onboarding);
-		const recall = findOnboardingRecallEvidence(snapshot.recentToolCalls, principalId, notBefore);
+		const notBefore = Math.max(
+			onboardingEvidenceNotBefore(this.settings.onboarding),
+			Date.parse(this.settings.onboarding.connectionVerifiedAt) || 0
+		);
+		const recall = findOnboardingRecallEvidence(
+			snapshot.recentToolCalls,
+			this.settings.onboarding.connectionVerifiedSessionId,
+			notBefore
+		);
 		if (!recall) {
 			throw new Error(ui(
-				'尚未发现所选 Agent 成功执行且有命中结果的 tracekeeper.recall。请先在 Agent 中发起一次窄范围召回。',
-				'No successful tracekeeper.recall with matches was found for the selected agent. Ask the agent to run a narrow recall first.'
+				'尚未发现已验证 MCP Session 中成功且有命中结果的 project Recall。请让同一 AI 工具 Session 执行一次项目召回。',
+				'No successful project Recall with matches was found in the verified MCP Session. Ask the same AI tool Session to run a project Recall.'
 			));
 		}
 		await this.markOnboardingFirstRecall(parseOnboardingRecallQuery(recall.argsSummary), recall.matchedCount);
 	}
 
 	async verifyOnboardingTrackedWorkflow(): Promise<void> {
-		const principalId = findOnboardingRuntimePrincipal(
-			this.settings.runtimeCredentials,
-			this.settings.onboarding.selectedClientId
-		);
 		const snapshot = await this.loadAgentConnectionsSnapshot();
 		const evidence = findOnboardingTrackedWorkflowEvidence(
 			snapshot.recentToolCalls,
-			principalId,
-			onboardingEvidenceNotBefore(this.settings.onboarding)
+			this.settings.onboarding.connectionVerifiedSessionId,
+			Math.max(
+				onboardingEvidenceNotBefore(this.settings.onboarding),
+				Date.parse(this.settings.onboarding.connectionVerifiedAt) || 0
+			)
 		);
 		if (!evidence) {
 			throw new Error(ui(
-				'尚未发现同一 Agent 的 start → recall → finish 成功序列。首次 Recall 不能证明 Skill 自动触发。',
-				'No successful start → recall → finish sequence was found for the same agent. A first recall does not prove automatic Skill triggering.'
+				'尚未发现同一已验证 MCP Session 中 task id 一致的 start → recall → finish 成功序列。首次 Recall 不能证明 Skill 自动触发。',
+				'No successful start → recall → finish sequence with one task id was found in the same verified MCP Session. A first Recall does not prove automatic Skill triggering.'
 			));
 		}
 		this.settings.onboarding = markTrackedWorkflowObserved(this.settings.onboarding, evidence.taskId);
@@ -2737,7 +2607,7 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	async saveSettings() {
-		await this.saveData(this.settings);
+		await this.saveData(stripLegacyConnectionSettings(this.settings));
 	}
 
 	async copyToClipboard(value: string, successMessage: string): Promise<void> {
@@ -2803,6 +2673,15 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 		if (normalized.includes('codex')) {
 			return 'Codex';
+		}
+		if (normalized.includes('gemini')) {
+			return 'Gemini CLI';
+		}
+		if (normalized.includes('grok')) {
+			return 'Grok Build';
+		}
+		if (normalized.includes('zcode')) {
+			return 'ZCode';
 		}
 		if (normalized.includes('claude')) {
 			return 'Claude';

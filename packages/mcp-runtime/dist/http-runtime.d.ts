@@ -1,19 +1,12 @@
-import type { ToolCapability } from '@tracekeeper/contracts';
 import type { VaultRepository } from '@tracekeeper/core';
 import { McpJsonRpcHandler } from './handler';
 export type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed' | 'port_conflict';
-export interface RuntimeCredential {
-    id: string;
-    token: string;
-    capabilities?: readonly (ToolCapability | '*')[];
-}
 export interface StreamableHttpRuntimeOptions {
+    localTrust?: boolean;
+    serviceToken: string;
     host?: string;
     port?: number;
     path?: string;
-    token?: string;
-    credentials?: readonly RuntimeCredential[];
-    allowMissingTokenForDev?: boolean;
     maxRequestBytes?: number;
     maxSessions?: number;
     maxStreamsPerSession?: number;
@@ -43,7 +36,6 @@ export interface StreamableHttpRuntimeStatus {
     sessionIdleTtlMs: number;
     maxStreamsPerSession: number;
     requestTimeoutMs: number;
-    credentialCount: number;
     recovery: RuntimeRecoveryStatus | null;
 }
 export interface RuntimeRecoveryStatus {
@@ -56,8 +48,7 @@ export declare class StreamableHttpMcpRuntime {
     private host;
     private port;
     private path;
-    private credentials;
-    private allowMissingTokenForDev;
+    private serviceTokenHash;
     private maxRequestBytes;
     private maxSessions;
     private maxStreamsPerSession;
@@ -74,7 +65,7 @@ export declare class StreamableHttpMcpRuntime {
     private startedAt;
     private lastError;
     private recoveryStatus;
-    constructor(options?: StreamableHttpRuntimeOptions);
+    constructor(options: StreamableHttpRuntimeOptions);
     start(): Promise<StreamableHttpRuntimeStatus>;
     stop(): Promise<void>;
     private stopServer;
@@ -94,7 +85,8 @@ export declare class StreamableHttpMcpRuntime {
     private isAllowedOrigin;
     private isAllowedHost;
     private allowedCorsOrigin;
-    private authenticate;
+    private serviceBearerStatus;
+    private recordRequestRejection;
     private pruneExpiredSessions;
     private firstHeaderValue;
     private writeJson;

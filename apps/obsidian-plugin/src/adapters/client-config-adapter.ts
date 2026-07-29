@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
+	buildClientConfigTexts,
 	detectClientConfigStatus,
 	mergeClientConfigContent,
 	removeClientConfigContent,
@@ -39,14 +40,15 @@ export interface ClientConfigPathApi {
 export interface ClientConfigAdapterOptions {
 	fs: ClientConfigFileApi;
 	path: ClientConfigPathApi;
-	getConnectionUrl(clientId: string): string;
+	getConnectionUrl(): string;
+	getAccessToken(): string;
 	now?: () => Date;
 	planTtlMs?: number;
 }
 
 interface StoredClientConfigChangePlan extends ClientConfigChangePlan {
 	nextContent: string;
-	connectionUrlHash: string;
+	connectionConfigHash: string;
 }
 
 export class ClientConfigPlanConflictError extends Error {
@@ -73,9 +75,20 @@ export class ClientConfigAdapter {
 		this.pruneExpiredPlans();
 		const targetPath = this.requireTarget(config);
 		const original = this.readCurrent(targetPath);
-		const nextContent = action === 'apply'
-			? mergeClientConfigContent(config, original, this.options.getConnectionUrl)
-			: removeClientConfigContent(config, original);
+		let nextContent: string;
+		let previewText: string;
+		let connectionConfigHashValue = '';
+		if (action === 'apply') {
+			const connectionUrl = this.options.getConnectionUrl();
+			const accessToken = this.options.getAccessToken();
+			const configTexts = buildClientConfigTexts(config, connectionUrl, accessToken);
+			nextContent = mergeClientConfigContent(config, original, connectionUrl, accessToken);
+			previewText = configTexts.redactedConfigText;
+			connectionConfigHashValue = connectionConfigHash(connectionUrl, accessToken);
+		} else {
+			nextContent = removeClientConfigContent(config, original);
+			previewText = `Remove Tracekeeper from ${targetPath}`;
+		}
 		const createdAt = this.now();
 		const plan: StoredClientConfigChangePlan = {
 			planId: `client-config-${randomBytes(12).toString('hex')}`,
@@ -83,10 +96,10 @@ export class ClientConfigAdapter {
 			clientId: config.clientId,
 			targetPath,
 			originalHash: contentHash(original),
-			previewText: action === 'apply' ? config.configText : `Remove Tracekeeper from ${targetPath}`,
+			previewText,
 			expiresAt: new Date(createdAt.getTime() + this.planTtlMs).toISOString(),
 			nextContent,
-			connectionUrlHash: contentHash(this.options.getConnectionUrl(config.clientId)),
+			connectionConfigHash: connectionConfigHashValue,
 		};
 		this.plans.set(plan.planId, plan);
 		return publicPlan(plan);
@@ -121,7 +134,8 @@ export class ClientConfigAdapter {
 		return detectClientConfigStatus(
 			profile,
 			this.options.fs.readFileSync(profile.targetPath, 'utf8'),
-			this.options.getConnectionUrl(profile.id),
+			this.options.getConnectionUrl(),
+			this.options.getAccessToken(),
 			localize
 		);
 	}
@@ -141,9 +155,12 @@ export class ClientConfigAdapter {
 		}
 		if (
 			plan.action === 'apply'
-			&& contentHash(this.options.getConnectionUrl(plan.clientId)) !== plan.connectionUrlHash
+			&& connectionConfigHash(
+				this.options.getConnectionUrl(),
+				this.options.getAccessToken()
+			) !== plan.connectionConfigHash
 		) {
-			throw new ClientConfigPlanConflictError('Client credential changed after preview. Preview the change again.');
+			throw new ClientConfigPlanConflictError('Client connection settings changed after preview. Preview the change again.');
 		}
 		return this.writeConfigFile(plan.targetPath, current, plan.nextContent);
 	}
@@ -188,7 +205,11 @@ function contentHash(content: string): string {
 	return createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
+function connectionConfigHash(connectionUrl: string, accessToken: string): string {
+	return contentHash(JSON.stringify([connectionUrl, accessToken]));
+}
+
 function publicPlan(plan: StoredClientConfigChangePlan): ClientConfigChangePlan {
-	const { nextContent: _nextContent, connectionUrlHash: _connectionUrlHash, ...result } = plan;
+	const { nextContent: _nextContent, connectionConfigHash: _connectionConfigHash, ...result } = plan;
 	return result;
 }

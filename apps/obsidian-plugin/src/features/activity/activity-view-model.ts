@@ -6,7 +6,6 @@ import type { AgentConnectionRecord } from './activity-model';
 export type ActivityPrimaryAction =
 	| 'repair_structure'
 	| 'recover_runtime'
-	| 'continue_onboarding'
 	| 'review_changes'
 	| 'inspect_diagnostics'
 	| 'none';
@@ -14,15 +13,24 @@ export type ActivityPrimaryAction =
 export interface ActivityPrimaryActionInput {
 	structureState: StructureState;
 	runtimeStatus: RuntimeViewModelInput;
-	onboardingComplete: boolean;
 	actionableReviewQueueItemCount: number;
 	agedWorkflowCount: number;
 	permissionDeniedCount: number;
 }
 
+export interface ActivityAgentGroup {
+	displayName: string;
+	observedClientType: string;
+	sessionCount: number;
+	lastConnectedAt: number;
+	lastUsedAt: number;
+	sortTimestamp: number;
+}
+
 export interface ActivityAgentSummary {
 	state: 'observed' | 'not_observed';
-	latestAgent: AgentConnectionRecord | null;
+	observedAgentCount: number;
+	agentGroups: ActivityAgentGroup[];
 }
 
 export function selectActivityPrimaryAction(input: ActivityPrimaryActionInput): ActivityPrimaryAction {
@@ -37,9 +45,6 @@ export function selectActivityPrimaryAction(input: ActivityPrimaryActionInput): 
 	if (runtime.state !== 'running') {
 		return 'none';
 	}
-	if (!input.onboardingComplete) {
-		return 'continue_onboarding';
-	}
 	if (input.actionableReviewQueueItemCount > 0) {
 		return 'review_changes';
 	}
@@ -50,9 +55,65 @@ export function selectActivityPrimaryAction(input: ActivityPrimaryActionInput): 
 }
 
 export function buildActivityAgentSummary(recentAgents: AgentConnectionRecord[]): ActivityAgentSummary {
-	const latestAgent = recentAgents[0] ?? null;
+	const groupedAgents = new Map<string, {
+		agent: ActivityAgentGroup;
+		sessions: Set<string>;
+	}>();
+	for (const recentAgent of recentAgents) {
+		const observedClientKey = recentAgent.observedClientType.trim() || 'unknown';
+		const sessionKey = recentAgent.sessionId.trim() || recentAgent.agentId.trim() || observedClientKey;
+		const connectedAt = Date.parse(recentAgent.connectedAt) || 0;
+		const lastUsedAt = Date.parse(recentAgent.lastUsedAt) || 0;
+		const existing = groupedAgents.get(observedClientKey);
+		if (!existing) {
+			groupedAgents.set(observedClientKey, {
+				agent: {
+					displayName: recentAgent.displayName,
+					observedClientType: observedClientKey,
+					sessionCount: 1,
+					lastConnectedAt: connectedAt,
+					lastUsedAt,
+					sortTimestamp: recentAgent.sortTimestamp,
+				},
+				sessions: new Set([sessionKey]),
+			});
+			continue;
+		}
+
+		existing.sessions.add(sessionKey);
+		existing.agent.lastConnectedAt = Math.max(existing.agent.lastConnectedAt, connectedAt);
+		existing.agent.lastUsedAt = Math.max(existing.agent.lastUsedAt, lastUsedAt);
+		if (recentAgent.sortTimestamp > existing.agent.sortTimestamp) {
+			existing.agent.displayName = recentAgent.displayName;
+			existing.agent.sortTimestamp = recentAgent.sortTimestamp;
+		}
+	}
+
+	const agentGroups = [...groupedAgents.values()]
+		.map(({ agent, sessions }) => ({ ...agent, sessionCount: sessions.size }))
+		.sort((left, right) => right.sortTimestamp - left.sortTimestamp);
 	return {
-		state: latestAgent ? 'observed' : 'not_observed',
-		latestAgent,
+		state: agentGroups.length > 0 ? 'observed' : 'not_observed',
+		observedAgentCount: agentGroups.length,
+		agentGroups,
 	};
+}
+
+export function selectSuccessfullyUsedAgentConnections(
+	recentAgents: AgentConnectionRecord[]
+): AgentConnectionRecord[] {
+	return recentAgents.filter((agent) =>
+		agent.transport.trim().toLowerCase() === 'streamable-http'
+		&& agent.sessionId.trim() !== ''
+		&& agent.resultStatus === 'success'
+		&& Date.parse(agent.connectedAt) > 0
+		&& Date.parse(agent.lastUsedAt) > 0
+		&& agent.lastSuccessfulTool.trim() !== ''
+	);
+}
+
+export function buildSuccessfullyUsedAgentSummary(
+	recentAgents: AgentConnectionRecord[]
+): ActivityAgentSummary {
+	return buildActivityAgentSummary(selectSuccessfullyUsedAgentConnections(recentAgents));
 }

@@ -26,6 +26,21 @@ export interface RuntimeViewModel {
 	canOpenLogs: boolean;
 }
 
+export const runtimeToneBadgeClass = (tone: RuntimeUiTone): string => {
+	switch (tone) {
+		case 'success':
+			return 'tracekeeper-badge--success';
+		case 'warning':
+			return 'tracekeeper-badge--warning';
+		case 'danger':
+			return 'tracekeeper-badge--error';
+		case 'disabled':
+		case 'default':
+		default:
+			return 'tracekeeper-badge--muted';
+	}
+};
+
 const safePort = (port: number): number => (Number.isFinite(port) ? port : 0);
 
 const deriveUiState = (input: RuntimeViewModelInput): RuntimeUiState => {

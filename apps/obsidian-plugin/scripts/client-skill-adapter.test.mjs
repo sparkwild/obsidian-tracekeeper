@@ -61,6 +61,9 @@ try {
 	const primaryDirectory = path.join(homeDirectory, '.agents', 'skills', 'tracekeeper');
 	const legacyDirectory = path.join(homeDirectory, '.codex', 'skills', 'tracekeeper');
 	const claudeCodeDirectory = path.join(homeDirectory, '.claude', 'skills', 'tracekeeper');
+	const geminiDirectory = path.join(homeDirectory, '.gemini', 'skills', 'tracekeeper');
+	const grokDirectory = path.join(homeDirectory, '.grok', 'skills', 'tracekeeper');
+	const zcodeDirectory = path.join(homeDirectory, '.zcode', 'skills', 'tracekeeper');
 
 	const codexProfile = module.buildClientSkillProfile('codex', 'Codex', homeDirectory, path.join);
 	assert.equal(codexProfile.supportsManagedInstall, true);
@@ -77,6 +80,18 @@ try {
 	assert.equal(cursorProfile.supportsManagedInstall, false);
 	assert.equal(cursorProfile.deliveryMode, 'copy-only');
 	assert.equal(cursorProfile.targetDirectory, undefined);
+
+	for (const [clientId, displayName, targetDirectory] of [
+		['gemini', 'Gemini CLI', geminiDirectory],
+		['grok', 'Grok Build', grokDirectory],
+		['zcode', 'ZCode', zcodeDirectory],
+	]) {
+		const profile = module.buildClientSkillProfile(clientId, displayName, homeDirectory, path.join);
+		assert.equal(profile.supportsManagedInstall, true);
+		assert.equal(profile.deliveryMode, 'managed');
+		assert.equal(profile.targetDirectory, targetDirectory);
+		assert.equal(profile.restartRequired, true);
+	}
 
 	const legacyBundle = buildBundle('2.0.0', '# Tracekeeper legacy\n');
 	const embeddedBundle = buildBundle('2.1.0', '# Tracekeeper current\n');
@@ -245,7 +260,7 @@ try {
 		(error) => error instanceof module.ClientSkillPlanConflictError && /Expected a Skill install preview/.test(error.message)
 	);
 
-	console.log(JSON.stringify({ result: 'pass', checks: 34 }));
+	console.log(JSON.stringify({ result: 'pass', checks: 46 }));
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

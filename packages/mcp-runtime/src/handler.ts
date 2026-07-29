@@ -23,9 +23,14 @@ import {
 	toolDefinitions,
 	toolPrompts,
 	appendConnectionAuditEvent,
+	recordRejectedToolCallAuditEvent,
 	type ToolInvocationContext,
 } from './tools';
 import type { VaultRepository } from '@tracekeeper/core';
+import {
+	normalizeObservedClientType,
+	type ObservedClientType,
+} from './observed-client';
 import {
 	ToolInputError,
 	assertNoSymlinkSegments,
@@ -117,6 +122,8 @@ export interface McpConnectionState {
 	credentialCapabilities: readonly string[];
 	agentId: string;
 	clientName: string | null;
+	clientVersion: string | null;
+	observedClientType: ObservedClientType;
 	initialized: boolean;
 	protocolVersion?: string;
 }
@@ -374,7 +381,7 @@ export class McpJsonRpcHandler {
 		if (!this.hasCapability(state, capability)) {
 			throw new RpcError({
 				code: -32602,
-				message: `Credential principal ${state.principalId || 'unknown'} lacks capability ${capability} for ${method}.`,
+				message: `Runtime principal ${state.principalId || 'unknown'} lacks capability ${capability} for ${method}.`,
 			});
 		}
 	}
@@ -390,12 +397,24 @@ export class McpJsonRpcHandler {
 		const name = params.name;
 		const argumentsValue = params.arguments ?? {};
 		if (typeof name !== 'string' || name.trim() === '') {
+			await recordRejectedToolCallAuditEvent(
+				this.buildToolInvocationContext(state),
+				'tool_call_invalid_name'
+			);
 			throw new RpcError({ code: -32602, message: '`name` is required for tools/call.' });
 		}
 		if (!isRecord(argumentsValue)) {
+			await recordRejectedToolCallAuditEvent(
+				this.buildToolInvocationContext(state),
+				'tool_call_invalid_arguments'
+			);
 			throw new RpcError({ code: -32602, message: '`arguments` must be an object.' });
 		}
-		const toolInvocationContext: ToolInvocationContext = {
+		return await callTool(name, argumentsValue, this.buildToolInvocationContext(state));
+	}
+
+	private buildToolInvocationContext(state: McpConnectionState): ToolInvocationContext {
+		return {
 			defaultVaultRoot: this.defaultVaultRoot,
 			vaultConfigDir: this.vaultConfigDir,
 			vaultRepository: this.vaultRepository,
@@ -409,15 +428,18 @@ export class McpJsonRpcHandler {
 			agentId: state.agentId,
 			sessionId: state.sessionId,
 			clientName: state.clientName,
+			clientVersion: state.clientVersion,
+			observedClientType: state.observedClientType,
 			transport: this.transport,
 			runtimeVersion: this.runtimeVersion,
 		};
-		return await callTool(name, argumentsValue, toolInvocationContext);
 	}
 
 	private captureConnection(params: Record<string, unknown>, state: McpConnectionState): void {
 		state.agentId = this.extractAgentIdFromInitialize(params, state.sessionId);
 		state.clientName = this.extractClientNameFromInitialize(params);
+		state.clientVersion = this.extractClientVersionFromInitialize(params);
+		state.observedClientType = normalizeObservedClientType(state.clientName);
 		state.initialized = true;
 
 		if (!this.defaultVaultRoot) {
@@ -430,6 +452,8 @@ export class McpJsonRpcHandler {
 				agentId: state.agentId,
 				sessionId: state.sessionId,
 				clientName: state.clientName,
+				clientVersion: state.clientVersion,
+				observedClientType: state.observedClientType,
 				transport: this.transport,
 				runtimeVersion: this.runtimeVersion,
 			});
@@ -483,6 +507,26 @@ export class McpJsonRpcHandler {
 		for (const name of names) {
 			if (typeof name === 'string' && name.trim() !== '') {
 				return name.trim();
+			}
+		}
+
+		return null;
+	}
+
+	private extractClientVersionFromInitialize(params: Record<string, unknown>): string | null {
+		const clientInfo = isRecord(params.clientInfo) ? params.clientInfo : {};
+		const versions = [
+			params.version,
+			params.client_version,
+			params.clientVersion,
+			clientInfo.version,
+			clientInfo.client_version,
+			clientInfo.clientVersion,
+		];
+
+		for (const version of versions) {
+			if (typeof version === 'string' && version.trim() !== '') {
+				return version.trim();
 			}
 		}
 

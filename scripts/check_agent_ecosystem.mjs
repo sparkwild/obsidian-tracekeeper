@@ -24,7 +24,9 @@ const REQUIRED_PATHS = Object.freeze([
 	'apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts',
 	'apps/obsidian-plugin/src/features/onboarding/onboarding-state.ts',
 	'apps/obsidian-plugin/src/features/onboarding/onboarding-view-model.ts',
+	'apps/obsidian-plugin/src/features/skill-installation/client-skill-prompt.ts',
 	'apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts',
+	'apps/obsidian-plugin/src/features/skill-installation/skill-install-view-model.ts',
 	'apps/obsidian-plugin/src/features/skill-installation/skill-install-audit.ts',
 	'apps/obsidian-plugin/src/features/skill-installation/skill-install-receipts.ts',
 	'apps/obsidian-plugin/src/adapters/client-skill-adapter.ts',
@@ -358,7 +360,9 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	const settingsSource = contents.get('apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts') ?? '';
 	const onboardingSource = contents.get('apps/obsidian-plugin/src/features/onboarding/onboarding-state.ts') ?? '';
 	const onboardingViewModelSource = contents.get('apps/obsidian-plugin/src/features/onboarding/onboarding-view-model.ts') ?? '';
+	const clientSkillPromptSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/client-skill-prompt.ts') ?? '';
 	const bundleSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts') ?? '';
+	const skillPromptSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-install-view-model.ts') ?? '';
 	const auditSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-install-audit.ts') ?? '';
 	const receiptSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-install-receipts.ts') ?? '';
 	const adapterSource = contents.get('apps/obsidian-plugin/src/adapters/client-skill-adapter.ts') ?? '';
@@ -401,11 +405,28 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	if (/\\?"project_hint\\?"\s*:\s*\\?"[^"\n]*(?:路径|path|仓库|工作区|repo|workspace)/i.test(onboardingViewModelSource)) {
 		errors.push('plugin-generated onboarding guidance must not place a repository or workspace path in project_hint');
 	}
-	if (!/workflowManageAvailable/.test(settingsSource) || !/Recall-only capability limit/.test(settingsSource)) {
-		errors.push('settings must expose the Recall-only capability limit instead of requiring unavailable lifecycle tools');
+	for (const [pattern, label] of [
+		[/McpCapabilitiesModal/, 'settings must route public-tool discovery to the MCP capabilities viewer'],
+		[/renderClientSkillPrompt/, 'settings must place the Skill prompt in each Agent configuration row'],
+	]) {
+		requirePattern(settingsSource, pattern, label, errors);
 	}
-	for (const label of ['Bundle available', 'Copied', 'User confirmed', 'File verified', 'Client reloaded', 'Connection verified', 'Recall observed', 'Tracked workflow observed', 'Update available']) {
-		requirePattern(settingsSource, new RegExp(label), `settings does not expose Skill evidence: ${label}`, errors);
+	requirePattern(
+		clientSkillPromptSource,
+		/buildSkillInstallPrompt/,
+		'shared Agent Skill prompt must render state-aware Skill prompts',
+		errors,
+	);
+	for (const [pattern, label] of [
+		[/renderOnboardingSection/, 'settings must not retain the resident onboarding checklist'],
+		[/runtimePublicTools/, 'Agent configuration rows must not duplicate the MCP public-tool list'],
+		[/RUNTIME_CREDENTIAL_PRESET_DEFINITIONS/, 'Agent configuration rows must not expose capability presets'],
+		[/tracekeeper-capability-preset/, 'Agent configuration rows must not render a capability-preset control'],
+	]) {
+		if (pattern.test(settingsSource)) errors.push(label);
+	}
+	for (const state of ['not_installed', 'installed', 'update_available', 'newer_than_bundled', 'modified', 'legacy_install', 'location_conflict', 'copy_only', 'unavailable']) {
+		requirePattern(skillPromptSource, new RegExp(`['"]${state}['"]`), `Skill prompt model is missing state: ${state}`, errors);
 	}
 	if (/clientId\s*===\s*['"]codex['"]/.test(settingsSource)) {
 		errors.push('settings must use Skill delivery capability state instead of a Codex-only installation gate');

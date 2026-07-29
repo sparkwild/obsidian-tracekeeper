@@ -48,6 +48,7 @@ export interface OnboardingSettingsState {
 	memoryPolicyConfirmedAt: string;
 	agentRestartCompletedAt: string;
 	connectionVerifiedAt: string;
+	connectionVerifiedSessionId: string;
 	firstRecallCompletedAt: string;
 	firstRecallMatchedCount: number;
 	firstRecallQuery: string;
@@ -57,18 +58,25 @@ export interface OnboardingSettingsState {
 }
 
 export interface OnboardingConnectionEvidence {
-	principalId: string;
+	principalId?: string;
+	sessionId: string;
 	transport: string;
+	connectedAt: string;
+	resultStatus: string;
 	sortTimestamp: number;
 }
 
 export interface OnboardingToolEvidence {
-	principalId: string;
+	principalId?: string;
+	sessionId: string;
+	transport: string;
 	taskId?: string;
 	toolName: string;
 	resultStatus: string;
 	resultSummary: string;
 	argsSummary: string;
+	scopeMode?: string;
+	matchedCount?: string | number;
 	sortTimestamp: number;
 }
 
@@ -95,6 +103,7 @@ export const DEFAULT_ONBOARDING_SETTINGS: OnboardingSettingsState = {
 	memoryPolicyConfirmedAt: '',
 	agentRestartCompletedAt: '',
 	connectionVerifiedAt: '',
+	connectionVerifiedSessionId: '',
 	firstRecallCompletedAt: '',
 	firstRecallMatchedCount: 0,
 	firstRecallQuery: '',
@@ -135,6 +144,7 @@ export const normalizeOnboardingSettingsState = (raw: unknown): OnboardingSettin
 		memoryPolicyConfirmedAt: asTimestamp(rawState.memoryPolicyConfirmedAt),
 		agentRestartCompletedAt: asTimestamp(rawState.agentRestartCompletedAt),
 		connectionVerifiedAt: asTimestamp(rawState.connectionVerifiedAt),
+		connectionVerifiedSessionId: asString(rawState.connectionVerifiedSessionId),
 		firstRecallCompletedAt: asTimestamp(rawState.firstRecallCompletedAt),
 		firstRecallMatchedCount: asNonNegativeInteger(rawState.firstRecallMatchedCount, 0),
 		firstRecallQuery: asString(rawState.firstRecallQuery),
@@ -198,30 +208,55 @@ export const getNextOnboardingStep = (
 ): OnboardingStep => getOnboardingStepSequence(context).find((step) => !stepIsCompleted(state, context, step)) || 'complete';
 
 export const hasOnboardingRecallResult = (state: OnboardingSettingsState): boolean =>
-	state.firstRecallCompletedAt !== '' && asNonNegativeInteger(state.firstRecallMatchedCount, 0) > 0;
+	state.connectionVerifiedSessionId !== ''
+	&& state.firstRecallCompletedAt !== ''
+	&& asNonNegativeInteger(state.firstRecallMatchedCount, 0) > 0;
 
-export const hasOnboardingConnectionEvidence = (
+export const findOnboardingConnectionEvidence = (
 	evidence: readonly OnboardingConnectionEvidence[],
-	principalId: string,
 	notBefore: number
-): boolean => evidence.some((entry) =>
-	entry.principalId === principalId
-	&& entry.transport === 'streamable-http'
-	&& entry.sortTimestamp >= notBefore
-);
+): (OnboardingConnectionEvidence & { connectedTimestamp: number }) | null => {
+	let latest: (OnboardingConnectionEvidence & { connectedTimestamp: number }) | null = null;
+	for (const entry of evidence) {
+		const sessionId = asString(entry.sessionId);
+		const connectedAt = asTimestamp(entry.connectedAt);
+		const connectedTimestamp = connectedAt ? Date.parse(connectedAt) : Number.NaN;
+		if (!sessionId
+			|| sessionId === 'unknown'
+			|| entry.transport !== 'streamable-http'
+			|| entry.resultStatus !== 'success'
+			|| !Number.isFinite(connectedTimestamp)
+			|| connectedTimestamp < notBefore) {
+			continue;
+		}
+		if (!latest || connectedTimestamp > latest.connectedTimestamp) {
+			latest = { ...entry, sessionId, connectedAt, connectedTimestamp };
+		}
+	}
+	return latest;
+};
 
 export const findOnboardingRecallEvidence = (
 	evidence: readonly OnboardingRecallEvidence[],
-	principalId: string,
+	sessionId: string,
 	notBefore: number
 ): (OnboardingRecallEvidence & { matchedCount: number }) | null => {
+	const expectedSessionId = asString(sessionId);
+	if (!expectedSessionId || expectedSessionId === 'unknown') {
+		return null;
+	}
 	for (const entry of evidence) {
-		const match = entry.resultSummary.match(/(?:^|\|)\s*matched_count=(\d+)/);
-		const matchedCount = match ? Number.parseInt(match[1], 10) : 0;
-		if (entry.principalId === principalId
+		const matchedCount = asNonNegativeInteger(
+			entry.matchedCount,
+			extractSummaryInteger(entry.resultSummary, 'matched_count')
+		);
+		const scopeMode = asString(entry.scopeMode) || extractSummaryValue(entry.resultSummary, 'scope_mode');
+		if (asString(entry.sessionId) === expectedSessionId
+			&& entry.transport === 'streamable-http'
 			&& entry.toolName === 'tracekeeper.recall'
 			&& entry.resultStatus === 'success'
 			&& entry.sortTimestamp >= notBefore
+			&& scopeMode === 'project'
 			&& matchedCount > 0) return { ...entry, matchedCount };
 	}
 	return null;
@@ -229,20 +264,29 @@ export const findOnboardingRecallEvidence = (
 
 export const findOnboardingTrackedWorkflowEvidence = (
 	evidence: readonly OnboardingToolEvidence[],
-	principalId: string,
+	sessionId: string,
 	notBefore: number
 ): OnboardingTrackedWorkflowEvidence | null => {
+	const expectedSessionId = asString(sessionId);
+	if (!expectedSessionId || expectedSessionId === 'unknown') {
+		return null;
+	}
 	const entries = evidence
-		.filter((entry) => entry.principalId === principalId && entry.resultStatus === 'success' && entry.sortTimestamp >= notBefore)
+		.filter((entry) =>
+			asString(entry.sessionId) === expectedSessionId
+			&& entry.transport === 'streamable-http'
+			&& entry.resultStatus === 'success'
+			&& entry.sortTimestamp >= notBefore
+		)
 		.sort((left, right) => left.sortTimestamp - right.sortTimestamp);
 	for (const start of entries.filter((entry) => entry.toolName === 'tracekeeper.start_task')) {
 		const taskId = asString(start.taskId) || extractTaskId(start.resultSummary);
 		if (!taskId) continue;
-		const recall = entries.find((entry) => entry.toolName === 'tracekeeper.recall' && entry.sortTimestamp >= start.sortTimestamp);
+		const recall = entries.find((entry) => entry.toolName === 'tracekeeper.recall' && entry.sortTimestamp > start.sortTimestamp);
 		if (!recall) continue;
 		const finish = entries.find((entry) =>
 			entry.toolName === 'tracekeeper.finish_task'
-			&& entry.sortTimestamp >= recall.sortTimestamp
+			&& entry.sortTimestamp > recall.sortTimestamp
 			&& (asString(entry.taskId) || extractTaskId(`${entry.argsSummary}|${entry.resultSummary}`)) === taskId
 		);
 		if (finish) {
@@ -297,8 +341,26 @@ export const markSkillUpdateAvailable = (
 export const markAgentRestartDone = (state: OnboardingSettingsState): OnboardingSettingsState =>
 	timestamped(state, { agentRestartCompletedAt: new Date().toISOString() });
 
-export const markConnectionVerified = (state: OnboardingSettingsState): OnboardingSettingsState =>
-	timestamped(state, { connectionVerifiedAt: new Date().toISOString() });
+export const markConnectionVerified = (
+	state: OnboardingSettingsState,
+	sessionId: string,
+	connectedAt: string
+): OnboardingSettingsState => {
+	const verifiedSessionId = asString(sessionId);
+	const verifiedAt = asTimestamp(connectedAt);
+	if (!verifiedSessionId || verifiedSessionId === 'unknown' || !verifiedAt) {
+		return state;
+	}
+	return timestamped(state, {
+		connectionVerifiedAt: verifiedAt,
+		connectionVerifiedSessionId: verifiedSessionId,
+		firstRecallCompletedAt: '',
+		firstRecallMatchedCount: 0,
+		firstRecallQuery: '',
+		trackedWorkflowObservedAt: '',
+		trackedWorkflowTaskId: '',
+	});
+};
 
 export const markFirstRecallDone = (
 	state: OnboardingSettingsState,
@@ -338,4 +400,13 @@ function timestamped(
 function extractTaskId(value: string): string {
 	const match = value.match(/task_id(?:["']?\s*[:=]\s*["']?)([A-Za-z0-9._-]+)/i);
 	return match?.[1] || '';
+}
+
+function extractSummaryValue(value: string, key: string): string {
+	const match = value.match(new RegExp(`(?:^|\\|)\\s*${key}=([^|\\s]+)`));
+	return match?.[1]?.trim() || '';
+}
+
+function extractSummaryInteger(value: string, key: string): number {
+	return asNonNegativeInteger(extractSummaryValue(value, key), 0);
 }

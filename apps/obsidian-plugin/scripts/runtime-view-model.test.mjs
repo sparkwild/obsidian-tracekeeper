@@ -39,7 +39,7 @@ try {
 		format: 'esm',
 		logLevel: 'silent',
 	});
-	const { runtimeViewModel } = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
+	const { runtimeToneBadgeClass, runtimeViewModel } = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 
 	const disabled = runtimeViewModel(
 		status({ enabled: false, state: 'running', lastError: 'ignored' }),
@@ -72,6 +72,7 @@ try {
 	assert.equal(running.primaryAction, 'none');
 	assert.equal(running.canOpenLogs, false);
 	assert.equal(running.label, 'Running');
+	assert.equal(runtimeToneBadgeClass(running.tone), 'tracekeeper-badge--success');
 	assert.equal(
 		running.detail,
 		'Obsidian is hosting the local MCP service. AI tools can connect while Obsidian is open.'
@@ -102,6 +103,10 @@ try {
 	assert.equal(failed.canOpenLogs, true);
 	assert.equal(failed.primaryAction, 'retry');
 	assert.equal(failed.detail, 'MCP service failed to start: boom-fail');
+	assert.equal(runtimeToneBadgeClass(failed.tone), 'tracekeeper-badge--error');
+	assert.equal(runtimeToneBadgeClass(starting.tone), 'tracekeeper-badge--warning');
+	assert.equal(runtimeToneBadgeClass(stopped.tone), 'tracekeeper-badge--muted');
+	assert.equal(runtimeToneBadgeClass(disabled.tone), 'tracekeeper-badge--muted');
 
 	const fromRuntimeViewStatus = runtimeViewModel(
 		status({
@@ -116,7 +121,7 @@ try {
 
 	process.stdout.write(`${JSON.stringify({
 		result: 'pass',
-		checks: 8,
+		checks: 13,
 	})}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });

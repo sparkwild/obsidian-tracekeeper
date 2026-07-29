@@ -32,7 +32,6 @@ function status(state, port) {
 		sessionIdleTtlMs: 1000,
 		maxStreamsPerSession: 2,
 		requestTimeoutMs: 1000,
-		credentialCount: 1,
 		recovery: null,
 	};
 }

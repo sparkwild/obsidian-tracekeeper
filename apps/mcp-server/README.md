@@ -10,7 +10,7 @@ Shared contracts:
 
 ## Protocol Surface
 
-The runtime supports MCP `2025-06-18` and `2025-11-25` over Streamable HTTP. It implements `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`. After initialization, clients send the negotiated `Mcp-Protocol-Version` with each session request. `tools/list` exposes only the authenticated principal's permitted focused surface, while call dispatch repeats the same capability check. Compatibility handlers remain available for older callers but are not advertised as workflow choices.
+The runtime supports MCP `2025-06-18` and `2025-11-25` over Streamable HTTP. It implements `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`. After initialization, clients send the negotiated `Mcp-Protocol-Version` with each session request. `tools/list` exposes the fixed local-user capability surface, while call dispatch repeats the same capability check. Compatibility handlers remain available for older callers but are not advertised as workflow choices.
 
 ## Security Posture
 
@@ -18,7 +18,10 @@ The runtime supports MCP `2025-06-18` and `2025-11-25` over Streamable HTTP. It 
 - review-gated durable writeback and user-controlled append-only project memory
 - active-vault containment and Obsidian configuration-directory exclusion
 - no shell or network capabilities exposed through tools
-- generated local token required by default
+- exact `127.0.0.1` binding with no remote-listen mode
+- one installation-level service Bearer required on every non-preflight request
+- fixed local-user capabilities; client self-identification cannot change permissions
+- Token-free endpoint URLs; legacy Token query parameters and plaintext Token CLI options are rejected
 - Obsidian/loopback CORS allowlist rather than wildcard origins
 - sanitized audit events for write operations
 
@@ -32,10 +35,11 @@ npm install --cache /private/tmp/tracekeeper-npm-cache
 npm run typecheck
 npm run build
 npm run test
-node dist/server.js --vault-root <vault> --vault-config-dir <config-dir> --port 58437 --token <token>
+export TRACEKEEPER_MCP_TOKEN='<at-least-32-byte-base64url-token>'
+node dist/server.js --vault-root <vault> --vault-config-dir <config-dir> --port 58437
 ```
 
-The endpoint is `http://127.0.0.1:58437/mcp?token=<token>` by default. The standalone runtime refuses to start without a token unless `--allow-missing-token-for-dev` is explicitly supplied for an isolated development check.
+The endpoint is `http://127.0.0.1:58437/mcp` by default. The standalone runtime reads its service credential only from `TRACEKEEPER_MCP_TOKEN`, fails closed when the value is missing or invalid, and never accepts a plaintext `--token` argument. Clients send the credential as `Authorization: Bearer <token>`; the endpoint URL stays free of secrets. The standalone runtime uses the same explicit local-trust mode as the Obsidian-hosted runtime and refuses any bind address other than `127.0.0.1`.
 
 ## Package Scripts
 
@@ -46,4 +50,4 @@ npm run test
 npm run smoke
 ```
 
-The smoke suite uses a temporary non-network vault fixture and covers authentication, origins, sessions, both protocol versions, capability-filtered tools/resources/prompts, output schemas, structured actions, instruction isolation, scoped recall, safe reads, bounded writes, task closeout, source requests, Knowledge Change Review flow, and approved writeback.
+The smoke suite uses a temporary Vault fixture and loopback HTTP. It covers the standalone environment-only credential contract, Bearer enforcement and redaction, local-trust migration rejection, origins, sessions, both protocol versions, the fixed capability-filtered tools/resources/prompts, output schemas, structured actions, instruction isolation, scoped recall, safe reads, bounded writes, task closeout, source requests, and exclusion of human review/apply tools.

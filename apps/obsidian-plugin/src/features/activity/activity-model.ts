@@ -100,6 +100,14 @@ export interface AuditEventRecord {
 	agentId: string;
 	sessionId: string;
 	clientName: string;
+	auditSchemaVersion: string;
+	observedClientNameRaw: string;
+	observedClientType: string;
+	observedClientVersion: string;
+	connectedAt: string;
+	lastUsedAt: string;
+	lastSuccessfulTool: string;
+	diagnosticReason: string;
 	toolName: string;
 	resultStatus: string;
 	targetPaths: string[];
@@ -189,11 +197,18 @@ export interface AgentConnectionRecord {
 	agentId: string;
 	sessionId: string;
 	clientName: string;
+	observedClientNameRaw: string;
+	observedClientType: string;
+	observedClientVersion: string;
 	displayName: string;
 	transport: string;
 	status: string;
 	lastSeen: string;
 	lastToolCall: string;
+	connectedAt: string;
+	resultStatus: string;
+	lastUsedAt: string;
+	lastSuccessfulTool: string;
 	runtimeVersion: string;
 	permissionProfile: string;
 	sortTimestamp: number;
@@ -205,14 +220,22 @@ export interface AgentToolCallRecord {
 	agentId: string;
 	sessionId: string;
 	clientName: string;
+	observedClientNameRaw: string;
+	observedClientType: string;
+	observedClientVersion: string;
 	toolName: string;
 	resultStatus: string;
 	targetPaths: string[];
 	timestamp: string;
+	lastUsedAt: string;
+	lastSuccessfulTool: string;
+	transport: string;
 	durationMs: string;
 	riskLevel: string;
 	argsSummary: string;
 	resultSummary: string;
+	scopeMode: string;
+	matchedCount: string;
 	sortTimestamp: number;
 }
 

@@ -1,6 +1,7 @@
 import { type JsonRpcResponse } from './protocol';
 import { type ToolInvocationContext } from './tools';
 import type { VaultRepository } from '@tracekeeper/core';
+import { type ObservedClientType } from './observed-client';
 export declare const MCP_PROTOCOL_VERSION = "2025-06-18";
 export declare const SUPPORTED_MCP_PROTOCOL_VERSIONS: readonly ["2025-11-25", "2025-06-18"];
 export declare const MCP_SERVER_VERSION = "0.2.4";
@@ -11,6 +12,8 @@ export interface McpConnectionState {
     credentialCapabilities: readonly string[];
     agentId: string;
     clientName: string | null;
+    clientVersion: string | null;
+    observedClientType: ObservedClientType;
     initialized: boolean;
     protocolVersion?: string;
 }
@@ -50,8 +53,10 @@ export declare class McpJsonRpcHandler {
     private ensureCapability;
     private hasCapability;
     private handleToolsCall;
+    private buildToolInvocationContext;
     private captureConnection;
     private extractAgentIdFromInitialize;
     private extractClientNameFromInitialize;
+    private extractClientVersionFromInitialize;
     private errorResponse;
 }

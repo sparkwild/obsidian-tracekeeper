@@ -41,7 +41,9 @@ async function createFixture() {
 		'apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts',
 		'apps/obsidian-plugin/src/features/onboarding/onboarding-state.ts',
 		'apps/obsidian-plugin/src/features/onboarding/onboarding-view-model.ts',
+		'apps/obsidian-plugin/src/features/skill-installation/client-skill-prompt.ts',
 		'apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts',
+		'apps/obsidian-plugin/src/features/skill-installation/skill-install-view-model.ts',
 		'apps/obsidian-plugin/src/features/skill-installation/skill-install-audit.ts',
 		'apps/obsidian-plugin/src/features/skill-installation/skill-install-receipts.ts',
 		'apps/obsidian-plugin/src/adapters/client-skill-adapter.ts',
@@ -96,6 +98,34 @@ test('rejects onboarding guidance that drifts from project Recall or workflow ca
 		const result = await checkAgentEcosystem(root);
 		assert.equal(result.ok, false);
 		assert.match(result.errors.join('\n'), /(plugin-generated onboarding guidance|project_hint)/);
+	});
+});
+
+test('rejects settings that restore resident onboarding or duplicate Agent capability controls', async () => {
+	await withFixture(async (root) => {
+		const settingsPath = path.join(root, 'apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts');
+		const settings = await readFile(settingsPath, 'utf8');
+		await writeFile(
+			settingsPath,
+			`${settings}\nconst rejectedSettingsControls = 'renderOnboardingSection runtimePublicTools RUNTIME_CREDENTIAL_PRESET_DEFINITIONS tracekeeper-capability-preset';\n`,
+			'utf8',
+		);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(result.errors.join('\n'), /resident onboarding checklist/);
+		assert.match(result.errors.join('\n'), /public-tool list/);
+		assert.match(result.errors.join('\n'), /capability presets/);
+	});
+});
+
+test('rejects a shared Agent Skill prompt that stops using the state-aware prompt model', async () => {
+	await withFixture(async (root) => {
+		const promptPath = path.join(root, 'apps/obsidian-plugin/src/features/skill-installation/client-skill-prompt.ts');
+		const prompt = await readFile(promptPath, 'utf8');
+		await writeFile(promptPath, prompt.replace(/buildSkillInstallPrompt/g, 'buildStaticSkillPrompt'), 'utf8');
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(result.errors.join('\n'), /state-aware Skill prompts/);
 	});
 });
 

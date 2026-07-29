@@ -39,12 +39,15 @@ try {
 	const onboardingState = await import(`${pathToFileURL(stateBundle).href}?test=${Date.now()}`);
 	const onboardingViewModel = await import(`${pathToFileURL(viewModelBundle).href}?test=${Date.now()}`);
 	const embeddedBundle = await import(`${pathToFileURL(embeddedBundleOutput).href}?test=${Date.now()}`);
-	const settingsSource = fs.readFileSync('src/features/settings/tracekeeper-setting-tab.ts', 'utf8');
+		const settingsSource = fs.readFileSync('src/features/settings/tracekeeper-setting-tab.ts', 'utf8');
+	const activityDataSource = fs.readFileSync('src/features/activity/activity-data-controller.ts', 'utf8');
 	const mainSource = fs.readFileSync('src/main.ts', 'utf8');
 	const entryModalSource = fs.readFileSync('src/features/onboarding/onboarding-entry-modal.ts', 'utf8');
 	const runtimeStatusSource = fs.readFileSync('src/features/runtime/runtime-status-view.ts', 'utf8');
 	const buildSource = fs.readFileSync('scripts/build.mjs', 'utf8');
+	const clientSkillPromptSource = fs.readFileSync('src/features/skill-installation/client-skill-prompt.ts', 'utf8');
 	const skillBundleSource = fs.readFileSync('src/features/skill-installation/skill-bundle.ts', 'utf8');
+	const skillPromptSource = fs.readFileSync('src/features/skill-installation/skill-install-view-model.ts', 'utf8');
 	const pluginBundleSource = fs.readFileSync(pluginBundle, 'utf8');
 
 	assert.equal(onboardingState.ONBOARDING_STEP_SEQUENCE[3], 'skill_setup');
@@ -64,6 +67,7 @@ try {
 		skillSetupCompletedAt: '',
 		agentRestartCompletedAt: '2026-07-22T00:00:01.000Z',
 		connectionVerifiedAt: '2026-07-22T00:00:02.000Z',
+		connectionVerifiedSessionId: 'session-codex',
 		firstRecallCompletedAt: '2026-07-22T00:00:03.000Z',
 		firstRecallMatchedCount: 2,
 	};
@@ -131,24 +135,46 @@ try {
 	assert.ok(skillBundleSource.includes('dist/tracekeeper.flattened.md'));
 	assert.ok(skillBundleSource.includes('manifest.json'));
 	assert.equal(/skills\/tracekeeper\/SKILL\.md['"]/.test(settingsSource), false);
-	assert.ok(settingsSource.includes('SkillInstallPreviewModal'));
-	assert.ok(settingsSource.includes('not file verification'));
-	assert.ok(settingsSource.includes('Does not prove automatic Skill triggering'));
-	assert.ok(settingsSource.includes('Local single-user managed profile (not team RBAC)'));
-	assert.ok(settingsSource.includes('Confirm memory policy'));
-	assert.ok(settingsSource.includes('New installations start in review'));
+	assert.ok(settingsSource.includes('renderClientSkillPrompt'));
+	assert.ok(clientSkillPromptSource.includes('SkillInstallPreviewModal'));
+	assert.ok(clientSkillPromptSource.includes('buildSkillInstallPrompt'));
+	assert.ok(settingsSource.includes('renderClientSkillPrompt'));
+	assert.ok(clientSkillPromptSource.includes('tracekeeper-settings-client-skill'));
+	assert.ok(settingsSource.includes('McpCapabilitiesModal'));
+	assert.ok(settingsSource.includes('View capabilities'));
+	assert.equal(settingsSource.includes('renderOnboardingSection'), false);
+	assert.equal(settingsSource.includes('tracekeeper-onboarding-steps'), false);
+	assert.equal(settingsSource.includes("ui('首次接入引导', 'Onboarding')"), false);
+	assert.equal(settingsSource.includes('runtimePublicTools'), false);
+	assert.equal(settingsSource.includes('RUNTIME_CREDENTIAL_PRESET_DEFINITIONS'), false);
+	assert.equal(settingsSource.includes('tracekeeper-capability-preset'), false);
+	assert.equal(settingsSource.includes("ui('能力预设', 'Capability profile')"), false);
+	assert.ok(skillPromptSource.includes("case 'not_installed'"));
+	assert.ok(skillPromptSource.includes("case 'update_available'"));
+	assert.ok(skillPromptSource.includes("case 'modified'"));
+	assert.ok(skillPromptSource.includes("case 'newer_than_bundled'"));
+	assert.ok(skillPromptSource.includes("case 'location_conflict'"));
+	assert.ok(skillPromptSource.includes("case 'copy_only'"));
 	assert.ok(mainSource.includes("projectMemoryRule: 'review_queue'"));
 	assert.ok(mainSource.includes('normalizeMemoryRuleSettings(saved, DEFAULT_SETTINGS)'));
 	assert.equal(mainSource.includes('savedMemoryRulesVersion'), false);
-	assert.ok(settingsSource.includes('skillActionForState'));
-	assert.ok(settingsSource.includes('legacy_install'));
-	assert.ok(settingsSource.includes('newer_than_bundled'));
 	assert.equal(settingsSource.includes("clientId === 'codex'"), false);
-	assert.ok(settingsSource.includes('buildOnboardingRecallInstruction'));
-	assert.ok(settingsSource.includes('Recall-only capability limit'));
-	assert.ok(mainSource.includes('runtimeCapabilities: selectedClient.runtimeCapabilities'));
+	assert.ok(mainSource.includes('runtimeCapabilities: LOCAL_TRUST_CAPABILITIES'));
 	assert.ok(mainSource.includes('clearOnboardingAgentBehaviorEvidence'));
-	assert.ok(settingsSource.includes('Local preview does not complete agent connection or first-recall verification.'));
+	assert.equal(mainSource.includes('LOCAL_TRUST_PRINCIPAL_ID'), false);
+		assert.equal(mainSource.includes('hasOnboardingConnectionEvidence'), false);
+		assert.ok(mainSource.includes('connectionVerifiedSessionId'));
+		const completionMethodSource = mainSource.slice(
+			mainSource.indexOf('isOnboardingComplete(): boolean'),
+			mainSource.indexOf('getOnboardingSelectedClient(', mainSource.indexOf('isOnboardingComplete(): boolean'))
+		);
+		assert.ok(completionMethodSource.includes('resolveOnboardingSelectedClient'));
+		assert.equal(activityDataSource.includes('sessionId: event.sessionId || event.agentId'), false);
+		assert.ok(activityDataSource.includes('sessionId: event.sessionId,'));
+		assert.equal(
+			fs.readFileSync('src/features/onboarding/onboarding-view-model.ts', 'utf8').toLowerCase().includes('principal'),
+			false
+	);
 	assert.ok(entryModalSource.includes('Start connecting Agent'));
 	assert.ok(entryModalSource.includes('Set up later'));
 	assert.ok(entryModalSource.includes('onStartConnectingAgent'));
@@ -174,7 +200,7 @@ try {
 		assert.equal(/(?:sk-[A-Za-z0-9_-]{12,}|api_key\s*[:=]\s*[A-Za-z0-9._-]{12,})/i.test(content), false);
 	}
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 39 })}\n`);
+		process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 53 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

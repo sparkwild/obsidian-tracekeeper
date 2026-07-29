@@ -36,7 +36,7 @@ export type OnboardingTrackedWorkflowStatus = 'observed' | 'not_observed';
 
 export interface OnboardingObservedEvidence {
 	selectedClientId: string;
-	principalId: string;
+	sessionId: string;
 	firstRecallQuery: string;
 	firstRecallMatchedCount: number;
 	firstRecallMatchedAt: string;
@@ -47,7 +47,6 @@ export interface OnboardingObservedEvidence {
 
 export interface BuildOnboardingObservedEvidenceInput {
 	selectedClient: OnboardingClientSelectionProfile | null;
-	principalId: string;
 	onboarding: OnboardingSettingsState;
 	skillBundleVersion: string;
 }
@@ -76,7 +75,11 @@ export const resolveOnboardingSelectedClient = (
 	return {
 		selectedClient: first,
 		selectedClientId: first.clientId,
-		state: { ...state, selectedClientId: first.clientId, lastUpdatedAt: now },
+		state: {
+			...clearOnboardingClientEvidence(state),
+			selectedClientId: first.clientId,
+			lastUpdatedAt: now,
+		},
 	};
 };
 
@@ -84,7 +87,7 @@ export const buildOnboardingObservedEvidence = (input: BuildOnboardingObservedEv
 	const observed = input.onboarding.trackedWorkflowObservedAt !== '';
 	return {
 		selectedClientId: input.selectedClient?.clientId || input.onboarding.selectedClientId,
-		principalId: input.principalId,
+		sessionId: input.onboarding.connectionVerifiedSessionId,
 		firstRecallQuery: input.onboarding.firstRecallQuery,
 		firstRecallMatchedCount: input.onboarding.firstRecallMatchedCount,
 		firstRecallMatchedAt: input.onboarding.firstRecallCompletedAt,
@@ -101,14 +104,14 @@ export const buildOnboardingRecallInstruction = (input: BuildOnboardingRecallIns
 	return {
 		instruction: input.workflowManageAvailable
 			? input.localize(
-				`请使用所选 Agent Principal 完成一次端到端验证：\n\n`
+				`请使用刚完成 MCP Session 验证的 AI 工具完成一次端到端验证：\n\n`
 				+ `1. 恰好调用一次 tracekeeper.start_task，并保留 Runtime 返回的真实 task_id。\n`
 				+ `2. 严格复制该响应中的 next_actions 或 recommended_recall 参数执行 Recall，不要自行重建项目路由。\n`
 				+ `3. 恰好调用一次 tracekeeper.finish_task，并使用同一个 task_id。\n\n`
 				+ `已知项目的路径应作为 repo_path 传递；只有已知规范项目名时才传 project_hint，绝不能把路径写入 project_hint。项目 Recall 的参数形状如下：\n\n`
 				+ `${recallPayload}\n\n`
 				+ `按原样汇报每次调用的参数和结果，不要先宣称成功。`,
-				`Use the selected Agent principal for one end-to-end verification:\n\n`
+				`Use the AI tool from the verified MCP Session for one end-to-end verification:\n\n`
 				+ `1. Call tracekeeper.start_task exactly once and keep the real task_id returned by the Runtime.\n`
 				+ `2. Copy the next_actions or recommended_recall arguments from that response exactly; do not reconstruct project routing.\n`
 				+ `3. Call tracekeeper.finish_task exactly once with that same task_id.\n\n`
@@ -117,11 +120,11 @@ export const buildOnboardingRecallInstruction = (input: BuildOnboardingRecallIns
 				+ `Report each raw call argument and result as-is; do not claim success upfront.`,
 			)
 			: input.localize(
-				`所选 Principal 仅支持 Recall，不具备 workflow.manage，因此不要调用 tracekeeper.start_task 或 tracekeeper.finish_task。\n\n`
+				`当前 AI 工具仅支持 Recall，不具备 workflow.manage，因此不要调用 tracekeeper.start_task 或 tracekeeper.finish_task。\n\n`
 				+ `先识别当前仓库或工作区，然后执行一次 project-scoped 的 tracekeeper.recall：\n\n`
 				+ `${recallPayload}\n\n`
 				+ `只有已知规范项目名时才添加 project_hint，绝不能把路径写入 project_hint。按原样汇报调用参数和结果，不要先宣称成功。`,
-				`The selected principal supports Recall only and does not have workflow.manage, so do not call tracekeeper.start_task or tracekeeper.finish_task.\n\n`
+				`The current AI tool supports Recall only and does not have workflow.manage, so do not call tracekeeper.start_task or tracekeeper.finish_task.\n\n`
 				+ `Identify the current repository or workspace, then run one project-scoped tracekeeper.recall:\n\n`
 				+ `${recallPayload}\n\n`
 				+ `Add project_hint only for a known canonical project name; never put a path in project_hint. Report the raw call arguments and result as-is; do not claim success upfront.`,
@@ -146,7 +149,9 @@ export const buildOnboardingContext = (input: BuildOnboardingContextInput): Onbo
 	const userConfirmed = input.onboarding.skillUserConfirmedAt !== '';
 	const clientReloaded = input.onboarding.agentRestartCompletedAt !== ''
 		|| (liveFileVerified && input.skillInstallState?.restartRequired === false);
-	const recallObserved = hasOnboardingRecallResult(input.onboarding);
+	const connectionVerified = input.onboarding.connectionVerifiedAt !== ''
+		&& input.onboarding.connectionVerifiedSessionId !== '';
+	const recallObserved = connectionVerified && hasOnboardingRecallResult(input.onboarding);
 	return {
 		vaultReady: input.vaultReady,
 		runtimeRunning: input.runtimeState === 'running' && input.runtimeEnabled,
@@ -154,7 +159,7 @@ export const buildOnboardingContext = (input: BuildOnboardingContextInput): Onbo
 		skillSetupConfirmed: liveFileVerified || userConfirmed,
 		memoryPolicyConfirmed: input.onboarding.memoryPolicyConfirmedAt !== '',
 		agentRestartConfirmed: clientReloaded,
-		connectionVerified: input.onboarding.connectionVerifiedAt !== '',
+		connectionVerified,
 		firstRecallCompleted: recallObserved,
 		skillAvailable: Boolean(input.skillInstallState),
 		skillCopied: input.onboarding.skillCopiedAt !== '',
@@ -179,6 +184,7 @@ export const clearOnboardingClientEvidence = (state: OnboardingSettingsState): O
 	skillUpdateAvailableAt: '',
 	agentRestartCompletedAt: '',
 	connectionVerifiedAt: '',
+	connectionVerifiedSessionId: '',
 	firstRecallCompletedAt: '',
 	firstRecallMatchedCount: 0,
 	firstRecallQuery: '',
@@ -194,6 +200,7 @@ export const clearOnboardingRuntimeEvidence = (
 	clientConfiguredAt: '',
 	agentRestartCompletedAt: '',
 	connectionVerifiedAt: '',
+	connectionVerifiedSessionId: '',
 	firstRecallCompletedAt: '',
 	firstRecallMatchedCount: 0,
 	firstRecallQuery: '',
@@ -209,6 +216,7 @@ export const clearOnboardingAgentBehaviorEvidence = (
 	...state,
 	agentRestartCompletedAt: '',
 	connectionVerifiedAt: '',
+	connectionVerifiedSessionId: '',
 	firstRecallCompletedAt: '',
 	firstRecallMatchedCount: 0,
 	firstRecallQuery: '',
@@ -230,11 +238,6 @@ export const parseOnboardingRecallQuery = (argsSummary: string): string => {
 		return '';
 	}
 };
-
-export const findOnboardingRuntimePrincipal = (
-	credentials: readonly { clientId: string; id: string }[],
-	clientId: string
-): string => credentials.find((credential) => credential.clientId === clientId)?.id || '';
 
 export const onboardingStepLabel = (
 	step: string,
@@ -272,7 +275,7 @@ export const onboardingContextDescription = (
 	if (required.every(Boolean)) {
 		return context.workflowManageAvailable
 			? localize('首次引导已完成，可直接开始有意义任务。', 'Onboarding is complete. You can start meaningful work.')
-			: localize('Recall-only 引导已完成；所选 Principal 不支持 tracked closeout。', 'Recall-only onboarding is complete; the selected principal does not support tracked closeout.');
+			: localize('Recall-only 引导已完成；当前 AI 工具不支持 tracked closeout。', 'Recall-only onboarding is complete; the current AI tool does not support tracked closeout.');
 	}
 	const pending = required.filter((value) => !value).length;
 	return context.vaultReady && pending > 0
