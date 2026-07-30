@@ -39,7 +39,6 @@ import {
 	type OperationRecord,
 	lintNotes,
 	parseMarkdown,
-	recallNotes,
 	type ScanResult,
 	type ScannedNote,
 	type VaultRepository,
@@ -82,6 +81,16 @@ import {
 	type ResolvedProjectIdentity,
 } from './application/project-identity';
 import {
+	RecallApplicationService,
+	type GlobalRecallApplicationResult,
+	type ProjectHistoryRecallApplicationResult,
+	type ProjectRecallApplicationResult,
+	type RecallApplicationScope,
+	type RecallContentOrigin,
+	type RecallRelationEvidence,
+	type RecallRelationEvidenceItem,
+} from './application/recall';
+import {
 	normalizeObservedClientType,
 	type ObservedClientType,
 } from './observed-client';
@@ -100,7 +109,6 @@ const MAX_LIST_QUEUE_ITEMS = 20;
 const MAX_AUDIT_ITEMS = 20;
 const MAX_APPROVED_WRITEBACKS = 20;
 const MAX_PROJECT_TOOL_ITEMS = 20;
-const MAX_PROJECT_SCOPE_CANDIDATES = 8;
 const CONTEXT_PACK_DIR = TRACEKEEPER_CONTEXT_PACKS_DIR;
 const SESSION_NOTE_DIR = TRACEKEEPER_SESSIONS_DIR;
 const AGENT_TASK_DIR = TRACEKEEPER_TASKS_DIR;
@@ -112,16 +120,8 @@ const SOURCES_DIR = KNOWLEDGE_SOURCES_DIR;
 const SOURCE_ANALYSIS_REPORT_DIR = TRACEKEEPER_SOURCE_ANALYSIS_DIR;
 const MEMORY_PROPOSAL_DIR = TRACEKEEPER_REVIEW_QUEUE_DIR;
 const MAX_SOURCE_EXCERPT_LENGTH = 1000;
-const MAX_RECALL_EXCERPT_LENGTH = 480;
-const MAX_RECALL_GRAPH_LINKS = 8;
 const MAX_RECALL_RELATIONS = 8;
-const MAX_RECALL_CANDIDATES = 50;
 const DEFAULT_FINISH_TASK_REVIEW_MODE = 'auto_propose';
-const PROJECT_MEMORY_RECALL_BOOST = 4;
-const KNOWLEDGE_WIKI_RECALL_BOOST = 0.75;
-const WORK_RECORD_RECALL_PENALTY = 5;
-const PROJECT_MEMORY_RECALL_REASON = 'Project-memory location boost (+4)';
-const KNOWLEDGE_WIKI_RECALL_REASON = 'Wiki location boost (+0.75)';
 
 type CaptureSourceMode = 'external_reference' | 'extracted_snapshot' | 'local_copy';
 type ReviewProposalMode = 'off' | 'suggest' | 'review_queue' | 'auto_propose';
@@ -344,26 +344,6 @@ interface RecallArgs extends ToolArgs {
 	repo_path?: unknown;
 	repo?: unknown;
 	project_path?: unknown;
-}
-
-interface RankedRecallMatch {
-	note: ScannedNote;
-	score: number;
-	raw_score: number;
-	matchedTokens: string[];
-	score_reason: string[];
-}
-
-interface RecallRelationEvidenceItem {
-	path: string;
-	declared_by: string;
-	declared_via: Array<'frontmatter' | 'body_wikilink'>;
-	verified_by: 'active_vault_snapshot';
-}
-
-interface RecallRelationEvidence {
-	related_wiki: RecallRelationEvidenceItem[];
-	related_sources: RecallRelationEvidenceItem[];
 }
 
 interface ArchitectureStatusReport {
@@ -1207,7 +1187,7 @@ function graphProfileFromArgs(value: unknown, context: ToolContext): GraphProfil
 	return normalizeGraphProfile(value ?? context.graphProfile);
 }
 
-type RecallScope = 'global' | 'project' | 'project_history';
+type RecallScope = RecallApplicationScope;
 
 function coerceRecallScope(value: unknown): RecallScope {
 	const normalized = coerceOptionalString(value).toLowerCase();
@@ -1996,354 +1976,6 @@ function filterNotesByProjectScopeWithSessions(notes: ScannedNote[], scope: Proj
 	return results;
 }
 
-function collectProjectCandidates(
-	notes: ScannedNote[],
-	scope: ProjectScopeFilter,
-	maxItems: number
-): Array<{ path: string; title: string; type: string | null }> {
-	const candidates: Array<{ path: string; title: string; type: string | null }> = [];
-	const seen = new Set<string>();
-	for (const note of notes) {
-		const candidate = projectMemoryCandidatePath(note.relativePath);
-		if (candidate) {
-			if (!seen.has(note.relativePath)) {
-				seen.add(note.relativePath);
-				candidates.push({
-					path: note.relativePath,
-					title: note.title,
-					type: note.type ?? null,
-				});
-			}
-		}
-		const notePath = note.relativePath.toLowerCase();
-		const hintTokens = projectTokens(scope.projectHint);
-		if (
-			scope.projectId &&
-			(notePath.includes(scope.projectId.toLowerCase()) || valueContainsAnyToken(notePath, hintTokens))
-		) {
-			if (!seen.has(note.relativePath)) {
-				seen.add(note.relativePath);
-				candidates.push({
-					path: note.relativePath,
-					title: note.title,
-					type: note.type ?? null,
-				});
-			}
-		}
-		if (candidates.length >= maxItems) {
-			break;
-		}
-	}
-	return candidates.slice(0, maxItems);
-}
-
-function projectMemoryCandidatePath(notePath: string): string {
-	for (const dir of PROJECT_MEMORY_READ_DIRS) {
-		const prefix = `${dir}/`;
-		if (!notePath.startsWith(prefix)) {
-			continue;
-		}
-		const [projectSegment] = notePath.slice(prefix.length).split('/').filter(Boolean);
-		return projectSegment ? `${dir}/${projectSegment}` : dir;
-	}
-	return '';
-}
-
-function buildProjectHistoryEntries(matches: ScannedNote[], query = '', allNotes: ScannedNote[] = []) {
-	return matches.map((note) => ({
-		path: note.relativePath,
-		title: note.title,
-		type: note.type,
-		note_type: note.type ?? null,
-		scope: 'project_history',
-		modifiedAt: note.modifiedAt,
-		content_origin: recallContentOrigin(note.relativePath, note.type),
-		instruction_trust: 'data_only',
-		task_id: readFrontmatterString(note.frontmatter, ['task_id', 'taskId']),
-		project_hint: readFrontmatterString(note.frontmatter, ['project_hint', 'related_project', 'project']),
-		why_matched: buildProjectHistoryWhy(note, query),
-		excerpt: compactNoteText(note.content),
-		graph_links: buildRecallGraphLinks(note),
-		relation_evidence: buildRecallRelationEvidence(note, allNotes),
-	}));
-}
-
-function buildProjectRecallRelationEvidence(scope: ProjectScopeFilter, fallbackToGlobal: boolean): Array<Record<string, unknown>> {
-	const evidence: Array<Record<string, unknown>> = [];
-	if (scope.projectHint) {
-		evidence.push({
-			type: 'project_hint',
-			value: scope.projectHint,
-			confidence: scope.confidence,
-		});
-	}
-	if (scope.projectId) {
-		evidence.push({
-			type: 'project_id',
-			value: scope.projectId,
-			confidence: scope.confidence,
-		});
-	}
-	if (scope.repoPath) {
-		evidence.push({
-			type: 'repo_path',
-			value: scope.repoPath,
-			confidence: scope.confidence,
-		});
-	}
-	if (fallbackToGlobal) {
-		evidence.push({
-			type: 'fallback',
-			value: 'project_scope_uncertain_no_matches',
-			target_scope: 'global',
-		});
-	}
-	if (evidence.length === 0) {
-		evidence.push({
-			type: 'fallback',
-			value: 'global_default',
-			target_scope: 'global',
-		});
-	}
-	return evidence;
-}
-
-function matchesProjectQuery(note: ScannedNote, query: string): boolean {
-	const normalizedQuery = query.trim().toLowerCase();
-	if (!normalizedQuery) {
-		return true;
-	}
-	const haystack = [
-		note.relativePath,
-		note.title,
-		note.type,
-		note.tokens,
-		JSON.stringify(note.frontmatter),
-	].join(' ').toLowerCase();
-	if (haystack.includes(normalizedQuery)) {
-		return true;
-	}
-	const queryTokens = Array.from(new Set(normalizedQuery.split(/[^a-z0-9\u4e00-\u9fff]+/u).filter((token) => token.length > 1)));
-	if (queryTokens.length === 0) {
-		return false;
-	}
-	const matchedCount = queryTokens.filter((token) => haystack.includes(token)).length;
-	const requiredMatches = queryTokens.length <= 2
-		? queryTokens.length
-		: Math.max(2, Math.ceil(queryTokens.length * 0.6));
-	return matchedCount >= requiredMatches;
-}
-
-function buildProjectScopeMetadata(scope: ProjectScopeFilter) {
-	return {
-		project_hint: scope.projectHint || null,
-		project_id: scope.projectId || null,
-		repo_path: scope.repoPath || null,
-		source: scope.source,
-		confidence: scope.confidence,
-		warnings: scope.warnings,
-	};
-}
-
-function collectRecallScopeTokens(scope: ProjectScopeFilter): string[] {
-	const tokens = new Set<string>();
-	if (scope.projectHint) {
-		for (const token of projectTokens(scope.projectHint)) {
-			tokens.add(token);
-		}
-	}
-	if (scope.projectId) {
-		tokens.add(scope.projectId.toLowerCase());
-	}
-	if (scope.repoPath) {
-		const normalized = normalizeRepoPrefix(scope.repoPath).toLowerCase();
-		if (normalized) {
-			tokens.add(normalized);
-			tokens.add(normalized.split('/').filter(Boolean).pop() || normalized);
-		}
-	}
-	return Array.from(tokens).filter(Boolean);
-}
-
-function recallRecencyBoost(modifiedAt: string): number {
-	const modified = Date.parse(modifiedAt);
-	if (!Number.isFinite(modified)) {
-		return 0;
-	}
-	const ageHours = (Date.now() - modified) / (60 * 60 * 1000);
-	if (ageHours < 24) {
-		return 1;
-	}
-	if (ageHours < 72) {
-		return 0.6;
-	}
-	if (ageHours < 168) {
-		return 0.25;
-	}
-	return 0;
-}
-
-function recallCandidateLimit(maxItems: number): number {
-	return Math.min(Math.max(maxItems * 4, 24), MAX_RECALL_CANDIDATES);
-}
-
-function isGeneratedWorkRecord(note: ScannedNote): boolean {
-	const notePath = note.relativePath.replace(/\\/g, '/');
-	return notePath.startsWith(`${TRACEKEEPER_TASKS_DIR}/`) ||
-		notePath.startsWith(`${TRACEKEEPER_SESSIONS_DIR}/`) ||
-		notePath.startsWith('02_timeline/agent_tasks/') ||
-		notePath.startsWith('02_timeline/sessions/');
-}
-
-function buildProjectMemoryAnchors(
-	notes: ScannedNote[],
-	existingPaths: Set<string>,
-	maxItems = 2
-): Array<{ note: ScannedNote; score: number; matchedTokens: string[] }> {
-	return notes
-		.filter((note) =>
-			note.relativePath.startsWith(`${KNOWLEDGE_PROJECTS_MEMORY_DIR}/`) &&
-			!existingPaths.has(note.relativePath)
-		)
-		.sort((a, b) => {
-			const aCanonical = a.relativePath.toLowerCase().endsWith('/memory.md') ? 1 : 0;
-			const bCanonical = b.relativePath.toLowerCase().endsWith('/memory.md') ? 1 : 0;
-			return bCanonical - aCanonical ||
-				Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt) ||
-				a.relativePath.localeCompare(b.relativePath);
-		})
-		.slice(0, maxItems)
-		.map((note) => ({ note, score: 0, matchedTokens: [] }));
-}
-
-function selectRecallMatches(matches: RankedRecallMatch[], maxItems: number): RankedRecallMatch[] {
-	const hasDurableKnowledge = matches.some((match) =>
-		!isGeneratedWorkRecord(match.note) && match.raw_score > 0
-	);
-	if (!hasDurableKnowledge) {
-		return matches.slice(0, maxItems);
-	}
-	const selected: RankedRecallMatch[] = [];
-	let workRecordCount = 0;
-	for (const match of matches) {
-		if (isGeneratedWorkRecord(match.note)) {
-			if (workRecordCount >= 1) {
-				continue;
-			}
-			workRecordCount += 1;
-		}
-		selected.push(match);
-		if (selected.length >= maxItems) {
-			break;
-		}
-	}
-	if (
-		maxItems > 1 &&
-		workRecordCount === 0 &&
-		selected.length === maxItems
-	) {
-		const bestWorkRecord = matches.find((match) =>
-			isGeneratedWorkRecord(match.note) && match.raw_score > 0
-		);
-		if (bestWorkRecord) {
-			selected[selected.length - 1] = bestWorkRecord;
-		}
-	}
-	return selected;
-}
-
-function rankRecallMatches(
-	matches: Array<{ note: ScannedNote; score: number; matchedTokens: string[] }>,
-	query: string,
-	scope: ProjectScopeFilter
-): RankedRecallMatch[] {
-	const fullQuery = query.trim().toLowerCase();
-	const scopeTokens = collectRecallScopeTokens(scope);
-
-	const ranked = matches.map((match) => {
-		let score = match.score;
-		const reasons: string[] = [];
-		const noteTitle = match.note.title.toLowerCase();
-		const notePath = match.note.relativePath.toLowerCase();
-		const noteFrontmatter = [
-			readFrontmatterString(match.note.frontmatter, ['project', 'project_hint', 'related_project']),
-			readFrontmatterString(match.note.frontmatter, ['project_id', 'projectId', 'pid']),
-			readFrontmatterString(match.note.frontmatter, ['repo_path', 'repoPath', 'project_path']),
-			readFrontmatterString(match.note.frontmatter, ['related_project', 'relatedProject', 'workspace']),
-		].join(' ').toLowerCase();
-
-		if (notePath.startsWith(`${KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)) {
-			score += PROJECT_MEMORY_RECALL_BOOST;
-			reasons.push(PROJECT_MEMORY_RECALL_REASON);
-		} else if (isKnowledgeWikiPath(notePath)) {
-			score += KNOWLEDGE_WIKI_RECALL_BOOST;
-			reasons.push(KNOWLEDGE_WIKI_RECALL_REASON);
-		} else if (
-			notePath.startsWith(`${TRACEKEEPER_TASKS_DIR}/`) ||
-			notePath.startsWith(`${TRACEKEEPER_SESSIONS_DIR}/`)
-		) {
-			const echoPenalty = Math.max(
-				WORK_RECORD_RECALL_PENALTY + Math.max(0, match.matchedTokens.length - 1),
-				Math.max(0, match.score - 2)
-			);
-			score = Math.max(0.01, score - echoPenalty);
-			reasons.push(`Work-record query-echo penalty (-${echoPenalty})`);
-		}
-		if (match.matchedTokens.length >= 2) {
-			score += 0.4;
-			reasons.push('Multiple query token matches (+0.4)');
-		}
-		const recency = recallRecencyBoost(match.note.modifiedAt);
-		if (recency > 0) {
-			score += recency;
-			reasons.push(`Recent edit (+${recency})`);
-		}
-		if (fullQuery && (noteTitle.includes(fullQuery) || notePath.includes(fullQuery))) {
-			score += 1;
-			reasons.push('Exact query phrase match in title/path (+1)');
-		}
-		if (scopeTokens.some((token) => valueContainsAnyToken(noteTitle, [token]) || valueContainsAnyToken(notePath, [token]) || valueContainsAnyToken(noteFrontmatter, [token]))) {
-			score += 0.4;
-			reasons.push('Project scope match (+0.4)');
-		}
-		return {
-			note: match.note,
-			raw_score: match.score,
-			score: Number(score.toFixed(2)),
-			matchedTokens: match.matchedTokens,
-			score_reason: reasons.length ? reasons : ['Core recall score'],
-		};
-	});
-
-	return ranked.sort((a, b) => b.score - a.score || a.note.relativePath.localeCompare(b.note.relativePath));
-}
-
-function compactNoteText(text: string, maxLength = MAX_RECALL_EXCERPT_LENGTH): string {
-	const compact = text
-		.replace(/```[\s\S]*?```/g, ' ')
-		.replace(/^#{1,6}\s+/gm, '')
-		.replace(/\s+/g, ' ')
-		.trim();
-	if (compact.length <= maxLength) {
-		return compact;
-	}
-	return `${compact.slice(0, maxLength - 1).trimEnd()}…`;
-}
-
-function buildRecallGraphLinks(note: ScannedNote): string[] {
-	const links = new Set<string>();
-	for (const link of note.wikilinks) {
-		const target = link.heading ? `${link.target}#${link.heading}` : link.target;
-		if (target.trim()) {
-			links.add(target.trim());
-		}
-		if (links.size >= MAX_RECALL_GRAPH_LINKS) {
-			break;
-		}
-	}
-	return Array.from(links);
-}
-
 function relationValues(value: unknown): string[] {
 	const values = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
 	return values
@@ -2439,18 +2071,7 @@ function buildRecallRelationEvidence(note: ScannedNote, allNotes: ScannedNote[])
 	return evidence;
 }
 
-function buildRecallWhyMatched(match: RankedRecallMatch, scope: RecallScope): string {
-	const scopeLabel = scope === 'project_history'
-		? 'Project-history recall'
-		: scope === 'project'
-			? 'Project recall'
-			: 'Global recall';
-	const tokenText = match.matchedTokens.slice(0, 6).join(', ');
-	const reasonText = match.score_reason.slice(0, 2).join('; ');
-	return [scopeLabel, tokenText ? `matched tokens: ${tokenText}` : '', reasonText].filter(Boolean).join(' - ');
-}
-
-function recallContentOrigin(relativePath: string, noteType?: string): 'captured_source' | 'tracekeeper_generated' | 'vault_note' {
+function recallContentOrigin(relativePath: string, noteType?: string): RecallContentOrigin {
 	const normalizedPath = relativePath.replace(/\\/g, '/').replace(/^\.\//, '');
 	const normalizedType = (noteType ?? '').trim().toLowerCase();
 	if (
@@ -2464,42 +2085,6 @@ function recallContentOrigin(relativePath: string, noteType?: string): 'captured
 		return 'tracekeeper_generated';
 	}
 	return 'vault_note';
-}
-
-function buildRecallEntry(
-	match: RankedRecallMatch,
-	scope: RecallScope,
-	allNotes: ScannedNote[]
-) {
-	return {
-		path: match.note.relativePath,
-		title: match.note.title,
-		type: match.note.type,
-		note_type: match.note.type ?? null,
-		scope,
-		score: match.score,
-		raw_score: match.raw_score,
-		matched_tokens: match.matchedTokens,
-		score_reason: match.score_reason,
-		why_matched: buildRecallWhyMatched(match, scope),
-		excerpt: compactNoteText(match.note.content),
-		content_origin: recallContentOrigin(match.note.relativePath, match.note.type),
-		instruction_trust: 'data_only',
-		graph_links: buildRecallGraphLinks(match.note),
-		relation_evidence: buildRecallRelationEvidence(match.note, allNotes),
-	};
-}
-
-function buildProjectHistoryWhy(note: ScannedNote, query: string): string {
-	const parts = ['Project-history recall'];
-	const taskId = readFrontmatterString(note.frontmatter, ['task_id', 'taskId']);
-	if (taskId) {
-		parts.push(`linked task: ${taskId}`);
-	}
-	if (query) {
-		parts.push(`matched query: ${query}`);
-	}
-	return parts.join(' - ');
 }
 
 function buildFinishTaskProposalEvidence(
@@ -4829,6 +4414,52 @@ function looksLikeSensitiveValue(value: string): boolean {
 	return !scanSensitiveText(value).ok;
 }
 
+const RECALL_FAMILY_AUDIT_TOOL_NAMES = new Set([
+	'tracekeeper.recall',
+	'tracekeeper.project_context',
+	'tracekeeper.project_history',
+]);
+
+const RECALL_AUDIT_METADATA_KEYS = [
+	'scope',
+	'project_hint',
+	'project_id',
+	'repo_path',
+	'repo',
+	'project_path',
+	'max_items',
+] as const;
+
+function projectRecallAuditMetadataValue(value: unknown): unknown {
+	if (
+		value === null ||
+		value === undefined ||
+		typeof value === 'string' ||
+		typeof value === 'number' ||
+		typeof value === 'boolean'
+	) {
+		return value;
+	}
+	return '[invalid]';
+}
+
+function projectArgumentsForAudit(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
+	if (!RECALL_FAMILY_AUDIT_TOOL_NAMES.has(toolName)) {
+		return args;
+	}
+
+	const projected: Record<string, unknown> = {};
+	if (Object.prototype.hasOwnProperty.call(args, 'query')) {
+		projected.query = '[redacted]';
+	}
+	for (const key of RECALL_AUDIT_METADATA_KEYS) {
+		if (Object.prototype.hasOwnProperty.call(args, key)) {
+			projected[key] = projectRecallAuditMetadataValue(args[key]);
+		}
+	}
+	return projected;
+}
+
 function summarizeForAudit(args: Record<string, unknown>, limit = MAX_ARGS_SUMMARY_LENGTH): string {
 	const summary: Record<string, unknown> = {};
 
@@ -5386,7 +5017,7 @@ export async function callTool(
 	let status: 'success' | 'failed' = 'failed';
 	const toolName = requestName || 'unknown';
 
-	const argsSummary = summarizeForAudit(args);
+	const argsSummary = summarizeForAudit(projectArgumentsForAudit(requestName, args));
 
 	try {
 		const contract = getContractByName(requestName);
@@ -5836,10 +5467,57 @@ async function handleStartTask(rawArgs: StartTaskArgs, context: ToolInvocationCo
 	return runner.run();
 }
 
+function executeRecallApplication(
+	scope: 'global',
+	rawArgs: RecallArgs,
+	context: ToolContext
+): GlobalRecallApplicationResult;
+function executeRecallApplication(
+	scope: 'project',
+	rawArgs: RecallArgs,
+	context: ToolContext
+): ProjectRecallApplicationResult;
+function executeRecallApplication(
+	scope: 'project_history',
+	rawArgs: RecallArgs,
+	context: ToolContext
+): ProjectHistoryRecallApplicationResult;
+function executeRecallApplication(
+	scope: RecallScope,
+	rawArgs: RecallArgs,
+	context: ToolContext
+) {
+	const vaultRoot = vaultRootFromArgs(rawArgs, context);
+	const query = scope === 'project_history'
+		? coerceOptionalString(rawArgs.query)
+		: coerceNonEmptyString(rawArgs.query, true, 'query');
+	const maxItems = coercePositiveInt(
+		rawArgs.max_items,
+		scope === 'global' ? 6 : MAX_PROJECT_TOOL_ITEMS,
+		1,
+		MAX_PROJECT_TOOL_ITEMS
+	);
+	const service = new RecallApplicationService({
+		loadScan: () => scanVaultForContext(vaultRoot, context),
+		nowMs: () => Date.now(),
+		resolveProjectIdentity,
+		filterProjectNotes: filterNotesByProjectScopeWithSessions,
+		buildRelationEvidence: buildRecallRelationEvidence,
+		contentOrigin: recallContentOrigin,
+	});
+	return service.execute({
+		scope,
+		query,
+		maxItems,
+		vaultRoot,
+		projectIdentityInput: rawArgs,
+	});
+}
+
 function handleRecall(rawArgs: RecallArgs, context: ToolContext) {
 	const scope = coerceRecallScope(rawArgs.scope);
 	if (scope === 'project') {
-		const result = handleProjectContext(rawArgs, context);
+		const result = executeRecallApplication('project', rawArgs, context);
 		return {
 			...result,
 			scope: {
@@ -5850,7 +5528,7 @@ function handleRecall(rawArgs: RecallArgs, context: ToolContext) {
 		};
 	}
 	if (scope === 'project_history') {
-		const result = handleProjectHistory(rawArgs, context);
+		const result = executeRecallApplication('project_history', rawArgs, context);
 		return {
 			...result,
 			scope: {
@@ -5860,34 +5538,7 @@ function handleRecall(rawArgs: RecallArgs, context: ToolContext) {
 			scope_mode: scope,
 		};
 	}
-	const vaultRoot = vaultRootFromArgs(rawArgs, context);
-	const query = coerceNonEmptyString(rawArgs.query, true, 'query');
-	const maxItems = coercePositiveInt(rawArgs.max_items, 6, 1, 20);
-	const scan = scanVaultForContext(vaultRoot, context);
-	const rawMatches = recallNotes(scan.notes, query, { limit: recallCandidateLimit(maxItems) });
-	const matches = selectRecallMatches(
-		rankRecallMatches(rawMatches, query, {
-			projectHint: '',
-			projectId: '',
-			repoPath: '',
-			source: 'unknown',
-			confidence: 'uncertain',
-			warnings: [],
-		}),
-		maxItems
-	);
-
-	return {
-		ok: true,
-		read_only: true,
-		scope_mode: scope,
-		query,
-		vault_root: vaultRoot,
-		max_items: maxItems,
-		matched_count: matches.length,
-		...scanProvenance(scan),
-		matches: matches.map((match) => buildRecallEntry(match, scope, scan.notes)),
-	};
+	return executeRecallApplication('global', rawArgs, context);
 }
 
 async function handleReadNote(rawArgs: ReadNoteArgs, context: ToolContext) {
@@ -5934,96 +5585,11 @@ async function handleReadNote(rawArgs: ReadNoteArgs, context: ToolContext) {
 }
 
 function handleProjectContext(rawArgs: ProjectContextArgs, context: ToolContext) {
-	const vaultRoot = vaultRootFromArgs(rawArgs, context);
-	const query = coerceNonEmptyString(rawArgs.query, true, 'query');
-	const maxItems = coercePositiveInt(rawArgs.max_items, MAX_PROJECT_TOOL_ITEMS, 1, MAX_PROJECT_TOOL_ITEMS);
-	const scan = scanVaultForContext(vaultRoot, context);
-	const scope = coerceProjectScope(rawArgs, scan.notes);
-	const unresolved = scope.confidence === 'uncertain';
-	const scopedNotes = unresolved
-		? scan.notes
-		: filterNotesByProjectScopeWithSessions(scan.notes, scope);
-	const candidateLimit = recallCandidateLimit(maxItems);
-	const initialMatches = recallNotes(scopedNotes, query, { limit: candidateLimit });
-	const anchoredMatches = unresolved
-		? initialMatches
-		: [
-			...initialMatches,
-			...buildProjectMemoryAnchors(
-				scopedNotes,
-				new Set(initialMatches.map((match) => match.note.relativePath))
-			),
-		];
-	const fallbackToGlobal = unresolved && anchoredMatches.length === 0;
-	const finalScope = fallbackToGlobal ? resolveProjectIdentity({}, scan.notes) : scope;
-	const finalScopeMode = fallbackToGlobal ? 'global' : 'project';
-	const finalRawMatches = fallbackToGlobal
-		? recallNotes(scan.notes, query, { limit: candidateLimit })
-		: anchoredMatches;
-	const matches = selectRecallMatches(
-		rankRecallMatches(finalRawMatches, query, finalScope),
-		maxItems
-	);
-	const uncertain = !hasProjectScope(scope) || scope.confidence === 'uncertain' || fallbackToGlobal;
-	const candidateNotes = collectProjectCandidates(scopedNotes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
-	const scopeEvidence = buildProjectRecallRelationEvidence(scope, fallbackToGlobal);
-	const scopeMetadata = fallbackToGlobal
-		? buildProjectScopeMetadata(resolveProjectIdentity({}, scan.notes))
-		: buildProjectScopeMetadata(scope);
-
-	return {
-		ok: true,
-		read_only: true,
-		vault_root: vaultRoot,
-		query,
-		uncertain: uncertain,
-		scope: scopeMetadata,
-		project_identity: projectIdentityToResult(scope),
-		max_items: maxItems,
-		matched_count: matches.length,
-		...scanProvenance(scan),
-		candidates: candidateNotes.map((candidate) => candidate.path),
-		candidate_notes: candidateNotes,
-		scope_evidence: scopeEvidence,
-		scope_mode: finalScopeMode,
-		entries: matches.map((match) => buildRecallEntry(match, finalScopeMode, scan.notes)),
-	};
+	return executeRecallApplication('project', rawArgs, context);
 }
 
 function handleProjectHistory(rawArgs: ProjectHistoryArgs, context: ToolContext) {
-	const vaultRoot = vaultRootFromArgs(rawArgs, context);
-	const query = coerceOptionalString(rawArgs.query);
-	const maxItems = coercePositiveInt(rawArgs.max_items, MAX_PROJECT_TOOL_ITEMS, 1, MAX_PROJECT_TOOL_ITEMS);
-	const scan = scanVaultForContext(vaultRoot, context);
-	const scope = coerceProjectScope(rawArgs, scan.notes);
-	const unresolved = scope.confidence === 'uncertain';
-	const scopedNotes = unresolved
-		? scan.notes
-		: filterNotesByProjectScopeWithSessions(scan.notes, scope);
-	const uncertain = !hasProjectScope(scope) || scope.confidence === 'uncertain';
-	const filteredByQuery = query ? scopedNotes.filter((note) => matchesProjectQuery(note, query)) : scopedNotes;
-	const sortedMatches = filteredByQuery
-		.filter((note) => note.relativePath !== '')
-		.sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
-	const candidateNotes = collectProjectCandidates(scopedNotes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
-	const matches = sortedMatches.slice(0, maxItems);
-
-	return {
-		ok: true,
-		read_only: true,
-		vault_root: vaultRoot,
-		query: query || null,
-		uncertain: uncertain,
-		scope: buildProjectScopeMetadata(scope),
-		project_identity: projectIdentityToResult(scope),
-		max_items: maxItems,
-		matched_count: matches.length,
-		total_matches: sortedMatches.length,
-		...scanProvenance(scan),
-		candidates: candidateNotes.map((candidate) => candidate.path),
-		candidate_notes: candidateNotes,
-		entries: buildProjectHistoryEntries(matches, query, scan.notes),
-	};
+	return executeRecallApplication('project_history', rawArgs, context);
 }
 
 function handleListSourceRequests(rawArgs: ListSourceRequestsArgs, context: ToolContext) {
