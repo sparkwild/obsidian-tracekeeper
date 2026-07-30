@@ -16,7 +16,7 @@ After Tracekeeper is listed in the Obsidian Community Plugins directory:
 4. Select **Browse**, search for **Tracekeeper**, then install it.
 5. Enable **Tracekeeper** from the installed plugins list.
 
-Before community listing, install from the latest GitHub release:
+For manual installation or release-candidate testing, install from the matching GitHub release:
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the release whose tag matches the version in `manifest.json`.
 2. Create `plugins/tracekeeper/` inside the vault's Obsidian configuration folder.

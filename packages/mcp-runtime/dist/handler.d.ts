@@ -4,7 +4,7 @@ import type { VaultRepository } from '@tracekeeper/core';
 import { type ObservedClientType } from './observed-client';
 export declare const MCP_PROTOCOL_VERSION = "2025-06-18";
 export declare const SUPPORTED_MCP_PROTOCOL_VERSIONS: readonly ["2025-11-25", "2025-06-18"];
-export declare const MCP_SERVER_VERSION = "0.2.4";
+export declare const MCP_SERVER_VERSION = "0.3.0";
 export declare const STREAMABLE_HTTP_TRANSPORT = "streamable-http";
 export interface McpConnectionState {
     sessionId: string;

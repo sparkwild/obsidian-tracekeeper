@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-tracekeeper",
-	"version": "0.2.4",
+	"version": "0.3.0",
 	"description": "Review AI-proposed wiki and memory updates before they reach your vault.",
 	"private": true,
 	"workspaces": [
@@ -20,12 +20,14 @@
 		"agent:ecosystem": "node ./scripts/check_agent_ecosystem.mjs",
 		"agent:ecosystem:test": "node --test ./scripts/check_agent_ecosystem.test.mjs",
 		"architecture:check": "node ./scripts/check_architecture_boundaries.mjs && node --test ./scripts/check_architecture_boundaries.test.mjs",
+		"benchmark:index": "npm run build --workspace packages/core && npm run build --workspace packages/mcp-runtime && node --expose-gc ./benchmarks/knowledge-index/run.mjs",
+		"benchmark:index:test": "npm run build --workspace packages/core && npm run build --workspace packages/mcp-runtime && node --test ./benchmarks/knowledge-index/*.test.mjs",
 		"typecheck": "npm run typecheck --workspaces --if-present",
 		"build": "npm run build --workspaces --if-present",
 		"test": "npm run test --workspaces --if-present",
 		"package": "npm run package --workspace apps/obsidian-plugin",
 		"verify": "bash ./scripts/verify.sh",
-		"version": "node ./version-bump.mjs && git add manifest.json versions.json package.json package-lock.json apps/obsidian-plugin/manifest.json apps/obsidian-plugin/package.json apps/obsidian-plugin/package-lock.json apps/mcp-server/scripts/smoke.mjs apps/mcp-server/package.json apps/mcp-server/package-lock.json packages/contracts/package.json packages/core/package.json packages/core/package-lock.json packages/mcp-runtime/package.json packages/mcp-runtime/src/handler.ts"
+		"version": "node ./version-bump.mjs && node ./scripts/build_tracekeeper_skill.mjs && git add manifest.json versions.json package.json package-lock.json apps/obsidian-plugin/manifest.json apps/obsidian-plugin/package.json apps/obsidian-plugin/package-lock.json apps/obsidian-plugin/src/composition/local-tool-executor.ts apps/mcp-server/package.json apps/mcp-server/package-lock.json packages/contracts/package.json packages/core/package.json packages/core/package-lock.json packages/mcp-runtime/package.json packages/mcp-runtime/src/handler.ts skills/tracekeeper/release.json skills/tracekeeper/manifest.json skills/tracekeeper/dist/tracekeeper.flattened.md"
 	},
 	"devDependencies": {
 		"@types/node": "^22.19.19",

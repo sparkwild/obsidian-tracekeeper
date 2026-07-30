@@ -93,11 +93,14 @@ replaceInFile(
 	`export const MCP_SERVER_VERSION = '${targetVersion}';`
 );
 replaceInFile(
-	'apps/mcp-server/scripts/smoke.mjs',
-	/version: '[^']+',/,
-	`version: '${targetVersion}',`
+	'apps/obsidian-plugin/src/composition/local-tool-executor.ts',
+	/options\.runtimeVersion\?\.trim\(\) \|\| '[^']+';/,
+	`options.runtimeVersion?.trim() || '${targetVersion}';`
 );
-
 const versions = readJson('versions.json');
 versions[targetVersion] = manifest.minAppVersion;
 writeJson('versions.json', versions);
+
+const skillRelease = readJson('skills/tracekeeper/release.json');
+skillRelease.minimum_tracekeeper_version = targetVersion;
+writeJson('skills/tracekeeper/release.json', skillRelease, '  ');

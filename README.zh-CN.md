@@ -16,7 +16,7 @@ Tracekeeper 进入 Obsidian 社区插件目录后：
 4. 点击 **浏览**，搜索 **Tracekeeper** 并安装。
 5. 在已安装插件列表中启用 **Tracekeeper**。
 
-社区目录审核通过前，可以从 GitHub Release 手动安装：
+如需手动安装或测试候选版本，可以从版本一致的 GitHub Release 安装：
 
 1. 下载与 `manifest.json` 版本一致的 release 资产：`main.js`、`manifest.json`、`styles.css`。
 2. 在当前 vault 的 Obsidian 配置目录内创建 `plugins/tracekeeper/`。

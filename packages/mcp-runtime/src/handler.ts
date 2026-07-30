@@ -41,7 +41,7 @@ import {
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
 export const SUPPORTED_MCP_PROTOCOL_VERSIONS = ['2025-11-25', MCP_PROTOCOL_VERSION] as const;
-export const MCP_SERVER_VERSION = '0.2.4';
+export const MCP_SERVER_VERSION = '0.3.0';
 export const STREAMABLE_HTTP_TRANSPORT = 'streamable-http';
 
 const MAX_RESOURCE_TEXT_CHARS = 128 * 1024;
