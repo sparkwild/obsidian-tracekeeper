@@ -38,7 +38,22 @@ Client interoperability exceptions must remain narrow and must not relax
 loopback, redirect, resource, PKCE, or Bearer enforcement. The current Codex
 callback relay compatibility advertises that the authorization-response `iss`
 parameter is not required, while Tracekeeper still returns a matching `iss` in
-the redirect and tests that value.
+the redirect and tests that value. Codex may also repeat the same decoded
+`resource` indicator. Tracekeeper accepts that repetition only when every value
+is non-empty and identical, then applies the usual exact MCP-resource check;
+missing, empty, or conflicting values remain invalid.
+
+Authorization HTML uses `Referrer-Policy: same-origin` so Chromium preserves the
+exact loopback `Origin` on both confirmation form posts. Cross-origin redirects
+to the client's distinct loopback callback still receive no referrer. OAuth
+JSON responses keep `no-referrer`, and form posts remain rejected unless their
+`Origin` exactly matches the active Runtime origin.
+
+The confirmation page and its redirect response extend `form-action` only with
+the exact origin of the already registered and validated loopback callback.
+This permits Chromium to follow the OAuth redirect across local ports without
+allowing arbitrary form destinations; all other authorization HTML remains
+`form-action 'self'`.
 
 Use temporary Vaults and client fixtures. Do not test a write path against a real
 user Vault without explicit authorization.

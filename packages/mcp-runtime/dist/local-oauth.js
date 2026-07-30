@@ -350,7 +350,7 @@ class LocalOAuthAuthorizationServer {
         this.authorizationApprovals.set(approvalDigest, approval);
         ticket.state = 'awaiting_confirmation';
         ticket.approvalDigest = approvalDigest;
-        this.writeOAuthHtml(response, 200, this.confirmationPage(approvalSecret, ticket, client), request);
+        this.writeOAuthHtml(response, 200, this.confirmationPage(approvalSecret, ticket, client), request, new node_url_1.URL(parsed.redirectUri).origin);
     }
     completeAuthorization(request, response, approvalSecret) {
         const digest = digestSecretHex(approvalSecret);
@@ -402,6 +402,7 @@ class LocalOAuthAuthorizationServer {
         redirect.searchParams.set('state', approval.request.state);
         redirect.searchParams.set('iss', this.getOrigin());
         this.applySecurityHeaders(response);
+        response.setHeader('Content-Security-Policy', oauthContentSecurityPolicy(redirect.origin));
         response.statusCode = 303;
         response.setHeader('Location', redirect.toString());
         response.end();
@@ -542,12 +543,17 @@ class LocalOAuthAuthorizationServer {
             'state',
             'code_challenge',
             'code_challenge_method',
-            'resource',
         ]) {
             const values = params.getAll(required);
             if (values.length !== 1 || !values[0]) {
                 return new Error(`${required} must be provided exactly once.`);
             }
+        }
+        const resourceValues = params.getAll('resource');
+        if (resourceValues.length < 1
+            || resourceValues.some((value) => !value)
+            || resourceValues.some((value) => value !== resourceValues[0])) {
+            return new Error('resource must be provided at least once without conflicting values.');
         }
         const scopeValues = params.getAll('scope');
         if (scopeValues.length > 1) {
@@ -578,7 +584,7 @@ class LocalOAuthAuthorizationServer {
             state,
             codeChallenge,
             codeChallengeMethod: 'S256',
-            resource: params.get('resource') || '',
+            resource: resourceValues[0],
             scope,
         };
     }
@@ -716,8 +722,12 @@ ${authorizationRequestInputs(request)}
             return null;
         }
     }
-    writeOAuthHtml(response, status, html, request) {
+    writeOAuthHtml(response, status, html, request, callbackOrigin) {
         this.applySecurityHeaders(response);
+        if (callbackOrigin) {
+            response.setHeader('Content-Security-Policy', oauthContentSecurityPolicy(callbackOrigin));
+        }
+        response.setHeader('Referrer-Policy', 'same-origin');
         this.writeOAuthCors(response, request);
         response.statusCode = status;
         response.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -937,6 +947,14 @@ function htmlPage(title, body) {
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>${escapeHtml(title)}</title></head>
 <body><main>${body}</main></body>
 </html>`;
+}
+function oauthContentSecurityPolicy(callbackOrigin) {
+    return [
+        "default-src 'none'",
+        "base-uri 'none'",
+        `form-action 'self' ${callbackOrigin}`,
+        "frame-ancestors 'none'",
+    ].join('; ');
 }
 function errorPage(title, message) {
     return htmlPage(title, `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p>`);

@@ -157,6 +157,7 @@ async function completeAuthorization({
 	assert.equal(pageUrl.searchParams.has('pairing_code'), false);
 	const page = await fetch(pageUrl);
 	assert.equal(page.status, 200);
+	assert.equal(page.headers.get('referrer-policy'), 'same-origin');
 	const pageHtml = await page.text();
 	assert.match(pageHtml, /OAuth 客户端自报名称/u);
 	assert.match(pageHtml, /Codex &lt;local&gt;/u);
@@ -167,6 +168,11 @@ async function completeAuthorization({
 		code: ticket.code,
 	});
 	assert.equal(verified.response.status, 200);
+	assert.equal(verified.response.headers.get('referrer-policy'), 'same-origin');
+	assert.match(
+		verified.response.headers.get('content-security-policy'),
+		/form-action 'self' http:\/\/127\.0\.0\.1:48765/u
+	);
 	assert.match(verified.html, new RegExp(`为 <strong>${expectedClientId}</strong> 生成`, 'u'));
 	assert.match(verified.html, /客户端自报名称/u);
 	const approvalId = extractHiddenInput(verified.html, 'approval_id');
@@ -175,6 +181,10 @@ async function completeAuthorization({
 	assert.equal(JSON.stringify(awaiting).includes(ticket.code), false);
 	const approved = await approvePairing(origin, approvalId);
 	assert.equal(approved.status, 303);
+	assert.match(
+		approved.headers.get('content-security-policy'),
+		/form-action 'self' http:\/\/127\.0\.0\.1:48765/u
+	);
 	const redirect = new URL(approved.headers.get('location'));
 	assert.equal(redirect.origin + redirect.pathname, REDIRECT_URI);
 	assert.equal(redirect.searchParams.get('state'), params.state);
@@ -388,6 +398,18 @@ test('authorization rejects wrong Origin, redirect, resource, Host, and oversize
 			resource: `${origin}/not-mcp`,
 		}));
 		assert.equal(wrongResource.status, 400);
+		const repeatedResource = new URL(authorizationUrl(origin, params));
+		repeatedResource.searchParams.append('resource', endpoint);
+		assert.equal((await fetch(repeatedResource)).status, 200);
+		const conflictingResource = new URL(authorizationUrl(origin, params));
+		conflictingResource.searchParams.append('resource', `${origin}/not-mcp`);
+		assert.equal((await fetch(conflictingResource)).status, 400);
+		const missingResource = new URL(authorizationUrl(origin, params));
+		missingResource.searchParams.delete('resource');
+		assert.equal((await fetch(missingResource)).status, 400);
+		const emptyRepeatedResource = new URL(authorizationUrl(origin, params));
+		emptyRepeatedResource.searchParams.append('resource', '');
+		assert.equal((await fetch(emptyRepeatedResource)).status, 400);
 		const missingState = new URL(authorizationUrl(origin, params));
 		missingState.searchParams.delete('state');
 		assert.equal((await fetch(missingState)).status, 400);

@@ -481,7 +481,8 @@ export class LocalOAuthAuthorizationServer {
 			response,
 			200,
 			this.confirmationPage(approvalSecret, ticket, client),
-			request
+			request,
+			new URL(parsed.redirectUri).origin
 		);
 	}
 
@@ -556,6 +557,10 @@ export class LocalOAuthAuthorizationServer {
 		redirect.searchParams.set('state', approval.request.state);
 		redirect.searchParams.set('iss', this.getOrigin());
 		this.applySecurityHeaders(response);
+		response.setHeader(
+			'Content-Security-Policy',
+			oauthContentSecurityPolicy(redirect.origin)
+		);
 		response.statusCode = 303;
 		response.setHeader('Location', redirect.toString());
 		response.end();
@@ -711,12 +716,19 @@ export class LocalOAuthAuthorizationServer {
 			'state',
 			'code_challenge',
 			'code_challenge_method',
-			'resource',
 		]) {
 			const values = params.getAll(required);
 			if (values.length !== 1 || !values[0]) {
 				return new Error(`${required} must be provided exactly once.`);
 			}
+		}
+		const resourceValues = params.getAll('resource');
+		if (
+			resourceValues.length < 1
+			|| resourceValues.some((value) => !value)
+			|| resourceValues.some((value) => value !== resourceValues[0])
+		) {
+			return new Error('resource must be provided at least once without conflicting values.');
 		}
 		const scopeValues = params.getAll('scope');
 		if (scopeValues.length > 1) {
@@ -747,7 +759,7 @@ export class LocalOAuthAuthorizationServer {
 			state,
 			codeChallenge,
 			codeChallengeMethod: 'S256',
-			resource: params.get('resource') || '',
+			resource: resourceValues[0],
 			scope,
 		};
 	}
@@ -924,9 +936,17 @@ ${authorizationRequestInputs(request)}
 		response: ServerResponse,
 		status: number,
 		html: string,
-		request?: IncomingMessage
+		request?: IncomingMessage,
+		callbackOrigin?: string
 	): void {
 		this.applySecurityHeaders(response);
+		if (callbackOrigin) {
+			response.setHeader(
+				'Content-Security-Policy',
+				oauthContentSecurityPolicy(callbackOrigin)
+			);
+		}
+		response.setHeader('Referrer-Policy', 'same-origin');
 		this.writeOAuthCors(response, request);
 		response.statusCode = status;
 		response.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1179,6 +1199,15 @@ function htmlPage(title: string, body: string): string {
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>${escapeHtml(title)}</title></head>
 <body><main>${body}</main></body>
 </html>`;
+}
+
+function oauthContentSecurityPolicy(callbackOrigin: string): string {
+	return [
+		"default-src 'none'",
+		"base-uri 'none'",
+		`form-action 'self' ${callbackOrigin}`,
+		"frame-ancestors 'none'",
+	].join('; ');
 }
 
 function errorPage(title: string, message: string): string {
