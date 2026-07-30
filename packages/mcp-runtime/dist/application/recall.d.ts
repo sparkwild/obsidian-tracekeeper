@@ -1,7 +1,29 @@
 import { type ScanResult, type ScannedNote } from '@tracekeeper/core';
-import { projectIdentityToResult, type RawProjectIdentityInput, type ResolvedProjectIdentity } from './project-identity';
 export type RecallApplicationScope = 'global' | 'project' | 'project_history';
 export type RecallContentOrigin = 'captured_source' | 'tracekeeper_generated' | 'vault_note';
+export interface RecallProjectIdentityInput {
+    project_hint?: unknown;
+    project_id?: unknown;
+    repo_path?: unknown;
+    repo?: unknown;
+    project_path?: unknown;
+}
+export interface RecallProjectIdentity {
+    projectHint: string;
+    projectId: string;
+    repoPath: string;
+    source: 'explicit_project_id' | 'explicit_project_hint' | 'vault_match' | 'repo_leaf' | 'task_metadata' | 'unknown';
+    confidence: 'exact' | 'derived' | 'uncertain';
+    warnings: string[];
+}
+export interface RecallProjectIdentityResult {
+    project_hint: string | null;
+    project_id: string | null;
+    repo_path: string | null;
+    source: RecallProjectIdentity['source'];
+    confidence: RecallProjectIdentity['confidence'];
+    warnings: string[];
+}
 export interface RecallRelationEvidenceItem {
     path: string;
     declared_by: string;
@@ -17,13 +39,13 @@ export interface RecallApplicationRequest {
     query: string;
     maxItems: number;
     vaultRoot: string;
-    projectIdentityInput: RawProjectIdentityInput;
+    projectIdentityInput: RecallProjectIdentityInput;
 }
 export interface RecallApplicationDependencies {
     loadScan(): ScanResult;
     nowMs(): number;
-    resolveProjectIdentity(input: RawProjectIdentityInput, notes: ScannedNote[]): ResolvedProjectIdentity;
-    filterProjectNotes(notes: ScannedNote[], identity: ResolvedProjectIdentity): ScannedNote[];
+    resolveProjectIdentity(input: RecallProjectIdentityInput, notes: ScannedNote[]): RecallProjectIdentity;
+    filterProjectNotes(notes: ScannedNote[], identity: RecallProjectIdentity): ScannedNote[];
     buildRelationEvidence(note: ScannedNote, allNotes: ScannedNote[]): RecallRelationEvidence;
     contentOrigin(relativePath: string, noteType?: string): RecallContentOrigin;
 }
@@ -81,8 +103,8 @@ export interface ProjectRecallApplicationResult extends RecallScanProvenance {
     vault_root: string;
     query: string;
     uncertain: boolean;
-    scope: ReturnType<typeof projectIdentityToResult>;
-    project_identity: ReturnType<typeof projectIdentityToResult>;
+    scope: RecallProjectIdentityResult;
+    project_identity: RecallProjectIdentityResult;
     max_items: number;
     matched_count: number;
     candidates: string[];
@@ -97,8 +119,8 @@ export interface ProjectHistoryRecallApplicationResult extends RecallScanProvena
     vault_root: string;
     query: string | null;
     uncertain: boolean;
-    scope: ReturnType<typeof projectIdentityToResult>;
-    project_identity: ReturnType<typeof projectIdentityToResult>;
+    scope: RecallProjectIdentityResult;
+    project_identity: RecallProjectIdentityResult;
     max_items: number;
     matched_count: number;
     total_matches: number;

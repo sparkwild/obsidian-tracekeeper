@@ -9,11 +9,6 @@ import {
 	type ScanResult,
 	type ScannedNote,
 } from '@tracekeeper/core';
-import {
-	projectIdentityToResult,
-	type RawProjectIdentityInput,
-	type ResolvedProjectIdentity,
-} from './project-identity';
 
 const PROJECT_MEMORY_READ_DIRS = [KNOWLEDGE_PROJECTS_MEMORY_DIR, '05_projects', '04_projects'];
 const MAX_PROJECT_SCOPE_CANDIDATES = 8;
@@ -28,6 +23,38 @@ const KNOWLEDGE_WIKI_RECALL_REASON = 'Wiki location boost (+0.75)';
 
 export type RecallApplicationScope = 'global' | 'project' | 'project_history';
 export type RecallContentOrigin = 'captured_source' | 'tracekeeper_generated' | 'vault_note';
+
+export interface RecallProjectIdentityInput {
+	project_hint?: unknown;
+	project_id?: unknown;
+	repo_path?: unknown;
+	repo?: unknown;
+	project_path?: unknown;
+}
+
+export interface RecallProjectIdentity {
+	projectHint: string;
+	projectId: string;
+	repoPath: string;
+	source:
+		| 'explicit_project_id'
+		| 'explicit_project_hint'
+		| 'vault_match'
+		| 'repo_leaf'
+		| 'task_metadata'
+		| 'unknown';
+	confidence: 'exact' | 'derived' | 'uncertain';
+	warnings: string[];
+}
+
+export interface RecallProjectIdentityResult {
+	project_hint: string | null;
+	project_id: string | null;
+	repo_path: string | null;
+	source: RecallProjectIdentity['source'];
+	confidence: RecallProjectIdentity['confidence'];
+	warnings: string[];
+}
 
 export interface RecallRelationEvidenceItem {
 	path: string;
@@ -46,19 +73,19 @@ export interface RecallApplicationRequest {
 	query: string;
 	maxItems: number;
 	vaultRoot: string;
-	projectIdentityInput: RawProjectIdentityInput;
+	projectIdentityInput: RecallProjectIdentityInput;
 }
 
 export interface RecallApplicationDependencies {
 	loadScan(): ScanResult;
 	nowMs(): number;
 	resolveProjectIdentity(
-		input: RawProjectIdentityInput,
+		input: RecallProjectIdentityInput,
 		notes: ScannedNote[]
-	): ResolvedProjectIdentity;
+	): RecallProjectIdentity;
 	filterProjectNotes(
 		notes: ScannedNote[],
-		identity: ResolvedProjectIdentity
+		identity: RecallProjectIdentity
 	): ScannedNote[];
 	buildRelationEvidence(
 		note: ScannedNote,
@@ -125,8 +152,8 @@ export interface ProjectRecallApplicationResult extends RecallScanProvenance {
 	vault_root: string;
 	query: string;
 	uncertain: boolean;
-	scope: ReturnType<typeof projectIdentityToResult>;
-	project_identity: ReturnType<typeof projectIdentityToResult>;
+	scope: RecallProjectIdentityResult;
+	project_identity: RecallProjectIdentityResult;
 	max_items: number;
 	matched_count: number;
 	candidates: string[];
@@ -142,8 +169,8 @@ export interface ProjectHistoryRecallApplicationResult extends RecallScanProvena
 	vault_root: string;
 	query: string | null;
 	uncertain: boolean;
-	scope: ReturnType<typeof projectIdentityToResult>;
-	project_identity: ReturnType<typeof projectIdentityToResult>;
+	scope: RecallProjectIdentityResult;
+	project_identity: RecallProjectIdentityResult;
 	max_items: number;
 	matched_count: number;
 	total_matches: number;
@@ -230,8 +257,19 @@ function projectTokens(value: string): string[] {
 	return Array.from(variants).filter(Boolean);
 }
 
-function hasProjectScope(scope: ResolvedProjectIdentity): boolean {
+function hasProjectScope(scope: RecallProjectIdentity): boolean {
 	return Boolean(scope.projectHint || scope.projectId || scope.repoPath);
+}
+
+function projectIdentityResult(identity: RecallProjectIdentity): RecallProjectIdentityResult {
+	return {
+		project_hint: identity.projectHint || null,
+		project_id: identity.projectId || null,
+		repo_path: identity.repoPath || null,
+		source: identity.source,
+		confidence: identity.confidence,
+		warnings: identity.warnings,
+	};
 }
 
 function scanProvenance(scan: ScanResult): RecallScanProvenance {
@@ -259,7 +297,7 @@ function projectMemoryCandidatePath(notePath: string): string {
 
 function collectProjectCandidates(
 	notes: ScannedNote[],
-	scope: ResolvedProjectIdentity,
+	scope: RecallProjectIdentity,
 	maxItems: number
 ): ProjectCandidate[] {
 	const candidates: ProjectCandidate[] = [];
@@ -296,7 +334,7 @@ function collectProjectCandidates(
 }
 
 function buildProjectRecallRelationEvidence(
-	scope: ResolvedProjectIdentity,
+	scope: RecallProjectIdentity,
 	fallbackToGlobal: boolean
 ): Array<Record<string, unknown>> {
 	const evidence: Array<Record<string, unknown>> = [];
@@ -364,7 +402,7 @@ function matchesProjectQuery(note: ScannedNote, query: string): boolean {
 	return matchedCount >= requiredMatches;
 }
 
-function collectRecallScopeTokens(scope: ResolvedProjectIdentity): string[] {
+function collectRecallScopeTokens(scope: RecallProjectIdentity): string[] {
 	const tokens = new Set<string>();
 	if (scope.projectHint) {
 		for (const token of projectTokens(scope.projectHint)) {
@@ -474,7 +512,7 @@ function selectRecallMatches(matches: RankedRecallMatch[], maxItems: number): Ra
 function rankRecallMatches(
 	matches: Array<{ note: ScannedNote; score: number; matchedTokens: string[] }>,
 	query: string,
-	scope: ResolvedProjectIdentity,
+	scope: RecallProjectIdentity,
 	nowMs: number
 ): RankedRecallMatch[] {
 	const fullQuery = query.trim().toLowerCase();
@@ -743,8 +781,8 @@ export class RecallApplicationService {
 			MAX_PROJECT_SCOPE_CANDIDATES
 		);
 		const scopeMetadata = fallbackToGlobal
-			? projectIdentityToResult(this.dependencies.resolveProjectIdentity({}, scan.notes))
-			: projectIdentityToResult(scope);
+			? projectIdentityResult(this.dependencies.resolveProjectIdentity({}, scan.notes))
+			: projectIdentityResult(scope);
 
 		return {
 			ok: true,
@@ -753,7 +791,7 @@ export class RecallApplicationService {
 			query: request.query,
 			uncertain,
 			scope: scopeMetadata,
-			project_identity: projectIdentityToResult(scope),
+			project_identity: projectIdentityResult(scope),
 			max_items: request.maxItems,
 			matched_count: matches.length,
 			...scanProvenance(scan),
@@ -799,8 +837,8 @@ export class RecallApplicationService {
 			vault_root: request.vaultRoot,
 			query: request.query || null,
 			uncertain,
-			scope: projectIdentityToResult(scope),
-			project_identity: projectIdentityToResult(scope),
+			scope: projectIdentityResult(scope),
+			project_identity: projectIdentityResult(scope),
 			max_items: request.maxItems,
 			matched_count: matches.length,
 			total_matches: sortedMatches.length,

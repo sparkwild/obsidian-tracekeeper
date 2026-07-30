@@ -2,7 +2,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RecallApplicationService = void 0;
 const core_1 = require("@tracekeeper/core");
-const project_identity_1 = require("./project-identity");
 const PROJECT_MEMORY_READ_DIRS = [core_1.KNOWLEDGE_PROJECTS_MEMORY_DIR, '05_projects', '04_projects'];
 const MAX_PROJECT_SCOPE_CANDIDATES = 8;
 const MAX_RECALL_EXCERPT_LENGTH = 480;
@@ -69,6 +68,16 @@ function projectTokens(value) {
 }
 function hasProjectScope(scope) {
     return Boolean(scope.projectHint || scope.projectId || scope.repoPath);
+}
+function projectIdentityResult(identity) {
+    return {
+        project_hint: identity.projectHint || null,
+        project_id: identity.projectId || null,
+        repo_path: identity.repoPath || null,
+        source: identity.source,
+        confidence: identity.confidence,
+        warnings: identity.warnings,
+    };
 }
 function scanProvenance(scan) {
     const indexState = scan.index?.index_state ?? 'filesystem_scan';
@@ -480,8 +489,8 @@ class RecallApplicationService {
             fallbackToGlobal;
         const candidateNotes = collectProjectCandidates(scopedNotes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
         const scopeMetadata = fallbackToGlobal
-            ? (0, project_identity_1.projectIdentityToResult)(this.dependencies.resolveProjectIdentity({}, scan.notes))
-            : (0, project_identity_1.projectIdentityToResult)(scope);
+            ? projectIdentityResult(this.dependencies.resolveProjectIdentity({}, scan.notes))
+            : projectIdentityResult(scope);
         return {
             ok: true,
             read_only: true,
@@ -489,7 +498,7 @@ class RecallApplicationService {
             query: request.query,
             uncertain,
             scope: scopeMetadata,
-            project_identity: (0, project_identity_1.projectIdentityToResult)(scope),
+            project_identity: projectIdentityResult(scope),
             max_items: request.maxItems,
             matched_count: matches.length,
             ...scanProvenance(scan),
@@ -521,8 +530,8 @@ class RecallApplicationService {
             vault_root: request.vaultRoot,
             query: request.query || null,
             uncertain,
-            scope: (0, project_identity_1.projectIdentityToResult)(scope),
-            project_identity: (0, project_identity_1.projectIdentityToResult)(scope),
+            scope: projectIdentityResult(scope),
+            project_identity: projectIdentityResult(scope),
             max_items: request.maxItems,
             matched_count: matches.length,
             total_matches: sortedMatches.length,
