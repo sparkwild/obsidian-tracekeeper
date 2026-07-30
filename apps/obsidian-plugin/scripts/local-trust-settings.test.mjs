@@ -86,12 +86,18 @@ try {
 	assert.match(mainSource, /saveData\(stripLegacyConnectionSettings\(this\.settings\)\)/);
 	assert.match(mainSource, /runtimeAccessToken:\s*string/);
 	assert.match(mainSource, /serviceToken:\s*this\.settings\.runtimeAccessToken/);
+	assert.match(mainSource, /getSharedBearerToken:\s*\(\)\s*=>\s*this\.settings\.runtimeAccessToken/);
+	assert.match(mainSource, /issueAgentPairingTicket\(clientId:\s*string\)/);
+	assert.match(mainSource, /getAgentPairingTicketStatus\(id:\s*string\)/);
+	assert.match(mainSource, /buildGeneratedClientSetup\(profile,\s*this\.getMcpConnectionUrl\(\)\)/);
+	assert.doesNotMatch(mainSource, /readClientConfigStatus\(/);
+	assert.doesNotMatch(mainSource, /buildClientConfigTexts\(\s*profile,\s*this\.getMcpConnectionUrl\(\)/);
 	assert.match(mainSource, /accessProtected:\s*isRuntimeAccessToken\(this\.settings\.runtimeAccessToken\)/);
 	assert.doesNotMatch(mainSource, /runtimeToken\s*[?:]/);
 	assert.doesNotMatch(mainSource, /runtimeCredentials\s*[?:]/);
 	assert.doesNotMatch(mainSource, /regenerateRuntimeToken|rotateRuntimeCredential|setRuntimeCredentialProfile/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 24 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 30 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

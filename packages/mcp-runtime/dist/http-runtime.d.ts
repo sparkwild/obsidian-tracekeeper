@@ -1,12 +1,22 @@
 import type { VaultRepository } from '@tracekeeper/core';
 import { McpJsonRpcHandler } from './handler';
+import { type PairingTicket, type PairingTicketStatus } from './local-oauth';
+export type { PairingTicket, PairingTicketState, PairingTicketStatus } from './local-oauth';
 export type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed' | 'port_conflict';
 export interface StreamableHttpRuntimeOptions {
     localTrust?: boolean;
     serviceToken: string;
+    getSharedBearerToken?: () => string | Promise<string>;
     host?: string;
     port?: number;
     path?: string;
+    pairingTicketTtlMs?: number;
+    pairingTicketCapacity?: number;
+    pairingTicketMaxAttempts?: number;
+    authorizationCodeTtlMs?: number;
+    authorizationCodeCapacity?: number;
+    clientRegistrationTtlMs?: number;
+    clientRegistrationCapacity?: number;
     maxRequestBytes?: number;
     maxSessions?: number;
     maxStreamsPerSession?: number;
@@ -61,11 +71,17 @@ export declare class StreamableHttpMcpRuntime {
     private server;
     private stopPromise;
     private sessions;
+    private oauthServer;
     private state;
     private startedAt;
     private lastError;
     private recoveryStatus;
     constructor(options: StreamableHttpRuntimeOptions);
+    /**
+     * Issues a one-time local pairing code for the Agent selected in Obsidian.
+     */
+    issuePairingTicket(expectedClientId: string): PairingTicket;
+    getPairingTicketStatus(id: string): PairingTicketStatus | null;
     start(): Promise<StreamableHttpRuntimeStatus>;
     stop(): Promise<void>;
     private stopServer;
@@ -92,5 +108,6 @@ export declare class StreamableHttpMcpRuntime {
     private writeJson;
     private writePlain;
     private writeCors;
+    private runtimeOrigin;
     private errorResponse;
 }

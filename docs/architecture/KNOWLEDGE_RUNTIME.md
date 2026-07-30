@@ -66,20 +66,26 @@ over a later edit.
 
 ## Vault-Outside Integration
 
-Client configuration and explicitly confirmed Skill installation are the only
-expected Vault-outside writes. The Obsidian plugin owns them; MCP tools do not.
+Explicitly confirmed Skill installation is the normal Vault-outside write owned
+by the Obsidian plugin; MCP tools do not perform it. Agent connection
+configuration is owned by each client's official OAuth/MCP entry. Tracekeeper
+does not detect or write cross-platform client configuration paths during
+normal setup.
 
 Every managed change:
 
 1. previews the exact target and Tracekeeper-only modification;
-2. binds a short-lived plan to original hashes and the current credential;
+2. binds a short-lived plan to original hashes, bundle identity, and the exact
+   target;
 3. requires explicit confirmation;
 4. revalidates before commit;
 5. preserves unrelated content;
 6. creates a backup and stages replacement;
 7. rolls back partial installation failure where possible;
-8. records a bounded local audit result without credentials or absolute target
-   paths.
+8. records a bounded local audit result without credentials, authorization
+   Headers, credential hashes, or absolute target paths.
 
 Unknown, conflicting, newer, or user-modified Skill installations are never
-silently overwritten.
+silently overwritten. Historical direct-configuration adapters may remain only
+for an explicitly confirmed migration or recovery operation; they are not a
+normal Agent-installation API and never redefine the OAuth credential boundary.

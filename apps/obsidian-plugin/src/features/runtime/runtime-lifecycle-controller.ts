@@ -17,6 +17,10 @@ export class McpRuntimeLifecycleController {
 		return this.runtime?.getStatus() ?? null;
 	}
 
+	getRuntime(): ManagedMcpRuntime | null {
+		return this.runtime;
+	}
+
 	start(factory: ManagedMcpRuntimeFactory): Promise<StreamableHttpRuntimeStatus | null> {
 		return this.enqueue(async () => {
 			if (this.closed) {

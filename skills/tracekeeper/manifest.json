@@ -1,11 +1,11 @@
 {
   "format_version": 1,
   "name": "tracekeeper",
-  "skill_version": "2.1.0",
+  "skill_version": "2.1.1",
   "workflow_contract_version": 3,
   "minimum_tracekeeper_version": "0.2.4",
   "hash_algorithm": "sha256",
-  "bundle_hash": "sha256:23ea1de4c37f7270c2822a1153495b215ef1f8eb2204f25df17b90e8f9e08509",
+  "bundle_hash": "sha256:a8fdb73a8fb27014bdb49a0665362b6886654b6fccd58a3c5bb51b6f9b470cda",
   "files": [
     {
       "path": "SKILL.md",
@@ -17,7 +17,7 @@
     },
     {
       "path": "references/ingestion-workflow.md",
-      "sha256": "sha256:267cfbafefeeb08dae74fae11d597bc30218989d82587066955984dadaa0fdc0"
+      "sha256": "sha256:30bf0205dd2a3e8036d504312c56346a75e3a4f192a901f6dbfc9b4c5de06306"
     },
     {
       "path": "references/failure-recovery.md",
@@ -35,7 +35,7 @@
   "artifacts": {
     "flattened": {
       "path": "dist/tracekeeper.flattened.md",
-      "sha256": "sha256:bb9e96ab8218204be8927bb11d58dd204a616c65681c307f92e310f0c467b403"
+      "sha256": "sha256:b4dab73c9f27974ff782f45b7693292dabc49e43cb899916b270dab16cc1dbbd"
     }
   }
 }

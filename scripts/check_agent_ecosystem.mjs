@@ -11,9 +11,14 @@ import {
 } from './build_tracekeeper_skill.mjs';
 
 const REQUIRED_PATHS = Object.freeze([
+	'README.md',
+	'README.zh-CN.md',
+	'PRIVACY.md',
 	'docs/features/AGENT_WORKFLOW.md',
+	'docs/features/AGENT_CONNECTION.md',
 	'docs/features/INDEX.md',
 	'docs/architecture/SYSTEM_ARCHITECTURE.md',
+	'docs/architecture/TRUST_BOUNDARIES.md',
 	'docs/development/ENGINEERING_AND_RELEASE.md',
 	`skills/tracekeeper/${TRACEKEEPER_SKILL_RELEASE_PATH}`,
 	'skills/tracekeeper/SKILL.md',
@@ -129,6 +134,134 @@ function checkWorkflowSemantics(contract, skill, flattened, errors) {
 	}
 }
 
+function checkLocalTrustSemantics(contents, errors) {
+	const sources = [
+		['README.md', contents.get('README.md') ?? ''],
+		['README.zh-CN.md', contents.get('README.zh-CN.md') ?? ''],
+		['PRIVACY.md', contents.get('PRIVACY.md') ?? ''],
+		['docs/features/AGENT_CONNECTION.md', contents.get('docs/features/AGENT_CONNECTION.md') ?? ''],
+		['docs/features/AGENT_WORKFLOW.md', contents.get('docs/features/AGENT_WORKFLOW.md') ?? ''],
+		['docs/architecture/SYSTEM_ARCHITECTURE.md', contents.get('docs/architecture/SYSTEM_ARCHITECTURE.md') ?? ''],
+		['docs/architecture/TRUST_BOUNDARIES.md', contents.get('docs/architecture/TRUST_BOUNDARIES.md') ?? ''],
+		[
+			'skills/tracekeeper/references/ingestion-workflow.md',
+			contents.get('skills/tracekeeper/references/ingestion-workflow.md') ?? '',
+		],
+	];
+	const forbidden = [
+		/\bindependent (?:local )?credential principal\b/i,
+		/\bcredential principal\b/i,
+		/\bprincipal-bound\b/i,
+		/\bsame-principal\b/i,
+		/\blocal capability profile\b/i,
+		/\blegacy shared token\b/i,
+		/\brequired (?:capability )?profile\b/i,
+		/\bcopy (?:its )?protected Header configuration\b/i,
+		/\bcomplete `Authorization` configuration is written\b/i,
+		/独立的 credential principal/i,
+		/Session 绑定 credential principal/i,
+		/复制受保护的 Header 配置/i,
+	];
+	for (const [relativePath, content] of sources) {
+			for (const pattern of forbidden) {
+				if (pattern.test(content)) {
+					errors.push(`retired Agent trust/bootstrap semantics found in ${relativePath}: ${pattern.source}`);
+				}
+			}
+	}
+
+	const readme = contents.get('README.md') ?? '';
+	const chineseReadme = contents.get('README.zh-CN.md') ?? '';
+	const privacy = contents.get('PRIVACY.md') ?? '';
+	const agentConnection = contents.get('docs/features/AGENT_CONNECTION.md') ?? '';
+	const architecture = contents.get('docs/architecture/SYSTEM_ARCHITECTURE.md') ?? '';
+	const trustBoundaries = contents.get('docs/architecture/TRUST_BOUNDARIES.md') ?? '';
+	requirePattern(
+		readme,
+		/installation-level service Bearer/i,
+		'README does not disclose the installation-level service Bearer',
+		errors,
+	);
+	requirePattern(
+		readme,
+		/authorization-code \+ PKCE pairing/i,
+		'README does not define OAuth authorization-code and PKCE pairing',
+		errors,
+	);
+	requirePattern(
+		chineseReadme,
+		/安装级[\s\S]{0,40}服务级 Bearer/i,
+		'Chinese README does not disclose the installation-level service Bearer',
+		errors,
+	);
+	requirePattern(
+		chineseReadme,
+		/authorization code \+ PKCE 配对/i,
+		'Chinese README does not define OAuth authorization-code and PKCE pairing',
+		errors,
+	);
+	requirePattern(
+		privacy,
+		/installation-level service credential/i,
+		'privacy policy does not disclose the installation-level service credential',
+		errors,
+	);
+	requirePattern(
+		privacy,
+		/local OAuth token endpoint/i,
+		'privacy policy does not disclose local OAuth credential delivery',
+		errors,
+	);
+	requirePattern(
+		agentConnection,
+		/same external Streamable HTTP Session/i,
+		'Agent connection contract does not require same-session protocol-use evidence',
+		errors,
+	);
+	requirePattern(
+		agentConnection,
+		/normalized client type/i,
+		'Agent connection contract does not define normalized observed-client grouping',
+		errors,
+	);
+	requirePattern(
+		agentConnection,
+		/Protected Resource Metadata[\s\S]{0,500}PKCE `S256`/i,
+		'Agent connection contract does not define OAuth discovery and PKCE',
+		errors,
+	);
+	requirePattern(
+		architecture,
+		/fixed `local-user` capability set/i,
+		'system architecture does not define the fixed local-user capability set',
+		errors,
+	);
+	requirePattern(
+		trustBoundaries,
+		/installation-level service Bearer/i,
+		'trust boundaries do not define the installation-level service Bearer',
+		errors,
+	);
+	requirePattern(
+		trustBoundaries,
+		/fixed `local-user` execution domain/i,
+		'trust boundaries do not define the fixed local-user execution domain',
+		errors,
+	);
+	requirePattern(
+		trustBoundaries,
+		/clientInfo[\s\S]{0,120}(?:untrusted|not authentication)/i,
+		'trust boundaries do not classify clientInfo as untrusted observation data',
+		errors,
+	);
+	requirePattern(
+		trustBoundaries,
+		/Pairing codes[\s\S]{0,220}(?:memory state|one-use memory)/i,
+		'trust boundaries do not keep pairing state memory-only',
+		errors,
+	);
+}
+
 function checkUnsafeExamples(contents, errors) {
 	const absoluteDeveloperPath = /(?:\/Users\/[A-Za-z0-9._-]+\/|\/home\/[A-Za-z0-9._-]+\/|[A-Za-z]:\\Users\\|file:\/\/)/;
 	const credentialExample = /(?:sk-[A-Za-z0-9_-]{12,}|eyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{6,}\.|(?:api[_-]?key|access[_-]?token|authorization|bearer)\s*[:=]\s*["'`]?[A-Za-z0-9._-]{12,})/i;
@@ -208,6 +341,7 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	requirePattern(skill, /^---\nname: tracekeeper\ndescription: [^\n]+\n---\n/, 'Skill frontmatter must contain only compatible name and description fields', errors);
 	requirePattern(skill, /description: .*project continuity.*Do not use Tracekeeper/i, 'Skill description must contain positive and negative triggers', errors);
 	checkWorkflowSemantics(contract, skill, flattened, errors);
+	checkLocalTrustSemantics(contents, errors);
 	for (const [content, owner] of [[contract, 'contract'], [skill, 'Skill'], [flattened, 'flattened Skill']]) {
 		requirePattern(
 			content,

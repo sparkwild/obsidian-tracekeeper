@@ -167,16 +167,16 @@ try {
 		[config('codex', { configState: 'needs_update' })],
 		[agent()]
 	);
-	assert.equal(staleManagedConfig.visibleAgents.length, 0);
-	assert.equal(staleManagedConfig.candidateConfigs.length, 1);
+	assert.equal(staleManagedConfig.visibleAgents.length, 1);
+	assert.equal(staleManagedConfig.candidateConfigs.length, 0);
 
 	for (const clientId of ['gemini', 'grok', 'zcode']) {
 		const unconfiguredManaged = buildAgentConfigurationViewModel(
 			[config(clientId, { configState: 'not_configured' })],
 			[agent({ observedClientType: clientId, displayName: clientId })]
 		);
-		assert.equal(unconfiguredManaged.visibleAgents.length, 0);
-		assert.equal(unconfiguredManaged.candidateConfigs.length, 1);
+		assert.equal(unconfiguredManaged.visibleAgents.length, 1);
+		assert.equal(unconfiguredManaged.candidateConfigs.length, 0);
 	}
 
 	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 18 })}\n`);

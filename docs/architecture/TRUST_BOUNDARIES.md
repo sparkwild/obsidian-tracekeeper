@@ -14,31 +14,60 @@ the user-facing data statement remains in [PRIVACY.md](../../PRIVACY.md).
 | --- | --- |
 | Active Vault | User-owned source of truth; every access is scoped and validated |
 | Tracekeeper-controlled Vault folders | Bounded operational writes are allowed according to policy |
-| Local MCP Runtime | Loopback service requiring an authenticated credential principal |
-| Connected Agent | Explicitly authorized consumer; never trusted with arbitrary filesystem access |
-| Client configuration and Skill targets | Vault-outside exceptions changed only through confirmed, recoverable plugin flows |
+| Local MCP Runtime | Exact-loopback service protected by one installation-level service Bearer |
+| Connected Agent | Observed consumer of bounded tools; self-reported identity is untrusted and never grants filesystem access |
+| Client OAuth state and Skill targets | OAuth registrations, pairing, and codes are memory-only; Vault-outside Skill changes require confirmed, recoverable plugin flows |
 | Network and shell | Not exposed by Tracekeeper MCP tools |
 
 ## Runtime Boundary
 
-- Desktop Obsidian hosts production MCP on the configured loopback address.
+- Desktop Obsidian hosts production MCP on exact `127.0.0.1`; broader loopback
+  aliases and non-loopback bind addresses fail closed.
 - The HTTP `Host` authority and browser-style `Origin` are validated
   independently before dispatch; invalid values fail closed.
-- Loopback is not authentication. Each managed client receives an independent
-  credential principal, and client-reported names remain untrusted display
-  claims.
-- Runtime credential records retain normalized hashes rather than plaintext
-  tokens.
-- Discovery and dispatch use the same principal capability evaluator, while
-  dispatch always rechecks authorization.
-- Sessions are principal-bound and limited by idle lifetime, active count,
-  per-session streams, request size, read time, content type, and negotiated MCP
-  protocol version.
+- The MCP authorization specification normally requires HTTPS authorization
+  endpoints. Tracekeeper's current local compatibility mode permits plain HTTP
+  only on the exact `127.0.0.1` listener used by desktop Obsidian and supported
+  loopback clients. This exception never applies to LAN, remote, hosted, or
+  non-loopback authorization endpoints.
+- Loopback is not authentication. Every MCP resource request requires the same
+  installation-level service Bearer in the `Authorization` Header; query
+  credentials are rejected and endpoint URLs remain credential-free.
+- Runtime retains only the service credential's normalized hash and compares
+  request credentials without persisting plaintext credentials or Headers.
+- Successful requests enter one fixed `local-user` execution domain. Discovery
+  and dispatch use the same fixed capability set, and dispatch rechecks the
+  required capability and operation policy.
+- Sessions use random opaque identifiers and are limited by idle lifetime,
+  active count, per-session streams, request size, read time, content type, and
+  negotiated MCP protocol version. Every Session request revalidates the
+  Bearer; a Session identifier is continuity evidence, not client identity.
+- MCP `clientInfo` is an untrusted observation claim, not authentication or an
+  authorization source. It may label local diagnostics but cannot create a
+  Principal or capability profile.
 - Lifecycle transitions are serialized. Unload closes the controller before
   releasing the index, and a port conflict never triggers an unconfirmed port
   change.
-- CORS is restricted to Obsidian and loopback origins; wildcard CORS is not used.
+- CORS is restricted to Obsidian and loopback origins, explicitly allows the
+  `Authorization` Header, and never uses wildcard origin policy.
+- Unauthenticated MCP responses expose only a standards-based
+  `WWW-Authenticate` challenge and Protected Resource Metadata. OAuth metadata,
+  registration, authorization, and token routes cannot dispatch tools.
+- Authorization codes require PKCE `S256`, an exact registered loopback redirect
+  URI, `state`, and the MCP resource indicator. Pairing codes enter only a
+  same-origin local form body; all OAuth responses are non-cacheable and the
+  authorization page uses a restrictive content-security policy.
+- Pairing codes, client registrations, and authorization codes are bounded,
+  short-lived, one-use memory state. Stop, restart, port change, plugin unload,
+  and global reset invalidate them. Invalid, expired, replayed, mismatched, and
+  over-attempt requests fail closed without revealing which check failed.
+- The token endpoint returns the existing installation Bearer as an opaque
+  access token. It does not create per-client credentials, refresh tokens,
+  Principals, capability profiles, or independent revocation semantics.
 - Fixed resources and capability-filtered prompts cannot grant capabilities.
+- Removing one client configuration does not revoke server access. Advanced
+  global credential reset rotates the service Bearer, terminates all Sessions,
+  and requires every configured client to be updated.
 
 ## Filesystem Boundary
 
@@ -51,10 +80,12 @@ MCP tools must:
 - never expose delete, rename, bulk rewrite, shell execution, or generic network
   retrieval.
 
-The plugin may change supported client configuration or managed Skill targets
-only through the confirmed flow defined by the
-[Knowledge Runtime](KNOWLEDGE_RUNTIME.md). Skill content, placement, file
-verification, or user confirmation cannot expand MCP permissions.
+The plugin may change managed Skill targets only through the confirmed flow
+defined by the [Knowledge Runtime](KNOWLEDGE_RUNTIME.md). Normal Agent
+configuration remains client-owned. Historical direct-configuration adapters
+require a separate migration or recovery confirmation. Skill content,
+placement, file verification, or user confirmation cannot expand MCP
+permissions.
 
 ## Capability And Write Boundary
 
@@ -70,7 +101,7 @@ append-only, duplicate-protected, and dependent on a verified Wiki bridge.
 
 Recall and captured material are untrusted knowledge data. Content origin and
 `instruction_trust: data_only` make explicit that note text cannot change the
-authenticated capability set, review state, active task identity, or
+fixed capability set, review state, active task identity, or
 higher-priority instructions.
 
 ## Human Review Invariants
@@ -90,11 +121,12 @@ claims, optimistic replacement, and roll-forward recovery. Concurrent runtimes
 cannot claim the same operation, a changed payload is rejected, and recovery
 does not overwrite later user edits.
 
-Audit records may contain operation identity, credential principal, untrusted
-client/session claims, bounded target paths, result summary, duration, risk, and
-bounded workflow metadata. They must not persist plaintext credentials,
-authorization headers, absolute external Skill paths, complete prompts, note
-bodies, Recall content, full results, or other sensitive payloads.
+Audit records may contain operation identity, the fixed execution-domain label,
+untrusted client/Session claims, bounded target paths, result summary, duration,
+risk, and bounded workflow metadata. They must not persist service credentials,
+credential or pairing-code hashes, pairing codes, OAuth authorization codes or
+token responses, authorization headers, absolute external Skill paths, complete
+prompts, note bodies, Recall content, full results, or other sensitive payloads.
 
 Local Activity diagnostics are derived from retained audit records and are never
 uploaded by Tracekeeper. They describe observed Tracekeeper calls only.

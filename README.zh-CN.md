@@ -46,15 +46,17 @@ Tracekeeper 会把 AI 给出的整理结果当成候选记忆提案。你可以�
 
 1. 像平时一样在 Obsidian 中记录和收集资料。
 2. 启用 Tracekeeper，并打开 **设置 -> 第三方插件 -> Tracekeeper**。
-3. 在可恢复的 **首次安装引导** 中选择 Agent，预览或复制它的独立连接配置；受支持客户端可预览安装完整 Skill bundle，其他客户端可复制单文件兼容 Skill。
-4. 按提示重启 Agent，让它调用 Tracekeeper，再由插件核验该客户端留下的真实连接证据。
-5. 让这个 Agent 执行一次至少命中一条笔记的窄范围 `tracekeeper.recall`，随后在设置中核验首次召回证据。
+3. 在 **MCP 服务** 中启动 Runtime，并确认不含凭据的 loopback 地址显示“本机访问已保护”。
+4. 在 **Agent 配置** 中点击 **添加 Agent** 并选择一个 AI 工具，只执行界面给出的公开原生命令。对支持 OAuth 的客户端，生成短时配对码，并在 Tracekeeper 本机授权页中输入；尚未证明本机 OAuth 能力的客户端只显示真实的原生/手工兜底。
+5. 在适用时单独安装推荐的配套 Skill，再按提示重新加载 AI 工具，让它初始化 Tracekeeper 并调用一个 `tracekeeper.*` 工具。只有同一个外部 Session 同时完成初始化和成功使用后，这个 Agent 才会出现在正常列表中。
 6. 在 **知识变更审核** 中查看需要处理的记忆、Wiki、图谱或迁移候选变更。
 7. 逐条编辑提案、通过审核、退回修改或不采纳；通过审核后仍需预览并明确确认写入。
 
 ## Agent 与 MCP 连接
 
-Tracekeeper 在桌面端 Obsidian 开启时提供本机 Streamable HTTP MCP Runtime。Runtime 默认绑定 loopback 地址，并为每个受管理的 Agent 客户端生成独立的 credential principal；本地 capability profile 决定该凭据能够发现和调用哪些公开工具，它只是预设，不是团队 RBAC。设置页可以单独轮换一个客户端凭据而不影响其他 Agent，旧版共享 token 仍保留迁移兼容。
+Tracekeeper 在桌面端 Obsidian 开启时提供本机 Streamable HTTP MCP Runtime。生产 Runtime 只绑定精确的 `127.0.0.1`，每个 MCP 资源请求都必须携带本次插件安装共享的一个安装级、服务级 Bearer。连接地址、客户端原生命令和授权 URL 都不含凭据；受支持客户端发现 Tracekeeper 的本机 OAuth 元数据，完成 authorization code + PKCE 配对，通过客户端自己的凭据存储保存 access token，再用 `Authorization` Header 发送它。
+
+服务 Bearer 只是访问门槛，不是客户端身份；OAuth 不创建每客户端凭据或权限。成功请求统一使用 Runtime 固定的 `local-user` 能力集合，MCP `clientInfo` 只作为客户端自报的观察信息。删除一个客户端配置不会在服务端单独撤销它；高级区的全局访问凭据重置会终止全部 Session，并要求所有客户端重新授权。
 
 AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 vault 上下文、构建 context pack、记录有限范围内的工作笔记，并按你的记忆规则提交更新。全局记忆默认进入知识变更审核；项目记忆可以按规则自动追加保存到项目记忆笔记。
 
@@ -108,7 +110,7 @@ Tracekeeper 通过只读的 `tracekeeper.lint` 统一检查 Obsidian wikilink �
 
 ## 安全模型
 
-Tracekeeper 是桌面端插件，因为它会托管本机 MCP Runtime。Runtime 默认必须使用本地 token，并且只接受来自 Obsidian 或 loopback origin 的浏览器式 CORS 请求。
+Tracekeeper 是桌面端插件，因为它会托管本机 MCP Runtime。每个 MCP 资源请求都必须携带安装级服务 Bearer；公开 OAuth 路由不能调用工具。Runtime 会校验 `Host`，把浏览器式 CORS 限制在 Obsidian 和 loopback origin，强制 PKCE 与精确 loopback redirect，并拒绝旧版查询参数凭据。
 
 MCP 写入范围被刻意限制：
 
@@ -116,10 +118,10 @@ MCP 写入范围被刻意限制：
 - 生成记录不会覆盖已有笔记
 - 已审核通过的内容只会追加到对应 proposal 指向的已有目标笔记
 - 多步骤任务和审核写回具备幂等标识、操作日志，并在 Runtime 启动时继续恢复
-- Session 绑定 credential principal，并受请求体大小、会话数量和空闲时间上限约束
+- 每个 Session 使用随机标识，每次 Session 请求都会重新校验服务 Bearer，并继续执行请求体大小、会话数量、流数量和空闲时间上限
 - MCP 不提供删除、重命名、批量重写和系统命令执行能力
 
-用户确认的客户端配置是预期中唯一可能写到 active vault 外的操作。Tracekeeper 会先展示目标配置和变更预览，并在修改支持的 AI 工具配置文件前创建备份。
+正常 Agent 配置由客户端官方 OAuth/MCP 入口拥有；Tracekeeper 不读取或写入跨平台客户端配置路径。经确认的受管 Skill 安装仍是可恢复的 Vault 外写入。配对码、授权码、服务凭据、token response 和 Authorization Header 都不会进入连接 URL、复制命令、AI 指令、Runtime 日志或 Vault 审计记录。
 
 ## 项目文档
 

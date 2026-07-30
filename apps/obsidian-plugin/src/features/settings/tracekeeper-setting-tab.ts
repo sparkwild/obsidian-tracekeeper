@@ -458,8 +458,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('本机访问保护', 'Local access protection'))
 			.setDesc(ui(
-				'本机访问已保护。重置会终止全部现有 Session，并让所有客户端配置进入需更新状态。',
-				'Local access is protected. Resetting ends every existing session and makes all client configurations require an update.'
+				'本机访问已保护。重置会终止全部现有 Session，并要求所有客户端重新授权。',
+				'Local access is protected. Resetting ends every existing session and requires every client to authorize again.'
 			))
 			.addButton((button) => {
 				button

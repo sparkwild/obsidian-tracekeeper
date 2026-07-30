@@ -25,17 +25,26 @@ a client, install a Skill, or write knowledge.
 The complete connection outcome still requires:
 
 1. A ready Tracekeeper Vault structure and running local MCP Runtime.
-2. A selected Agent with a previewed and confirmed, or manually copied,
-   connection configuration.
-3. Installed or manually saved Tracekeeper Skill guidance.
-4. A client reload when required.
-5. An authenticated call followed by one non-empty project-scoped Recall.
-6. For a workflow-capable client, one same-principal
-   `start -> recall -> finish` sequence.
+2. One Agent selected from the outer **Add Agent** menu.
+3. For a client with verified local OAuth support, an official client command
+   containing only the public loopback endpoint, followed by a short-lived
+   pairing code entered by the user on Tracekeeper's local authorization page.
+   Other clients receive an honest native-settings or manual fallback.
+4. Client-native credential storage and a reload or reconnect when required.
+5. One external Streamable HTTP Session that successfully initializes with the
+   installation-level service Bearer and completes at least one Tracekeeper
+   tool call.
+6. A non-empty project-scoped Recall and, when tracked-workflow onboarding
+   evidence is required, one `start -> recall -> finish` sequence observed in
+   that same external Streamable HTTP Session.
 
-A selected principal without `workflow.manage` follows the supported
-Recall-only path. Generated workflow guidance must state that tracked closeout
-is unavailable and must not ask that principal to call lifecycle tools.
+The same Agent surface recommends the companion Skill and offers its independent
+preview-and-confirm installation flow where supported. Skill installation is
+not connection authentication and does not complete the protocol-use gate.
+
+The Runtime exposes one fixed capability set to every successfully authenticated
+request. Client configuration does not select a Recall-only or workflow profile,
+and client-reported identity does not change authorization.
 
 Tracekeeper may retain this evidence for verification and recovery, but the
 normal settings surface does not expose it as a permanent step tracker. Each
@@ -56,24 +65,55 @@ The UI treats these as independent evidence:
 - the Skill bundle is available;
 - guidance was copied;
 - the user confirmed a manual step;
-- managed files match the expected hashes;
+- managed Skill files match the expected hashes;
 - the client was reloaded;
-- the credential principal connected;
+- a pairing code is ready, consumed, expired, or invalidated;
+- the client's OAuth flow completed;
+- an external Session initialized with the current service credential;
+- that same Session completed a Tracekeeper tool call;
 - an external `tracekeeper.recall` returned at least one match;
-- a complete tracked workflow was observed when the selected principal has
-  `workflow.manage`;
+- a complete tracked workflow was observed when required by onboarding;
 - an update is available.
 
 A plugin-local Recall preview cannot complete external Recall verification. File
 verification does not prove that a client discovered or automatically used the
 Skill, and one Recall does not prove automatic Skill triggering.
 
-## Client Capabilities
+## Service Access And Fixed Capabilities
 
-Each managed client receives an independent local credential principal and a
-local capability profile. Profiles are presets over Runtime capabilities, not
-hosted roles or a second authorization system. Rotating a credential or changing
-a profile invalidates only that client's affected evidence.
+All configured clients use the same installation-level service Bearer. The
+Bearer protects access to the local service; it is not a client identity or an
+authorization profile. Every successful request runs in the fixed `local-user`
+execution domain with `vault.read`, `workflow.manage`, `vault.write`, and
+`memory.propose`. Review/apply separation, Vault path validation, Memory rules,
+and other operation-specific policy remain enforced after that fixed capability
+check.
+
+MCP `clientInfo` and Session identifiers are self-reported or transport-level
+observation data. They can label recent use and help diagnosis, but they cannot
+grant capabilities, create a separate Principal, or prove which executable sent
+a request. Tracekeeper therefore does not offer per-client capability profiles
+or per-client server-side revocation.
+
+Tracekeeper delivers that existing service Bearer through the MCP authorization
+flow rather than exposing it as connection configuration. An unauthenticated MCP
+request receives Protected Resource Metadata discovery; the same exact-loopback
+Runtime publishes Authorization Server Metadata, public-client registration,
+authorization-code and token endpoints. The authorization request and token
+exchange require PKCE `S256`, an exact registered loopback redirect URI, and the
+MCP resource indicator.
+
+The pairing code is a short-lived human confirmation generated inside Obsidian.
+It is submitted only in the local authorization form body and is never part of
+the MCP URL, authorization URL, redirect URI, terminal command, AI instruction,
+Deep Link, log, audit record, or client configuration. Pairing codes,
+registrations, and authorization codes are memory-only and are invalidated by
+Runtime restart, port change, plugin unload, or global credential reset.
+
+The token endpoint returns the one installation-level Bearer as an opaque access
+token. The client owns secure credential storage. Tracekeeper does not create
+per-client access or refresh tokens, and successful OAuth login still does not
+prove which executable sent later requests.
 
 The normal Agent Configuration card does not enumerate MCP tools or expose a
 capability-preset selector. Tool discovery belongs to the MCP Service
@@ -85,38 +125,52 @@ successful MCP initialization and at least one successful Tracekeeper
 `tools/call`. Evidence from different Sessions or the plugin-internal direct
 transport cannot be combined.
 
-A managed client must also be currently detected as `configured`. For a manual
-client, successful initialization and tool use in that real protocol Session
-are the proof that configuration works. Configured-only, copied-only,
-initialize-only, stale managed configurations, and unused clients do not create
-a resident Agent card; those client candidates remain in **Add Agent**.
+A verified official status entry may suppress a client whose configuration was
+clearly removed. Tracekeeper does not scan operating-system-specific
+configuration paths as the normal visibility gate. Pairing-only, OAuth-login-only,
+initialize-only, removed, and unused clients do not create a resident Agent
+card; those client candidates remain in **Add Agent**.
 
 The supported candidate set includes Codex, Claude Code, Claude Desktop,
-Cursor, Gemini CLI, Grok Build, ZCode, and a Custom MCP fallback. Gemini CLI,
-Grok Build, and ZCode use their native user-level configuration structures and
-native Skill directories. Tracekeeper preserves unrelated client settings,
-requires the protected Authorization header, and does not treat a written
-configuration as successful use.
+Cursor, Gemini CLI, Grok Build, ZCode, and a Custom MCP fallback. Each candidate
+exposes only a compatibility-proven OAuth/CLI/link/extension/settings action or
+an explicit fallback. The normal flow neither detects nor writes cross-platform
+client configuration paths, and it never hands the Bearer or complete
+Authorization Header to the user or an Agent.
+
+The current registry exposes the official OAuth CLI path for Codex, Claude Code,
+and Gemini CLI. Codex compatibility is covered by a live native-client probe;
+the generated command relies on MCP discovery and therefore does not add a
+second explicit resource parameter. Claude Desktop, Cursor, Grok Build, ZCode,
+and Custom MCP retain their documented native or manual fallback until an
+equivalent local OAuth path is proved.
 
 Each visible Agent card keeps the client-facing identity, recent connection and
 successful-use evidence, connection management, and Skill state together. MCP
 Service does not duplicate the Agent list or expose a separate connection-setup
 entry.
 
-Automatic client-configuration or Skill installation is available only for
-clients with a verified local placement contract. Other clients receive
-copyable configuration or flattened Skill guidance with honest manual steps.
+OAuth connection and Skill installation use separate capability registries.
+Clients without verified local OAuth receive honest native/manual connection
+guidance. Managed Skill installation is available only for clients with a
+verified local placement contract; other clients receive flattened Skill
+guidance.
 
 Each Agent card shows one state-aware Skill row. Verified installs remain quiet;
 missing, outdated, or legacy installs expose only the applicable install, update,
 or migrate action. Local modifications, newer versions, and directory conflicts
 are preserved and do not expose an unsafe overwrite or downgrade action.
 
-Managed installation and configuration always use preview, explicit
-confirmation, current-file revalidation, backup, and conflict detection. The
-complete filesystem and credential controls are defined by the
-[knowledge runtime](../architecture/KNOWLEDGE_RUNTIME.md) and
-[trust boundaries](../architecture/TRUST_BOUNDARIES.md).
+Managed Skill installation always uses preview, explicit confirmation,
+current-file revalidation, backup, and conflict detection. Client connection
+configuration is owned by the client's official entry. The complete filesystem
+and credential controls are defined by the [knowledge runtime](../architecture/KNOWLEDGE_RUNTIME.md)
+and [trust boundaries](../architecture/TRUST_BOUNDARIES.md).
+
+Removing one client through its official entry removes only that configuration.
+Advanced global credential reset rotates the installation-level Bearer,
+terminates every active Session, and requires every configured client to be
+authorized again.
 
 ## Recovery And Visibility
 
@@ -126,28 +180,29 @@ perform the next action, and where the user should return afterward.
 
 Runtime disabled, stopped, transitional, running, port-conflict, and failed
 states must remain distinct. A configured client is not described as connected
-until authenticated Runtime evidence exists.
+until a real external Session has both initialized and completed a successful
+Tracekeeper tool call.
 
 The dedicated connection-status surface shows MCP service availability separately
-from authenticated Agent evidence. The normal Activity surface does not repeat
+from observed usable-Agent evidence. The normal Activity surface does not repeat
 service, Vault, Agent, and refresh summaries in a header-card layer. Runtime
 failure remains prominent through the single operational action when recovery is
 required.
 
-Activity groups recent audit evidence by credential principal, showing each
-client-facing Agent identity with its latest observation and session count. Agent
-rows do not duplicate tool-call or connection events. It does not expose principal
-or session identifiers in the normal layer, and historical evidence is never
-presented as proof that a client remains online. Selected, configured, copied,
-or initialize-only clients with no successful tool-use evidence stay out of the
-normal Agent list.
+Activity groups recent audit evidence by normalized client type, showing each
+client-facing Agent identity with its latest observation and the count of
+contributing Sessions. Raw client name/version and Session identifiers remain
+advanced diagnostic evidence. Agent rows do not duplicate tool-call or
+connection events, and historical evidence is never presented as proof that a
+client remains online. Selected, configured, copied, or initialize-only clients
+with no successful tool-use evidence stay out of the normal Agent list.
 
 Activity exposes at most one visually dominant next action. Structure repair and
 Runtime recovery take priority over actionable knowledge changes and observed
 workflow failures. Agent connection, credential, and Skill actions remain in
 settings; Activity only provides a compact route there. The latest task,
 knowledge-change state, and source activity remain visible before the advanced
-diagnostics section. Principal identifiers, lifecycle ratios, latency
+diagnostics section. Raw client and Session claims, lifecycle ratios, latency
 percentiles, evaluator commands, and aggregate counters are collapsed by
 default. These diagnostics use only locally observed calls, do not measure
 missed calls, and are never uploaded.

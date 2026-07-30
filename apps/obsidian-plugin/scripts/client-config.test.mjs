@@ -28,19 +28,39 @@ try {
 		['codex', 'claude-code', 'claude-desktop', 'cursor', 'gemini', 'grok', 'zcode', 'custom']
 	);
 	const profileById = (id) => profiles.find((profile) => profile.id === id);
-	assert.equal(profileById('codex').targetPath, '/home/test-user/.codex/config.toml');
-	assert.equal(profileById('claude-desktop').targetPath, '/home/test-user/Library/Application Support/Claude/claude_desktop_config.json');
-	assert.equal(profileById('claude-desktop').supportsAutoConfigure, true);
-	assert.equal(profileById('gemini').targetPath, '/home/test-user/.gemini/settings.json');
-	assert.equal(profileById('grok').targetPath, '/home/test-user/.grok/config.toml');
-	assert.equal(profileById('zcode').targetPath, '/home/test-user/.zcode/cli/config.json');
+	assert.equal(profiles.every((profile) => profile.targetPath === undefined), true);
+	assert.equal(profiles.every((profile) => profile.supportsAutoConfigure === false), true);
+	assert.deepEqual(
+		Object.fromEntries(profiles.map((profile) => [profile.id, profile.setupCapability])),
+		{
+			codex: 'oauth-cli',
+			'claude-code': 'oauth-cli',
+			'claude-desktop': 'extension',
+			cursor: 'native-gui',
+			gemini: 'oauth-cli',
+			grok: 'manual',
+			zcode: 'native-gui',
+			custom: 'manual',
+		}
+	);
+	assert.deepEqual(
+		profiles.filter((profile) => profile.supportsLocalOAuth).map((profile) => profile.id),
+		['codex', 'claude-code', 'gemini']
+	);
 
 	const noHomeProfiles = config.buildClientProfiles(undefined, (zh, en) => en, (...parts) => parts.join('/'));
-	assert.equal(noHomeProfiles[0].supportsAutoConfigure, false);
-	assert.equal(noHomeProfiles[0].targetPath, undefined);
-	assert.equal(noHomeProfiles.find((profile) => profile.id === 'gemini').supportsAutoConfigure, false);
-	assert.equal(noHomeProfiles.find((profile) => profile.id === 'grok').supportsAutoConfigure, false);
-	assert.equal(noHomeProfiles.find((profile) => profile.id === 'zcode').supportsAutoConfigure, false);
+	assert.deepEqual(
+		noHomeProfiles.map((profile) => ({
+			id: profile.id,
+			capability: profile.setupCapability,
+			oauth: profile.supportsLocalOAuth,
+		})),
+		profiles.map((profile) => ({
+			id: profile.id,
+			capability: profile.setupCapability,
+			oauth: profile.supportsLocalOAuth,
+		}))
+	);
 
 	const codexProfile = profileById('codex');
 	const mcpProfile = profileById('claude-code');
@@ -53,6 +73,42 @@ try {
 	const previousAccessToken = 'B'.repeat(43);
 	const authorization = `Bearer ${accessToken}`;
 	const localize = (_zh, en) => en;
+	const codexSetup = config.buildGeneratedClientSetup(codexProfile, configTextUrl);
+	assert.equal(
+		codexSetup.setupInstruction,
+		'codex mcp add tracekeeper --url http://127.0.0.1:58437/mcp'
+	);
+	assert.match(codexSetup.setupFollowup, /codex mcp login tracekeeper --scopes mcp/);
+	const claudeSetup = config.buildGeneratedClientSetup(profileById('claude-code'), configTextUrl);
+	assert.equal(
+		claudeSetup.setupInstruction,
+		'claude mcp add --transport http --scope user tracekeeper http://127.0.0.1:58437/mcp'
+	);
+	assert.match(claudeSetup.setupFollowup, /\/mcp/);
+	const geminiSetup = config.buildGeneratedClientSetup(geminiProfile, configTextUrl);
+	assert.equal(
+		geminiSetup.setupInstruction,
+		'gemini mcp add --transport http --scope user tracekeeper http://127.0.0.1:58437/mcp'
+	);
+	assert.match(geminiSetup.setupFollowup, /\/mcp auth tracekeeper/);
+	for (const profile of profiles.filter((candidate) => !candidate.supportsLocalOAuth)) {
+		const setup = config.buildGeneratedClientSetup(profile, configTextUrl);
+		assert.equal(setup.setupInstruction, configTextUrl);
+	}
+	for (const setup of [codexSetup, claudeSetup, geminiSetup]) {
+		assert.equal(setup.setupInstruction.includes(accessToken), false);
+		assert.equal(setup.setupInstruction.includes('Bearer'), false);
+		assert.equal(setup.setupInstruction.includes('Authorization'), false);
+		assert.equal(setup.setupInstruction.includes('ticket'), false);
+	}
+	assert.throws(
+		() => config.buildGeneratedClientSetup(profileById('claude-code'), 'http://localhost:58437/mcp'),
+		/exact local MCP endpoint/
+	);
+	assert.throws(
+		() => config.buildGeneratedClientSetup(profileById('claude-code'), 'http://127.0.0.1:58437/mcp?token=secret'),
+		/exact local MCP endpoint/
+	);
 
 	const codexTexts = config.buildClientConfigTexts(codexProfile, configTextUrl, accessToken);
 	assert.equal(codexTexts.completeConfigText, [
@@ -428,15 +484,19 @@ try {
 
 	const modalSource = fs.readFileSync(path.resolve('src/features/client-config/client-config-modals.ts'), 'utf8');
 	const settingsSource = fs.readFileSync(path.resolve('src/features/settings/tracekeeper-setting-tab.ts'), 'utf8');
-	assert.match(modalSource, /text:\s*this\.config\.redactedConfigText/);
-	assert.match(modalSource, /this\.config\.completeConfigText/);
-	assert.match(modalSource, /clipboard will contain a local access credential/i);
+	assert.match(modalSource, /text:\s*this\.config\.setupInstruction/);
+	assert.match(modalSource, /issueAgentPairingTicket\(this\.config\.clientId\)/);
+	assert.match(modalSource, /getAgentPairingTicketStatus\(ticket\.id\)/);
+	assert.match(modalSource, /text:\s*this\.pairingTicket\.code/);
 	assert.match(settingsSource, /new ConnectAiToolModal\(/);
-	assert.match(modalSource, /new ClientConfigCopyModal\(this\.app, this\.plugin, config\)\.open\(\)/);
+	assert.doesNotMatch(modalSource, /ClientConfigCopyModal/);
+	assert.doesNotMatch(modalSource, /ClientConfigPreviewModal/);
+	assert.doesNotMatch(modalSource, /config\.completeConfigText/);
+	assert.doesNotMatch(modalSource, /config\.redactedConfigText/);
 	assert.doesNotMatch(settingsSource, /copyToClipboard\(config\.completeConfigText/);
 	assert.doesNotMatch(settingsSource, /copyToClipboard\(\s*connectionUrl/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 89 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 91 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

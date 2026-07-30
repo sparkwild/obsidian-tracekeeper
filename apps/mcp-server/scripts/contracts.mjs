@@ -45,7 +45,7 @@ const readOnlyDefinitions = toolDefinitions(['vault.read']);
 assert.deepEqual(
 	readOnlyDefinitions.map((definition) => definition.name),
 	PUBLIC_TOOL_NAME_ORDER.filter((name) => getContractByName(name).capability === 'vault.read'),
-	'principal-filtered tools/list must preserve public contract order'
+	'capability-filtered tools/list must preserve public contract order'
 );
 for (const definition of readOnlyDefinitions) {
 	assert.equal(getContractByName(definition.name).capability, 'vault.read');
@@ -64,13 +64,13 @@ assert.equal(unauthenticatedDirectCall.structuredContent?.tool, 'tracekeeper.sta
 assert.match(
 	unauthenticatedDirectCall.structuredContent?.error || '',
 	/lacks capability vault\.read/,
-	'direct tool calls without an explicit credential capability must be denied'
+	'direct tool calls without an explicit capability context must be denied'
 );
 assert.equal(unauthenticatedDirectCall.structuredContent?.error_detail?.code, 'PERMISSION_DENIED');
 assert.doesNotMatch(
 	unauthenticatedDirectCall.structuredContent?.error_detail?.message || '',
 	/unknown/i,
-	'structured error detail must not duplicate principal identifiers'
+	'structured error detail must not duplicate execution identifiers'
 );
 
 const inheritedEnvelope = Object.create({

@@ -71,14 +71,15 @@ The plugin provides native Obsidian surfaces for:
 - Source status and source-to-proposal traceability;
 - Knowledge Change Review;
 - Runtime status and local logs;
-- permission policy;
+- Memory and persistence policy;
 - graph health and structure migration;
 - client and memory settings.
 
-Default surfaces should emphasize the user's next action. Principal details,
-latency percentiles, evaluation commands, and aggregate lifecycle metrics remain
-available as advanced local diagnostics. Metrics cover only calls that reached
-Tracekeeper and are never a missed-call denominator.
+Default surfaces should emphasize the user's next action. Raw client and Session
+evidence, execution diagnostics, latency percentiles, evaluation commands, and
+aggregate lifecycle metrics remain available as advanced local diagnostics.
+Metrics cover only calls that reached Tracekeeper and are never a missed-call
+denominator.
 
 ## Lint, Graph, And Migration
 

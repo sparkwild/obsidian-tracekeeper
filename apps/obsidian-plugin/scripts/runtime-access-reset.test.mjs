@@ -225,6 +225,8 @@ try {
 	assert.match(settingsSource, /new RuntimeAccessResetModal\(this\.app, this\.plugin, \(\) =>/);
 	assert.match(modalSource, /全部现有 MCP Session/);
 	assert.match(modalSource, /不会自动改写客户端配置/);
+	assert.match(modalSource, /现有客户端需要重新授权/);
+	assert.doesNotMatch(modalSource, /现有客户端配置需要更新/);
 	assert.doesNotMatch(modalSource, /runtimeAccessToken|completeConfigText|copyToClipboard/);
 
 	process.stdout.write(`${JSON.stringify({
@@ -232,7 +234,7 @@ try {
 		checks: [
 			'successful-reset-restarts-runtime',
 			'old-sessions-cleared',
-			'client-config-needs-update',
+			'clients-require-reauthorization',
 			'disabled-runtime-remains-stopped',
 			'save-failure-rolls-back',
 			'start-failure-rolls-back',

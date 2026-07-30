@@ -20,14 +20,14 @@ export class RuntimeAccessResetModal extends Modal {
 		});
 		contentEl.createEl('p', {
 			text: ui(
-				'这是一项全局操作：全部现有 MCP Session 会立即终止，所有已配置的 AI 工具都需要更新连接配置。',
-				'This is a global action: every existing MCP session will end immediately, and every configured AI tool will need updated connection settings.'
+				'这是一项全局操作：全部现有 MCP Session 会立即终止，所有已连接的 AI 工具都需要重新授权。',
+				'This is a global action: every existing MCP session ends immediately, and every connected AI tool must authorize again.'
 			),
 		});
 		contentEl.createEl('p', {
 			text: ui(
-				'Tracekeeper 不会自动改写客户端配置。重置成功后，请逐个预览并确认更新。',
-				'Tracekeeper will not silently rewrite client configuration. After a successful reset, preview and confirm each update.'
+				'Tracekeeper 不会自动改写客户端配置。重置成功后，请从各客户端的原生 MCP 入口重新连接。',
+				'Tracekeeper does not rewrite client configuration automatically. After reset succeeds, reconnect from each client-native MCP entry.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
@@ -52,12 +52,12 @@ export class RuntimeAccessResetModal extends Modal {
 					this.onReset?.();
 					new Notice(result.runtimeRestarted
 						? ui(
-							'MCP 访问凭据已重置；现有客户端配置需要更新。',
-							'MCP access credential reset. Existing client configurations need an update.'
+							'MCP 访问凭据已重置；现有客户端需要重新授权。',
+							'MCP access credential reset. Existing clients must authorize again.'
 						)
 						: ui(
-							'MCP 访问凭据已重置；服务保持关闭，现有客户端配置需要更新。',
-							'MCP access credential reset. The service remains off, and existing client configurations need an update.'
+							'MCP 访问凭据已重置；服务保持关闭，现有客户端需要在服务恢复后重新授权。',
+							'MCP access credential reset. The service remains off, and existing clients must authorize again after it resumes.'
 						));
 					this.close();
 				})
@@ -71,8 +71,8 @@ export class RuntimeAccessResetModal extends Modal {
 							'Reset failed. The previous credential and MCP service state were restored.'
 						)
 						: ui(
-							'重置失败且自动恢复未完成。请重启 Obsidian 后再更新客户端配置。',
-							'Reset failed and automatic recovery did not complete. Restart Obsidian before updating client configuration.'
+							'重置失败且自动恢复未完成。请重启 Obsidian 后再重新授权客户端。',
+							'Reset failed and automatic recovery did not complete. Restart Obsidian before authorizing clients again.'
 						));
 					if (rollbackSucceeded) {
 						confirm.disabled = false;

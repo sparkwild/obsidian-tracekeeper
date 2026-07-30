@@ -21,7 +21,7 @@ Run one real two-arm smoke:
 npm run eval:agent-initiative:real -- --execute --scenario real-greeting
 ```
 
-Run the separate v2.1.0 multi-source ingestion matrix without changing the existing 12-scenario regression matrix:
+Run the separate v2.1.1 multi-source ingestion matrix without changing the existing 12-scenario regression matrix:
 
 ```bash
 npm run eval:agent-initiative:real -- \
@@ -29,8 +29,8 @@ npm run eval:agent-initiative:real -- \
   --scenarios evals/agent-initiative/real/ingestion-scenarios.json \
   --arm both \
   --repetitions 1 \
-  --seed tracekeeper-v210-ingest \
-  --experiment-id tracekeeper-v210-ingest
+  --seed tracekeeper-v211-ingest \
+  --experiment-id tracekeeper-v211-ingest
 ```
 
 This matrix uses only synthetic local source files and a deliberately unavailable example URL. It measures local snapshot capture, safe `external_reference` fallback, review-boundary preservation, stable retry-key use, and non-duplicating closeout. It does not perform a real network fetch.
@@ -142,7 +142,15 @@ Per-run files are currently:
 - `agent-message.json`: captured final assistant message.
 - `diagnostics.json`: parse/transport diagnostics.
 
-The runtime binds to `127.0.0.1` on an ephemeral port and uses a random bearer token. Raw stdout, diagnostics, Agent messages, tokens, temporary roots, and user-home paths are redacted before persistence. Raw JSONL can still contain synthetic prompt or synthetic note content; reports are ignored by Git and should be treated as local evaluation artifacts.
+The runtime binds to `127.0.0.1` on an ephemeral port and uses a random bearer
+token. This isolated, non-production harness injects that ephemeral token
+directly into its one temporary Codex process so an unattended evaluator does
+not open the interactive product pairing flow. Production Obsidian-hosted setup
+uses local OAuth discovery, authorization code, and PKCE pairing instead. Raw
+stdout, diagnostics, Agent messages, tokens, temporary roots, and user-home
+paths are redacted before persistence. Raw JSONL can still contain synthetic
+prompt or synthetic note content; reports are ignored by Git and should be
+treated as local evaluation artifacts.
 
 ## Interpretation
 

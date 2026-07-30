@@ -80,12 +80,16 @@ try {
 		return fakeRuntime('duplicate', 58438, events);
 	});
 	assert.equal((await firstStart)?.state, 'running');
+	assert.equal(controller.getRuntime(), firstRuntime);
 	assert.equal((await duplicateStart)?.port, 58437);
 	assert.equal(duplicateFactoryCalls, 0);
 
 	const secondRuntime = fakeRuntime('second', 58438, events);
 	assert.equal((await controller.restart(() => secondRuntime))?.port, 58438);
+	assert.equal(controller.getRuntime(), secondRuntime);
 	assert.deepEqual(events.slice(0, 3), ['first:start', 'first:stop', 'second:start']);
+	assert.equal((await controller.stop())?.state, 'stopped');
+	assert.equal(controller.getRuntime(), null);
 
 	const delayedEvents = [];
 	const startGate = deferred();
@@ -97,6 +101,7 @@ try {
 	startGate.resolve();
 	assert.equal(await delayedStart, null);
 	assert.equal((await close)?.state ?? 'stopped', 'stopped');
+	assert.equal(closingController.getRuntime(), null);
 	assert.deepEqual(delayedEvents, ['delayed:start', 'delayed:stop']);
 
 	let postCloseFactoryCalls = 0;
@@ -108,7 +113,7 @@ try {
 
 	process.stdout.write(`${JSON.stringify({
 		result: 'pass',
-		checks: ['deduplicated-start', 'serialized-restart', 'close-preempts-start', 'closed-controller-rejects-start'],
+		checks: ['deduplicated-start', 'runtime-access', 'serialized-restart', 'stop-clears-runtime', 'close-preempts-start', 'closed-controller-rejects-start'],
 	})}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });

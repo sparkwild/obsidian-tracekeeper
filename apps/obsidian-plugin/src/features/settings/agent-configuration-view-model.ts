@@ -25,10 +25,7 @@ export function buildAgentConfigurationViewModel(
 		const config = clientConfigs.find(
 			(candidate) => candidate.clientId === agent.observedClientType
 		);
-		if (
-			!config
-			|| (config.supportsAutoConfigure && config.configState !== 'configured')
-		) {
+		if (!config) {
 			return [];
 		}
 		visibleClientIds.add(config.clientId);

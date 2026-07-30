@@ -18,15 +18,30 @@ import {
 	MCP_SERVER_VERSION,
 	STREAMABLE_HTTP_TRANSPORT,
 } from './handler';
+import {
+	LocalOAuthAuthorizationServer,
+	type PairingTicket,
+	type PairingTicketStatus,
+} from './local-oauth';
+
+export type { PairingTicket, PairingTicketState, PairingTicketStatus } from './local-oauth';
 
 export type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed' | 'port_conflict';
 
 export interface StreamableHttpRuntimeOptions {
 	localTrust?: boolean;
 	serviceToken: string;
+	getSharedBearerToken?: () => string | Promise<string>;
 	host?: string;
 	port?: number;
 	path?: string;
+	pairingTicketTtlMs?: number;
+	pairingTicketCapacity?: number;
+	pairingTicketMaxAttempts?: number;
+	authorizationCodeTtlMs?: number;
+	authorizationCodeCapacity?: number;
+	clientRegistrationTtlMs?: number;
+	clientRegistrationCapacity?: number;
 	maxRequestBytes?: number;
 	maxSessions?: number;
 	maxStreamsPerSession?: number;
@@ -73,7 +88,6 @@ interface RuntimeSession extends McpConnectionState {
 	streams: Set<ServerResponse>;
 }
 
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PATH = '/mcp';
 const DEFAULT_MAX_REQUEST_BYTES = 1024 * 1024;
@@ -81,6 +95,13 @@ const DEFAULT_MAX_SESSIONS = 32;
 const DEFAULT_MAX_STREAMS_PER_SESSION = 2;
 const DEFAULT_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30 * 1000;
+const DEFAULT_PAIRING_TICKET_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_PAIRING_TICKET_CAPACITY = 3;
+const DEFAULT_PAIRING_TICKET_MAX_ATTEMPTS = 5;
+const DEFAULT_AUTHORIZATION_CODE_TTL_MS = 2 * 60 * 1000;
+const DEFAULT_AUTHORIZATION_CODE_CAPACITY = 32;
+const DEFAULT_CLIENT_REGISTRATION_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_CLIENT_REGISTRATION_CAPACITY = 32;
 const MIN_SERVICE_TOKEN_BYTES = 32;
 
 export class StreamableHttpMcpRuntime {
@@ -100,6 +121,7 @@ export class StreamableHttpMcpRuntime {
 	private server: HttpServer | null = null;
 	private stopPromise: Promise<void> | null = null;
 	private sessions = new Map<string, RuntimeSession>();
+	private oauthServer: LocalOAuthAuthorizationServer | null;
 	private state: RuntimeState = 'stopped';
 	private startedAt = '';
 	private lastError = '';
@@ -116,11 +138,76 @@ export class StreamableHttpMcpRuntime {
 		this.port = options.port ?? 58437;
 		this.path = options.path || DEFAULT_PATH;
 		this.serviceTokenHash = hashServiceToken(options.serviceToken);
-		this.maxRequestBytes = normalizePositiveLimit(options.maxRequestBytes, DEFAULT_MAX_REQUEST_BYTES, 'maxRequestBytes');
-		this.maxSessions = normalizePositiveLimit(options.maxSessions, DEFAULT_MAX_SESSIONS, 'maxSessions');
-		this.maxStreamsPerSession = normalizePositiveLimit(options.maxStreamsPerSession, DEFAULT_MAX_STREAMS_PER_SESSION, 'maxStreamsPerSession');
-		this.sessionIdleTtlMs = normalizePositiveLimit(options.sessionIdleTtlMs, DEFAULT_SESSION_IDLE_TTL_MS, 'sessionIdleTtlMs');
-		this.requestTimeoutMs = normalizePositiveLimit(options.requestTimeoutMs, DEFAULT_REQUEST_TIMEOUT_MS, 'requestTimeoutMs');
+		this.maxRequestBytes = normalizePositiveLimit(
+			options.maxRequestBytes,
+			DEFAULT_MAX_REQUEST_BYTES,
+			'maxRequestBytes'
+		);
+		this.maxSessions = normalizePositiveLimit(
+			options.maxSessions,
+			DEFAULT_MAX_SESSIONS,
+			'maxSessions'
+		);
+		this.maxStreamsPerSession = normalizePositiveLimit(
+			options.maxStreamsPerSession,
+			DEFAULT_MAX_STREAMS_PER_SESSION,
+			'maxStreamsPerSession'
+		);
+		this.sessionIdleTtlMs = normalizePositiveLimit(
+			options.sessionIdleTtlMs,
+			DEFAULT_SESSION_IDLE_TTL_MS,
+			'sessionIdleTtlMs'
+		);
+		this.requestTimeoutMs = normalizePositiveLimit(
+			options.requestTimeoutMs,
+			DEFAULT_REQUEST_TIMEOUT_MS,
+			'requestTimeoutMs'
+		);
+		this.oauthServer = options.getSharedBearerToken
+			? new LocalOAuthAuthorizationServer({
+				serviceTokenHash: this.serviceTokenHash,
+				getSharedBearerToken: options.getSharedBearerToken,
+				getOrigin: () => this.runtimeOrigin(),
+				getResource: () => `${this.runtimeOrigin()}${this.path}`,
+				maxRequestBytes: this.maxRequestBytes,
+				requestTimeoutMs: this.requestTimeoutMs,
+				pairingTicketTtlMs: normalizePositiveLimit(
+					options.pairingTicketTtlMs,
+					DEFAULT_PAIRING_TICKET_TTL_MS,
+					'pairingTicketTtlMs'
+				),
+				pairingTicketCapacity: normalizePositiveLimit(
+					options.pairingTicketCapacity,
+					DEFAULT_PAIRING_TICKET_CAPACITY,
+					'pairingTicketCapacity'
+				),
+				pairingTicketMaxAttempts: normalizePositiveLimit(
+					options.pairingTicketMaxAttempts,
+					DEFAULT_PAIRING_TICKET_MAX_ATTEMPTS,
+					'pairingTicketMaxAttempts'
+				),
+				authorizationCodeTtlMs: normalizePositiveLimit(
+					options.authorizationCodeTtlMs,
+					DEFAULT_AUTHORIZATION_CODE_TTL_MS,
+					'authorizationCodeTtlMs'
+				),
+				authorizationCodeCapacity: normalizePositiveLimit(
+					options.authorizationCodeCapacity,
+					DEFAULT_AUTHORIZATION_CODE_CAPACITY,
+					'authorizationCodeCapacity'
+				),
+				clientRegistrationTtlMs: normalizePositiveLimit(
+					options.clientRegistrationTtlMs,
+					DEFAULT_CLIENT_REGISTRATION_TTL_MS,
+					'clientRegistrationTtlMs'
+				),
+				clientRegistrationCapacity: normalizePositiveLimit(
+					options.clientRegistrationCapacity,
+					DEFAULT_CLIENT_REGISTRATION_CAPACITY,
+					'clientRegistrationCapacity'
+				),
+			})
+			: null;
 		this.runtimeVersion = options.runtimeVersion || MCP_SERVER_VERSION;
 		this.defaultVaultRoot = options.defaultVaultRoot;
 		this.recoveryContext = {
@@ -149,6 +236,20 @@ export class StreamableHttpMcpRuntime {
 		});
 	}
 
+	/**
+	 * Issues a one-time local pairing code for the Agent selected in Obsidian.
+	 */
+	issuePairingTicket(expectedClientId: string): PairingTicket {
+		if (this.state !== 'running' || !this.oauthServer) {
+			throw new Error('OAuth pairing is unavailable until the runtime is running with a token callback.');
+		}
+		return this.oauthServer.issuePairingTicket(expectedClientId);
+	}
+
+	getPairingTicketStatus(id: string): PairingTicketStatus | null {
+		return this.oauthServer?.getPairingTicketStatus(id) || null;
+	}
+
 	async start(): Promise<StreamableHttpRuntimeStatus> {
 		if (this.stopPromise) {
 			await this.stopPromise;
@@ -161,7 +262,10 @@ export class StreamableHttpMcpRuntime {
 		this.recoveryStatus = null;
 		if (this.defaultVaultRoot) {
 			try {
-				const recovery = await recoverPendingOperations(this.defaultVaultRoot, this.recoveryContext);
+				const recovery = await recoverPendingOperations(
+					this.defaultVaultRoot,
+					this.recoveryContext
+				);
 				this.recoveryStatus = {
 					recovered: recovery.recovered.length,
 					failed: recovery.failed.length,
@@ -179,11 +283,15 @@ export class StreamableHttpMcpRuntime {
 			void this.handleRequest(request, response).catch((error: unknown) => {
 				this.lastError = toErrorMessage(error, 'Unhandled MCP HTTP request failure.');
 				if (!response.writableEnded && !response.destroyed) {
-					this.writeJson(response, 500, this.errorResponse(null, -32603, 'Internal MCP runtime error.'), request);
+					this.writeJson(
+						response,
+						500,
+						this.errorResponse(null, -32603, 'Internal MCP runtime error.'),
+						request
+					);
 				}
 			});
 		});
-
 		return new Promise((resolve, reject) => {
 			const server = this.server;
 			if (!server) {
@@ -228,6 +336,8 @@ export class StreamableHttpMcpRuntime {
 		const server = this.server;
 		if (!server) {
 			this.state = 'stopped';
+			this.sessions.clear();
+			this.oauthServer?.clear();
 			this.startedAt = '';
 			return;
 		}
@@ -236,8 +346,8 @@ export class StreamableHttpMcpRuntime {
 			this.closeSession(session);
 		}
 		this.sessions.clear();
+		this.oauthServer?.clear();
 		this.server = null;
-
 		await new Promise<void>((resolve) => {
 			server.close(() => resolve());
 		});
@@ -251,7 +361,7 @@ export class StreamableHttpMcpRuntime {
 			host: this.host,
 			port: this.port,
 			path: this.path,
-			endpoint: `http://${this.host}:${this.port}${this.path}`,
+			endpoint: `${this.runtimeOrigin()}${this.path}`,
 			startedAt: this.startedAt,
 			activeSessions: this.sessions.size,
 			lastError: this.lastError,
@@ -271,31 +381,42 @@ export class StreamableHttpMcpRuntime {
 			return;
 		}
 		const url = this.parseRequestUrl(request);
-		if (!url || url.pathname !== this.path) {
-			this.writePlain(response, 404, 'Not found.', request);
+		if (!url) {
+			this.writePlain(response, 400, 'Invalid request URL.', request);
 			return;
 		}
-
-		if (!this.isAllowedOrigin(request)) {
-			this.writeJson(response, 403, this.errorResponse(null, -32003, 'Forbidden origin.'), request);
-			return;
-		}
-
-		if (url.searchParams.has('token')) {
-			this.recordRequestRejection('query_token_rejected');
+		if (
+			url.searchParams.has('token')
+			|| url.searchParams.has('ticket')
+			|| url.searchParams.has('pairing_code')
+		) {
+			if (url.searchParams.has('token')) {
+				this.recordRequestRejection('query_token_rejected');
+			}
 			this.writeJson(
 				response,
 				400,
 				this.errorResponse(
 					null,
 					-32000,
-					'Legacy MCP credentials are not supported. Remove the token query and configure an Authorization Bearer header.'
+					'Legacy MCP credentials are not supported. Credentials are not accepted in URLs. Reconnect through the client native MCP OAuth flow.'
 				),
 				request
 			);
 			return;
 		}
-
+		if (this.oauthServer?.handlesPath(url.pathname)) {
+			await this.oauthServer.handle(request, response, url);
+			return;
+		}
+		if (url.pathname !== this.path) {
+			this.writePlain(response, 404, 'Not found.', request);
+			return;
+		}
+		if (!this.isAllowedOrigin(request)) {
+			this.writeJson(response, 403, this.errorResponse(null, -32003, 'Forbidden origin.'), request);
+			return;
+		}
 		if (request.method === 'OPTIONS') {
 			this.writeCors(response, 204, request);
 			response.end();
@@ -304,12 +425,28 @@ export class StreamableHttpMcpRuntime {
 		const bearerStatus = this.serviceBearerStatus(request);
 		if (bearerStatus !== 'valid') {
 			this.recordRequestRejection(bearerStatus === 'missing' ? 'auth_missing' : 'auth_invalid');
-			this.writeJson(response, 401, this.errorResponse(null, -32001, 'Unauthorized MCP request.'), request);
+			if (this.oauthServer) {
+				response.setHeader(
+					'WWW-Authenticate',
+					`Bearer resource_metadata="${this.oauthServer.protectedResourceMetadataUrl()}", scope="mcp"`
+				);
+			}
+			this.writeJson(
+				response,
+				401,
+				this.errorResponse(null, -32001, 'Unauthorized MCP request.'),
+				request
+			);
 			return;
 		}
 		if (request.method === 'POST') {
 			if (!this.hasJsonContentType(request)) {
-				this.writeJson(response, 415, this.errorResponse(null, -32015, 'Content-Type must be application/json.'), request);
+				this.writeJson(
+					response,
+					415,
+					this.errorResponse(null, -32015, 'Content-Type must be application/json.'),
+					request
+				);
 				return;
 			}
 			await this.handlePost(request, response);
@@ -323,8 +460,12 @@ export class StreamableHttpMcpRuntime {
 			this.handleDelete(request, response);
 			return;
 		}
-
-		this.writeJson(response, 405, this.errorResponse(null, -32005, 'Method not allowed.'), request);
+		this.writeJson(
+			response,
+			405,
+			this.errorResponse(null, -32005, 'Method not allowed.'),
+			request
+		);
 	}
 
 	private async handlePost(
@@ -336,11 +477,21 @@ export class StreamableHttpMcpRuntime {
 			body = await this.readBody(request);
 		} catch (error: unknown) {
 			if (error instanceof RequestBodyTooLargeError) {
-				this.writeJson(response, 413, this.errorResponse(null, -32013, error.message), request);
+				this.writeJson(
+					response,
+					413,
+					this.errorResponse(null, -32013, error.message),
+					request
+				);
 				return;
 			}
 			if (error instanceof RequestBodyTimeoutError) {
-				this.writeJson(response, 408, this.errorResponse(null, -32008, error.message), request);
+				this.writeJson(
+					response,
+					408,
+					this.errorResponse(null, -32008, error.message),
+					request
+				);
 				return;
 			}
 			throw error;
@@ -349,20 +500,32 @@ export class StreamableHttpMcpRuntime {
 		try {
 			message = JSON.parse(body || '{}');
 		} catch (error) {
-			const messageText = toErrorMessage(error, 'Invalid JSON.');
-			this.writeJson(response, 400, this.errorResponse(null, -32700, messageText), request);
+			this.writeJson(
+				response,
+				400,
+				this.errorResponse(null, -32700, toErrorMessage(error, 'Invalid JSON.')),
+				request
+			);
 			return;
 		}
-
 		if (Array.isArray(message)) {
-			this.writeJson(response, 400, this.errorResponse(null, -32600, 'Batch requests are not supported by this Runtime.'), request);
+			this.writeJson(
+				response,
+				400,
+				this.errorResponse(null, -32600, 'Batch requests are not supported by this Runtime.'),
+				request
+			);
 			return;
 		}
-
 		const method = this.readMethod(message);
 		const isInitialize = method === 'initialize';
 		if (isInitialize && this.sessions.size >= this.maxSessions) {
-			this.writeJson(response, 429, this.errorResponse(null, -32029, 'MCP session limit reached.'), request);
+			this.writeJson(
+				response,
+				429,
+				this.errorResponse(null, -32029, 'MCP session limit reached.'),
+				request
+			);
 			return;
 		}
 		const session = isInitialize
@@ -371,7 +534,6 @@ export class StreamableHttpMcpRuntime {
 		if (!session) {
 			return;
 		}
-
 		session.lastSeenAt = Date.now();
 		const result = await this.handler.handleMessage(message, session);
 		if (isInitialize) {
@@ -391,7 +553,12 @@ export class StreamableHttpMcpRuntime {
 			return;
 		}
 		if (session.streams.size >= this.maxStreamsPerSession) {
-			this.writeJson(response, 429, this.errorResponse(null, -32029, 'MCP stream limit reached for this session.'), request);
+			this.writeJson(
+				response,
+				429,
+				this.errorResponse(null, -32029, 'MCP stream limit reached for this session.'),
+				request
+			);
 			return;
 		}
 		session.lastSeenAt = Date.now();
@@ -442,15 +609,27 @@ export class StreamableHttpMcpRuntime {
 	): RuntimeSession | null {
 		const sessionId = this.firstHeaderValue(request.headers['mcp-session-id']);
 		if (!sessionId) {
-			this.writeJson(response, 400, this.errorResponse(null, -32000, 'Missing Mcp-Session-Id header.'), request);
+			this.writeJson(
+				response,
+				400,
+				this.errorResponse(null, -32000, 'Missing Mcp-Session-Id header.'),
+				request
+			);
 			return null;
 		}
 		const session = this.sessions.get(sessionId);
 		if (!session) {
-			this.writeJson(response, 404, this.errorResponse(null, -32004, 'Unknown MCP session.'), request);
+			this.writeJson(
+				response,
+				404,
+				this.errorResponse(null, -32004, 'Unknown MCP session.'),
+				request
+			);
 			return null;
 		}
-		const requestedProtocolVersion = this.firstHeaderValue(request.headers['mcp-protocol-version']);
+		const requestedProtocolVersion = this.firstHeaderValue(
+			request.headers['mcp-protocol-version']
+		);
 		if (session.protocolVersion && !requestedProtocolVersion) {
 			this.writeJson(
 				response,
@@ -468,7 +647,11 @@ export class StreamableHttpMcpRuntime {
 			this.writeJson(
 				response,
 				400,
-				this.errorResponse(null, -32000, 'Mcp-Protocol-Version does not match the initialized session.'),
+				this.errorResponse(
+					null,
+					-32000,
+					'Mcp-Protocol-Version does not match the initialized session.'
+				),
 				request
 			);
 			return null;
@@ -488,14 +671,16 @@ export class StreamableHttpMcpRuntime {
 			return null;
 		}
 		try {
-			return new URL(request.url, `http://${this.host}:${this.port}`);
+			return new URL(request.url, this.runtimeOrigin());
 		} catch {
 			return null;
 		}
 	}
 
 	private hasJsonContentType(request: IncomingMessage): boolean {
-		const contentType = this.firstHeaderValue(request.headers['content-type']).toLowerCase();
+		const contentType = this.firstHeaderValue(
+			request.headers['content-type']
+		).toLowerCase();
 		return contentType.split(';', 1)[0].trim() === 'application/json';
 	}
 
@@ -503,18 +688,23 @@ export class StreamableHttpMcpRuntime {
 		if (!isRecordLike(message)) {
 			return '';
 		}
-		const methodValue = message.method;
-		return typeof methodValue === 'string' ? methodValue : '';
+		return typeof message.method === 'string' ? message.method : '';
 	}
 
 	private async readBody(request: IncomingMessage): Promise<string> {
-		const declaredLength = Number.parseInt(this.firstHeaderValue(request.headers['content-length']), 10);
+		const declaredLength = Number.parseInt(
+			this.firstHeaderValue(request.headers['content-length']),
+			10
+		);
 		if (Number.isFinite(declaredLength) && declaredLength > this.maxRequestBytes) {
 			throw new RequestBodyTooLargeError(this.maxRequestBytes);
 		}
 		let timeout: ReturnType<typeof setTimeout> | undefined;
 		const timeoutPromise = new Promise<never>((_resolve, reject) => {
-			timeout = setTimeout(() => reject(new RequestBodyTimeoutError(this.requestTimeoutMs)), this.requestTimeoutMs);
+			timeout = setTimeout(
+				() => reject(new RequestBodyTimeoutError(this.requestTimeoutMs)),
+				this.requestTimeoutMs
+			);
 		});
 		try {
 			return await Promise.race([this.consumeRequestBody(request), timeoutPromise]);
@@ -553,15 +743,7 @@ export class StreamableHttpMcpRuntime {
 	}
 
 	private isAllowedHost(request: IncomingMessage): boolean {
-		const requestHost = requestHostname(this.firstHeaderValue(request.headers.host));
-		const boundHost = normalizeHostname(this.host);
-		if (!requestHost || !boundHost) {
-			return false;
-		}
-		if (isLoopbackHostname(boundHost)) {
-			return isLoopbackHostname(requestHost);
-		}
-		return requestHost === boundHost;
+		return this.firstHeaderValue(request.headers.host) === `${this.host}:${this.port}`;
 	}
 
 	private allowedCorsOrigin(request: IncomingMessage): string | null {
@@ -574,7 +756,14 @@ export class StreamableHttpMcpRuntime {
 		}
 		try {
 			const parsed = new URL(origin);
-			return LOOPBACK_HOSTS.has(parsed.hostname) ? origin : null;
+			if (
+				parsed.origin !== origin
+				|| (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+				|| !isLoopbackHostname(parsed.hostname)
+			) {
+				return null;
+			}
+			return origin;
 		} catch {
 			return null;
 		}
@@ -590,10 +779,14 @@ export class StreamableHttpMcpRuntime {
 			return 'invalid';
 		}
 		const presentedHash = crypto.createHash('sha256').update(match[1], 'utf8').digest();
-		return crypto.timingSafeEqual(presentedHash, this.serviceTokenHash) ? 'valid' : 'invalid';
+		return crypto.timingSafeEqual(presentedHash, this.serviceTokenHash)
+			? 'valid'
+			: 'invalid';
 	}
 
-	private recordRequestRejection(reason: 'auth_missing' | 'auth_invalid' | 'query_token_rejected'): void {
+	private recordRequestRejection(
+		reason: 'auth_missing' | 'auth_invalid' | 'query_token_rejected'
+	): void {
 		if (!this.defaultVaultRoot) {
 			return;
 		}
@@ -615,25 +808,36 @@ export class StreamableHttpMcpRuntime {
 	}
 
 	private firstHeaderValue(value: string | string[] | undefined): string {
-		if (Array.isArray(value)) {
-			return value[0] || '';
-		}
-		return value || '';
+		return Array.isArray(value) ? value[0] || '' : value || '';
 	}
 
-	private writeJson(response: ServerResponse, status: number, payload: JsonRpcResponse, request?: IncomingMessage): void {
+	private writeJson(
+		response: ServerResponse,
+		status: number,
+		payload: JsonRpcResponse,
+		request?: IncomingMessage
+	): void {
 		this.writeCors(response, status, request);
 		response.setHeader('Content-Type', 'application/json');
 		response.end(JSON.stringify(payload));
 	}
 
-	private writePlain(response: ServerResponse, status: number, text: string, request?: IncomingMessage): void {
+	private writePlain(
+		response: ServerResponse,
+		status: number,
+		text: string,
+		request?: IncomingMessage
+	): void {
 		this.writeCors(response, status, request);
 		response.setHeader('Content-Type', 'text/plain; charset=utf-8');
 		response.end(text);
 	}
 
-	private writeCors(response: ServerResponse, status: number, request?: IncomingMessage): void {
+	private writeCors(
+		response: ServerResponse,
+		status: number,
+		request?: IncomingMessage
+	): void {
 		response.statusCode = status;
 		const origin = request ? this.allowedCorsOrigin(request) : null;
 		if (origin) {
@@ -642,13 +846,22 @@ export class StreamableHttpMcpRuntime {
 		}
 		response.setHeader(
 			'Access-Control-Allow-Headers',
-			'Content-Type, Accept, Authorization, Mcp-Session-Id, MCP-Protocol-Version',
+			'Content-Type, Accept, Authorization, Mcp-Session-Id, MCP-Protocol-Version'
 		);
 		response.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
 		response.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
 	}
 
-	private errorResponse(id: number | string | null, code: number, message: string, data?: unknown): JsonRpcResponse {
+	private runtimeOrigin(): string {
+		return `http://${this.host}:${this.port}`;
+	}
+
+	private errorResponse(
+		id: number | string | null,
+		code: number,
+		message: string,
+		data?: unknown
+	): JsonRpcResponse {
 		const error: JsonRpcResponse['error'] = { code, message };
 		if (data !== undefined) {
 			error.data = data;
@@ -671,45 +884,20 @@ function toBodyChunkBuffer(chunk: unknown): Buffer {
 }
 
 function toErrorMessage(error: unknown, fallback: string): string {
-	if (error instanceof Error) {
-		return error.message || fallback;
-	}
-	return fallback;
-}
-
-function requestHostname(authority: string): string {
-	if (!authority || /[,\s/\\]/u.test(authority)) {
-		return '';
-	}
-	try {
-		const parsed = new URL(`http://${authority}`);
-		if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') {
-			return '';
-		}
-		return normalizeHostname(parsed.hostname);
-	} catch {
-		return '';
-	}
-}
-
-function normalizeHostname(hostname: string): string {
-	const normalized = hostname.trim().toLowerCase();
-	if (normalized.startsWith('[') && normalized.endsWith(']')) {
-		return normalized.slice(1, -1);
-	}
-	return normalized;
+	return error instanceof Error ? error.message || fallback : fallback;
 }
 
 function isLoopbackHostname(hostname: string): boolean {
-	return LOOPBACK_HOSTS.has(hostname) || LOOPBACK_HOSTS.has(`[${hostname}]`);
+	const normalized = hostname.toLowerCase();
+	return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '[::1]';
 }
 
 function isAddressInfo(address: ReturnType<HttpServer['address']>): address is AddressInfo {
 	return (
-		typeof address === 'object' &&
-		address !== null &&
-		'port' in address &&
-		typeof address.port === 'number'
+		typeof address === 'object'
+		&& address !== null
+		&& 'port' in address
+		&& typeof address.port === 'number'
 	);
 }
 
@@ -731,7 +919,11 @@ class RequestBodyTimeoutError extends Error {
 	}
 }
 
-function normalizePositiveLimit(value: number | undefined, fallback: number, name: string): number {
+function normalizePositiveLimit(
+	value: number | undefined,
+	fallback: number,
+	name: string
+): number {
 	const resolved = value ?? fallback;
 	if (!Number.isSafeInteger(resolved) || resolved <= 0) {
 		throw new Error(`${name} must be a positive safe integer.`);
@@ -741,11 +933,13 @@ function normalizePositiveLimit(value: number | undefined, fallback: number, nam
 
 function hashServiceToken(serviceToken: string): Buffer {
 	if (
-		typeof serviceToken !== 'string' ||
-		Buffer.byteLength(serviceToken, 'utf8') < MIN_SERVICE_TOKEN_BYTES ||
-		/\s/u.test(serviceToken)
+		typeof serviceToken !== 'string'
+		|| Buffer.byteLength(serviceToken, 'utf8') < MIN_SERVICE_TOKEN_BYTES
+		|| /\s/u.test(serviceToken)
 	) {
-		throw new Error(`serviceToken must contain at least ${MIN_SERVICE_TOKEN_BYTES} non-whitespace UTF-8 bytes.`);
+		throw new Error(
+			`serviceToken must contain at least ${MIN_SERVICE_TOKEN_BYTES} non-whitespace UTF-8 bytes.`
+		);
 	}
 	return crypto.createHash('sha256').update(serviceToken, 'utf8').digest();
 }

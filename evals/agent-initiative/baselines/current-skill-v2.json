@@ -8,7 +8,7 @@
 		{ "path": "skills/tracekeeper/SKILL.md", "sha256": "33748e871b97d0b039780cacd2ee8e7f2414e74eed701dd0689c16f3bca78b9c" },
 		{ "path": "skills/tracekeeper/references/closeout-fields.md", "sha256": "67c19a831ca9407602f8bf184f1ccfe9cb7ca736007645c8d84f3080f7bd0213" },
 		{ "path": "skills/tracekeeper/references/failure-recovery.md", "sha256": "2b95aef2ffdf4af49fd4344a30ea13e32f789b895777bbb406ec61542ffac597" },
-		{ "path": "skills/tracekeeper/references/ingestion-workflow.md", "sha256": "267cfbafefeeb08dae74fae11d597bc30218989d82587066955984dadaa0fdc0" },
+		{ "path": "skills/tracekeeper/references/ingestion-workflow.md", "sha256": "30bf0205dd2a3e8036d504312c56346a75e3a4f192a901f6dbfc9b4c5de06306" },
 		{ "path": "skills/tracekeeper/references/instruction-isolation.md", "sha256": "2bf2f2f047bba9a968d2ca841029f130c12a9829e2e294e3b8d56659fd8c9357" },
 		{ "path": "skills/tracekeeper/references/workflow-state-machine.md", "sha256": "34d9a52169cbfb9dd75ea9d43961c79ccb8c97cc45c64959697d06571cfa4cae" }
 	],

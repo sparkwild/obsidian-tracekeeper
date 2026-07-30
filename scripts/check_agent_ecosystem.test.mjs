@@ -21,11 +21,21 @@ async function writeFixtureFile(root, relativePath, content) {
 
 async function createFixture() {
 	const root = await mkdtemp(path.join(os.tmpdir(), 'tracekeeper-agent-ecosystem-'));
-	await writeFixtureFile(
-		root,
+	for (const relativePath of [
+		'README.md',
+		'README.zh-CN.md',
+		'PRIVACY.md',
 		'docs/features/AGENT_WORKFLOW.md',
-		await readFile(path.join(REPO_ROOT, 'docs/features/AGENT_WORKFLOW.md'), 'utf8'),
-	);
+		'docs/features/AGENT_CONNECTION.md',
+		'docs/architecture/SYSTEM_ARCHITECTURE.md',
+		'docs/architecture/TRUST_BOUNDARIES.md',
+	]) {
+		await writeFixtureFile(
+			root,
+			relativePath,
+			await readFile(path.join(REPO_ROOT, ...relativePath.split('/')), 'utf8'),
+		);
+	}
 	for (const relativePath of TRACEKEEPER_SKILL_SOURCE_FILES) {
 		await writeFixtureFile(
 			root,
@@ -34,7 +44,6 @@ async function createFixture() {
 		);
 	}
 	await writeFixtureFile(root, 'docs/features/INDEX.md', '[Agent workflow](AGENT_WORKFLOW.md)\n');
-	await writeFixtureFile(root, 'docs/architecture/SYSTEM_ARCHITECTURE.md', '[Agent workflow](../features/AGENT_WORKFLOW.md)\n');
 	await writeFixtureFile(root, 'docs/development/ENGINEERING_AND_RELEASE.md', '# Engineering\n');
 	await writeFixtureFile(root, `skills/tracekeeper/${TRACEKEEPER_SKILL_RELEASE_PATH}`, await readFile(path.join(REPO_ROOT, 'skills', 'tracekeeper', TRACEKEEPER_SKILL_RELEASE_PATH), 'utf8'));
 	for (const relativePath of [
@@ -115,6 +124,48 @@ test('rejects settings that restore resident onboarding or duplicate Agent capab
 		assert.match(result.errors.join('\n'), /resident onboarding checklist/);
 		assert.match(result.errors.join('\n'), /public-tool list/);
 		assert.match(result.errors.join('\n'), /capability presets/);
+	});
+});
+
+test('rejects contracts that restore per-client principals or capability profiles', async () => {
+	await withFixture(async (root) => {
+		const connectionPath = path.join(root, 'docs/features/AGENT_CONNECTION.md');
+		const connection = await readFile(connectionPath, 'utf8');
+		await writeFile(
+			connectionPath,
+			`${connection}\nEach managed client receives an independent credential principal.\n`,
+			'utf8',
+		);
+		const ingestionPath = path.join(root, 'skills/tracekeeper/references/ingestion-workflow.md');
+		const ingestion = await readFile(ingestionPath, 'utf8');
+		await writeFile(
+			ingestionPath,
+			`${ingestion}\nIf a capability is missing, report the required profile.\n`,
+			'utf8',
+		);
+		await writeTracekeeperSkillBundle(root);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+			assert.match(result.errors.join('\n'), /retired Agent trust\/bootstrap semantics/);
+	});
+});
+
+test('rejects contracts that restore direct Header bootstrap or omit OAuth PKCE', async () => {
+	await withFixture(async (root) => {
+		const readmePath = path.join(root, 'README.md');
+		const readme = await readFile(readmePath, 'utf8');
+		await writeFile(
+			readmePath,
+			`${readme}\nCopy its protected Header configuration into the client.\n`,
+			'utf8',
+		);
+		const connectionPath = path.join(root, 'docs/features/AGENT_CONNECTION.md');
+		const connection = await readFile(connectionPath, 'utf8');
+		await writeFile(connectionPath, connection.replace(/PKCE `S256`/g, 'custom exchange'), 'utf8');
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(result.errors.join('\n'), /retired Agent trust\/bootstrap semantics/);
+		assert.match(result.errors.join('\n'), /OAuth discovery and PKCE/);
 	});
 });
 

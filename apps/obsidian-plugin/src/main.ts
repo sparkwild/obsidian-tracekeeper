@@ -78,9 +78,10 @@ import {
 	shouldShowOnboardingEntryPrompt,
 } from './features/onboarding/onboarding-state';
 import {
-	buildClientConfigTexts,
+	buildGeneratedClientSetup,
 	buildClientProfiles,
-	type ClientConfigState,
+	type ClientPairingTicket,
+	type ClientPairingTicketStatus,
 	type ClientProfile,
 	type GeneratedClientConfig,
 } from './features/client-config/client-config';
@@ -1088,6 +1089,7 @@ export default class TracekeeperPlugin extends Plugin {
 		const runtimeOptions: StreamableHttpRuntimeOptionsWithGraphProfile = {
 			localTrust: true,
 			serviceToken: this.settings.runtimeAccessToken,
+			getSharedBearerToken: () => this.settings.runtimeAccessToken,
 			host: DEFAULT_MCP_HOST,
 			port: this.settings.mcpPort,
 			path: DEFAULT_MCP_PATH,
@@ -1649,6 +1651,41 @@ export default class TracekeeperPlugin extends Plugin {
 		};
 	}
 
+	issueAgentPairingTicket(clientId: string): ClientPairingTicket {
+		const runtime = this.mcpRuntimeLifecycle.getRuntime();
+		if (!(runtime instanceof StreamableHttpMcpRuntime)) {
+			throw new Error('Local OAuth pairing requires a running MCP Runtime.');
+		}
+		const ticket = runtime.issuePairingTicket(clientId);
+		return {
+			id: ticket.id,
+			code: ticket.code,
+			expectedClientId: ticket.expectedClientId,
+			issuedAt: ticket.issuedAt,
+			expiresAt: ticket.expiresAt,
+		};
+	}
+
+	getAgentPairingTicketStatus(id: string): ClientPairingTicketStatus | null {
+		const runtime = this.mcpRuntimeLifecycle.getRuntime();
+		if (!(runtime instanceof StreamableHttpMcpRuntime)) {
+			return null;
+		}
+		const status = runtime.getPairingTicketStatus(id);
+		if (!status) {
+			return null;
+		}
+		return {
+			id: status.id,
+			expectedClientId: status.expectedClientId,
+			state: status.state,
+			issuedAt: status.issuedAt,
+			expiresAt: status.expiresAt,
+			attemptsRemaining: status.attemptsRemaining,
+			authorizedAt: status.authorizedAt,
+		};
+	}
+
 	async loadGraphHealthSnapshot(): Promise<GraphHealthSnapshot> {
 		return this.graphHealthController.loadGraphHealthSnapshot();
 	}
@@ -1686,57 +1723,27 @@ export default class TracekeeperPlugin extends Plugin {
 
 	private buildClientConfigs(): GeneratedClientConfig[] {
 		return this.getClientProfiles().map((profile) => {
-			const status = this.readClientConfigStatus(profile);
-			const configTexts = buildClientConfigTexts(
-				profile,
-				this.getMcpConnectionUrl(),
-				this.settings.runtimeAccessToken
-			);
+			const setup = buildGeneratedClientSetup(profile, this.getMcpConnectionUrl());
 			return {
 				clientId: profile.id,
 				displayName: profile.displayName,
 				description: profile.description,
 				transport: profile.preferredTransport,
-				...configTexts,
+				completeConfigText: '',
+				redactedConfigText: '',
 				supportsAutoConfigure: profile.supportsAutoConfigure,
 				restartRequired: profile.restartRequired,
 				configFormat: profile.configFormat,
 				targetPath: profile.targetPath,
-				configState: status.state,
-				configStatusLabel: status.label,
-				configStatusDetail: status.detail,
+				configState: 'not_configured',
+				configStatusLabel: ui('由客户端管理', 'Managed by client'),
+				configStatusDetail: ui(
+					'使用客户端原生入口完成连接；Tracekeeper 不读取或改写客户端配置。',
+					'Complete setup through the client-native entry. Tracekeeper does not read or rewrite client configuration.'
+				),
+				...setup,
 			};
 		});
-	}
-
-	private readClientConfigStatus(profile: ClientProfile): { state: ClientConfigState; label: string; detail: string } {
-		if (!profile.supportsAutoConfigure || !profile.targetPath) {
-			return {
-				state: 'not_configured',
-				label: ui('未配置', 'Not configured'),
-				detail: ui('需要复制配置到对应 AI 工具。', 'Copy this config into the AI tool.'),
-			};
-		}
-
-		const adapter = this.clientConfigAdapter;
-		if (!adapter) {
-			return {
-				state: 'unavailable',
-				label: ui('未配置', 'Not configured'),
-				detail: ui('当前环境不支持自动读取配置文件。', 'This environment cannot read the config file automatically.'),
-			};
-		}
-
-		try {
-			return adapter.verifyInstalledConfig(profile, ui);
-		} catch (error) {
-			console.error('tracekeeper failed to read client config status', error);
-			return {
-				state: 'unavailable',
-				label: ui('未配置', 'Not configured'),
-				detail: ui('无法读取配置文件，请检查文件权限。', 'Cannot read the config file. Check file permissions.'),
-			};
-		}
 	}
 
 	private getClientProfiles(): ClientProfile[] {

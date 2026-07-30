@@ -17,7 +17,7 @@ Use this route only inside `tracked_task` when the active user explicitly asks t
 
 ## Policy and authority
 
-An explicit request to research and save is a workflow trigger, not a permission grant. `capture_source` still requires `vault.write`; `propose_memory` still requires `memory.propose`; MCP policy still controls the target, review queue, and optional project auto-write. If a capability is missing, report the required profile and leave that step undone.
+An explicit request to research and save is a workflow trigger, not a permission grant. `capture_source` still requires `vault.write`; `propose_memory` still requires `memory.propose`; MCP policy still controls the target, review queue, and optional project auto-write. If a capability is missing, report which capability was unavailable and leave that step undone.
 
 Global Memory and Wiki changes remain review-gated by default. A project candidate is auto-applied only when the user's existing policy permits it and the Runtime validates its Wiki bridge. Do not claim that a pending proposal is durable memory.
 
