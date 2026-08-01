@@ -97,8 +97,9 @@ npm run qa:external-loopback
 The command refuses a dirty worktree or a SHA that does not equal `HEAD`.
 
 `npm run architecture:check` enforces workspace dependency boundaries and
-guards against reintroducing plugin self-MCP execution. It parses JavaScript and
-TypeScript module syntax rather than matching import-like comments or strings.
+guards against reintroducing plugin self-MCP execution. It parses every plugin
+production source file, rejects MCP-client/network transport
+modules and browser client APIs, and ignores import-like comments or strings.
 The Agent ecosystem gate scans every public ecosystem Markdown owner for
 developer-specific paths and credential-like examples.
 
@@ -185,24 +186,34 @@ The release workflow is `.github/workflows/release.yml`. Its build job checks
 out the requested ref with full tag history, runs the full verification and
 package flow under read-only repository permission, generates artifact
 attestations, and uploads one immutable Actions artifact named by version and
-checked commit. A manual dispatch stages only by default. Publication runs in a
-separate write-enabled job only for a tag push or an explicit manual `publish`
-decision, and only after the strict version tag resolves to the checked commit.
+checked commit. Manual dispatch and tag push both stage only. Publication runs
+in a separate write-enabled job only for an explicit manual `publish` decision,
+after the strict version tag and the repository default-branch head both resolve
+to the checked commit and the rebuilt assets match all three qualified staged
+SHA-256 values. The write-enabled job resolves the tag and default branch again
+immediately before release creation, closing the build-to-publication mutation
+window. Published release assets are immutable; the workflow refuses to replace
+an existing version.
 
 Release requirements:
 
 1. Keep versions aligned across root and plugin manifests, workspace packages,
    `versions.json`, client metadata, and MCP server metadata.
 2. Run `npm run verify` from the intended release commit.
-3. Use a strict `x.y.z` version matching `manifest.json`; publication also
-   requires that exact tag to resolve to the checked commit.
+3. Use a strict `x.y.z` version matching `manifest.json`; tag staging and
+   publication require that exact tag and the default-branch head to resolve to
+   the checked commit.
 4. Use a non-publishing workflow dispatch to stage and download the exact
    attested `main.js`, `manifest.json`, and `styles.css` candidate for install
-   and smoke qualification.
-5. Publish only the already staged job output by tag push or explicit manual
-   `publish`; the publish job downloads the same immutable Actions artifact.
-6. Verify release assets and attestations before community submission; do not
-   substitute unattested local uploads.
+   and smoke qualification; retain their three SHA-256 values.
+5. After the strict tag exists, use a separate explicit manual `publish` with
+   those qualified SHA-256 values. The workflow rebuilds the same default-branch
+   commit, rejects any byte mismatch, and passes only that run's attested staged
+   artifact to the write-enabled job.
+6. Never overwrite or clobber an existing release. Corrective bytes require a
+   new version, qualification identity, and tag.
+7. Verify release assets, attestations, Community Plugins install/update, and
+   the displayed safety Scorecard; do not substitute unattested local uploads.
 
 Recheck the current official references at release time:
 

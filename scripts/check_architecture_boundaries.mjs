@@ -14,6 +14,26 @@ const WORKSPACES = [
 
 const SOURCE_EXTENSIONS = new Set(['.ts', '.mjs', '.js']);
 const IGNORED_DIRECTORIES = new Set(['dist', 'node_modules', 'plugin']);
+const FORBIDDEN_PLUGIN_TRANSPORT_IDENTIFIERS = new Set([
+	'callLocalMcpTool',
+	'uiMcpSession',
+	'McpClient',
+	'StreamableHTTPClientTransport',
+	'fetch',
+	'requestUrl',
+	'XMLHttpRequest',
+	'WebSocket',
+	'EventSource',
+]);
+const FORBIDDEN_PLUGIN_TRANSPORT_MODULES = [
+	/^@modelcontextprotocol\/sdk\/client(?:\/|$)/u,
+	/^(?:node:)?http$/u,
+	/^(?:node:)?https$/u,
+	/^(?:node:)?net$/u,
+	/^(?:node:)?tls$/u,
+	/^undici(?:\/|$)/u,
+	/^ws(?:\/|$)/u,
+];
 
 function collectSourceFiles(root, relativeDirectory, output) {
 	const absoluteDirectory = path.resolve(root, relativeDirectory);
@@ -65,21 +85,29 @@ function moduleSpecifiers(sourceFile) {
 	return specifiers;
 }
 
-function hasForbiddenPluginIdentifier(sourceFile) {
-	let found = false;
-	const visit = (node) => {
-		if (found) {
-			return;
+function forbiddenPluginTransportReasons(sourceFile) {
+	const reasons = new Set();
+	for (const specifier of moduleSpecifiers(sourceFile)) {
+		if (FORBIDDEN_PLUGIN_TRANSPORT_MODULES.some((pattern) => pattern.test(specifier))) {
+			reasons.add(`transport module ${specifier}`);
 		}
+	}
+	const visit = (node) => {
 		if (ts.isIdentifier(node)
-			&& (node.text === 'callLocalMcpTool' || node.text === 'uiMcpSession')) {
-			found = true;
-			return;
+			&& FORBIDDEN_PLUGIN_TRANSPORT_IDENTIFIERS.has(node.text)) {
+			reasons.add(`transport identifier ${node.text}`);
+		}
+		if (
+			ts.isElementAccessExpression(node) &&
+			ts.isStringLiteralLike(node.argumentExpression) &&
+			FORBIDDEN_PLUGIN_TRANSPORT_IDENTIFIERS.has(node.argumentExpression.text)
+		) {
+			reasons.add(`transport property ${node.argumentExpression.text}`);
 		}
 		ts.forEachChild(node, visit);
 	};
 	visit(sourceFile);
-	return found;
+	return [...reasons].sort();
 }
 
 function parseSource(relativeFile, content) {
@@ -114,13 +142,11 @@ export function checkArchitectureBoundaries(root = process.cwd()) {
 				errors.push(`${relativeFile}: relative cross-workspace import ${specifier} targets ${targetWorkspace}`);
 			}
 		}
-	}
-
-	const pluginMainPath = path.resolve(root, 'apps/obsidian-plugin/src/main.ts');
-	if (fs.existsSync(pluginMainPath)) {
-		const pluginMain = fs.readFileSync(pluginMainPath, 'utf8');
-		if (hasForbiddenPluginIdentifier(parseSource('apps/obsidian-plugin/src/main.ts', pluginMain))) {
-			errors.push('apps/obsidian-plugin/src/main.ts: plugin UI must not call its own MCP transport');
+		const normalizedRelativeFile = relativeFile.split(path.sep).join('/');
+		if (normalizedRelativeFile.startsWith('apps/obsidian-plugin/src/')) {
+			for (const reason of forbiddenPluginTransportReasons(sourceFile)) {
+				errors.push(`${relativeFile}: plugin UI must not call its own MCP transport (${reason})`);
+			}
 		}
 	}
 

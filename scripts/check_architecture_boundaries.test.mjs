@@ -48,12 +48,33 @@ test('rejects plugin self-MCP client symbols', () => {
 	}
 });
 
+test('rejects self-MCP transport moved outside plugin main', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'apps/obsidian-plugin/src/main.ts', 'export {}\n');
+		write(root, 'apps/obsidian-plugin/src/features/internal-client.ts', [
+			"import { Client as RenamedClient } from '@modelcontextprotocol/sdk/client/index.js';",
+			'const send = globalThis.fetch;',
+			'void RenamedClient;',
+			'void send;',
+			'',
+		].join('\n'));
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, false);
+		assert.ok(result.errors.some((error) => /transport module/.test(error)));
+		assert.ok(result.errors.some((error) => /transport identifier fetch/.test(error)));
+		assert.ok(result.errors.every((error) => /features\/internal-client\.ts/.test(error)));
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test('ignores import-like text and forbidden symbols inside comments and strings', () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
 	try {
 		write(root, 'apps/obsidian-plugin/src/main.ts', [
 			"// import '../../../packages/mcp-runtime/src/index';",
-			"const note = 'callLocalMcpTool uiMcpSession';",
+			"const note = 'callLocalMcpTool uiMcpSession fetch requestUrl';",
 			'',
 		].join('\n'));
 		write(root, 'packages/mcp-runtime/src/index.ts', 'export {};\n');

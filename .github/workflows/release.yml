@@ -19,6 +19,18 @@ on:
         required: false
         default: false
         type: boolean
+      expected_main_sha256:
+        description: Qualified staged main.js SHA-256. Required when publish is true.
+        required: false
+        type: string
+      expected_manifest_sha256:
+        description: Qualified staged manifest.json SHA-256. Required when publish is true.
+        required: false
+        type: string
+      expected_styles_sha256:
+        description: Qualified staged styles.css SHA-256. Required when publish is true.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -30,7 +42,6 @@ jobs:
       contents: read
       id-token: write
       attestations: write
-      artifact-metadata: write
     outputs:
       version: ${{ steps.semver.outputs.version }}
       sha: ${{ steps.checkout.outputs.sha }}
@@ -70,6 +81,19 @@ jobs:
             exit 1
           fi
 
+      - name: Verify candidate is the default-branch head
+        if: github.event_name == 'push' || inputs.publish
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CHECKED_SHA: ${{ steps.checkout.outputs.sha }}
+        run: |
+          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          DEFAULT_SHA=$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")
+          if [ "$DEFAULT_SHA" != "$CHECKED_SHA" ]; then
+            echo "Default branch $DEFAULT_BRANCH resolves to $DEFAULT_SHA, not checked commit $CHECKED_SHA."
+            exit 1
+          fi
+
       - name: Verify manifest version
         env:
           VERSION: ${{ steps.semver.outputs.version }}
@@ -95,6 +119,31 @@ jobs:
       - name: Check generated package artifacts
         run: git diff --exit-code -- apps/mcp-server/dist packages/core/dist packages/contracts/dist packages/mcp-runtime/dist
 
+      - name: Verify qualified asset hashes for publication
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          EXPECTED_MAIN_SHA256: ${{ inputs.expected_main_sha256 }}
+          EXPECTED_MANIFEST_SHA256: ${{ inputs.expected_manifest_sha256 }}
+          EXPECTED_STYLES_SHA256: ${{ inputs.expected_styles_sha256 }}
+        run: |
+          verify_asset() {
+            local expected="$1"
+            local asset="$2"
+            if ! [[ "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Expected SHA-256 for $asset must be 64 lowercase hexadecimal characters."
+              exit 1
+            fi
+            local actual
+            actual=$(sha256sum "$asset" | awk '{print $1}')
+            if [ "$actual" != "$expected" ]; then
+              echo "Qualified SHA-256 for $asset is $expected, but the rebuilt asset is $actual."
+              exit 1
+            fi
+          }
+          verify_asset "$EXPECTED_MAIN_SHA256" apps/obsidian-plugin/plugin/main.js
+          verify_asset "$EXPECTED_MANIFEST_SHA256" apps/obsidian-plugin/plugin/manifest.json
+          verify_asset "$EXPECTED_STYLES_SHA256" apps/obsidian-plugin/plugin/styles.css
+
       - name: Generate release asset attestations
         uses: actions/attest@v4
         with:
@@ -116,53 +165,66 @@ jobs:
 
   publish:
     needs: build
-    if: github.event_name == 'push' || inputs.publish
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
+      - name: Checkout publication identity
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.version }}
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Download staged candidate assets
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.build.outputs.artifact-name }}
           path: candidate
 
-      - name: Check existing release
-        id: existing
+      - name: Revalidate publication identity
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CHECKED_SHA: ${{ needs.build.outputs.sha }}
+        run: |
+          git fetch --force --no-tags origin \
+            "+refs/tags/$VERSION:refs/tags/$VERSION" \
+            "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          TAG_SHA=$(git rev-parse "refs/tags/$VERSION^{commit}")
+          DEFAULT_SHA=$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")
+          if [ "$TAG_SHA" != "$CHECKED_SHA" ]; then
+            echo "Version tag $VERSION moved to $TAG_SHA after the build; refusing publication of $CHECKED_SHA."
+            exit 1
+          fi
+          if [ "$DEFAULT_SHA" != "$CHECKED_SHA" ]; then
+            echo "Default branch $DEFAULT_BRANCH moved to $DEFAULT_SHA after the build; refusing publication of $CHECKED_SHA."
+            exit 1
+          fi
+
+      - name: Refuse existing release replacement
         env:
           VERSION: ${{ needs.build.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view "$VERSION" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Release $VERSION already exists; refusing to replace published assets."
+            exit 1
           fi
 
       - name: Create GitHub release
-        if: steps.existing.outputs.exists != 'true'
         env:
           VERSION: ${{ needs.build.outputs.version }}
           CHECKED_SHA: ${{ needs.build.outputs.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$VERSION" \
+            --verify-tag \
             --target "$CHECKED_SHA" \
             --title "$VERSION" \
             --notes "Release $VERSION" \
             candidate/main.js \
             candidate/manifest.json \
             candidate/styles.css
-
-      - name: Update existing GitHub release assets
-        if: steps.existing.outputs.exists == 'true'
-        env:
-          VERSION: ${{ needs.build.outputs.version }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "$VERSION" \
-            candidate/main.js \
-            candidate/manifest.json \
-            candidate/styles.css \
-            --clobber

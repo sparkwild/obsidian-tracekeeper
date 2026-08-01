@@ -63,7 +63,7 @@ function main() {
 		assert(allowedManifestKeys.includes(key), `Plugin manifest has invalid key ${key}.`);
 	}
 
-	assert(/^[a-z0-9-_]+$/.test(communityEntry.id), 'Plugin id must use lowercase letters, numbers, dashes, or underscores only.');
+	assert(/^[a-z-]+$/.test(communityEntry.id), 'Plugin id must use lowercase letters and dashes only.');
 	assert(!communityEntry.id.toLowerCase().includes('obsidian'), 'Plugin id must not include "obsidian".');
 	assert(!communityEntry.id.toLowerCase().endsWith('plugin'), 'Plugin id must not end with "plugin".');
 	assert(!communityEntry.name.toLowerCase().includes('obsidian'), 'Plugin name must not include "Obsidian".');
@@ -73,7 +73,7 @@ function main() {
 	assert(!communityEntry.description.toLowerCase().includes('this plugin'), 'Description should describe behavior directly, without "this plugin".');
 	assert(/[.?!)]$/.test(communityEntry.description), 'Description must end with punctuation.');
 	assert(communityEntry.description.length <= 250, 'Description must be 250 characters or fewer.');
-	assert(/^[0-9.]+$/.test(manifest.version), 'Version must contain only numbers and dots.');
+	assert(/^\d+\.\d+\.\d+$/.test(manifest.version), 'Version must use strict x.y.z SemVer.');
 	assert(versions[manifest.version] === manifest.minAppVersion, 'versions.json must map the current plugin version to minAppVersion.');
 	assert(manifest.authorUrl !== 'https://obsidian.md', 'authorUrl must not point to the Obsidian website.');
 	assert(!manifest.authorUrl?.toLowerCase().includes(`github.com/${REPOSITORY.toLowerCase()}`), 'authorUrl must not point to the plugin repository.');
@@ -85,17 +85,24 @@ function main() {
 	assert(pluginPackage.description === manifest.description, 'Plugin package description must match root manifest.');
 	assert(mcpHandler.includes(`MCP_SERVER_VERSION = '${manifest.version}'`), 'MCP server version constant must match root manifest.');
 	assert(pluginMain.includes('StreamableHttpMcpRuntime'), 'Plugin must compose the shared MCP runtime package.');
-	assert(releaseWorkflow.includes('workflow_dispatch:'), 'Release workflow must support manually rebuilding an existing community release.');
+	assert(releaseWorkflow.includes('workflow_dispatch:'), 'Release workflow must support manual candidate staging and publication.');
 	assert(releaseWorkflow.includes('publish:'), 'Release workflow must expose an explicit publish decision for manual runs.');
 	assert(releaseWorkflow.includes('id-token: write'), 'Release workflow must grant id-token: write for artifact attestations.');
 	assert(releaseWorkflow.includes('attestations: write'), 'Release workflow must grant attestations: write.');
-	assert(releaseWorkflow.includes('artifact-metadata: write'), 'Release workflow must grant artifact-metadata: write.');
+	assert(!releaseWorkflow.includes('artifact-metadata: write'), 'Binary release attestation must not receive unused artifact-metadata write permission.');
 	assert(releaseWorkflow.includes('actions/attest@'), 'Release workflow must generate GitHub artifact attestations.');
 	assert(releaseWorkflow.includes('fetch-depth: 0'), 'Release workflow must fetch the version tag before binding it to the checked commit.');
-	assert(releaseWorkflow.includes('refs/tags/$VERSION^{commit}'), 'Release workflow must resolve the exact version tag commit.');
+	assert(releaseWorkflow.split('refs/tags/$VERSION^{commit}').length - 1 >= 2, 'Build and publish jobs must resolve the exact version tag commit.');
 	assert(releaseWorkflow.includes('TAG_SHA') && releaseWorkflow.includes('CHECKED_SHA'), 'Release workflow must reject a version tag and checkout SHA mismatch.');
 	assert(releaseWorkflow.includes('actions/upload-artifact@'), 'Release workflow must stage exact candidate assets before publication.');
-	assert(releaseWorkflow.includes("github.event_name == 'push' || inputs.publish"), 'Release mutation steps must require a tag push or explicit manual publish decision.');
+	assert(releaseWorkflow.includes("publish:\n    needs: build\n    if: github.event_name == 'workflow_dispatch' && inputs.publish"), 'Release mutation must require an explicit manual publish decision.');
+	assert(releaseWorkflow.includes('expected_main_sha256') && releaseWorkflow.includes('expected_manifest_sha256') && releaseWorkflow.includes('expected_styles_sha256'), 'Publication must bind all three qualified staged asset hashes.');
+	assert(releaseWorkflow.includes('sha256sum') && releaseWorkflow.includes('Verify qualified asset hashes for publication'), 'Publication must verify rebuilt assets against qualified SHA-256 values.');
+	assert(releaseWorkflow.split('refs/remotes/origin/$DEFAULT_BRANCH').length - 1 >= 2 && releaseWorkflow.includes('DEFAULT_SHA') && releaseWorkflow.includes('CHECKED_SHA'), 'Build and publish jobs must require the checked commit to equal the default-branch head.');
+	assert(releaseWorkflow.includes('Revalidate publication identity') && releaseWorkflow.includes('moved to $TAG_SHA after the build') && releaseWorkflow.includes('moved to $DEFAULT_SHA after the build'), 'Publication must revalidate tag and default-branch identity immediately before release creation.');
+	assert(releaseWorkflow.includes('already exists; refusing to replace published assets'), 'Release workflow must refuse existing release replacement.');
+	assert(releaseWorkflow.includes('--verify-tag'), 'Release creation must require the existing strict version tag.');
+	assert(!releaseWorkflow.includes('--clobber'), 'Release workflow must never clobber existing release assets.');
 	assert(releaseWorkflow.includes('apps/obsidian-plugin/plugin/main.js'), 'Release workflow must upload the packaged main.js.');
 	assert(releaseWorkflow.includes('apps/obsidian-plugin/plugin/manifest.json'), 'Release workflow must upload the packaged manifest.json.');
 	assert(releaseWorkflow.includes('apps/obsidian-plugin/plugin/styles.css'), 'Release workflow must upload the packaged styles.css.');
