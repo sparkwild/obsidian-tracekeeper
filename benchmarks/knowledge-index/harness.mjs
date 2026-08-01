@@ -203,33 +203,77 @@ function nativeMetadata(root, file) {
 	};
 }
 
-function resolveNativeLink(root, linkPath, sourcePath) {
-	const normalized = linkPath.replace(/\\/gu, '/').replace(/^\/+/u, '');
-	const sourceDirectory = path.posix.dirname(sourcePath);
-	const withExtension = normalized.endsWith('.md') ? normalized : `${normalized}.md`;
-	const candidates = new Set([
-		normalized,
-		withExtension,
-		path.posix.join(sourceDirectory, normalized),
-		path.posix.join(sourceDirectory, withExtension),
-	]);
-	const files = markdownFiles(root);
-	for (const file of files) {
-		if (candidates.has(file.path)) {
-			return file;
+export function createMarkdownFileCatalog(root) {
+	const filesByPath = new Map();
+	const pathsByBasename = new Map();
+
+	const remove = (filePath) => {
+		const existing = filesByPath.get(filePath);
+		if (!existing) {
+			return;
 		}
+		filesByPath.delete(filePath);
+		const matchingPaths = pathsByBasename.get(existing.basename);
+		matchingPaths?.delete(filePath);
+		if (matchingPaths?.size === 0) {
+			pathsByBasename.delete(existing.basename);
+		}
+	};
+	const upsert = (file) => {
+		remove(file.path);
+		filesByPath.set(file.path, file);
+		const matchingPaths = pathsByBasename.get(file.basename) ?? new Set();
+		matchingPaths.add(file.path);
+		pathsByBasename.set(file.basename, matchingPaths);
+	};
+
+	for (const file of markdownFiles(root)) {
+		upsert(file);
 	}
-	const basename = path.posix.basename(normalized, path.posix.extname(normalized));
-	const basenameMatches = files.filter((file) => file.basename === basename);
-	return basenameMatches.length === 1 ? basenameMatches[0] : null;
+
+	return {
+		all: () => [...filesByPath.values()].sort((left, right) =>
+			left.path.localeCompare(right.path)
+		),
+		find: (filePath) => filesByPath.get(filePath) ?? null,
+		remove,
+		rename: (oldPath, file) => {
+			remove(oldPath);
+			upsert(file);
+		},
+		resolve: (linkPath, sourcePath) => {
+			const normalized = linkPath.replace(/\\/gu, '/').replace(/^\/+/u, '');
+			const sourceDirectory = path.posix.dirname(sourcePath);
+			const withExtension = normalized.endsWith('.md') ? normalized : `${normalized}.md`;
+			const candidates = new Set([
+				normalized,
+				withExtension,
+				path.posix.join(sourceDirectory, normalized),
+				path.posix.join(sourceDirectory, withExtension),
+			]);
+			for (const candidate of candidates) {
+				const file = filesByPath.get(candidate);
+				if (file) {
+					return file;
+				}
+			}
+			const basename = path.posix.basename(normalized, path.posix.extname(normalized));
+			const basenameMatches = pathsByBasename.get(basename);
+			if (basenameMatches?.size !== 1) {
+				return null;
+			}
+			const [matchingPath] = basenameMatches;
+			return filesByPath.get(matchingPath) ?? null;
+		},
+		upsert,
+	};
 }
 
-function fakeObsidianApp(root) {
+function fakeObsidianApp(root, fileCatalog) {
 	return {
 		vault: {
-			getMarkdownFiles: () => markdownFiles(root),
-			getAbstractFileByPath: (filePath) =>
-				markdownFiles(root).find((file) => file.path === filePath) ?? null,
+			getMarkdownFiles: () => fileCatalog.all(),
+			getAbstractFileByPath: (filePath) => fileCatalog.find(filePath),
 			cachedRead: async (file) =>
 				fsPromises.readFile(path.join(root, ...file.path.split('/')), 'utf8'),
 			read: async (file) =>
@@ -238,7 +282,7 @@ function fakeObsidianApp(root) {
 		metadataCache: {
 			getFileCache: (file) => nativeMetadata(root, file),
 			getFirstLinkpathDest: (linkPath, sourcePath) =>
-				resolveNativeLink(root, linkPath, sourcePath),
+				fileCatalog.resolve(linkPath, sourcePath),
 			resolvedLinks: {},
 			unresolvedLinks: {},
 			on: () => ({ id: 'benchmark-metadata-cache-listener' }),
@@ -290,7 +334,8 @@ async function waitForReady(adapter, vaultRoot, rebuildState) {
 
 async function createReadyAdapter(bundlePath, fixtureRoot) {
 	const Adapter = loadAdapter(bundlePath);
-	const adapter = Adapter.create(fakeObsidianApp(fixtureRoot), fixtureRoot);
+	const fileCatalog = createMarkdownFileCatalog(fixtureRoot);
+	const adapter = Adapter.create(fakeObsidianApp(fixtureRoot, fileCatalog), fixtureRoot);
 	const rebuildPromise = adapter.rebuild();
 	const rebuildState = { settled: false, error: null };
 	void rebuildPromise.then(
@@ -309,6 +354,7 @@ async function createReadyAdapter(bundlePath, fixtureRoot) {
 	]);
 	return {
 		adapter,
+		fileCatalog,
 		report,
 		readyScan,
 		runtimeFirstReadyNs: elapsedNs(runtimeStartedAt),
@@ -322,7 +368,7 @@ async function writeEventContent(filePath, content, modifiedAt) {
 	await fsPromises.utimes(filePath, time, time);
 }
 
-async function applyIncrementalEvent(adapter, fixtureRoot, event) {
+async function applyIncrementalEvent(adapter, fileCatalog, fixtureRoot, event) {
 	const beforeSnapshot = await adapter.knowledgeSnapshot();
 	const mutationStartedAt = nowNs();
 	let apply;
@@ -332,12 +378,14 @@ async function applyIncrementalEvent(adapter, fixtureRoot, event) {
 		const absolutePath = path.join(fixtureRoot, ...event.path.split('/'));
 		await writeEventContent(absolutePath, content, event.modified_at);
 		const file = abstractFile(fixtureRoot, event.path);
+		fileCatalog.upsert(file);
 		apply = () => event.kind === 'create'
 			? adapter.applyCreate(file)
 			: adapter.applyModify(file);
 	} else if (event.kind === 'delete') {
 		const file = abstractFile(fixtureRoot, event.path);
 		await fsPromises.unlink(path.join(fixtureRoot, ...event.path.split('/')));
+		fileCatalog.remove(event.path);
 		apply = () => adapter.applyDelete(file);
 	} else {
 		const sourcePath = path.join(fixtureRoot, ...event.path.split('/'));
@@ -345,6 +393,7 @@ async function applyIncrementalEvent(adapter, fixtureRoot, event) {
 		await fsPromises.mkdir(path.dirname(targetPath), { recursive: true });
 		await fsPromises.rename(sourcePath, targetPath);
 		const file = abstractFile(fixtureRoot, event.new_path);
+		fileCatalog.rename(event.path, file);
 		apply = () => adapter.applyRename(file, event.path);
 	}
 
@@ -369,10 +418,10 @@ async function applyIncrementalEvent(adapter, fixtureRoot, event) {
 	};
 }
 
-async function applyIncrementalEvents(adapter, fixtureRoot, eventScript) {
+async function applyIncrementalEvents(adapter, fileCatalog, fixtureRoot, eventScript) {
 	const results = [];
 	for (const event of eventScript.events) {
-		const result = await applyIncrementalEvent(adapter, fixtureRoot, event);
+		const result = await applyIncrementalEvent(adapter, fileCatalog, fixtureRoot, event);
 		results.push(result);
 		if (result.status !== 'passed') {
 			throw new Error(
@@ -492,6 +541,7 @@ export async function runSingleRepetition(options) {
 		const adapter = adapterPhase.result.adapter;
 		const incrementalEvents = await applyIncrementalEvents(
 			adapter,
+			adapterPhase.result.fileCatalog,
 			fixtureRoot,
 			fixture.incrementalEvents
 		);

@@ -25,6 +25,12 @@ const defaultReportRoot = path.join(
 	repositoryRoot,
 	'.specs/runtime-modularization/audits/index-benchmark-reports'
 );
+const WORKER_TIMEOUT_MS_BY_TIER = Object.freeze({
+	tiny: 10 * 60 * 1_000,
+	'1k': 10 * 60 * 1_000,
+	'5k': 15 * 60 * 1_000,
+	'20k': 30 * 60 * 1_000,
+});
 
 function parsePositiveInt(value, label) {
 	const parsed = Number.parseInt(value, 10);
@@ -196,14 +202,19 @@ async function executeWorker(options, input) {
 		cwd: repositoryRoot,
 		encoding: 'utf8',
 		stdio: ['ignore', 'pipe', 'pipe'],
-		timeout: 10 * 60 * 1_000,
+		timeout: WORKER_TIMEOUT_MS_BY_TIER[options.tier],
 	});
 	let payload;
 	try {
 		payload = JSON.parse(await fs.readFile(input.resultPath, 'utf8'));
 	} catch {
+		const diagnostic = [
+			result.error instanceof Error ? result.error.message : '',
+			String(result.stderr ?? '').trim(),
+			result.signal ? `signal ${result.signal}` : '',
+		].filter(Boolean).join('; ').slice(0, 300);
 		throw new Error(
-			`Benchmark worker did not produce a result: ${String(result.stderr ?? '').trim().slice(0, 300)}`
+			`Benchmark worker did not produce a result${diagnostic ? `: ${diagnostic}` : '.'}`
 		);
 	}
 	return {

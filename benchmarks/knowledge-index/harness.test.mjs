@@ -14,6 +14,7 @@ import {
 } from './config.mjs';
 import {
 	buildAdapterBundle,
+	createMarkdownFileCatalog,
 	runSingleRepetition,
 } from './harness.mjs';
 import {
@@ -38,6 +39,21 @@ const core = require('@tracekeeper/core');
 
 function tempDirectory(prefix) {
 	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function markdownFile(root, relativePath) {
+	const absolutePath = path.join(root, ...relativePath.split('/'));
+	const extension = path.extname(relativePath).toLowerCase();
+	const stat = fs.statSync(absolutePath);
+	return {
+		path: relativePath,
+		extension: extension.slice(1),
+		basename: path.basename(relativePath, extension),
+		stat: {
+			size: stat.size,
+			mtime: stat.mtimeMs,
+		},
+	};
 }
 
 test('largest-remainder allocation is exact and declaration-order deterministic', () => {
@@ -108,6 +124,37 @@ test('tiny fixture generation is deterministic, complete, and cleans its tempora
 	}
 	assert.equal(fs.existsSync(firstRoot), false);
 	assert.equal(fs.existsSync(secondRoot), false);
+});
+
+test('benchmark file catalog preserves native link resolution while tracking mutations', async () => {
+	const root = tempDirectory('tracekeeper-index-catalog-');
+	try {
+		for (const relativePath of ['alpha/Note.md', 'beta/Note.md', 'local/Target.md']) {
+			const absolutePath = path.join(root, ...relativePath.split('/'));
+			await fsPromises.mkdir(path.dirname(absolutePath), { recursive: true });
+			await fsPromises.writeFile(absolutePath, `# ${relativePath}\n`, 'utf8');
+		}
+		const catalog = createMarkdownFileCatalog(root);
+		assert.equal(catalog.resolve('alpha/Note', 'Source.md')?.path, 'alpha/Note.md');
+		assert.equal(catalog.resolve('Target', 'local/Source.md')?.path, 'local/Target.md');
+		assert.equal(catalog.resolve('Note', 'Source.md'), null);
+
+		catalog.remove('beta/Note.md');
+		assert.equal(catalog.resolve('Note', 'Source.md')?.path, 'alpha/Note.md');
+
+		const renamedPath = path.join(root, 'archive/Renamed.md');
+		await fsPromises.mkdir(path.dirname(renamedPath), { recursive: true });
+		await fsPromises.rename(path.join(root, 'alpha/Note.md'), renamedPath);
+		catalog.rename('alpha/Note.md', markdownFile(root, 'archive/Renamed.md'));
+		assert.equal(catalog.resolve('Note', 'Source.md'), null);
+		assert.equal(catalog.resolve('Renamed', 'Source.md')?.path, 'archive/Renamed.md');
+		assert.deepEqual(
+			catalog.all().map((file) => file.path),
+			['archive/Renamed.md', 'local/Target.md']
+		);
+	} finally {
+		await fsPromises.rm(root, { recursive: true, force: true });
+	}
 });
 
 test('content digest ignores volatile state while state digest preserves generation and last event', async () => {
