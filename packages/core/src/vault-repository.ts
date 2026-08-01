@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -150,6 +151,13 @@ export class NodeFsVaultRepository implements VaultRepository {
 
 	private computeVersionFromStats(stats: import('node:fs').Stats): VaultFileVersion {
 		return computeFileVersion(stats.size, stats.mtime.toISOString());
+	}
+
+	private sameFileIdentity(
+		left: import('node:fs').Stats,
+		right: import('node:fs').Stats
+	): boolean {
+		return left.dev === right.dev && left.ino === right.ino;
 	}
 
 	private async readStats(targetPath: string): Promise<import('node:fs').Stats | null> {
@@ -313,19 +321,56 @@ export class NodeFsVaultRepository implements VaultRepository {
 
 	async readText(relativePath: VaultPath): Promise<VaultTextFile | null> {
 		const absolutePath = this.resolveRelativePath(relativePath);
-		const state = await this.readStats(absolutePath);
-		if (state === null) {
-			return null;
+		await this.assertNoSymlinkSegments(absolutePath);
+		const readFlags = process.platform === 'win32'
+			? fsConstants.O_RDONLY
+			: fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
+		let handle: import('node:fs/promises').FileHandle;
+		try {
+			handle = await fs.open(absolutePath, readFlags);
+		} catch (error: unknown) {
+			if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+				return null;
+			}
+			if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ELOOP') {
+				throw new VaultPathError(
+					`Vault path points to a symbolic link: ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`
+				);
+			}
+			throw error;
 		}
 
-		const content = await fs.readFile(absolutePath, 'utf8');
-		return {
-			path: this.normalizeRelativePath(relativePath),
-			content,
-			version: this.computeVersionFromStats(state),
-			size: state.size,
-			modifiedAt: state.mtime.toISOString(),
-		};
+		try {
+			const openedState = await handle.stat();
+			if (!openedState.isFile()) {
+				throw new VaultPathError(
+					`Vault path is not a file: ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`
+				);
+			}
+			const content = await handle.readFile({ encoding: 'utf8' });
+			const completedState = await handle.stat();
+			const pathState = await this.readStats(absolutePath);
+			if (
+				pathState === null
+				|| !this.sameFileIdentity(openedState, completedState)
+				|| !this.sameFileIdentity(completedState, pathState)
+				|| this.computeVersionFromStats(openedState) !== this.computeVersionFromStats(completedState)
+				|| this.computeVersionFromStats(completedState) !== this.computeVersionFromStats(pathState)
+			) {
+				throw new OperationConflictError(
+					`Vault file changed during read: ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`
+				);
+			}
+			return {
+				path: this.normalizeRelativePath(relativePath),
+				content,
+				version: this.computeVersionFromStats(completedState),
+				size: completedState.size,
+				modifiedAt: completedState.mtime.toISOString(),
+			};
+		} finally {
+			await handle.close();
+		}
 	}
 
 	async createText(relativePath: VaultPath, content: string): Promise<VaultWriteReceipt> {

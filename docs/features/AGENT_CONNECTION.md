@@ -162,10 +162,13 @@ or migrate action. Local modifications, newer versions, and directory conflicts
 are preserved and do not expose an unsafe overwrite or downgrade action.
 
 Managed Skill installation always uses preview, explicit confirmation,
-current-file revalidation, backup, and conflict detection. Client connection
-configuration is owned by the client's official entry. The complete filesystem
-and credential controls are defined by the [knowledge runtime](../architecture/KNOWLEDGE_RUNTIME.md)
-and [trust boundaries](../architecture/TRUST_BOUNDARIES.md).
+current-file revalidation, physical-path symlink rejection, backup, and conflict
+detection. A committed bundle followed by a receipt or audit failure is shown as
+partial, never as an unchanged target. File verification proves bundle identity,
+not client loading or Agent adoption. Client connection configuration is owned
+by the client's official entry. The complete filesystem and credential controls
+are defined by the [knowledge runtime](../architecture/KNOWLEDGE_RUNTIME.md) and
+[trust boundaries](../architecture/TRUST_BOUNDARIES.md).
 
 Removing one client through its official entry removes only that configuration.
 Advanced global credential reset rotates the installation-level Bearer,

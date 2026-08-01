@@ -8,6 +8,8 @@
 	"types": "dist/index.d.ts",
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
+		"test:loopback": "npm run build && node --test ./scripts/local-oauth.test.mjs",
+		"test:non-listener": "npm run build && node --test ./scripts/apply-approved-writeback.test.mjs ./scripts/local-trust-boundary.test.mjs ./scripts/project-identity.test.mjs ./scripts/project-memory.test.mjs ./scripts/recall-application.test.mjs ./scripts/recall-audit-redaction.test.mjs ./scripts/record-lifecycle.test.mjs ./scripts/source-request.test.mjs",
 		"test": "npm run build && node --test ./scripts/*.test.mjs",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},

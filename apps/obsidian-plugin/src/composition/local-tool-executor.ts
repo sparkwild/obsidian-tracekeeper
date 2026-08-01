@@ -1,4 +1,7 @@
-import { callTool } from '@tracekeeper/mcp-runtime';
+import {
+	callTool,
+	type ProposalTransitionPort,
+} from '@tracekeeper/mcp-runtime';
 import { randomUUID } from 'node:crypto';
 import type { ScanResult, VaultRepository } from '@tracekeeper/core';
 
@@ -9,6 +12,7 @@ export interface LocalToolExecutorContext {
 	defaultVaultRoot: string;
 	vaultConfigDir: string;
 	vaultRepository: VaultRepository;
+	proposalTransitionPort: ProposalTransitionPort;
 	knowledgeSnapshotProvider: (requestedVaultRoot: string) => ScanResult | null;
 	graphProfile: string;
 	memoryRules: {
@@ -70,6 +74,7 @@ export class LocalToolExecutor {
 			defaultVaultRoot: context.defaultVaultRoot,
 			vaultConfigDir: context.vaultConfigDir,
 			vaultRepository: context.vaultRepository,
+			proposalTransitionPort: context.proposalTransitionPort,
 			knowledgeSnapshotProvider: context.knowledgeSnapshotProvider,
 			graphProfile: context.graphProfile,
 			memoryRules: context.memoryRules,

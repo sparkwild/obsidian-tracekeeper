@@ -102,11 +102,13 @@ class McpJsonRpcHandler {
         this.defaultVaultRoot = options.defaultVaultRoot;
         this.vaultConfigDir = options.vaultConfigDir;
         this.vaultRepository = options.vaultRepository;
+        this.proposalTransitionPort = options.proposalTransitionPort;
         this.knowledgeSnapshotProvider = options.knowledgeSnapshotProvider;
         this.graphProfile = options.graphProfile;
         this.memoryRules = options.memoryRules;
         this.contentLanguage = options.contentLanguage;
         this.contentLanguageSource = options.contentLanguageSource;
+        this.writebackConfirmationSecret = options.writebackConfirmationSecret;
         this.runtimeVersion = options.runtimeVersion || exports.MCP_SERVER_VERSION;
         this.transport = options.transport || exports.STREAMABLE_HTTP_TRANSPORT;
     }
@@ -128,7 +130,7 @@ class McpJsonRpcHandler {
             return null;
         }
         try {
-            const result = await this.dispatch(method, params, state);
+            const result = await this.dispatch(method, params, state, requestId);
             if (isNotification || method.startsWith('notifications/')) {
                 return null;
             }
@@ -150,7 +152,7 @@ class McpJsonRpcHandler {
     readRequestId(id) {
         return typeof id === 'string' || typeof id === 'number' || id === null ? id : undefined;
     }
-    async dispatch(method, params, state) {
+    async dispatch(method, params, state, requestId) {
         switch (method) {
             case 'initialize':
                 state.protocolVersion = this.negotiateProtocolVersion(params.protocolVersion);
@@ -172,7 +174,7 @@ class McpJsonRpcHandler {
             case 'tools/list':
                 return { tools: (0, tools_1.toolDefinitions)(state.credentialCapabilities) };
             case 'tools/call':
-                return this.handleToolsCall(params, state);
+                return this.handleToolsCall(params, state, requestId);
             case 'resources/list':
                 return {
                     resources: RESOURCES.map((resource) => ({
@@ -306,29 +308,32 @@ class McpJsonRpcHandler {
         return Boolean(state.credentialCapabilities
             && (state.credentialCapabilities.includes('*') || state.credentialCapabilities.includes(capability)));
     }
-    async handleToolsCall(params, state) {
+    async handleToolsCall(params, state, requestId) {
         const name = params.name;
         const argumentsValue = params.arguments ?? {};
         if (typeof name !== 'string' || name.trim() === '') {
-            await (0, tools_1.recordRejectedToolCallAuditEvent)(this.buildToolInvocationContext(state), 'tool_call_invalid_name');
+            await (0, tools_1.recordRejectedToolCallAuditEvent)(this.buildToolInvocationContext(state, requestId), 'tool_call_invalid_name');
             throw new protocol_1.RpcError({ code: -32602, message: '`name` is required for tools/call.' });
         }
         if (!(0, protocol_1.isRecord)(argumentsValue)) {
-            await (0, tools_1.recordRejectedToolCallAuditEvent)(this.buildToolInvocationContext(state), 'tool_call_invalid_arguments');
+            await (0, tools_1.recordRejectedToolCallAuditEvent)(this.buildToolInvocationContext(state, requestId), 'tool_call_invalid_arguments');
             throw new protocol_1.RpcError({ code: -32602, message: '`arguments` must be an object.' });
         }
-        return await (0, tools_1.callTool)(name, argumentsValue, this.buildToolInvocationContext(state));
+        return await (0, tools_1.callTool)(name, argumentsValue, this.buildToolInvocationContext(state, requestId));
     }
-    buildToolInvocationContext(state) {
+    buildToolInvocationContext(state, requestId) {
         return {
+            requestId: requestId == null ? undefined : String(requestId),
             defaultVaultRoot: this.defaultVaultRoot,
             vaultConfigDir: this.vaultConfigDir,
             vaultRepository: this.vaultRepository,
+            proposalTransitionPort: this.proposalTransitionPort,
             knowledgeSnapshotProvider: this.knowledgeSnapshotProvider,
             graphProfile: this.graphProfile,
             memoryRules: this.memoryRules,
             contentLanguage: this.contentLanguage,
             contentLanguageSource: this.contentLanguageSource,
+            writebackConfirmationSecret: this.writebackConfirmationSecret,
             principalId: state.principalId,
             credentialCapabilities: state.credentialCapabilities,
             agentId: state.agentId,
@@ -566,42 +571,35 @@ async function readReviewQueueResource(vaultRoot, context) {
         : lines.join('\n'));
 }
 async function readAgentActivityResource(vaultRoot, context) {
-    const auditLog = await readAuditRecentRaw(vaultRoot, context);
-    if (!auditLog) {
+    const sections = await (0, tools_1.readMergedAuditSections)(vaultRoot, context);
+    if (sections.length === 0) {
         return '## Agent Activity\nNo activity entries are available.';
     }
-    const lines = auditLog
-        .split('\n')
-        .filter((line) => line.trim().length > 0)
-        .slice(-MAX_REVIEW_QUEUE_LINES)
-        .join('\n');
-    return boundResourceText(`# Agent Activity\n${lines}`);
+    const rendered = sections
+        .slice(0, MAX_REVIEW_QUEUE_LINES)
+        .map((section) => [
+        `## ${section.heading}`,
+        `source_path: ${section.source_path}`,
+        `source_kind: ${section.source_kind}`,
+        ...(section.audit_event_id ? [`audit_event_id: ${section.audit_event_id}`] : []),
+        ...section.body,
+    ].join('\n'));
+    return boundResourceText(['# Agent Activity', ...rendered].join('\n\n'));
 }
 async function readAuditRecentResource(vaultRoot, context) {
-    const auditLog = await readAuditRecentRaw(vaultRoot, context);
-    if (!auditLog) {
-        return '# Recent Audit\nNo sections are available.';
-    }
-    const sections = parseAuditSections(auditLog).slice(-MAX_REVIEW_QUEUE_LINES);
+    const sections = (await (0, tools_1.readMergedAuditSections)(vaultRoot, context))
+        .slice(0, MAX_REVIEW_QUEUE_LINES);
     if (sections.length === 0) {
         return '# Recent Audit\nNo sections are available.';
     }
-    const rendered = sections.map((section) => `## ${section.heading}\n${section.body.join('\n')}`);
+    const rendered = sections.map((section) => [
+        `## ${section.heading}`,
+        `source_path: ${section.source_path}`,
+        `source_kind: ${section.source_kind}`,
+        ...(section.audit_event_id ? [`audit_event_id: ${section.audit_event_id}`] : []),
+        ...section.body,
+    ].join('\n'));
     return boundResourceText(['# Recent Audit', ...rendered].join('\n\n'));
-}
-async function readAuditRecentRaw(vaultRoot, context) {
-    try {
-        return await readResourceText(core_1.TRACEKEEPER_AUDIT_LOG_PATH, vaultRoot, context);
-    }
-    catch (error) {
-        if (error instanceof safety_1.ToolInputError) {
-            return '';
-        }
-        if (error instanceof Error && error.message.startsWith('Resource not found')) {
-            return '';
-        }
-        throw error;
-    }
 }
 function readResourceText(relativePath, vaultRoot, context) {
     const normalized = (0, safety_1.normalizeNotePath)(relativePath, { vaultConfigDir: context.vaultConfigDir });
@@ -636,41 +634,4 @@ function boundResourceText(text) {
 }
 function toBoundText(text, maxLength) {
     return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
-}
-function parseAuditSections(content) {
-    const lines = content.split('\n');
-    const sections = [];
-    let currentHeading = '';
-    let currentBody = [];
-    let currentLine = 0;
-    let started = false;
-    for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index] || '';
-        const match = line.match(/^#{2,6}\s+(.+)$/);
-        if (!match) {
-            if (started) {
-                currentBody.push(line);
-            }
-            continue;
-        }
-        if (started) {
-            sections.push({
-                heading: currentHeading,
-                body: currentBody,
-                atLine: currentLine,
-            });
-        }
-        started = true;
-        currentHeading = match[1]?.trim() || 'section';
-        currentBody = [];
-        currentLine = index + 1;
-    }
-    if (started) {
-        sections.push({
-            heading: currentHeading,
-            body: currentBody,
-            atLine: currentLine,
-        });
-    }
-    return sections;
 }

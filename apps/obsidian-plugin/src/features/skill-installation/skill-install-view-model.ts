@@ -51,8 +51,8 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			return {
 				label: localize('Skill 已安装', 'Skill installed'),
 				detail: localize(
-					'这个 Agent 已能主动召回相关记忆，并在任务完成时整理值得长期保留的结论。',
-					'This agent can proactively recall relevant memory and organize conclusions worth keeping when work is complete.'
+					'Skill 文件已验证。是否被 Agent 实际采用，仍需观察同一会话中的 start → recall → finish；若客户端未加载再重启。',
+					'Skill files are verified. Actual Agent adoption still requires an observed start → recall → finish sequence in one session; restart only if the client did not load it.'
 				),
 				...versions,
 				tone: 'success',
@@ -63,8 +63,8 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			return {
 				label: localize('Skill 未安装', 'Skill not installed'),
 				detail: localize(
-					'安装后，这个 Agent 会主动召回相关记忆，并在任务完成时整理值得长期保留的结论，减少重复说明和跨会话上下文丢失。',
-					'After installation, this agent will proactively recall relevant memory and organize conclusions worth keeping when work is complete, reducing repeated context and cross-session context loss.'
+					'安装会把记忆召回和任务收尾指导放到客户端约定位置，但不证明 Agent 已加载或采用；安装后仍需真实使用验证。',
+					'Installation places memory-recall and task-closeout guidance in the client location, but does not prove that the Agent loaded or adopted it; real-use verification is still required.'
 				),
 				...versions,
 				tone: 'warning',
@@ -75,8 +75,8 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			return {
 				label: localize('Skill 可更新', 'Skill update available'),
 				detail: localize(
-					'更新后，这个 Agent 会使用最新的记忆召回和任务收尾规则。',
-					'After updating, this agent will use the latest memory-recall and task-closeout guidance.'
+					'更新会替换为最新的记忆召回和任务收尾指导；是否被 Agent 采用仍需真实使用验证。',
+					'Updating installs the latest memory-recall and task-closeout guidance; actual Agent adoption still requires real-use verification.'
 				),
 				...versions,
 				tone: 'warning',
@@ -136,8 +136,8 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			return {
 				label: localize('Skill 需手动设置', 'Skill requires manual setup'),
 				detail: localize(
-					'保存后，这个 Agent 会主动召回相关记忆，并在任务完成时整理值得长期保留的结论；需要按客户端方式手动保存。',
-					'After saving it, this agent will proactively recall relevant memory and organize conclusions worth keeping when work is complete. Save it manually using the client workflow.'
+					'请按客户端方式手动保存 Skill；保存只提供工作流指导，不证明 Agent 已加载或采用，仍需真实使用验证。',
+					'Save the Skill manually using the client workflow. Saving only provides workflow guidance and does not prove Agent loading or adoption; real-use verification is still required.'
 				),
 				...versions,
 				tone: 'warning',

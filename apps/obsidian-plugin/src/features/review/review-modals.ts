@@ -1,9 +1,22 @@
 import { App, Modal, Notice } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
-import type { ApprovedWritebackPreview } from './review-queue-controller';
+import type {
+	ApprovedWritebackPreview,
+	ArchiveMemoryProposalPreview,
+	ArchiveMemoryProposalReceipt,
+} from './review-queue-controller';
 import type { MemoryProposalRecord } from './review-view-model';
 import type { ReviewProposalContext, ReviewTargetCandidate } from './review-context-model';
 import { ui } from '../../ui/localization';
+
+const isProposalTransitionConflict = (error: unknown): boolean =>
+	error instanceof Error && error.name === 'ProposalTransitionConflictError';
+
+const configureLiveStatus = (element: HTMLElement): void => {
+	element.setAttr('role', 'status');
+	element.setAttr('aria-live', 'polite');
+	element.setAttr('aria-atomic', 'true');
+};
 
 export class ReviewQueueRequestRevisionModal extends Modal {
 	private comment = '';
@@ -11,6 +24,7 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 	private submitting = false;
 	private submitButton: HTMLButtonElement | null = null;
 	private statusText: HTMLElement | null = null;
+	private commentInput: HTMLTextAreaElement | null = null;
 
 	constructor(
 		app: App,
@@ -59,6 +73,7 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 		});
 		textarea.value = this.comment;
 		textarea.rows = 8;
+		this.commentInput = textarea;
 		textarea.addEventListener('input', () => {
 			this.comment = textarea.value;
 			this.updateSubmitState();
@@ -68,6 +83,7 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 			text: ui('请先填写修改说明。', 'Please enter a revision note.'),
 			cls: 'tracekeeper-view__description',
 		});
+		configureLiveStatus(this.statusText);
 
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
@@ -140,8 +156,24 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 		} catch (error) {
 			console.error('tracekeeper failed to request revision', error);
 			this.submitting = false;
-			new Notice(ui('退回修改失败。', 'Failed to return proposal for revision.'));
+			const conflict = isProposalTransitionConflict(error);
+			const failureMessage = conflict
+				? ui(
+					'提案已发生变化；修改说明仍保留。请重新加载后再审核。',
+					'The proposal changed; your revision note is preserved. Reload before reviewing again.'
+				)
+				: ui('退回修改失败。', 'Failed to return proposal for revision.');
+			new Notice(failureMessage);
+			if (conflict) {
+				try {
+					await this.onUpdated();
+				} catch (refreshError) {
+					console.error('tracekeeper failed to refresh conflicted review proposal', refreshError);
+				}
+			}
 			this.updateSubmitState();
+			this.statusText?.setText(failureMessage);
+			this.commentInput?.focus();
 		}
 	}
 }
@@ -152,6 +184,8 @@ export class ReviewQueueEditProposalModal extends Modal {
 	private saving = false;
 	private saveButton: HTMLButtonElement | null = null;
 	private targetContextEl: HTMLElement | null = null;
+	private writebackInput: HTMLTextAreaElement | null = null;
+	private statusText: HTMLElement | null = null;
 
 	constructor(
 		app: App,
@@ -193,9 +227,15 @@ export class ReviewQueueEditProposalModal extends Modal {
 		});
 		textarea.value = this.writebackContent;
 		textarea.rows = 12;
+		this.writebackInput = textarea;
 		textarea.addEventListener('input', () => {
 			this.writebackContent = textarea.value;
 		});
+
+		this.statusText = contentEl.createEl('p', {
+			cls: 'tracekeeper-view__description',
+		});
+		configureLiveStatus(this.statusText);
 
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		actions.createEl('button', { text: ui('取消', 'Cancel') }).addEventListener('click', () => this.close());
@@ -310,6 +350,7 @@ export class ReviewQueueEditProposalModal extends Modal {
 		this.saving = true;
 		this.saveButton.disabled = true;
 		this.saveButton.setText(ui('保存中...', 'Saving...'));
+		this.statusText?.setText(ui('正在保存提案草稿。', 'Saving proposal draft.'));
 		try {
 			await this.plugin.updateMemoryProposalDraft(this.proposal, {
 				targetNote: this.targetNote,
@@ -323,7 +364,23 @@ export class ReviewQueueEditProposalModal extends Modal {
 			this.saving = false;
 			this.saveButton.disabled = false;
 			this.saveButton.setText(ui('保存提案草稿', 'Save proposal draft'));
-			new Notice(ui('保存提案草稿失败。', 'Failed to save proposal draft.'));
+			const conflict = isProposalTransitionConflict(error);
+			const failureMessage = conflict
+				? ui(
+					'提案已发生变化；你的草稿仍保留。请重新加载后再审核。',
+					'The proposal changed; your draft is preserved. Reload before reviewing again.'
+				)
+				: ui('保存提案草稿失败。', 'Failed to save proposal draft.');
+			new Notice(failureMessage);
+			if (conflict) {
+				try {
+					await this.onUpdated();
+				} catch (refreshError) {
+					console.error('tracekeeper failed to refresh conflicted review proposal', refreshError);
+				}
+			}
+			this.statusText?.setText(failureMessage);
+			this.writebackInput?.focus();
 		}
 	}
 }
@@ -344,8 +401,13 @@ export class ReviewQueueConfirmModal extends Modal {
 		this.titleEl.setText(this.title);
 		this.contentEl.empty();
 		this.contentEl.createEl('p', { text: this.message });
+		const status = this.contentEl.createEl('p', {
+			cls: 'tracekeeper-view__description',
+		});
+		configureLiveStatus(status);
 		const actions = this.contentEl.createDiv({ cls: 'modal-button-container' });
-		actions.createEl('button', { text: ui('取消', 'Cancel') }).addEventListener('click', () => this.close());
+		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
+		cancel.addEventListener('click', () => this.close());
 		const confirm = actions.createEl('button', { text: this.confirmLabel, cls: 'mod-warning' });
 		confirm.addEventListener('click', () => {
 			void (async () => {
@@ -356,10 +418,174 @@ export class ReviewQueueConfirmModal extends Modal {
 				} catch (error) {
 					console.error('tracekeeper failed to confirm review queue action', error);
 					confirm.disabled = false;
-					new Notice(ui('操作失败。', 'Action failed.'));
+					const failureMessage = ui('操作失败，请重试。', 'Action failed. Try again.');
+					status.setText(failureMessage);
+					confirm.focus();
+					new Notice(failureMessage);
 				}
 			})();
 		});
+		cancel.focus();
+	}
+}
+
+export class ReviewQueueArchiveModal extends Modal {
+	private preview: ArchiveMemoryProposalPreview | null = null;
+	private committing = false;
+
+	constructor(
+		app: App,
+		private plugin: TracekeeperPlugin,
+		private proposals: MemoryProposalRecord[],
+		private onArchived: (receipt: ArchiveMemoryProposalReceipt) => Promise<void> | void
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		void super.onOpen();
+		this.titleEl.setText(ui('预览并归档处理记录', 'Preview and archive processed records'));
+		void this.renderPreview();
+	}
+
+	private async renderPreview(): Promise<void> {
+		this.preview = null;
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('tracekeeper-review-archive-modal');
+		const status = contentEl.createEl('p', {
+			text: ui(
+				'正在读取最新记录并生成归档预览…',
+				'Reading current records and preparing the archive preview…'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+		configureLiveStatus(status);
+		try {
+			const preview = await this.plugin.previewArchiveMemoryProposals(this.proposals);
+			this.renderReady(preview);
+		} catch (error) {
+			console.error('tracekeeper failed to prepare archive preview', error);
+			status.setText(
+				ui(
+					'无法生成归档预览。记录可能已变化、标识不唯一或目标已存在；请关闭后刷新审核视图再试。',
+					'Could not prepare the archive preview. A record may have changed, an identity may be ambiguous, or a destination may already exist. Close this dialog, refresh review, and try again.'
+				)
+			);
+			const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+			const close = actions.createEl('button', { text: ui('关闭', 'Close') });
+			close.addEventListener('click', () => this.close());
+			close.focus();
+		}
+	}
+
+	renderReady(preview: ArchiveMemoryProposalPreview): void {
+		this.preview = preview;
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('tracekeeper-review-archive-modal');
+		contentEl.createEl('p', {
+			text: ui(
+				'仅移动下列当前记录到 Tracekeeper 归档目录。确认时会重新校验记录、目标和受管引用；任何漂移都会在移动前拒绝。',
+				'Only the current records listed below will move to the Tracekeeper archive folder. Confirmation revalidates the records, destinations, and managed references; any drift is rejected before a new move.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+		const list = contentEl.createEl('ul', {
+			cls: 'tracekeeper-review-archive-modal__items',
+		});
+		for (const item of preview.items) {
+			const row = list.createEl('li');
+			row.createEl('code', {
+				text: `${item.sourcePath} → ${item.destinationPath}`,
+			});
+			row.createEl('small', {
+				text: ui(
+					`提案 ${item.proposalId}；${item.managedReferences.length} 个受管引用`,
+					`Proposal ${item.proposalId}; ${item.managedReferences.length} managed reference(s)`
+				),
+			});
+			if (item.managedReferences.length > 0) {
+				const references = row.createEl('ul');
+				for (const path of item.managedReferences) {
+					references.createEl('li').createEl('code', { text: path });
+				}
+			}
+		}
+		if (preview.conflicts.length > 0) {
+			const conflicts = contentEl.createDiv({
+				cls: 'tracekeeper-review-archive-modal__conflicts',
+			});
+			conflicts.createEl('strong', {
+				text: ui('必须先解决的冲突', 'Conflicts to resolve first'),
+			});
+			const conflictList = conflicts.createEl('ul');
+			for (const conflict of preview.conflicts) {
+				conflictList.createEl('li', {
+					text: `${conflict.kind}: ${conflict.path}`,
+				});
+			}
+		}
+		const status = contentEl.createEl('p', {
+			text: preview.conflicts.length > 0
+				? ui(
+					'存在冲突，归档未启用。关闭对话框并解决冲突后重新生成预览。',
+					'Archive is disabled while conflicts remain. Close this dialog, resolve them, and prepare a new preview.'
+				)
+				: ui(
+					'预览已就绪。归档会保留稳定提案标识、历史关联和审计记录。',
+					'Preview ready. Archive preserves stable proposal identity, history associations, and audit records.'
+				),
+			cls: 'tracekeeper-view__description',
+		});
+		configureLiveStatus(status);
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
+		cancel.addEventListener('click', () => this.close());
+		const confirm = actions.createEl('button', {
+			text: ui('确认归档', 'Archive items'),
+			cls: 'mod-warning',
+		});
+		confirm.disabled = preview.conflicts.length > 0;
+		confirm.addEventListener('click', () => {
+			void this.commit(preview, confirm, status);
+		});
+		cancel.focus();
+	}
+
+	private async commit(
+		preview: ArchiveMemoryProposalPreview,
+		confirm: HTMLButtonElement,
+		status: HTMLElement
+	): Promise<void> {
+		if (this.committing || this.preview !== preview) {
+			return;
+		}
+		this.committing = true;
+		confirm.disabled = true;
+		status.setText(ui('正在重新校验并归档…', 'Revalidating and archiving…'));
+		try {
+			const receipt = await this.plugin.commitArchiveMemoryProposals(preview);
+			await this.onArchived(receipt);
+			this.close();
+		} catch (error) {
+			console.error('tracekeeper failed to archive reviewed records', error);
+			this.committing = false;
+			confirm.disabled = preview.conflicts.length > 0;
+			status.setText(
+				ui(
+					'归档未完成，且不会覆盖目标。如果记录发生变化，请关闭后刷新并生成新预览；如果移动后发生中断，可在本对话框中重试同一确认以安全续接。',
+					'Archive did not complete and no destination is overwritten. If records changed, close, refresh, and prepare a new preview. If an interruption happened after a move, retry this same confirmation to resume safely.'
+				)
+			);
+			confirm.focus();
+			new Notice(
+				ui(
+					'归档未完成，请查看恢复说明。',
+					'Archive did not complete. Review the recovery guidance.'
+				)
+			);
+		}
 	}
 }
 
@@ -382,20 +608,24 @@ export class ApprovedWritebackApplyModal extends Modal {
 	private async renderPreview(): Promise<void> {
 		const { contentEl } = this;
 		contentEl.empty();
-		contentEl.createEl('p', {
+		const loading = contentEl.createEl('p', {
 			text: ui('正在生成写回预览...', 'Generating writeback preview...'),
 		});
+		configureLiveStatus(loading);
 		try {
 			const preview = await this.plugin.previewApprovedWriteback(this.proposal);
 			this.renderReady(preview);
 		} catch (error) {
 			console.error('tracekeeper failed to preview approved writeback', error);
 			contentEl.empty();
-			contentEl.createEl('p', {
+			const failure = contentEl.createEl('p', {
 				text: ui('生成写入预览失败，请检查该提案是否仍处于审核通过状态。', 'Failed to generate writeback preview. Check whether this proposal is still approved.'),
 			});
+			configureLiveStatus(failure);
 			const actions = contentEl.createDiv({ cls: 'modal-button-container' });
-			actions.createEl('button', { text: ui('关闭', 'Close') }).addEventListener('click', () => this.close());
+			const close = actions.createEl('button', { text: ui('关闭', 'Close') });
+			close.addEventListener('click', () => this.close());
+			close.focus();
 		}
 	}
 
@@ -412,6 +642,11 @@ export class ApprovedWritebackApplyModal extends Modal {
 		const previewBox = contentEl.createEl('pre');
 		previewBox.setText(preview.writeback_preview || '');
 
+		const status = contentEl.createEl('p', {
+			cls: 'tracekeeper-view__description',
+		});
+		configureLiveStatus(status);
+
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel'), cls: 'mod-warning' });
 		cancel.addEventListener('click', () => this.close());
@@ -420,19 +655,27 @@ export class ApprovedWritebackApplyModal extends Modal {
 			void (async () => {
 				confirm.disabled = true;
 				confirm.setText(ui('写回中...', 'Applying...'));
+				status.setText(ui('正在写入目标笔记。', 'Applying change to the target note.'));
 				try {
-					await this.plugin.applyApprovedWriteback(this.proposal);
+					await this.plugin.applyApprovedWriteback(this.proposal, preview);
 					new Notice(ui('已写入目标笔记。', 'Change applied to the target note.'));
 					this.onApplied();
 					this.close();
 				} catch (error) {
 					console.error('tracekeeper failed to apply approved writeback', error);
-					new Notice(ui('写入失败。', 'Failed to apply change.'));
+					const failureMessage = ui(
+						'写入失败。若操作曾中断可重试；若内容已变化，请关闭并重新生成预览。',
+						'Apply failed. Retry after an interruption, or close and generate a fresh preview if content changed.'
+					);
+					new Notice(failureMessage);
 					confirm.disabled = false;
 					confirm.setText(ui('确认写入', 'Confirm apply'));
+					status.setText(failureMessage);
+					confirm.focus();
 				}
 			})();
 		});
+		cancel.focus();
 	}
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 
 import {
 	canonicalJson,
@@ -25,6 +26,7 @@ import {
 	summarizeNanoseconds,
 } from './normalize.mjs';
 import {
+	collectProvenance,
 	createReportWriter,
 	sanitizeReportValue,
 	summarizeSamples,
@@ -193,6 +195,50 @@ test('report writer appends failed samples and removes forbidden absolute paths'
 		assert.equal(samples.trim().split('\n').length, 2);
 	} finally {
 		await fsPromises.rm(reportRoot, { recursive: true, force: true });
+	}
+});
+
+test('benchmark provenance binds untracked paths and bytes', async () => {
+	const repositoryRoot = tempDirectory('tracekeeper-index-provenance-');
+	try {
+		for (const relativePath of [
+			'package.json',
+			'packages/core/package.json',
+			'packages/mcp-runtime/package.json',
+			'apps/obsidian-plugin/package.json',
+		]) {
+			const absolutePath = path.join(repositoryRoot, relativePath);
+			await fsPromises.mkdir(path.dirname(absolutePath), { recursive: true });
+			await fsPromises.writeFile(absolutePath, '{"version":"0.3.0"}\n', 'utf8');
+		}
+		execFileSync('git', ['init', '-q'], { cwd: repositoryRoot });
+		execFileSync('git', ['add', '.'], { cwd: repositoryRoot });
+		execFileSync('git', ['-c', 'user.name=Tracekeeper Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture'], { cwd: repositoryRoot });
+
+		await fsPromises.writeFile(path.join(repositoryRoot, 'untracked.txt'), 'first\n', 'utf8');
+		const first = await collectProvenance({
+			repositoryRoot,
+			generatorSha256: 'generator',
+			harnessSha256: 'harness',
+			fixtureManifestSha256: 'fixture',
+			config: { tier: 'tiny' },
+		});
+		await fsPromises.writeFile(path.join(repositoryRoot, 'untracked.txt'), 'second\n', 'utf8');
+		const second = await collectProvenance({
+			repositoryRoot,
+			generatorSha256: 'generator',
+			harnessSha256: 'harness',
+			fixtureManifestSha256: 'fixture',
+			config: { tier: 'tiny' },
+		});
+
+		assert.equal(first.status, 'diagnostic');
+		assert.equal(first.git.clean, false);
+		assert.equal(first.git.untracked_file_count, 1);
+		assert.match(first.git.working_tree_sha256, /^[a-f0-9]{64}$/);
+		assert.notEqual(first.git.working_tree_sha256, second.git.working_tree_sha256);
+	} finally {
+		await fsPromises.rm(repositoryRoot, { recursive: true, force: true });
 	}
 });
 

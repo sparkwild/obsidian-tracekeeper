@@ -34,6 +34,7 @@ import {
 	TRACEKEEPER_CONTEXT_PACKS_DIR,
 	TRACEKEEPER_CONTROL_DIR,
 	TRACEKEEPER_MEMORY_POLICY_PATH,
+	TRACEKEEPER_OPERATIONS_DIR,
 	TRACEKEEPER_PERMISSIONS_PATH,
 	TRACEKEEPER_REVIEW_QUEUE_DIR,
 	TRACEKEEPER_SESSIONS_DIR,
@@ -55,6 +56,10 @@ import {
 import { ObsidianKnowledgeIndexAdapter } from './knowledge-index-adapter';
 import { ObsidianVaultRepository } from './adapters/obsidian-vault-repository';
 import {
+	ensureObsidianVaultFolderPath,
+	withObsidianVaultPathLock,
+} from './adapters/obsidian-vault-path-lock';
+import {
 	DEFAULT_ONBOARDING_SETTINGS,
 	OnboardingSettingsState,
 	findOnboardingConnectionEvidence,
@@ -62,7 +67,6 @@ import {
 	findOnboardingTrackedWorkflowEvidence,
 	getNextOnboardingStep,
 	markAgentRestartDone,
-	markClientConfigured,
 	markConnectionVerified,
 	markFirstRecallDone,
 	markMemoryPolicyConfirmed,
@@ -85,12 +89,6 @@ import {
 	type ClientProfile,
 	type GeneratedClientConfig,
 } from './features/client-config/client-config';
-import {
-	ClientConfigAdapter,
-	ClientConfigPlanConflictError,
-	type ClientConfigChangeAction,
-	type ClientConfigChangePlan,
-} from './adapters/client-config-adapter';
 import {
 	ClientSkillAdapter,
 	ClientSkillPlanConflictError,
@@ -167,6 +165,8 @@ import {
 } from './features/review/review-queue-model';
 import {
 	RUNTIME_LOG_PAGE_SIZE,
+	runtimeLogTrashBehaviorDescription,
+	type RuntimeLogCleanupPreview,
 	type RuntimeLogCleanupResult,
 	type RuntimeLogCleanupScope,
 	type RuntimeLogFilter,
@@ -191,8 +191,10 @@ import { TracekeeperPermissionPolicyView } from './features/permissions/permissi
 import { TracekeeperSettingTab } from './features/settings/tracekeeper-setting-tab';
 import {
 	LegacyMigrationController,
+	type LegacyCleanupPreview,
 	type LegacyCleanupResult,
 	type LegacyMigrationResult,
+	type LegacyStructurePlan,
 	type MemoryInitializationPlan,
 	type StructureState,
 	type StructureOrganizerSnapshot,
@@ -220,9 +222,19 @@ import {
 	trimText,
 } from './features/shared/markdown-record-parser';
 import { ActivityRecordRepository } from './features/activity/activity-record-repository';
+import { ObsidianAuditShardRepository } from './features/activity/native-audit-repository';
 import { GraphHealthController } from './features/graph/graph-health-controller';
 import type { GraphHealthSnapshot } from './features/graph/graph-health-model';
-import { ReviewQueueController, type ApprovedWritebackPreview } from './features/review/review-queue-controller';
+import {
+	ReviewQueueController,
+	ARCHIVE_RECEIPT_MAX_LENGTH,
+	ARCHIVE_TARGET_CLAIM_MAX_LENGTH,
+	type ApprovedWritebackPreview,
+	type ArchiveMemoryProposalPreview,
+	type ArchiveMemoryProposalReceipt,
+	type ArchiveMemoryProposalTargetClaim,
+} from './features/review/review-queue-controller';
+import { ObsidianProposalTransitionAdapter } from './features/review/proposal-transition-adapter';
 import type { ReviewKnowledgeSnapshot } from './features/review/review-context-model';
 import {
 	KNOWLEDGE_RELATIONSHIP_READ_LIMIT,
@@ -252,6 +264,8 @@ const CONTROL_PATHS = {
 	auditLog: TRACEKEEPER_AUDIT_LOG_PATH,
 	auditDir: TRACEKEEPER_AUDIT_DIR,
 };
+const ARCHIVE_TARGET_CLAIMS_DIR =
+	`${TRACEKEEPER_OPERATIONS_DIR}/archive-target-claims`;
 
 
 const vaultParentFolder = (path: string): string => path.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
@@ -390,6 +404,7 @@ export interface RuntimeViewStatus {
 interface DesktopNodeApi {
 	fs: {
 		existsSync(path: string): boolean;
+		lstatSync(path: string): { isSymbolicLink(): boolean };
 		readFileSync(path: string, encoding: 'utf8'): string;
 		writeFileSync(path: string, content: string, encoding: 'utf8'): void;
 		mkdirSync(path: string, options: { recursive: boolean }): void;
@@ -471,13 +486,14 @@ export default class TracekeeperPlugin extends Plugin {
 	private localToolExecutor!: LocalToolExecutor;
 	private vaultRepository!: ObsidianVaultRepository;
 	private knowledgeIndex: ObsidianKnowledgeIndexAdapter | null = null;
-	private clientConfigAdapter: ClientConfigAdapter | null = null;
 	private clientSkillAdapter: ClientSkillAdapter | null = null;
 	private legacyMigrationController!: LegacyMigrationController;
 	private activityDataController!: ActivityDataController;
 	private activityRecordRepository!: ActivityRecordRepository;
+	private auditShardRepository!: ObsidianAuditShardRepository;
 	private graphHealthController!: GraphHealthController;
 	private reviewQueueController!: ReviewQueueController;
+	private proposalTransitionAdapter!: ObsidianProposalTransitionAdapter;
 	private autoRefreshIntervalId: number | null = null;
 	private autoRefreshDebounceId: number | null = null;
 	private autoRefreshInFlight = false;
@@ -500,13 +516,25 @@ export default class TracekeeperPlugin extends Plugin {
 
 	async onload() {
 		this.settings = this.normalizeSettings(await this.loadData());
+		this.auditShardRepository = new ObsidianAuditShardRepository(this.app, {
+			ensureFolderExists: (path) => this.ensureFolderExists(path),
+		});
 		this.legacyMigrationController = new LegacyMigrationController(this.app, {
 			initializeMemoryStructure: (plan) => this.initializeMemoryStructure(plan),
 			ensureFolderExists: (path) => this.ensureFolderExists(path),
 			ensureFileDoesNotExist: (path, content) => this.ensureFileDoesNotExist(path, content),
 			normalizeVaultPath: (path) => this.normalizeVaultPath(path),
 			appendToAuditLog: (entry) => this.appendToAuditLog(entry),
+			appendOperationAuditEvent: async (operationId, entry) => {
+				await this.auditShardRepository.appendRawEvents(entry, { operationId });
+			},
 			refreshGovernanceViews: () => this.refreshGovernanceViews(),
+			loadKnowledgeSnapshot: async () => {
+				if (!this.knowledgeIndex) {
+					throw new Error('Knowledge index is not ready for legacy migration.');
+				}
+				return this.knowledgeIndex.knowledgeSnapshot();
+			},
 		});
 		this.activityRecordRepository = new ActivityRecordRepository(this.app);
 		this.graphHealthController = new GraphHealthController({
@@ -515,14 +543,32 @@ export default class TracekeeperPlugin extends Plugin {
 			getVaultRoot: () => this.getVaultRoot(),
 			getGraphProfile: () => this.settings.graphProfile,
 		});
-		this.reviewQueueController = new ReviewQueueController(this.app, this.activityRecordRepository, {
-			executeLocalTool: (name, args) => this.executeLocalTool(name, args),
-			refreshGovernanceViews: () => this.refreshGovernanceViews(),
-			appendToAuditLog: (entry) => this.appendToAuditLog(entry),
-			ensureFolderExists: (path) => this.ensureFolderExists(path),
-			normalizeVaultPath: (path) => this.normalizeVaultPath(path),
-			loadReviewKnowledgeSnapshot: () => this.loadReviewKnowledgeSnapshot(),
-		});
+		this.proposalTransitionAdapter = new ObsidianProposalTransitionAdapter(this.app);
+		this.reviewQueueController = new ReviewQueueController(
+			this.app,
+			this.activityRecordRepository,
+			{
+				executeLocalTool: (name, args) => this.executeLocalTool(name, args),
+				refreshGovernanceViews: () => this.refreshGovernanceViews(),
+				appendToAuditLog: (entry) => this.appendToAuditLog(entry),
+				ensureFolderExists: (path) => this.ensureFolderExists(path),
+				normalizeVaultPath: (path) => this.normalizeVaultPath(path),
+				loadReviewKnowledgeSnapshot: () => this.loadReviewKnowledgeSnapshot(),
+				waitForNativePath: (sourcePath, targetPath) =>
+					this.waitForNativePath(sourcePath, targetPath),
+				readArchiveReceipt: (operationId) =>
+					this.readArchiveReceipt(operationId),
+				writeArchiveReceipt: (receipt, expectedBindingHash) =>
+					this.writeArchiveReceipt(receipt, expectedBindingHash),
+				readArchiveTargetClaim: (targetHash) =>
+					this.readArchiveTargetClaim(targetHash),
+				writeArchiveTargetClaim: (claim, expectedBindingHash) =>
+					this.writeArchiveTargetClaim(claim, expectedBindingHash),
+				appendArchiveAuditEvent: (operationId, entry) =>
+					this.appendArchiveAuditEvent(operationId, entry),
+			},
+			this.proposalTransitionAdapter
+		);
 		this.activityDataController = new ActivityDataController(this.app, {
 			readRecentAgentTasks: (limit) => this.activityRecordRepository.readRecentAgentTasks(limit),
 			readRecentContextPacks: (limit) => this.activityRecordRepository.readRecentContextPacks(limit),
@@ -542,6 +588,9 @@ export default class TracekeeperPlugin extends Plugin {
 			snippetFromText: (text, fallback) => snippetFromText(text, fallback),
 			trimText: (value, maxLength) => trimText(value, maxLength),
 			buildAuditLogHeader: () => this.buildAuditLogHeader(),
+			ensureFolderExists: (path) => this.ensureFolderExists(path),
+			getConfiguredTrashDescription: () =>
+				this.getConfiguredTrashDescription(),
 			formatAgentDisplayName: (clientName, agentId) => this.formatAgentDisplayName(clientName, agentId),
 			formatToolDisplayName: (toolName) => this.formatToolDisplayName(toolName),
 			formatResultLabel: (status) => this.formatResultLabel(status),
@@ -549,14 +598,6 @@ export default class TracekeeperPlugin extends Plugin {
 		});
 		await this.saveSettings();
 		const desktopApi = this.getDesktopNodeApi();
-		this.clientConfigAdapter = desktopApi
-			? new ClientConfigAdapter({
-				fs: desktopApi.fs,
-				path: desktopApi.path,
-				getConnectionUrl: () => this.getMcpConnectionUrl(),
-				getAccessToken: () => this.settings.runtimeAccessToken,
-			})
-			: null;
 		this.clientSkillAdapter = desktopApi
 			? new ClientSkillAdapter({
 				fs: desktopApi.fs,
@@ -564,10 +605,11 @@ export default class TracekeeperPlugin extends Plugin {
 				bundle: TRACEKEEPER_SKILL_BUNDLE,
 			})
 			: null;
-		this.vaultRepository = new ObsidianVaultRepository(this.app.vault);
+		this.vaultRepository = new ObsidianVaultRepository(
+			this.app.vault,
+			this.app.fileManager
+		);
 		this.knowledgeIndex = await ObsidianKnowledgeIndexAdapter.create(this.app, this.getVaultRoot());
-		this.registerAutoRefreshEvents();
-		void this.rebuildKnowledgeIndex(false);
 		await this.startMcpRuntime();
 		this.localToolExecutor = new LocalToolExecutor({
 			getContext: () => this.buildLocalToolExecutionContext(),
@@ -710,13 +752,14 @@ export default class TracekeeperPlugin extends Plugin {
 		this.addSettingTab(new TracekeeperSettingTab(this.app, this));
 		this.restartAutoRefresh();
 		this.app.workspace.onLayoutReady(() => {
+			this.registerAutoRefreshEvents();
+			void this.rebuildKnowledgeIndex(false);
 			this.openOnboardingEntryIfNeeded();
 		});
 	}
 
 	onunload(): void {
 		this.stopAutoRefresh();
-		this.clientConfigAdapter = null;
 		this.clientSkillAdapter = null;
 		void this.closeMcpRuntime();
 	}
@@ -916,6 +959,14 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private registerAutoRefreshEvents(): void {
+		this.registerEvent(this.app.metadataCache.on('changed', (file, data, cache) => {
+			void this.updateKnowledgeIndex(() => this.knowledgeIndex?.applyModify(file, data, cache));
+			this.scheduleAutoRefreshForFile(file);
+		}));
+		this.registerEvent(this.app.metadataCache.on('resolve', (file) => {
+			void this.updateKnowledgeIndex(() => this.knowledgeIndex?.applyModify(file));
+			this.scheduleAutoRefreshForFile(file);
+		}));
 		this.registerEvent(this.app.vault.on('create', (file) => {
 			void this.updateKnowledgeIndex(() => this.knowledgeIndex?.applyCreate(file));
 			this.scheduleAutoRefreshForFile(file);
@@ -1098,6 +1149,7 @@ export default class TracekeeperPlugin extends Plugin {
 			defaultVaultRoot: vaultRoot,
 			vaultConfigDir: this.app.vault.configDir,
 			vaultRepository: this.vaultRepository,
+			proposalTransitionPort: this.proposalTransitionAdapter,
 			knowledgeSnapshotProvider: (requestedVaultRoot) => this.knowledgeIndex?.scanSnapshot(requestedVaultRoot) ?? null,
 			contentLanguage: noteContentLanguage.language,
 			contentLanguageSource: noteContentLanguage.source,
@@ -1179,9 +1231,14 @@ export default class TracekeeperPlugin extends Plugin {
 		}).open();
 	}
 
-	async buildStructureOrganizerSnapshot(migrationId = this.legacyMigrationController.createStructureMigrationId()): Promise<StructureOrganizerSnapshot> {
+	async buildStructureOrganizerSnapshot(migrationId?: string): Promise<StructureOrganizerSnapshot> {
+		const resolvedMigrationId = migrationId
+			?? await this.legacyMigrationController.findRecoverableMigrationId()
+			?? this.legacyMigrationController.createStructureMigrationId();
 		const basePlan = this.buildInitializationPlan();
-		const legacyPlan = await this.legacyMigrationController.buildLegacyStructurePlan(migrationId);
+		const legacyPlan = await this.legacyMigrationController.buildLegacyStructurePlan(
+			resolvedMigrationId
+		);
 		const hasMissingBase = basePlan.foldersToCreate.length > 0 || basePlan.filesToCreate.length > 0;
 		const state = legacyPlan.legacyRoots.length > 0
 			? 'legacy_detected'
@@ -1322,20 +1379,11 @@ export default class TracekeeperPlugin extends Plugin {
 
 	private async ensureFolderExists(folderPath: string): Promise<void> {
 		const normalized = this.normalizeVaultPath(folderPath);
-		if (!normalized) return;
-
-		let current = '';
-		for (const segment of normalized.split('/').filter(Boolean)) {
-			current = current ? `${current}/${segment}` : segment;
-			const existing = this.app.vault.getAbstractFileByPath(current);
-			if (!existing) {
-				await this.app.vault.createFolder(current);
-				continue;
-			}
-			if (!(existing instanceof TFolder)) {
-				throw new Error(`Cannot create folder: ${current} already exists as a file.`);
-			}
-		}
+		await ensureObsidianVaultFolderPath(
+			this.app.vault,
+			normalized,
+			(path) => new Error(`Cannot create folder: ${path} already exists as a file.`)
+		);
 	}
 
 	private async ensureFileDoesNotExist(path: string, content: string): Promise<void> {
@@ -1349,8 +1397,209 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.app.vault.create(this.normalizeVaultPath(path), content);
 	}
 
-	private buildAuditLogPath(): string {
-		return this.normalizeVaultPath(CONTROL_PATHS.auditLog);
+	private archiveReceiptPath(operationId: string): string {
+		if (
+			operationId.length > 160
+			|| !/^archive-[A-Za-z0-9_-]+$/.test(operationId)
+		) {
+			throw new Error('Archive operation id is invalid.');
+		}
+		return this.normalizeVaultPath(
+			`${TRACEKEEPER_OPERATIONS_DIR}/${operationId}.json`
+		);
+	}
+
+	private async readArchiveReceipt(operationId: string): Promise<unknown | null> {
+		const path = this.archiveReceiptPath(operationId);
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!file) {
+			return null;
+		}
+		if (!(file instanceof TFile)) {
+			throw new Error(`Archive receipt path is not a file: ${path}.`);
+		}
+		const content = await this.app.vault.read(file);
+		try {
+			return JSON.parse(content) as unknown;
+		} catch {
+			throw new Error(`Archive receipt is invalid: ${path}.`);
+		}
+	}
+
+	private async writeArchiveReceipt(
+		receipt: ArchiveMemoryProposalReceipt,
+		expectedBindingHash: string | null
+	): Promise<void> {
+		const path = this.archiveReceiptPath(receipt.operationId);
+		const content = `${JSON.stringify(receipt, null, 2)}\n`;
+		if (content.length > ARCHIVE_RECEIPT_MAX_LENGTH) {
+			throw new Error('Archive receipt exceeds the bounded record size.');
+		}
+		await this.ensureFolderExists(TRACEKEEPER_OPERATIONS_DIR);
+		await withObsidianVaultPathLock(this.app.vault, path, async () => {
+			let existing = this.app.vault.getAbstractFileByPath(path);
+			if (!existing) {
+				if (expectedBindingHash !== null) {
+					throw new Error(`Archive receipt disappeared before update: ${path}.`);
+				}
+				try {
+					await this.app.vault.create(path, content);
+					return;
+				} catch (error: unknown) {
+					existing = this.app.vault.getAbstractFileByPath(path);
+					if (!(existing instanceof TFile)) {
+						throw error;
+					}
+					const racedContent = await this.app.vault.read(existing);
+					if (racedContent.trim() === content.trim()) {
+						return;
+					}
+					throw new Error(
+						`Archive receipt creation lost a concurrent race: ${path}.`
+					);
+				}
+			}
+			if (!(existing instanceof TFile)) {
+				throw new Error(`Archive receipt path is not a file: ${path}.`);
+			}
+			await this.app.vault.process(existing, (current) => {
+				if (current.trim() === content.trim()) {
+					return current;
+				}
+				if (expectedBindingHash === null) {
+					throw new Error(
+						`Archive receipt already exists with different content: ${path}.`
+					);
+				}
+				let parsed: unknown;
+				try {
+					parsed = JSON.parse(current) as unknown;
+				} catch {
+					throw new Error(`Archive receipt changed outside the operation: ${path}.`);
+				}
+				if (
+					!parsed
+					|| typeof parsed !== 'object'
+					|| Array.isArray(parsed)
+					|| (parsed as Record<string, unknown>).operationId
+						!== receipt.operationId
+					|| (parsed as Record<string, unknown>).bindingHash
+						!== expectedBindingHash
+				) {
+					throw new Error(`Archive receipt changed outside the operation: ${path}.`);
+				}
+				return content;
+			});
+		});
+	}
+
+	private archiveTargetClaimPath(targetHash: string): string {
+		if (!/^[a-f0-9]{64}$/.test(targetHash)) {
+			throw new Error('Archive target hash is invalid.');
+		}
+		return this.normalizeVaultPath(
+			`${ARCHIVE_TARGET_CLAIMS_DIR}/${targetHash}.json`
+		);
+	}
+
+	private async readArchiveTargetClaim(targetHash: string): Promise<unknown | null> {
+		const path = this.archiveTargetClaimPath(targetHash);
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!file) {
+			return null;
+		}
+		if (!(file instanceof TFile)) {
+			throw new Error(`Archive target claim path is not a file: ${path}.`);
+		}
+		const content = await this.app.vault.read(file);
+		try {
+			return JSON.parse(content) as unknown;
+		} catch {
+			throw new Error(`Archive target claim is invalid: ${path}.`);
+		}
+	}
+
+	private async writeArchiveTargetClaim(
+		claim: ArchiveMemoryProposalTargetClaim,
+		expectedBindingHash: string | null
+	): Promise<void> {
+		const path = this.archiveTargetClaimPath(claim.targetHash);
+		const content = `${JSON.stringify(claim, null, 2)}\n`;
+		if (content.length > ARCHIVE_TARGET_CLAIM_MAX_LENGTH) {
+			throw new Error('Archive target claim exceeds the bounded record size.');
+		}
+		await this.ensureFolderExists(ARCHIVE_TARGET_CLAIMS_DIR);
+		await withObsidianVaultPathLock(this.app.vault, path, async () => {
+			let existing = this.app.vault.getAbstractFileByPath(path);
+			if (!existing) {
+				if (expectedBindingHash !== null) {
+					throw new Error(`Archive target claim disappeared before update: ${path}.`);
+				}
+				try {
+					await this.app.vault.create(path, content);
+					return;
+				} catch (error: unknown) {
+					existing = this.app.vault.getAbstractFileByPath(path);
+					if (!(existing instanceof TFile)) {
+						throw error;
+					}
+					const racedContent = await this.app.vault.read(existing);
+					if (racedContent.trim() === content.trim()) {
+						return;
+					}
+					throw new Error(
+						`Archive target claim creation lost a concurrent race: ${path}.`
+					);
+				}
+			}
+			if (!(existing instanceof TFile)) {
+				throw new Error(`Archive target claim path is not a file: ${path}.`);
+			}
+			await this.app.vault.process(existing, (current) => {
+				if (current.trim() === content.trim()) {
+					return current;
+				}
+				if (expectedBindingHash === null) {
+					throw new Error(
+						`Archive target claim already exists with different content: ${path}.`
+					);
+				}
+				let parsed: unknown;
+				try {
+					parsed = JSON.parse(current) as unknown;
+				} catch {
+					throw new Error(
+						`Archive target claim changed outside the operation: ${path}.`
+					);
+				}
+				if (
+					!parsed
+					|| typeof parsed !== 'object'
+					|| Array.isArray(parsed)
+					|| (parsed as Record<string, unknown>).operationId
+						!== claim.operationId
+					|| (parsed as Record<string, unknown>).targetHash
+						!== claim.targetHash
+					|| (parsed as Record<string, unknown>).bindingHash
+						!== expectedBindingHash
+				) {
+					throw new Error(
+						`Archive target claim changed outside the operation: ${path}.`
+					);
+				}
+				return content;
+			});
+		});
+	}
+
+	private async waitForNativePath(
+		sourcePath: string,
+		targetPath: string
+	): Promise<void> {
+		if (!this.knowledgeIndex) {
+			throw new Error('Knowledge index is not ready for native archive convergence.');
+		}
+		await this.knowledgeIndex.waitForRename(sourcePath, targetPath);
 	}
 
 	async initializeMemoryStructure(plan: MemoryInitializationPlan): Promise<void> {
@@ -1390,13 +1639,25 @@ export default class TracekeeperPlugin extends Plugin {
 		return this.legacyMigrationController.migrateLegacyStructure(snapshot);
 	}
 
-	async cleanupLegacyStructure(migrationId: string): Promise<LegacyCleanupResult> {
-		return this.legacyMigrationController.cleanupLegacyStructure(migrationId);
+	async runLegacyLinkPreflight(plan: LegacyStructurePlan): Promise<LegacyStructurePlan> {
+		return this.legacyMigrationController.runLegacyLinkPreflight(plan);
+	}
+
+	async previewLegacyStructureCleanup(migrationId: string): Promise<LegacyCleanupPreview> {
+		return this.legacyMigrationController.previewLegacyStructureCleanup(migrationId);
+	}
+
+	async cleanupLegacyStructure(preview: LegacyCleanupPreview): Promise<LegacyCleanupResult> {
+		return this.legacyMigrationController.cleanupLegacyStructure(preview);
 	}
 
 
 	private buildAuditLogHeader(): string {
 		return noteContentText(this.resolveNoteContentLanguage().language, '# 审计日志\n\n', '# Audit Log\n\n');
+	}
+
+	private getConfiguredTrashDescription(): string {
+		return runtimeLogTrashBehaviorDescription();
 	}
 
 	private async appendAuditEvent(plan: MemoryInitializationPlan): Promise<void> {
@@ -1414,21 +1675,16 @@ export default class TracekeeperPlugin extends Plugin {
 
 
 	private async appendToAuditLog(rawEvent: string): Promise<void> {
-		const auditPath = this.buildAuditLogPath();
-		const auditFile = this.app.vault.getAbstractFileByPath(auditPath);
-		if (!auditFile) {
-			await this.ensureFileDoesNotExist(auditPath, this.buildAuditLogHeader());
-		}
+		await this.auditShardRepository.appendRawEvents(rawEvent);
+	}
 
-		const finalAuditFile = this.app.vault.getAbstractFileByPath(auditPath);
-		if (!(finalAuditFile instanceof TFile)) {
-			throw new Error(`Cannot append audit log: ${auditPath} is not a file.`);
-		}
-
-		await this.app.vault.process(finalAuditFile, (current) => {
-			const normalizedCurrent = current.endsWith('\n') ? current : `${current}\n`;
-			const separator = normalizedCurrent.length > 0 ? '\n' : '';
-			return `${normalizedCurrent}${separator}${rawEvent}`;
+	private async appendArchiveAuditEvent(
+		operationId: string,
+		rawEvent: string
+	): Promise<void> {
+		this.archiveReceiptPath(operationId);
+		await this.auditShardRepository.appendRawEvents(rawEvent, {
+			operationId,
 		});
 	}
 
@@ -1615,8 +1871,20 @@ export default class TracekeeperPlugin extends Plugin {
 		return this.activityDataController.loadRuntimeLogSnapshot(page, filter, pageSize);
 	}
 
-	async cleanRuntimeLogs(scope: RuntimeLogCleanupScope): Promise<RuntimeLogCleanupResult> {
-		return this.activityDataController.cleanRuntimeLogs(scope);
+	async previewRuntimeLogCleanup(
+		scope: RuntimeLogCleanupScope
+	): Promise<RuntimeLogCleanupPreview> {
+		return this.activityDataController.previewRuntimeLogCleanup(scope);
+	}
+
+	async commitRuntimeLogCleanup(
+		preview: RuntimeLogCleanupPreview,
+		confirmationToken: string
+	): Promise<RuntimeLogCleanupResult> {
+		return this.activityDataController.commitRuntimeLogCleanup(
+			preview,
+			confirmationToken
+		);
 	}
 
 
@@ -1728,19 +1996,7 @@ export default class TracekeeperPlugin extends Plugin {
 				clientId: profile.id,
 				displayName: profile.displayName,
 				description: profile.description,
-				transport: profile.preferredTransport,
-				completeConfigText: '',
-				redactedConfigText: '',
-				supportsAutoConfigure: profile.supportsAutoConfigure,
-				restartRequired: profile.restartRequired,
-				configFormat: profile.configFormat,
-				targetPath: profile.targetPath,
-				configState: 'not_configured',
-				configStatusLabel: ui('由客户端管理', 'Managed by client'),
-				configStatusDetail: ui(
-					'使用客户端原生入口完成连接；Tracekeeper 不读取或改写客户端配置。',
-					'Complete setup through the client-native entry. Tracekeeper does not read or rewrite client configuration.'
-				),
+				configState: 'unavailable',
 				...setup,
 			};
 		});
@@ -1914,15 +2170,6 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.persistOnboardingState();
 	}
 
-	async markOnboardingClientConfigured(): Promise<void> {
-		const selected = this.settings.onboarding.selectedClientId || '';
-		if (!selected) {
-			return;
-		}
-		this.settings.onboarding = markClientConfigured(this.settings.onboarding, selected);
-		await this.persistOnboardingState();
-	}
-
 	async markOnboardingSkillSetup(): Promise<void> {
 		if (this.settings.onboarding.skillUserConfirmedAt) {
 			return;
@@ -2066,6 +2313,7 @@ export default class TracekeeperPlugin extends Plugin {
 	private isDesktopFsModule(value: unknown): value is DesktopNodeApi['fs'] {
 		return this.isRecord(value)
 			&& typeof value.existsSync === 'function'
+			&& typeof value.lstatSync === 'function'
 			&& typeof value.readFileSync === 'function'
 			&& typeof value.writeFileSync === 'function'
 			&& typeof value.mkdirSync === 'function'
@@ -2124,6 +2372,7 @@ export default class TracekeeperPlugin extends Plugin {
 			defaultVaultRoot: this.getVaultRoot(),
 			vaultConfigDir: this.app.vault.configDir,
 			vaultRepository: this.vaultRepository,
+			proposalTransitionPort: this.proposalTransitionAdapter,
 			knowledgeSnapshotProvider: (requestedVaultRoot) => this.knowledgeIndex?.scanSnapshot(requestedVaultRoot) ?? null,
 			graphProfile: this.settings.graphProfile,
 			memoryRules: {
@@ -2152,8 +2401,11 @@ export default class TracekeeperPlugin extends Plugin {
 		return this.reviewQueueController.previewApprovedWriteback(proposal);
 	}
 
-	async applyApprovedWriteback(proposal: MemoryProposalRecord): Promise<void> {
-		return this.reviewQueueController.applyApprovedWriteback(proposal);
+	async applyApprovedWriteback(
+		proposal: MemoryProposalRecord,
+		preview: ApprovedWritebackPreview
+	): Promise<void> {
+		return this.reviewQueueController.applyApprovedWriteback(proposal, preview);
 	}
 
 	async runMemoryRecall(input: MemoryRecallInput): Promise<MemoryRecallResult> {
@@ -2203,13 +2455,6 @@ export default class TracekeeperPlugin extends Plugin {
 			default:
 				return ui('全局', 'Global');
 		}
-	}
-
-	prepareClientConfigChange(
-		config: GeneratedClientConfig,
-		action: ClientConfigChangeAction
-	): ClientConfigChangePlan {
-		return this.requireClientConfigAdapter(config).previewChange(config, action);
 	}
 
 	getSkillInstallState(clientId: string): SkillInstallState {
@@ -2266,39 +2511,14 @@ export default class TracekeeperPlugin extends Plugin {
 		action: Extract<SkillInstallAction, 'install' | 'update' | 'migrate'>,
 		clientId: string
 	): Promise<SkillInstallResult> {
+		let result: SkillInstallResult;
 		try {
 			const adapter = this.requireClientSkillAdapter();
-			const result = action === 'install'
+			result = action === 'install'
 				? adapter.confirmInstall(planId)
 				: action === 'update'
 					? adapter.confirmUpdate(planId)
 					: adapter.confirmMigrate(planId);
-			const profile = this.getClientSkillProfile(result.clientId);
-			this.settings.skillInstallReceipts = recordSkillInstallReceipt(this.settings.skillInstallReceipts, {
-				targetId: profile.targetId,
-				bundleHash: result.bundleHash,
-				skillVersion: TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version,
-				installedAt: new Date().toISOString(),
-			});
-			this.settings.onboarding = markSkillFileVerified(this.settings.onboarding, result.bundleHash);
-			this.settings.onboarding = clearOnboardingAgentBehaviorEvidence(this.settings.onboarding);
-			await this.persistOnboardingState();
-			await this.appendToAuditLog(buildSkillInstallAuditEntry({
-				action,
-				clientId: result.clientId,
-				bundleHash: result.bundleHash,
-				backupCreated: result.backupDirectory !== '',
-				result: 'success',
-			}));
-			const actionLabel = action === 'install'
-				? ui('Skill bundle 已安装。', 'Skill bundle installed.')
-				: action === 'update'
-					? ui('Skill bundle 已更新。', 'Skill bundle updated.')
-					: ui('Skill 已复制到官方目录，旧目录保持不变。', 'Skill copied to the official directory. The legacy directory was kept unchanged.');
-			new Notice(profile.restartRequired
-				? `${actionLabel} ${ui('请重启客户端。', 'Restart the client.')}`
-				: `${actionLabel} ${ui('客户端通常会自动识别；若未出现再重启。', 'The client normally detects it automatically; restart only if it does not appear.')}`);
-			return result;
 		} catch (error) {
 			console.error('tracekeeper failed to install client Skill', error);
 			try {
@@ -2317,73 +2537,56 @@ export default class TracekeeperPlugin extends Plugin {
 				: ui('Skill 写入失败。', 'Failed to write Skill.'));
 			throw error;
 		}
-	}
 
-	async applyClientConfig(config: GeneratedClientConfig, planId: string): Promise<void> {
+		const profile = this.getClientSkillProfile(result.clientId);
+		let receiptPersisted = true;
 		try {
-			const result = this.requireClientConfigAdapter(config).applyConfirmedChange(planId);
-			if (config.clientId) {
-				this.settings.onboarding = clearOnboardingAgentBehaviorEvidence(
-					markClientConfigured(this.settings.onboarding, config.clientId)
-				);
-				await this.persistOnboardingState();
-			}
-			this.queueClientConfigAuditEvent('client_config_applied', config, 'success', result.backupPath);
-			new Notice(ui('已写入知识库连接配置，请重启对应 AI 工具。', 'Tracekeeper connection config written. Restart the AI tool.'));
-			this.queueRuntimeLogRefresh();
+			this.settings.skillInstallReceipts = recordSkillInstallReceipt(this.settings.skillInstallReceipts, {
+				targetId: profile.targetId,
+				bundleHash: result.bundleHash,
+				skillVersion: TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version,
+				installedAt: new Date().toISOString(),
+			});
+			this.settings.onboarding = markSkillFileVerified(this.settings.onboarding, result.bundleHash);
+			this.settings.onboarding = clearOnboardingAgentBehaviorEvidence(this.settings.onboarding);
+			await this.persistOnboardingState();
 		} catch (error) {
-			console.error('tracekeeper failed to apply client config', error);
-			this.queueClientConfigAuditEvent('client_config_failed', config, 'failed');
-			new Notice(error instanceof ClientConfigPlanConflictError
-				? ui('配置在预览后已变化，请重新预览再确认。', 'Config changed after preview. Preview it again before confirming.')
-				: ui('写入连接配置失败。', 'Failed to write connection config.'));
-			throw error;
+			receiptPersisted = false;
+			console.error('tracekeeper installed client Skill but failed to persist its local receipt', error);
 		}
-	}
 
-	async removeClientConfig(config: GeneratedClientConfig, planId: string): Promise<void> {
+		let auditRecorded = true;
 		try {
-			const result = this.requireClientConfigAdapter(config).removeConfirmedChange(planId);
-			if (config.clientId === this.settings.onboarding.selectedClientId) {
-				this.settings.onboarding = clearOnboardingClientEvidence(this.settings.onboarding);
-				await this.persistOnboardingState();
-			}
-			this.queueClientConfigAuditEvent('client_config_removed', config, 'success', result.backupPath);
-			new Notice(ui('已移除配置，请重启对应 AI 工具。', 'Config removed. Restart the AI tool.'));
-			this.queueRuntimeLogRefresh();
+			await this.appendToAuditLog(buildSkillInstallAuditEntry({
+				action,
+				clientId: result.clientId,
+				bundleHash: result.bundleHash,
+				backupCreated: result.backupDirectory !== '',
+				result: receiptPersisted ? 'success' : 'partial',
+			}));
 		} catch (error) {
-			console.error('tracekeeper failed to remove client config', error);
-			this.queueClientConfigAuditEvent('client_config_failed', config, 'failed');
-			new Notice(error instanceof ClientConfigPlanConflictError
-				? ui('配置在预览后已变化，请重新预览再确认。', 'Config changed after preview. Preview it again before confirming.')
-				: ui('移除配置失败。', 'Failed to remove config.'));
-			throw error;
+			auditRecorded = false;
+			console.error('tracekeeper installed client Skill but failed to record its audit event', error);
 		}
-	}
 
-	async openClientConfigFile(config: GeneratedClientConfig): Promise<void> {
-		const api = this.getDesktopNodeApi();
-		if (!api?.shell || !config.targetPath) {
-			new Notice(ui('当前环境无法打开配置文件。', 'Cannot open the config file in this environment.'));
-			return;
+		const actionLabel = action === 'install'
+			? ui('Skill bundle 已安装。', 'Skill bundle installed.')
+			: action === 'update'
+				? ui('Skill bundle 已更新。', 'Skill bundle updated.')
+				: ui('Skill 已复制到官方目录，旧目录保持不变。', 'Skill copied to the official directory. The legacy directory was kept unchanged.');
+		if (!receiptPersisted || !auditRecorded) {
+			new Notice(
+				`${actionLabel} ${ui(
+					'本地收据或审计记录未完整保存；Skill 文件已经写入，请重新检测状态，不要重复安装。',
+					'The local receipt or audit record was not fully saved. Skill files were written; detect the current state instead of installing again.'
+				)}`
+			);
+		} else {
+			new Notice(profile.restartRequired
+				? `${actionLabel} ${ui('请重启客户端。', 'Restart the client.')}`
+				: `${actionLabel} ${ui('客户端通常会自动识别；若未出现再重启。', 'The client normally detects it automatically; restart only if it does not appear.')}`);
 		}
-		if (!api.fs.existsSync(config.targetPath)) {
-			new Notice(ui('配置文件尚未创建，请先完成自动配置。', 'The config file does not exist yet. Run auto setup first.'));
-			return;
-		}
-		const result = await api.shell.openPath(config.targetPath);
-		if (result) {
-			new Notice(ui('打开配置文件失败。', 'Failed to open config file.'));
-			return;
-		}
-		new Notice(ui('已打开配置文件。', 'Config file opened.'));
-	}
-
-	private requireClientConfigAdapter(config: GeneratedClientConfig): ClientConfigAdapter {
-		if (!this.clientConfigAdapter || !config.targetPath || !config.supportsAutoConfigure) {
-			throw new Error(`Client auto-configuration is not supported for ${config.clientId}.`);
-		}
-		return this.clientConfigAdapter;
+		return result;
 	}
 
 	private getClientSkillProfile(clientId: string): ClientSkillProfile {
@@ -2408,38 +2611,6 @@ export default class TracekeeperPlugin extends Plugin {
 			throw new Error('Managed Skill installation is unavailable in this environment.');
 		}
 		return this.clientSkillAdapter;
-	}
-
-	private async appendClientConfigAuditEvent(
-		action: string,
-		config: GeneratedClientConfig,
-		result: string,
-		backupPath?: string
-	): Promise<void> {
-		const now = new Date().toISOString();
-		const event = (
-			`## ${now}\n` +
-			`action: ${action}\n` +
-			'actor: user\n' +
-			`client: ${config.clientId}\n` +
-			`transport: ${config.transport}\n` +
-			`target: ${config.targetPath || ''}\n` +
-			`backup_path: ${backupPath || ''}\n` +
-			`result: ${result}\n` +
-			`timestamp: ${now}\n\n`
-		);
-		await this.appendToAuditLog(event);
-	}
-
-	private queueClientConfigAuditEvent(
-		action: string,
-		config: GeneratedClientConfig,
-		result: string,
-		backupPath?: string
-	): void {
-		void this.appendClientConfigAuditEvent(action, config, result, backupPath).catch((error) => {
-			console.error('tracekeeper failed to record client config audit event', error);
-		});
 	}
 
 	private queueRuntimeLogRefresh(): void {
@@ -2504,7 +2675,20 @@ export default class TracekeeperPlugin extends Plugin {
 		return this.reviewQueueController.archiveMemoryProposals(proposals);
 	}
 
+	async previewArchiveMemoryProposals(
+		proposals: MemoryProposalRecord[]
+	): Promise<ArchiveMemoryProposalPreview> {
+		return this.reviewQueueController.previewArchiveMemoryProposals(proposals);
+	}
 
+	async commitArchiveMemoryProposals(
+		preview: ArchiveMemoryProposalPreview
+	): Promise<ArchiveMemoryProposalReceipt> {
+		return this.reviewQueueController.commitArchiveMemoryProposals(
+			preview,
+			preview.confirmationToken
+		);
+	}
 
 
 

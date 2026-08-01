@@ -7,7 +7,11 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { callTool } = require('@tracekeeper/mcp-runtime');
-const { NodeFsVaultRepository } = require('@tracekeeper/core');
+const { NodeFileOperationJournal, NodeFsVaultRepository } = require('@tracekeeper/core');
+
+const AUDIT_DIR = '00_tracekeeper/control/audit';
+const AUDIT_SHARD_PATH_PATTERN =
+	/^00_tracekeeper\/control\/audit\/\d{4}\/\d{4}-\d{2}-\d{2}\.md$/;
 
 function writeNote(vaultRoot, relativePath, content) {
 	const target = path.join(vaultRoot, relativePath);
@@ -44,10 +48,10 @@ class RecordingVaultRepository {
 
 	async replaceText(relativePath, expectedVersion, content) {
 		this.calls.push({ method: 'replaceText', path: relativePath });
-		if (relativePath === '00_tracekeeper/control/audit_log.md' && this.auditConflictPending) {
+		if (AUDIT_SHARD_PATH_PATTERN.test(relativePath) && this.auditConflictPending) {
 			this.auditConflictPending = false;
 			const current = await this.delegate.readText(relativePath);
-			assert.ok(current, 'audit log should exist before conflict injection');
+			assert.ok(current, 'audit shard should exist before conflict injection');
 			await this.delegate.replaceText(
 				relativePath,
 				expectedVersion,
@@ -77,18 +81,55 @@ function assertCallUnder(calls, method, expectedPrefix) {
 	);
 }
 
+function assertAuditShardCall(calls, method) {
+	assert.ok(
+		calls.some((call) => call.method === method && AUDIT_SHARD_PATH_PATTERN.test(call.path)),
+		`expected ${method} through VaultRepository for a native audit shard`
+	);
+}
+
 function countToolAuditSections(content, toolName) {
 	return content
 		.split('\n## ')
-		.filter((section) => section.includes('- type: tool-call') && section.includes(toolName))
+		.filter(
+			(section) =>
+				(
+					section.includes('- type: tool-call')
+					|| section.includes('- type: "tool-call"')
+				)
+				&& section.includes(toolName)
+		)
 		.length;
 }
 
-function readFinishTaskJournal(vaultRoot) {
+function readAuditShards(vaultRoot) {
+	const auditRoot = path.join(vaultRoot, AUDIT_DIR);
+	const documents = [];
+	const visit = (directory) => {
+		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+			const absolutePath = path.join(directory, entry.name);
+			if (entry.isDirectory()) {
+				visit(absolutePath);
+				continue;
+			}
+			const relativePath = path.relative(vaultRoot, absolutePath).replaceAll(path.sep, '/');
+			if (entry.isFile() && AUDIT_SHARD_PATH_PATTERN.test(relativePath)) {
+				documents.push(fs.readFileSync(absolutePath, 'utf8'));
+			}
+		}
+	};
+	visit(auditRoot);
+	return documents.join('\n');
+}
+
+async function readFinishTaskJournal(vaultRoot) {
 	const operationDirectory = path.join(vaultRoot, '00_tracekeeper/control/operations');
 	const filename = fs.readdirSync(operationDirectory).find((entry) => entry.startsWith('finish-task-') && entry.endsWith('.json'));
 	assert.ok(filename, 'finish_task operation journal should exist');
-	return JSON.parse(fs.readFileSync(path.join(operationDirectory, filename), 'utf8'));
+	const record = await new NodeFileOperationJournal({ directory: operationDirectory })
+		.loadById(filename.slice(0, -'.json'.length));
+	assert.ok(record, 'finish_task operation journal should be readable');
+	return record;
 }
 
 async function invoke(name, args, context) {
@@ -108,6 +149,17 @@ async function main() {
 	writeNote(vaultRoot, '01_knowledge/index.md', '# Knowledge Index\n');
 	writeNote(vaultRoot, '01_knowledge/sources/repository-source.md', '# Repository Source\n\nRepository-backed source text.\n');
 	writeNote(vaultRoot, '01_knowledge/wiki/repository-hub.md', '# Repository Hub\n');
+	writeNote(vaultRoot, '01_knowledge/memory/projects/repository-auto/index.md', [
+		'---',
+		'schema_version: 1',
+		'type: project_memory_index',
+		'project_id: repository-auto-id',
+		'project_key: repository-auto',
+		'project_hint: repository-auto',
+		'repo_path: /tmp/repository-auto',
+		'---',
+		'# Repository Auto Project Memory',
+	].join('\n'));
 	writeNote(vaultRoot, '00_tracekeeper/inbox/agent_requests/repository-request.md', [
 		'---',
 		'type: agent-request',
@@ -144,7 +196,7 @@ async function main() {
 		const taskId = startTask.task_id;
 		let calls = vaultRepository.takeCalls();
 		assertCall(calls, 'createText', startTask.path);
-		assertCall(calls, 'replaceText', '00_tracekeeper/control/audit_log.md');
+		assertAuditShardCall(calls, 'createText');
 
 		const writtenContext = await invoke('tracekeeper.write_context_pack', {
 			filename: 'repository-context-pack',
@@ -155,7 +207,7 @@ async function main() {
 		assertCall(calls, 'createText', writtenContext.path);
 		assertCallUnder(calls, 'createText', '00_tracekeeper/work/context_packs/');
 		assertCall(calls, 'replaceText', startTask.path);
-		assertCall(calls, 'replaceText', '00_tracekeeper/control/audit_log.md');
+		assertAuditShardCall(calls, 'replaceText');
 
 		const builtContext = await invoke('tracekeeper.build_context_pack', {
 			query: 'repository',
@@ -200,6 +252,17 @@ async function main() {
 		assertCall(calls, 'createText', analyzed.report.path);
 		assertCall(calls, 'replaceText', '00_tracekeeper/inbox/agent_requests/repository-request.md');
 		assertCall(calls, 'replaceText', startTask.path);
+		assert.ok(analyzed.proposals.length > 0);
+		const analyzedTaskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
+		for (const analyzedProposal of analyzed.proposals) {
+			assert.match(analyzedProposal.proposal_id, /^proposal-/);
+			assert.match(
+				fs.readFileSync(path.join(vaultRoot, analyzedProposal.path), 'utf8'),
+				new RegExp(`proposal_id: "?${analyzedProposal.proposal_id}"?`)
+			);
+			assert.match(analyzedTaskText, new RegExp(analyzedProposal.proposal_id));
+		}
+		assert.doesNotMatch(analyzedTaskText, /^proposals:/m);
 		assert.match(
 			fs.readFileSync(path.join(vaultRoot, '00_tracekeeper/inbox/agent_requests/repository-request.md'), 'utf8'),
 			/status: completed/
@@ -229,7 +292,9 @@ async function main() {
 		const autoMemory = await invoke('tracekeeper.propose_memory', {
 			proposal_kind: 'project_update',
 			content: 'Repository-backed automatic project memory.',
+			project_id: 'repository-auto-id',
 			project_hint: 'repository-auto',
+			repo_path: '/tmp/repository-auto',
 			memory_scope: 'project',
 			related_wiki: ['01_knowledge/wiki/repository-hub.md'],
 			task_id: taskId,
@@ -243,24 +308,32 @@ async function main() {
 		});
 		calls = vaultRepository.takeCalls();
 		assert.equal(autoMemory.auto_applied, true);
-		assertCall(calls, 'createText', '01_knowledge/memory/projects/repository-auto/index.md');
+		assert.equal(
+			calls.some(
+				(call) => call.method === 'createText'
+					&& call.path === '01_knowledge/memory/projects/repository-auto/index.md'
+			),
+			false,
+			'existing stable project hub must not be rewritten'
+		);
 		assertCall(calls, 'createText', autoMemory.path);
 
 		vaultRepository.injectAuditConflictOnce();
 		await invoke('tracekeeper.status', {}, context);
 		calls = vaultRepository.takeCalls();
 		assert.ok(
-			calls.filter((call) => call.method === 'replaceText' && call.path === '00_tracekeeper/control/audit_log.md').length >= 2,
+			calls.filter(
+				(call) => call.method === 'replaceText' && AUDIT_SHARD_PATH_PATTERN.test(call.path)
+			).length >= 2,
 			'audit append should retry after a CAS conflict'
 		);
 
-		const auditPath = path.join(vaultRoot, '00_tracekeeper/control/audit_log.md');
-		const auditBefore = fs.readFileSync(auditPath, 'utf8');
+		const auditBefore = readAuditShards(vaultRoot);
 		await Promise.all(Array.from({ length: 12 }, (_, index) => invoke('tracekeeper.status', {}, {
 			...context,
 			sessionId: `vault-repository-concurrent-audit-${index}`,
 		})));
-		const auditAfter = fs.readFileSync(auditPath, 'utf8');
+		const auditAfter = readAuditShards(vaultRoot);
 		assert.equal(
 			countToolAuditSections(auditAfter, 'tracekeeper.status') -
 				countToolAuditSections(auditBefore, 'tracekeeper.status'),
@@ -272,7 +345,9 @@ async function main() {
 		await invoke('tracekeeper.audit_recent', { max_items: 5 }, context);
 		calls = vaultRepository.takeCalls();
 		assertCall(calls, 'readText', '00_tracekeeper/control/audit_log.md');
-		assertCall(calls, 'replaceText', '00_tracekeeper/control/audit_log.md');
+		assertCall(calls, 'listMarkdown', AUDIT_DIR);
+		assertAuditShardCall(calls, 'readText');
+		assertAuditShardCall(calls, 'replaceText');
 
 		const finishArgs = {
 			task_id: taskId,
@@ -292,7 +367,7 @@ async function main() {
 			},
 		});
 		assert.equal(failedFinish.isError, true);
-		const frozenJournal = readFinishTaskJournal(vaultRoot);
+		const frozenJournal = await readFinishTaskJournal(vaultRoot);
 		assert.equal(typeof frozenJournal.payload.requestHash, 'string');
 		assert.equal(frozenJournal.payload.contentLanguage, 'en');
 
@@ -302,7 +377,7 @@ async function main() {
 			contentLanguage: 'zh-CN',
 		});
 		assert.equal(finished.content_language, 'en');
-		const completedJournal = readFinishTaskJournal(vaultRoot);
+		const completedJournal = await readFinishTaskJournal(vaultRoot);
 		assert.deepEqual(completedJournal.payload, frozenJournal.payload);
 
 		const conflictingFinish = await callTool('tracekeeper.finish_task', {

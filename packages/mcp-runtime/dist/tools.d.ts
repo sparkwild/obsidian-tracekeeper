@@ -1,4 +1,4 @@
-import { type OperationFailureInjection, type ScanResult, type VaultRepository } from '@tracekeeper/core';
+import { type OperationFailureInjection, type ProposalTransitionCommand, type ProposalTransitionDecision, type ScanResult, type VaultRepository } from '@tracekeeper/core';
 import { type McpPrompt, type McpStructuredToolResult, type McpToolDefinition } from './protocol';
 import { type ObservedClientType } from './observed-client';
 export declare const LOCAL_TRUST_PRINCIPAL_ID = "local-user";
@@ -17,8 +17,18 @@ interface ToolContext {
     memoryRules?: MemoryRulesContext;
     contentLanguage?: unknown;
     contentLanguageSource?: unknown;
+    proposalTransitionPort?: ProposalTransitionPort;
+}
+export interface ProposalTransitionPort {
+    transition(request: ProposalTransitionCommand & {
+        proposalPath: string;
+        expectedFileHash?: string;
+        now?: string;
+        actor?: string;
+    }): Promise<ProposalTransitionDecision>;
 }
 export interface ToolInvocationContext extends ToolContext {
+    requestId?: string;
     principalId?: string;
     credentialCapabilities?: readonly string[];
     agentId?: string;
@@ -29,6 +39,10 @@ export interface ToolInvocationContext extends ToolContext {
     transport?: string;
     runtimeVersion?: string;
     operationFailureInjection?: OperationFailureInjection;
+    writebackConfirmationClock?: () => number;
+    writebackConfirmationTtlMs?: number;
+    writebackConfirmationSecret?: string | Uint8Array;
+    writebackRecoveryOperationId?: string;
 }
 interface ConnectionAuditEventInput {
     principalId?: string;
@@ -41,6 +55,7 @@ interface ConnectionAuditEventInput {
     runtimeVersion: string;
 }
 interface ToolCallAuditEventInput {
+    requestId?: string;
     toolName: string;
     resultStatus: 'success' | 'failed';
     targetPaths: string[];
@@ -58,6 +73,17 @@ interface ToolCallAuditEventInput {
     resultSummary: string;
     workflowMetadata?: Record<string, unknown>;
 }
+export interface AuditRecentSection {
+    heading: string;
+    body: string[];
+    at_line: number;
+    audit_event_id: string;
+    timestamp: string;
+    source_path: string;
+    source_kind: 'legacy' | 'shard';
+    action: string;
+}
+export declare function readMergedAuditSections(vaultRoot: string, context: Pick<ToolContext, 'vaultConfigDir' | 'vaultRepository'>): Promise<AuditRecentSection[]>;
 export declare function appendConnectionAuditEvent(vaultRoot: string, input: ConnectionAuditEventInput): {
     path: string;
 };

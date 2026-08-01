@@ -86,7 +86,9 @@ function scanProvenance(scan) {
         snapshot_generation: scan.index?.generation ?? null,
         snapshot_warning: indexState === 'rebuilding'
             ? 'Knowledge index is rebuilding; this result may come from the previous snapshot generation.'
-            : null,
+            : indexState === 'initializing'
+                ? 'Knowledge index metadata is still initializing; this result may be incomplete.'
+                : null,
     };
 }
 function projectMemoryCandidatePath(notePath) {
@@ -131,7 +133,7 @@ function collectProjectCandidates(notes, scope, maxItems) {
     }
     return candidates.slice(0, maxItems);
 }
-function buildProjectRecallRelationEvidence(scope, fallbackToGlobal) {
+function buildProjectRecallRelationEvidence(scope) {
     const evidence = [];
     if (scope.projectHint) {
         evidence.push({
@@ -154,18 +156,18 @@ function buildProjectRecallRelationEvidence(scope, fallbackToGlobal) {
             confidence: scope.confidence,
         });
     }
-    if (fallbackToGlobal) {
+    if (scope.confidence === 'uncertain') {
         evidence.push({
-            type: 'fallback',
-            value: 'project_scope_uncertain_no_matches',
-            target_scope: 'global',
+            type: 'scope_status',
+            value: 'project_scope_uncertain',
+            target_scope: 'project',
         });
     }
     if (evidence.length === 0) {
         evidence.push({
-            type: 'fallback',
-            value: 'global_default',
-            target_scope: 'global',
+            type: 'scope_status',
+            value: 'project_scope_unresolved',
+            target_scope: 'project',
         });
     }
     return evidence;
@@ -354,8 +356,13 @@ function compactNoteText(text, maxLength = MAX_RECALL_EXCERPT_LENGTH) {
 }
 function buildRecallGraphLinks(note) {
     const links = new Set();
-    for (const link of note.wikilinks) {
-        const target = link.heading ? `${link.target}#${link.heading}` : link.target;
+    for (const link of note.edges) {
+        if (link.resolution.status !== 'resolved') {
+            continue;
+        }
+        const target = link.subpath
+            ? `${link.resolution.path}#${link.subpath}`
+            : link.resolution.path;
         if (target.trim()) {
             links.add(target.trim());
         }
@@ -465,55 +472,41 @@ class RecallApplicationService {
         const scope = this.dependencies.resolveProjectIdentity(request.projectIdentityInput, scan.notes);
         const unresolved = scope.confidence === 'uncertain';
         const scopedNotes = unresolved
-            ? scan.notes
+            ? []
             : this.dependencies.filterProjectNotes(scan.notes, scope);
         const candidateLimit = recallCandidateLimit(request.maxItems);
         const initialMatches = (0, core_1.recallNotes)(scopedNotes, request.query, { limit: candidateLimit });
-        const anchoredMatches = unresolved
-            ? initialMatches
-            : [
-                ...initialMatches,
-                ...buildProjectMemoryAnchors(scopedNotes, new Set(initialMatches.map((match) => match.note.relativePath))),
-            ];
-        const fallbackToGlobal = unresolved && anchoredMatches.length === 0;
-        const finalScope = fallbackToGlobal
-            ? this.dependencies.resolveProjectIdentity({}, scan.notes)
-            : scope;
-        const finalScopeMode = fallbackToGlobal ? 'global' : 'project';
-        const finalRawMatches = fallbackToGlobal
-            ? (0, core_1.recallNotes)(scan.notes, request.query, { limit: candidateLimit })
-            : anchoredMatches;
-        const matches = selectRecallMatches(rankRecallMatches(finalRawMatches, request.query, finalScope, this.dependencies.nowMs()), request.maxItems);
+        const anchoredMatches = [
+            ...initialMatches,
+            ...buildProjectMemoryAnchors(scopedNotes, new Set(initialMatches.map((match) => match.note.relativePath))),
+        ];
+        const matches = selectRecallMatches(rankRecallMatches(anchoredMatches, request.query, scope, this.dependencies.nowMs()), request.maxItems);
         const uncertain = !hasProjectScope(scope) ||
-            scope.confidence === 'uncertain' ||
-            fallbackToGlobal;
-        const candidateNotes = collectProjectCandidates(scopedNotes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
-        const scopeMetadata = fallbackToGlobal
-            ? projectIdentityResult(this.dependencies.resolveProjectIdentity({}, scan.notes))
-            : projectIdentityResult(scope);
+            scope.confidence === 'uncertain';
+        const candidateNotes = collectProjectCandidates(unresolved ? scan.notes : scopedNotes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
         return {
             ok: true,
             read_only: true,
             vault_root: request.vaultRoot,
             query: request.query,
             uncertain,
-            scope: scopeMetadata,
+            scope: projectIdentityResult(scope),
             project_identity: projectIdentityResult(scope),
             max_items: request.maxItems,
             matched_count: matches.length,
             ...scanProvenance(scan),
             candidates: candidateNotes.map((candidate) => candidate.path),
             candidate_notes: candidateNotes,
-            scope_evidence: buildProjectRecallRelationEvidence(scope, fallbackToGlobal),
-            scope_mode: finalScopeMode,
-            entries: matches.map((match) => buildRecallEntry(match, finalScopeMode, scan.notes, this.dependencies)),
+            scope_evidence: buildProjectRecallRelationEvidence(scope),
+            scope_mode: 'project',
+            entries: matches.map((match) => buildRecallEntry(match, 'project', scan.notes, this.dependencies)),
         };
     }
     executeProjectHistory(request, scan) {
         const scope = this.dependencies.resolveProjectIdentity(request.projectIdentityInput, scan.notes);
         const unresolved = scope.confidence === 'uncertain';
         const scopedNotes = unresolved
-            ? scan.notes
+            ? []
             : this.dependencies.filterProjectNotes(scan.notes, scope);
         const uncertain = !hasProjectScope(scope) || scope.confidence === 'uncertain';
         const filteredByQuery = request.query
@@ -522,7 +515,7 @@ class RecallApplicationService {
         const sortedMatches = filteredByQuery
             .filter((note) => note.relativePath !== '')
             .sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
-        const candidateNotes = collectProjectCandidates(scopedNotes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
+        const candidateNotes = collectProjectCandidates(unresolved ? scan.notes : scopedNotes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
         const matches = sortedMatches.slice(0, request.maxItems);
         return {
             ok: true,

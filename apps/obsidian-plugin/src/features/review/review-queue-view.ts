@@ -19,6 +19,7 @@ import {
 } from './review-queue-model';
 import {
 	ApprovedWritebackApplyModal,
+	ReviewQueueArchiveModal,
 	ReviewQueueConfirmModal,
 	ReviewQueueEditProposalModal,
 	ReviewQueueRequestRevisionModal,
@@ -33,6 +34,8 @@ import { TRACEKEEPER_REVIEW_QUEUE_VIEW } from '../../ui/view-types';
 import { trimText } from '../shared/markdown-record-parser';
 
 const REVIEW_PAGE_SIZE = 18;
+const isProposalTransitionConflict = (error: unknown): boolean =>
+	error instanceof Error && error.name === 'ProposalTransitionConflictError';
 
 export class TracekeeperReviewQueueView extends ItemView {
 	private activeFilter: ReviewInboxFilter = 'needs_completion';
@@ -305,12 +308,11 @@ export class TracekeeperReviewQueueView extends ItemView {
 				text: ui(`归档处理记录 (${archiveCandidates.length})`, `Archive processed records (${archiveCandidates.length})`),
 			});
 			archive.addEventListener('click', () => {
-				new ReviewQueueConfirmModal(
+				new ReviewQueueArchiveModal(
 					this.app,
-					ui('归档已处理提案', 'Archive processed proposals'),
-					ui(`将移动 ${archiveCandidates.length} 项到 Tracekeeper 归档目录。`, `This moves ${archiveCandidates.length} item(s) to the Tracekeeper archive folder.`),
-					ui('确认归档', 'Archive items'),
-					() => this.batchArchive(archiveCandidates)
+					this.plugin,
+					archiveCandidates,
+					(receipt) => this.afterBatchArchive(receipt.moved.length)
 				).open();
 			});
 		}
@@ -786,23 +788,49 @@ export class TracekeeperReviewQueueView extends ItemView {
 				} catch (error) {
 					console.error('tracekeeper failed to update review proposal status', error);
 					button.disabled = false;
-					new Notice(ui('更新审核状态失败。', 'Failed to update review status.'));
+					if (isProposalTransitionConflict(error)) {
+						new Notice(ui(
+							'提案已发生变化，正在重新加载审核状态。',
+							'The proposal changed. Reloading the current review state.'
+						));
+						await this.refresh();
+					} else {
+						new Notice(ui('更新审核状态失败。', 'Failed to update review status.'));
+					}
 				}
 			})();
 		});
 	}
 
 	private async batchUpdate(proposals: MemoryProposalRecord[], status: MemoryProposalStatus): Promise<void> {
+		const failedPaths: string[] = [];
+		let updated = 0;
 		for (const proposal of proposals) {
-			await this.plugin.updateMemoryProposalStatus(proposal, status);
+			try {
+				await this.plugin.updateMemoryProposalStatus(proposal, status);
+				updated += 1;
+			} catch (error) {
+				failedPaths.push(proposal.path);
+				console.error('tracekeeper failed to update review proposal in batch', error);
+			}
 		}
-		new Notice(ui(`已更新 ${proposals.length} 条变更提案。`, `Updated ${proposals.length} change proposals.`));
 		this.selectedProposalPaths.clear();
+		for (const failedPath of failedPaths) {
+			this.selectedProposalPaths.add(failedPath);
+		}
+		const failed = failedPaths.length;
+		new Notice(
+			failed === 0
+				? ui(`已更新 ${updated} 条变更提案。`, `Updated ${updated} change proposals.`)
+				: ui(
+					`已更新 ${updated} 条变更提案；${failed} 条失败并保留选择。`,
+					`Updated ${updated} change proposals; ${failed} failed and remain selected.`
+				)
+		);
 		await this.refresh();
 	}
 
-	private async batchArchive(proposals: MemoryProposalRecord[]): Promise<void> {
-		const moved = await this.plugin.archiveMemoryProposals(proposals);
+	private async afterBatchArchive(moved: number): Promise<void> {
 		new Notice(ui(`已归档 ${moved} 条处理记录。`, `Archived ${moved} processed records.`));
 		this.selectedProposalPaths.clear();
 		await this.refresh();

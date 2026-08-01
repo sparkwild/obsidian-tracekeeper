@@ -39,9 +39,11 @@ const REQUIRED_PATHS = Object.freeze([
 	'apps/obsidian-plugin/scripts/build.mjs',
 ]);
 
-const ALLOWED_SKILL_WORKFLOW_TOOLS = new Set([
+const ALLOWED_SKILL_TOOL_NAMES = new Set([
 	'tracekeeper.start_task',
 	'tracekeeper.recall',
+	'tracekeeper.project_memory',
+	'tracekeeper.read_note',
 	'tracekeeper.finish_task',
 	'tracekeeper.capture_source',
 	'tracekeeper.propose_memory',
@@ -116,6 +118,24 @@ function checkWorkflowSemantics(contract, skill, flattened, errors) {
 		requirePattern(content, /if_context_insufficient/i, `${owner} does not include context-insufficient next_action timing`, errors);
 		requirePattern(content, /at_task_closeout/i, `${owner} does not include closeout next_action timing`, errors);
 		requirePattern(content, /required:\s*true|required actions/i, `${owner} does not describe required action semantics`, errors);
+		requirePattern(
+			content,
+			/tracekeeper\.project_memory/,
+			`${owner} does not define complete project-memory enumeration`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/Recall[\s\S]{0,180}relevance-ranked[\s\S]{0,240}(?:not exhaustive|exhaustive project-memory enumeration)/i,
+			`${owner} does not distinguish relevance-ranked Recall from complete project-memory enumeration`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/immutable\s+operation\s+entry/i,
+			`${owner} does not define immutable project-memory operation entries`,
+			errors,
+		);
 		requirePattern(
 			content,
 			/(?:untrusted )?knowledge data, not (?:a new |system or tool )?instructions?/i,
@@ -262,16 +282,18 @@ function checkLocalTrustSemantics(contents, errors) {
 	);
 }
 
-function checkUnsafeExamples(contents, errors) {
+function checkUnsafeExamples(contents, errors, { checkToolNames = false } = {}) {
 	const absoluteDeveloperPath = /(?:\/Users\/[A-Za-z0-9._-]+\/|\/home\/[A-Za-z0-9._-]+\/|[A-Za-z]:\\Users\\|file:\/\/)/;
 	const credentialExample = /(?:sk-[A-Za-z0-9_-]{12,}|eyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{6,}\.|(?:api[_-]?key|access[_-]?token|authorization|bearer)\s*[:=]\s*["'`]?[A-Za-z0-9._-]{12,})/i;
 	for (const { relativePath, content } of contents) {
 		if (absoluteDeveloperPath.test(content)) errors.push(`absolute developer path found in ${relativePath}`);
 		if (credentialExample.test(content)) errors.push(`sensitive credential example found in ${relativePath}`);
-		const toolNames = content.match(/tracekeeper\.[a-z][a-z0-9_]*/g) ?? [];
-		for (const toolName of new Set(toolNames)) {
-			if (!ALLOWED_SKILL_WORKFLOW_TOOLS.has(toolName)) {
-				errors.push(`deprecated or unknown Tracekeeper tool name in ${relativePath}: ${toolName}`);
+		if (checkToolNames) {
+			const toolNames = content.match(/tracekeeper\.[a-z][a-z0-9_]*/g) ?? [];
+			for (const toolName of new Set(toolNames)) {
+				if (!ALLOWED_SKILL_TOOL_NAMES.has(toolName)) {
+					errors.push(`deprecated or unknown Tracekeeper tool name in ${relativePath}: ${toolName}`);
+				}
 			}
 		}
 	}
@@ -480,7 +502,13 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 		if (item.content || !item.relativePath.startsWith('skills/tracekeeper/')) continue;
 		item.content = await readRequired(repoRoot, item.relativePath, errors);
 	}
-	checkUnsafeExamples(safetyContents, errors);
+	checkUnsafeExamples(
+		REQUIRED_PATHS
+			.filter((relativePath) => relativePath.endsWith('.md'))
+			.map((relativePath) => ({ relativePath, content: contents.get(relativePath) ?? '' })),
+		errors
+	);
+	checkUnsafeExamples(safetyContents, errors, { checkToolNames: true });
 
 	for (const indexPath of ['docs/features/INDEX.md', 'docs/architecture/SYSTEM_ARCHITECTURE.md']) {
 		requirePattern(

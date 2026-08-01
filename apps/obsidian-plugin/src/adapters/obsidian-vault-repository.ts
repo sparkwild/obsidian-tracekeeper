@@ -1,8 +1,9 @@
-import { TFile, TFolder, Vault, normalizePath } from 'obsidian';
+import { TFile, Vault, normalizePath, type FileManager } from 'obsidian';
 import {
 	OperationConflictError,
 	VaultPathError,
 	computeFileVersion,
+	hashVaultContent,
 	isSafeDirectoryName,
 	type VaultPath,
 	type VaultRepository,
@@ -10,11 +11,38 @@ import {
 	type VaultTextMetadata,
 	type VaultWriteReceipt,
 } from '@tracekeeper/core';
+import {
+	ensureObsidianVaultFolderPath,
+	withObsidianVaultPathLock,
+} from './obsidian-vault-path-lock';
 
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
 
 export class ObsidianVaultRepository implements VaultRepository {
-	constructor(private readonly vault: Vault) {}
+	constructor(
+		private readonly vault: Vault,
+		private readonly fileManager: FileManager
+	) {}
+
+	generateMarkdownLink(
+		targetPath: VaultPath,
+		sourcePath: VaultPath,
+		subpath = '',
+		alias = ''
+	): string {
+		const safeTargetPath = this.normalizeRelativePath(targetPath);
+		const safeSourcePath = this.normalizeRelativePath(sourcePath);
+		const target = this.vault.getAbstractFileByPath(safeTargetPath);
+		if (!(target instanceof TFile)) {
+			throw new VaultPathError(`Markdown link target is not a file: ${safeTargetPath}`);
+		}
+		return this.fileManager.generateMarkdownLink(
+			target,
+			safeSourcePath,
+			subpath,
+			alias
+		);
+	}
 
 	async readText(relativePath: VaultPath): Promise<VaultTextFile | null> {
 		const safePath = this.normalizeRelativePath(relativePath);
@@ -29,7 +57,7 @@ export class ObsidianVaultRepository implements VaultRepository {
 		return {
 			path: safePath,
 			content,
-			version: this.fileVersion(file),
+			version: this.fileVersion(file, content),
 			size: file.stat.size,
 			modifiedAt: new Date(file.stat.mtime).toISOString(),
 		};
@@ -37,20 +65,22 @@ export class ObsidianVaultRepository implements VaultRepository {
 
 	async createText(relativePath: VaultPath, content: string): Promise<VaultWriteReceipt> {
 		const safePath = this.normalizeRelativePath(relativePath);
-		if (this.vault.getAbstractFileByPath(safePath)) {
-			throw new OperationConflictError(`Target already exists: ${safePath}`);
-		}
-		await this.ensureFolder(safePath.split('/').slice(0, -1).join('/'));
-		let file: TFile;
-		try {
-			file = await this.vault.create(safePath, content);
-		} catch (error: unknown) {
+		return withObsidianVaultPathLock(this.vault, safePath, async () => {
 			if (this.vault.getAbstractFileByPath(safePath)) {
 				throw new OperationConflictError(`Target already exists: ${safePath}`);
 			}
-			throw error;
-		}
-		return this.receipt(file);
+			await this.ensureFolder(safePath.split('/').slice(0, -1).join('/'));
+			let file: TFile;
+			try {
+				file = await this.vault.create(safePath, content);
+			} catch (error: unknown) {
+				if (this.vault.getAbstractFileByPath(safePath)) {
+					throw new OperationConflictError(`Target already exists: ${safePath}`);
+				}
+				throw error;
+			}
+			return this.receipt(file, content);
+		});
 	}
 
 	async replaceText(
@@ -59,31 +89,38 @@ export class ObsidianVaultRepository implements VaultRepository {
 		content: string
 	): Promise<VaultWriteReceipt> {
 		const safePath = this.normalizeRelativePath(relativePath);
-		const file = this.vault.getAbstractFileByPath(safePath);
-		if (!(file instanceof TFile)) {
-			throw new OperationConflictError(`Target does not exist: ${safePath}`);
-		}
-		if (this.fileVersion(file) !== expectedVersion) {
-			throw new OperationConflictError(`CAS check failed for ${safePath}`);
-		}
-		await this.vault.modify(file, content);
-		return this.receipt(file);
+		return withObsidianVaultPathLock(this.vault, safePath, async () => {
+			const file = this.vault.getAbstractFileByPath(safePath);
+			if (!(file instanceof TFile)) {
+				throw new OperationConflictError(`Target does not exist: ${safePath}`);
+			}
+			const writtenContent = await this.vault.process(file, (currentContent) => {
+				if (this.fileVersion(file, currentContent) !== expectedVersion) {
+					throw new OperationConflictError(`CAS check failed for ${safePath}`);
+				}
+				return content;
+			});
+			return this.receipt(file, writtenContent);
+		});
 	}
 
 	async listMarkdown(scope?: VaultPath): Promise<readonly VaultTextMetadata[]> {
 		const safeScope = scope ? this.normalizeRelativePath(scope) : '';
 		const prefix = safeScope ? `${safeScope}/` : '';
-		return this.vault.getFiles()
+		const files = this.vault.getFiles()
 			.filter((file) => MARKDOWN_EXTENSIONS.has(file.extension.toLowerCase()))
 			.filter((file) => !safeScope || file.path === safeScope || file.path.startsWith(prefix))
-			.filter((file) => this.isSafeExistingPath(file.path))
-			.map((file) => ({
+			.filter((file) => this.isSafeExistingPath(file.path));
+		const metadata = await Promise.all(files.map(async (file) => {
+			const content = await this.vault.read(file);
+			return {
 				path: file.path,
-				version: this.fileVersion(file),
+				version: this.fileVersion(file, content),
 				size: file.stat.size,
 				modifiedAt: new Date(file.stat.mtime).toISOString(),
-			}))
-			.sort((left, right) => left.path.localeCompare(right.path));
+			};
+		}));
+		return metadata.sort((left, right) => left.path.localeCompare(right.path));
 	}
 
 	private normalizeRelativePath(input: VaultPath): VaultPath {
@@ -116,31 +153,26 @@ export class ObsidianVaultRepository implements VaultRepository {
 	}
 
 	private async ensureFolder(folderPath: string): Promise<void> {
-		if (!folderPath) {
-			return;
-		}
-		let current = '';
-		for (const segment of folderPath.split('/')) {
-			current = current ? `${current}/${segment}` : segment;
-			const existing = this.vault.getAbstractFileByPath(current);
-			if (!existing) {
-				await this.vault.createFolder(current);
-				continue;
-			}
-			if (!(existing instanceof TFolder)) {
-				throw new VaultPathError(`Vault folder path is occupied by a file: ${current}`);
-			}
-		}
+		await ensureObsidianVaultFolderPath(
+			this.vault,
+			folderPath,
+			(path) => new VaultPathError(
+				`Vault folder path is occupied by a file: ${path}`
+			)
+		);
 	}
 
-	private fileVersion(file: TFile): string {
-		return computeFileVersion(file.stat.size, new Date(file.stat.mtime).toISOString());
+	private fileVersion(file: TFile, content: string): string {
+		return [
+			computeFileVersion(file.stat.size, new Date(file.stat.mtime).toISOString()),
+			hashVaultContent(content),
+		].join('|');
 	}
 
-	private receipt(file: TFile): VaultWriteReceipt {
+	private receipt(file: TFile, content: string): VaultWriteReceipt {
 		return {
 			path: file.path,
-			version: this.fileVersion(file),
+			version: this.fileVersion(file, content),
 			size: file.stat.size,
 			modifiedAt: new Date(file.stat.mtime).toISOString(),
 		};

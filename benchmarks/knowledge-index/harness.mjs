@@ -125,12 +125,128 @@ function abstractFile(root, relativePath) {
 	};
 }
 
+function nativeReference(edge) {
+	return {
+		link: `${edge.linkPath}${edge.subpath ? `#${edge.subpath}` : ''}`,
+		original: edge.raw,
+		displayText: edge.displayText,
+		position: edge.position,
+		...(edge.referenceLabel ? { id: edge.referenceLabel } : {}),
+	};
+}
+
+function nativeSectionType(type) {
+	switch (type) {
+		case 'heading':
+			return 'heading';
+		case 'fenced-code':
+			return 'code';
+		case 'html-comment':
+			return 'html';
+		case 'callout':
+			return 'callout';
+		default:
+			return null;
+	}
+}
+
+function nativeMetadata(root, file) {
+	const absolutePath = path.join(root, ...file.path.split('/'));
+	const content = fs.readFileSync(absolutePath, 'utf8');
+	const note = core.scannedNoteFromContent({
+		absolutePath,
+		relativePath: file.path,
+		fallbackTitle: file.basename,
+		size: file.stat.size,
+		modifiedAt: new Date(file.stat.mtime).toISOString(),
+		content,
+	});
+	const frontmatterPosition = note.sections.find(
+		(section) => section.type === 'frontmatter'
+	)?.position;
+	const headingSections = note.sections.filter(
+		(section) => section.type === 'heading'
+	);
+	const sections = note.sections.flatMap((section) => {
+		const type = nativeSectionType(section.type);
+		return type ? [{ type, position: section.position }] : [];
+	});
+	const edges = (kind) => note.edges
+		.filter((edge) => edge.kind === kind)
+		.map(nativeReference);
+	const fallbackPosition = {
+		start: { line: 0, col: 0, offset: 0 },
+		end: { line: 0, col: 0, offset: 0 },
+	};
+
+	return {
+		frontmatter: note.frontmatter,
+		...(frontmatterPosition ? { frontmatterPosition } : {}),
+		frontmatterLinks: edges('frontmatter'),
+		tags: note.tags.map((tag) => ({
+			tag: `#${tag}`,
+			position: frontmatterPosition ?? fallbackPosition,
+		})),
+		headings: note.headings.map((heading, index) => ({
+			heading,
+			level: 1,
+			position: headingSections[index]?.position ?? fallbackPosition,
+		})),
+		blocks: Object.fromEntries(note.blockIds.map((id) => [
+			id,
+			{ id, position: fallbackPosition },
+		])),
+		links: edges('link'),
+		embeds: edges('embed'),
+		referenceLinks: edges('reference'),
+		sections,
+	};
+}
+
+function resolveNativeLink(root, linkPath, sourcePath) {
+	const normalized = linkPath.replace(/\\/gu, '/').replace(/^\/+/u, '');
+	const sourceDirectory = path.posix.dirname(sourcePath);
+	const withExtension = normalized.endsWith('.md') ? normalized : `${normalized}.md`;
+	const candidates = new Set([
+		normalized,
+		withExtension,
+		path.posix.join(sourceDirectory, normalized),
+		path.posix.join(sourceDirectory, withExtension),
+	]);
+	const files = markdownFiles(root);
+	for (const file of files) {
+		if (candidates.has(file.path)) {
+			return file;
+		}
+	}
+	const basename = path.posix.basename(normalized, path.posix.extname(normalized));
+	const basenameMatches = files.filter((file) => file.basename === basename);
+	return basenameMatches.length === 1 ? basenameMatches[0] : null;
+}
+
 function fakeObsidianApp(root) {
 	return {
 		vault: {
 			getMarkdownFiles: () => markdownFiles(root),
+			getAbstractFileByPath: (filePath) =>
+				markdownFiles(root).find((file) => file.path === filePath) ?? null,
 			cachedRead: async (file) =>
 				fsPromises.readFile(path.join(root, ...file.path.split('/')), 'utf8'),
+			read: async (file) =>
+				fsPromises.readFile(path.join(root, ...file.path.split('/')), 'utf8'),
+		},
+		metadataCache: {
+			getFileCache: (file) => nativeMetadata(root, file),
+			getFirstLinkpathDest: (linkPath, sourcePath) =>
+				resolveNativeLink(root, linkPath, sourcePath),
+			resolvedLinks: {},
+			unresolvedLinks: {},
+			on: () => ({ id: 'benchmark-metadata-cache-listener' }),
+			offref: () => {},
+		},
+		fileManager: {
+			generateMarkdownLink: (target, _sourcePath, subpath = '', alias = '') =>
+				`[[${target.path.replace(/\.md$/u, '')}${subpath}${alias ? `|${alias}` : ''}]]`,
 		},
 	};
 }
@@ -154,11 +270,19 @@ function loadAdapter(bundlePath) {
 	return require(bundlePath).ObsidianKnowledgeIndexAdapter;
 }
 
-async function waitForReady(adapter, vaultRoot) {
+async function waitForReady(adapter, vaultRoot, rebuildState) {
 	for (;;) {
 		const snapshot = adapter.scanSnapshot(vaultRoot);
 		if (snapshot?.index?.index_state === 'ready') {
 			return snapshot;
+		}
+		if (rebuildState.error) {
+			throw rebuildState.error;
+		}
+		if (rebuildState.settled) {
+			throw new Error(
+				`Adapter rebuild completed without reaching ready state: ${snapshot?.index?.index_state ?? 'missing'}.`
+			);
 		}
 		await new Promise((resolve) => setImmediate(resolve));
 	}
@@ -168,10 +292,20 @@ async function createReadyAdapter(bundlePath, fixtureRoot) {
 	const Adapter = loadAdapter(bundlePath);
 	const adapter = Adapter.create(fakeObsidianApp(fixtureRoot), fixtureRoot);
 	const rebuildPromise = adapter.rebuild();
+	const rebuildState = { settled: false, error: null };
+	void rebuildPromise.then(
+		() => {
+			rebuildState.settled = true;
+		},
+		(error) => {
+			rebuildState.error = error;
+			rebuildState.settled = true;
+		}
+	);
 	const runtimeStartedAt = nowNs();
 	const [report, readyScan] = await Promise.all([
 		rebuildPromise,
-		waitForReady(adapter, fixtureRoot),
+		waitForReady(adapter, fixtureRoot, rebuildState),
 	]);
 	return {
 		adapter,

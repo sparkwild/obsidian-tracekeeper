@@ -8,6 +8,8 @@
 	"types": "dist/server.d.ts",
 	"scripts": {
 		"test": "node ./scripts/contracts.mjs && node ./scripts/smoke.mjs && node ./scripts/writeback-recovery.mjs && node ./scripts/finish-task-recovery.mjs",
+		"test:loopback": "node ./scripts/smoke.mjs",
+		"test:non-listener": "node ./scripts/contracts.mjs && node ./scripts/vault-repository-generated-records.mjs && node ./scripts/writeback-recovery.mjs && node ./scripts/finish-task-recovery.mjs",
 		"test:contracts": "node ./scripts/contracts.mjs",
 		"smoke": "node ./scripts/smoke.mjs",
 		"test:writeback-recovery": "node ./scripts/writeback-recovery.mjs",

@@ -69,6 +69,10 @@ export interface MemoryInspectorSnapshot {
 	lastRebuild: string;
 	readFailures: ScanError[];
 	staleRecordCount: number;
+	projectMemoryCounts: {
+		immutableEntries: number;
+		legacyNotes: number;
+	};
 	updatedAt: string;
 }
 
@@ -268,6 +272,8 @@ export const buildMemoryInspectorSnapshot = (
 ): MemoryInspectorSnapshot => {
 	const persistedPaths = new Set<string>();
 	const records: MemoryInspectorRecord[] = [];
+	let immutableProjectEntryCount = 0;
+	let legacyProjectNoteCount = 0;
 
 	for (const note of input.index.notes) {
 		const path = normalizeRecordPath(note.path);
@@ -277,6 +283,17 @@ export const buildMemoryInspectorSnapshot = (
 		persistedPaths.add(path);
 		const project = projectFromMemoryPath(path)
 			|| frontmatterString(note, ['project_hint', 'projectHint', 'related_project', 'relatedProject']);
+		if (memoryScopeForPath(path, project) === 'project') {
+			const recordType = (
+				frontmatterString(note, ['type'])
+				|| asString(note.type)
+			).toLowerCase();
+			if (recordType === 'project_memory_entry') {
+				immutableProjectEntryCount += 1;
+			} else {
+				legacyProjectNoteCount += 1;
+			}
+		}
 		records.push({
 			id: `persisted:${path}`,
 			path,
@@ -393,6 +410,10 @@ export const buildMemoryInspectorSnapshot = (
 		lastRebuild: input.index.lastRebuild,
 		readFailures: input.index.errors.filter((error) => isMemoryPath(error.path)),
 		staleRecordCount: missingByPath.size,
+		projectMemoryCounts: {
+			immutableEntries: immutableProjectEntryCount,
+			legacyNotes: legacyProjectNoteCount,
+		},
 		updatedAt: input.now || new Date().toISOString(),
 	};
 };

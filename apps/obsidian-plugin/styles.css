@@ -1,3 +1,21 @@
+.theme-light {
+	--tracekeeper-text-success: color-mix(
+		in srgb,
+		var(--text-success, var(--color-green)) 55%,
+		var(--text-normal)
+	);
+	--tracekeeper-text-warning: color-mix(
+		in srgb,
+		var(--text-warning, var(--color-orange)) 55%,
+		var(--text-normal)
+	);
+	--tracekeeper-text-error: color-mix(
+		in srgb,
+		var(--text-error, var(--color-red)) 55%,
+		var(--text-normal)
+	);
+}
+
 .tracekeeper-view-root {
 	padding: 12px 16px 24px;
 	font-size: 13px;
@@ -102,7 +120,7 @@
 }
 
 .tracekeeper-metric-card--warning {
-	border-color: var(--text-warning);
+	border-color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-card {
@@ -420,7 +438,7 @@
 
 .tracekeeper-connect-ai-tool-modal__compatibility {
 	padding: 8px 10px;
-	border-inline-start: 3px solid var(--text-warning);
+	border-inline-start: 3px solid var(--tracekeeper-text-warning, var(--text-warning));
 	background: var(--background-secondary);
 	color: var(--text-muted);
 }
@@ -748,8 +766,8 @@ button.tracekeeper-task-card__change-chip:focus-visible {
 }
 
 .tracekeeper-observability-warning {
-	border-color: var(--text-warning);
-	box-shadow: inset 3px 0 0 var(--text-warning);
+	border-color: var(--tracekeeper-text-warning, var(--text-warning));
+	box-shadow: inset 3px 0 0 var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-observability-warning p {
@@ -790,15 +808,15 @@ button.tracekeeper-task-card__change-chip:focus-visible {
 }
 
 button.tracekeeper-confirm-button {
-	background: var(--text-success);
-	background-color: var(--text-success);
+	background: var(--tracekeeper-text-success, var(--text-success));
+	background-color: var(--tracekeeper-text-success, var(--text-success));
 	color: var(--text-on-accent);
 }
 
 button.tracekeeper-confirm-button:hover,
 button.tracekeeper-confirm-button:focus {
-	background: var(--text-success);
-	background-color: var(--text-success);
+	background: var(--tracekeeper-text-success, var(--text-success));
+	background-color: var(--tracekeeper-text-success, var(--text-success));
 	color: var(--text-on-accent);
 	filter: brightness(0.95);
 }
@@ -809,15 +827,15 @@ button.tracekeeper-confirm-button:disabled {
 }
 
 button.tracekeeper-revision-button {
-	background: var(--text-warning);
-	background-color: var(--text-warning);
+	background: var(--tracekeeper-text-warning, var(--text-warning));
+	background-color: var(--tracekeeper-text-warning, var(--text-warning));
 	color: var(--text-on-accent);
 }
 
 button.tracekeeper-revision-button:hover,
 button.tracekeeper-revision-button:focus {
-	background: var(--text-warning);
-	background-color: var(--text-warning);
+	background: var(--tracekeeper-text-warning, var(--text-warning));
+	background-color: var(--tracekeeper-text-warning, var(--text-warning));
 	color: var(--text-on-accent);
 	filter: brightness(0.95);
 }
@@ -854,28 +872,34 @@ button.tracekeeper-revision-button:disabled {
 
 .tracekeeper-badge--risk-high,
 .tracekeeper-badge--risk-critical {
-	border-color: var(--text-error);
-	color: var(--text-error);
+	border-color: var(--tracekeeper-text-error, var(--text-error));
+	color: var(--tracekeeper-text-error, var(--text-error));
 }
 
 .tracekeeper-badge--risk-medium {
-	border-color: var(--text-warning);
-	color: var(--text-warning);
+	border-color: var(--tracekeeper-text-warning, var(--text-warning));
+	color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-badge--warning {
-	border-color: var(--text-warning);
-	color: var(--text-warning);
+	border-color: var(--tracekeeper-text-warning, var(--text-warning));
+	color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-badge--error {
-	border-color: var(--text-error);
-	color: var(--text-error);
+	border-color: var(--tracekeeper-text-error, var(--text-error));
+	color: var(--tracekeeper-text-error, var(--text-error));
 }
 
 .tracekeeper-badge--success {
-	border-color: var(--text-success, var(--color-green));
-	color: var(--text-success, var(--color-green));
+	border-color: var(
+		--tracekeeper-text-success,
+		var(--text-success, var(--color-green))
+	);
+	color: var(
+		--tracekeeper-text-success,
+		var(--text-success, var(--color-green))
+	);
 }
 
 .tracekeeper-badge--muted {
@@ -1070,8 +1094,8 @@ button.tracekeeper-review-inbox__row input[type='checkbox'] {
 }
 
 .tracekeeper-review-inbox__notice--warning {
-	border-left: 3px solid var(--text-warning);
-	color: var(--text-warning);
+	border-left: 3px solid var(--tracekeeper-text-warning, var(--text-warning));
+	color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-review-inbox__summary {
@@ -1113,7 +1137,7 @@ button.tracekeeper-review-inbox__row input[type='checkbox'] {
 }
 
 .tracekeeper-review-inbox__writeback pre.is-empty {
-	color: var(--text-warning);
+	color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-review-inbox__diff {
@@ -1178,7 +1202,7 @@ button.tracekeeper-review-inbox__row input[type='checkbox'] {
 }
 
 .tracekeeper-review-inbox__candidate-warning {
-	color: var(--text-warning);
+	color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-review-inbox__source {
@@ -1292,7 +1316,7 @@ button.tracekeeper-review-inbox__row input[type='checkbox'] {
 }
 
 .tracekeeper-review-change-preview--empty {
-	color: var(--text-warning);
+	color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-review-source-line {
@@ -1325,7 +1349,7 @@ button.tracekeeper-review-inbox__row input[type='checkbox'] {
 .tracekeeper-revision-comment {
 	margin-top: 8px;
 	padding: 8px;
-	border-left: 3px solid var(--text-warning);
+	border-left: 3px solid var(--tracekeeper-text-warning, var(--text-warning));
 	background: var(--background-primary);
 }
 
@@ -1358,11 +1382,11 @@ button.tracekeeper-review-inbox__row input[type='checkbox'] {
 }
 
 .tracekeeper-issue-row--error {
-	border-color: var(--text-error);
+	border-color: var(--tracekeeper-text-error, var(--text-error));
 }
 
 .tracekeeper-issue-row--warning {
-	border-color: var(--text-warning);
+	border-color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-graph-candidate-row {
@@ -1648,6 +1672,39 @@ button.tracekeeper-review-queue-button--action:focus {
 
 .tracekeeper-review-revision-modal {
 	max-width: 700px;
+}
+
+.tracekeeper-review-archive-modal {
+	max-width: min(760px, calc(100vw - 32px));
+}
+
+.tracekeeper-review-archive-modal__items,
+.tracekeeper-review-archive-modal__conflicts {
+	max-height: min(44vh, 420px);
+	overflow: auto;
+}
+
+.tracekeeper-review-archive-modal__items code,
+.tracekeeper-review-archive-modal__conflicts {
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-review-archive-modal__items small {
+	display: block;
+	color: var(--text-muted);
+}
+
+.tracekeeper-runtime-log-cleanup-modal {
+	max-width: min(760px, calc(100vw - 32px));
+}
+
+.tracekeeper-runtime-log-cleanup-modal__file-list {
+	max-height: min(28vh, 280px);
+	overflow: auto;
+}
+
+.tracekeeper-runtime-log-cleanup-modal__file-list li {
+	overflow-wrap: anywhere;
 }
 
 .tracekeeper-recall-results {

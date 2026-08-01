@@ -1,4 +1,4 @@
-export type SkillInstallAuditResult = 'success' | 'failed';
+export type SkillInstallAuditResult = 'success' | 'partial' | 'failed';
 
 export interface SkillInstallAuditInput {
 	action: 'install' | 'update' | 'migrate';

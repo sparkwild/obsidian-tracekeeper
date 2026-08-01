@@ -16,6 +16,7 @@ const ACCEPTED_LOCAL_TRUST_TOOLS = [
 	'tracekeeper.status',
 	'tracekeeper.lint',
 	'tracekeeper.recall',
+	'tracekeeper.project_memory',
 	'tracekeeper.read_note',
 	'tracekeeper.start_task',
 	'tracekeeper.finish_task',
@@ -69,15 +70,31 @@ async function initializeAndList(handler, clientName, clientVersion, sessionId) 
 }
 
 function auditSections(vaultRoot) {
-	const auditPath = path.join(vaultRoot, '00_tracekeeper', 'control', 'audit_log.md');
-	const content = fs.readFileSync(auditPath, 'utf8');
-	return content
+	const auditRoot = path.join(vaultRoot, '00_tracekeeper', 'control', 'audit');
+	const documents = [];
+	if (fs.existsSync(auditRoot)) {
+		for (const year of fs.readdirSync(auditRoot, { withFileTypes: true })) {
+			if (!year.isDirectory() || !/^\d{4}$/.test(year.name)) {
+				continue;
+			}
+			const yearRoot = path.join(auditRoot, year.name);
+			for (const file of fs.readdirSync(yearRoot, { withFileTypes: true })) {
+				if (file.isFile() && /^\d{4}-\d{2}-\d{2}\.md$/.test(file.name)) {
+					documents.push(path.join(yearRoot, file.name));
+				}
+			}
+		}
+	}
+	return documents
+		.sort()
+		.map((documentPath) => fs.readFileSync(documentPath, 'utf8'))
+		.join('\n')
 		.split('\n## ')
 		.map((section) => section.trim())
 		.filter(Boolean);
 }
 
-test('accepted local trust capabilities expose the exact fixed ten-tool surface', () => {
+test('accepted local trust capabilities expose the exact fixed eleven-tool surface', () => {
 	assert.deepEqual(LOCAL_TRUST_CAPABILITIES, [
 		'vault.read',
 		'workflow.manage',
@@ -126,7 +143,7 @@ test('observed-client audit timestamps only successful initialize and tool use',
 		const handler = new McpJsonRpcHandler({ defaultVaultRoot: vaultRoot });
 		const { state } = await initializeAndList(handler, 'Codex CLI', '9.9.9', 'session-observed');
 		let sections = auditSections(vaultRoot);
-		const connection = sections.find((section) => section.includes('- type: connection'));
+		const connection = sections.find((section) => section.includes('- type: "connection"'));
 		assert.ok(connection);
 		assert.match(connection, /- audit_schema_version: 2/);
 		assert.match(connection, /- observed_client_name_raw: "Codex CLI"/);
@@ -198,7 +215,7 @@ test('observed-client audit timestamps only successful initialize and tool use',
 		assert.doesNotMatch(failedUse, /- last_successful_tool:/);
 		for (const reason of ['tool_call_unknown', 'tool_call_invalid_arguments']) {
 			const rejectedUse = sections.find(
-				(section) => section.includes('- type: tool-call')
+				(section) => section.includes('- type: "tool-call"')
 					&& section.includes(`- diagnostic_reason: "${reason}"`)
 			);
 			assert.ok(rejectedUse);

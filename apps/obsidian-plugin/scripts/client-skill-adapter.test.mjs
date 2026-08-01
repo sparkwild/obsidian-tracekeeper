@@ -23,9 +23,13 @@ try {
 	const module = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 
 	const files = new Map();
+	const symbolicLinks = new Set();
 	let renameFailureTarget = '';
 	const fileApi = {
-		existsSync: (filePath) => files.has(filePath),
+		existsSync: (filePath) => files.has(filePath) || symbolicLinks.has(filePath),
+		lstatSync: (filePath) => ({
+			isSymbolicLink: () => symbolicLinks.has(filePath),
+		}),
 		readFileSync: (filePath) => {
 			if (!files.has(filePath)) {
 				throw new Error(`missing ${filePath}`);
@@ -106,6 +110,13 @@ try {
 		planTtlMs: 1_000,
 	});
 	assert.equal(emptyAdapter.detect(codexProfile).state, 'not_installed');
+	symbolicLinks.add(path.join(homeDirectory, '.agents'));
+	assert.throws(
+		() => emptyAdapter.detect(codexProfile),
+		(error) => error instanceof module.ClientSkillPlanConflictError
+			&& /symbolic link/i.test(error.message)
+	);
+	symbolicLinks.clear();
 	const installPlan = emptyAdapter.previewInstall(codexProfile);
 	assert.equal(installPlan.action, 'install');
 	assert.equal(installPlan.canConfirm, true);
@@ -260,7 +271,7 @@ try {
 		(error) => error instanceof module.ClientSkillPlanConflictError && /Expected a Skill install preview/.test(error.message)
 	);
 
-	console.log(JSON.stringify({ result: 'pass', checks: 46 }));
+	console.log(JSON.stringify({ result: 'pass', checks: 47 }));
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

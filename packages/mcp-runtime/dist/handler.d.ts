@@ -1,5 +1,5 @@
 import { type JsonRpcResponse } from './protocol';
-import { type ToolInvocationContext } from './tools';
+import { type ProposalTransitionPort, type ToolInvocationContext } from './tools';
 import type { VaultRepository } from '@tracekeeper/core';
 import { type ObservedClientType } from './observed-client';
 export declare const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -21,11 +21,13 @@ export interface McpJsonRpcHandlerOptions {
     defaultVaultRoot?: string;
     vaultConfigDir?: string;
     vaultRepository?: VaultRepository;
+    proposalTransitionPort?: ProposalTransitionPort;
     knowledgeSnapshotProvider?: ToolInvocationContext['knowledgeSnapshotProvider'];
     graphProfile?: unknown;
     memoryRules?: ToolInvocationContext['memoryRules'];
     contentLanguage?: unknown;
     contentLanguageSource?: unknown;
+    writebackConfirmationSecret?: string | Uint8Array;
     runtimeVersion?: string;
     transport?: string;
 }
@@ -33,11 +35,13 @@ export declare class McpJsonRpcHandler {
     private defaultVaultRoot?;
     private vaultConfigDir?;
     private vaultRepository?;
+    private proposalTransitionPort?;
     private knowledgeSnapshotProvider?;
     private graphProfile?;
     private memoryRules?;
     private contentLanguage?;
     private contentLanguageSource?;
+    private writebackConfirmationSecret?;
     private runtimeVersion;
     private transport;
     constructor(options?: McpJsonRpcHandlerOptions);

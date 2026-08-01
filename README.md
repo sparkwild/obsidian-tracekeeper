@@ -58,7 +58,7 @@ Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian i
 
 The service Bearer is an access gate, not proof of client identity. OAuth does not create per-client credentials or permissions. Successful requests use the Runtime's fixed `local-user` capability set, while MCP `clientInfo` is retained only as self-reported observation data. Removing one client configuration does not revoke that client at the server. The advanced global credential reset terminates all Sessions and requires every configured client to authorize again.
 
-AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and submit memory updates according to your memory rules. Global memory goes to review by default; project memory can auto-save as an append-only project note when you enable that rule.
+AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and submit memory updates according to your memory rules. Global memory goes to review by default; when you enable project auto-save, each eligible operation creates its own immutable Markdown entry under a stable project hub.
 
 For shared use across Codex, Claude, OpenClaw, and other MCP clients, the companion Skill selects `no_track`, `recall_only`, or `tracked_task`. Tracked work starts once, recalls the narrowest useful context, finishes once with the returned task id, and reports whether closeout memory was saved, queued, suggested, or blocked. Recall results label Vault content as knowledge data rather than instructions, and structured MCP actions reduce client-side guesswork. See the [Agent Workflow](./docs/features/AGENT_WORKFLOW.md).
 
@@ -78,7 +78,9 @@ Global long-term memory changes are review-gated by default. When an assistant p
 
 Approval and writeback are separate actions. Tracekeeper only applies an approved proposal to its target note after you preview and explicitly confirm the writeback.
 
-Project memory is lighter by default: project-scoped updates can auto-save as append-only entries in `01_knowledge/memory/projects/<project>/memory.md`, with duplicate signatures to avoid repeated writes. Project auto-save still requires a valid Wiki bridge, so memory lines remain connected to topic pages. Task closeout defaults to auto mode: project memory follows the project rule, global memory enters Knowledge Change Review, and summary-only closeouts are recorded without creating empty memory items.
+Project memory is lighter by default: project-scoped updates can auto-save as create-only entries under `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/`. Stable operation identity makes an exact retry reuse the same entry and rejects a changed payload instead of overwriting another operation. Every new entry links to the stable project hub and verified Wiki or Source notes through Obsidian-native links. Existing project `memory.md` files remain readable and catalogued but are not rewritten, split, or migrated automatically.
+
+`tracekeeper.recall` remains a relevance-ranked selection. When an Agent needs complete project-memory enumeration, the read-only `tracekeeper.project_memory` catalog lists immutable entries and legacy notes over one index generation without returning note bodies.
 
 ## What It Helps With
 
@@ -86,7 +88,7 @@ Project memory is lighter by default: project-scoped updates can auto-save as ap
 - Capturing recurring preferences, decisions, and lessons as long-term memory.
 - Reviewing AI-generated knowledge before it becomes part of your vault.
 - Keeping AI collaboration grounded in your own Obsidian workspace.
-- A stable Memory + Wiki structure where project memory lines stay connected to topic hubs.
+- A stable Memory + Wiki structure where immutable project-memory entries stay connected to project and topic hubs.
 - Building a personal knowledge system where automation suggests and the user decides.
 
 ## Graph Health

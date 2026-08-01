@@ -8,6 +8,10 @@ product and a bounded Agent integration.
 - The codebase is a TypeScript and Node.js npm workspace.
 - The production product is an Obsidian desktop plugin and uses the Obsidian
   plugin, Vault, View, Modal, Command, Setting, and lifecycle APIs.
+- Production code uses only public Obsidian plugin APIs declared by the
+  supported API package. Native move, link generation, atomic file processing,
+  metadata convergence, and configured trash use `FileManager` or `Vault`
+  methods rather than private configuration access or adapter internals.
 - Plugin UI defaults to native Obsidian primitives and local styles. A UI
   dependency requires a real-plugin proof for bundle size, theme variables, CSS
   isolation, keyboard behavior, accessibility, and cleanup.
@@ -43,6 +47,10 @@ product and a bounded Agent integration.
 - `apps/obsidian-plugin` and `apps/mcp-server` are composition roots.
 - npm scripts provide type checking, builds, tests, packaging, architecture
   checks, Agent ecosystem checks, and local evaluation tooling.
+- Compatibility is qualified in isolated temporary Vaults on the manifest's
+  minimum Obsidian version and the current stable desktop version. Native API
+  behavior and the previous packaged-plugin upgrade path require real-plugin
+  evidence in addition to stubbed unit fixtures.
 - GitHub Actions builds release assets and artifact attestations from the tagged
   source commit.
 

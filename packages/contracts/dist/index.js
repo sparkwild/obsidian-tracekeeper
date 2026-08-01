@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.START_TASK_OUTPUT_SCHEMA = exports.RECALL_OUTPUT_SCHEMA = exports.FINISH_TASK_OUTPUT_SCHEMA = exports.GENERIC_TOOL_OUTPUT_SCHEMA = exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA = exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = exports.SCHEMA_VERSION = exports.AGENT_ACTION_SCHEMA = exports.AGENT_ACTION_REASON_CODES = exports.AGENT_ACTION_TIMINGS = exports.AGENT_ACTION_KINDS = exports.isCompatibilityTool = exports.isPublicTool = exports.getContractNamesByVisibility = exports.getContractByName = exports.publicContracts = exports.compatibilityToolNames = exports.toolContracts = exports.PUBLIC_TOOL_NAME_ORDER = void 0;
+exports.START_TASK_OUTPUT_SCHEMA = exports.RECALL_OUTPUT_SCHEMA = exports.PROJECT_MEMORY_OUTPUT_SCHEMA = exports.FINISH_TASK_OUTPUT_SCHEMA = exports.GENERIC_TOOL_OUTPUT_SCHEMA = exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA = exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = exports.SCHEMA_VERSION = exports.AGENT_ACTION_SCHEMA = exports.AGENT_ACTION_REASON_CODES = exports.AGENT_ACTION_TIMINGS = exports.AGENT_ACTION_KINDS = exports.isCompatibilityTool = exports.isPublicTool = exports.getContractNamesByVisibility = exports.getContractByName = exports.publicContracts = exports.compatibilityToolNames = exports.toolContracts = exports.PUBLIC_TOOL_NAME_ORDER = void 0;
 var contracts_1 = require("./contracts");
 Object.defineProperty(exports, "PUBLIC_TOOL_NAME_ORDER", { enumerable: true, get: function () { return contracts_1.PUBLIC_TOOL_NAME_ORDER; } });
 Object.defineProperty(exports, "toolContracts", { enumerable: true, get: function () { return contracts_1.toolContracts; } });
@@ -21,5 +21,6 @@ Object.defineProperty(exports, "COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA", { enumerable
 Object.defineProperty(exports, "COMMON_TOOL_FAILURE_OUTPUT_SCHEMA", { enumerable: true, get: function () { return result_schemas_1.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA; } });
 Object.defineProperty(exports, "GENERIC_TOOL_OUTPUT_SCHEMA", { enumerable: true, get: function () { return result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA; } });
 Object.defineProperty(exports, "FINISH_TASK_OUTPUT_SCHEMA", { enumerable: true, get: function () { return result_schemas_1.FINISH_TASK_OUTPUT_SCHEMA; } });
+Object.defineProperty(exports, "PROJECT_MEMORY_OUTPUT_SCHEMA", { enumerable: true, get: function () { return result_schemas_1.PROJECT_MEMORY_OUTPUT_SCHEMA; } });
 Object.defineProperty(exports, "RECALL_OUTPUT_SCHEMA", { enumerable: true, get: function () { return result_schemas_1.RECALL_OUTPUT_SCHEMA; } });
 Object.defineProperty(exports, "START_TASK_OUTPUT_SCHEMA", { enumerable: true, get: function () { return result_schemas_1.START_TASK_OUTPUT_SCHEMA; } });

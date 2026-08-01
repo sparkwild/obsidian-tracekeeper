@@ -1,4 +1,5 @@
 import type { VaultRepository } from '@tracekeeper/core';
+import { type ProposalTransitionPort } from './tools';
 import { McpJsonRpcHandler } from './handler';
 import { type PairingTicket, type PairingTicketStatus } from './local-oauth';
 export type { PairingTicket, PairingTicketState, PairingTicketStatus } from './local-oauth';
@@ -25,6 +26,7 @@ export interface StreamableHttpRuntimeOptions {
     defaultVaultRoot?: string;
     vaultConfigDir?: string;
     vaultRepository?: VaultRepository;
+    proposalTransitionPort?: ProposalTransitionPort;
     knowledgeSnapshotProvider?: NonNullable<ConstructorParameters<typeof McpJsonRpcHandler>[0]>['knowledgeSnapshotProvider'];
     graphProfile?: unknown;
     memoryRules?: NonNullable<ConstructorParameters<typeof McpJsonRpcHandler>[0]>['memoryRules'];

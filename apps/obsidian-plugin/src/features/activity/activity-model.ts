@@ -41,6 +41,8 @@ export interface AgentTaskRecord {
 	memoryReads: string[];
 	memoryWrites: string[];
 	sourceCaptures: string[];
+	proposalIds: string[];
+	proposalPaths: string[];
 	proposals: string[];
 	memoryCandidates: string[];
 	snippet: string;

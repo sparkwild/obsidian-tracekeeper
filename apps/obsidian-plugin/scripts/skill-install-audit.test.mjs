@@ -45,6 +45,15 @@ try {
 		timestamp: '2026-07-23T00:00:00.000Z',
 	});
 	assert.match(migration, /action: skill_migrate/);
+	const partial = audit.buildSkillInstallAuditEntry({
+		action: 'install',
+		clientId: 'codex',
+		bundleHash: hash,
+		backupCreated: false,
+		result: 'partial',
+		timestamp: '2026-07-23T00:00:00.000Z',
+	});
+	assert.match(partial, /result: partial/);
 
 	const failed = audit.buildSkillInstallAuditEntry({
 		action: 'install',
@@ -60,7 +69,7 @@ try {
 	assert.match(failed, /backup_created: false/);
 	assert.match(failed, /result: failed/);
 	assert.equal(failed.includes('token=secret'), false);
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 13 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 14 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

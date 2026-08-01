@@ -352,6 +352,7 @@ export const markConnectionVerified = (
 		return state;
 	}
 	return timestamped(state, {
+		clientConfiguredAt: verifiedAt,
 		connectionVerifiedAt: verifiedAt,
 		connectionVerifiedSessionId: verifiedSessionId,
 		firstRecallCompletedAt: '',

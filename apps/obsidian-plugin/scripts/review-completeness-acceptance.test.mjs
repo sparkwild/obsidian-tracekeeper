@@ -5,11 +5,13 @@ import fs from 'node:fs';
 const read = (path) => fs.readFileSync(path, 'utf8');
 
 const modelSource = read('src/features/review/review-queue-model.ts');
+const reviewViewModelSource = read('src/features/review/review-view-model.ts');
 const contextSource = read('src/features/review/review-context-model.ts');
 const targetPolicySource = read('src/features/review/review-target-policy.ts');
 const controllerSource = read('src/features/review/review-queue-controller.ts');
 const viewSource = read('src/features/review/review-queue-view.ts');
 const modalSource = read('src/features/review/review-modals.ts');
+const stylesSource = read('styles.css');
 const governanceSource = read('../../docs/features/KNOWLEDGE_GOVERNANCE.md');
 
 assert.match(modelSource, /\| 'needs_completion'/);
@@ -29,10 +31,10 @@ assert.match(contextSource, /taskContextForProposal/);
 
 assert.match(controllerSource, /normalizedStatus === 'approved'/);
 assert.match(controllerSource, /readMemoryProposalFile\(file\)/);
-assert.match(controllerSource, /getReviewProposalValidity\(currentProposal, \{ exists: targetExists \}\)/);
-assert.match(controllerSource, /Incomplete proposals cannot be approved/);
-assert.match(controllerSource, /isReviewRemediationTargetPath\(normalizedTarget\)/);
-assert.match(controllerSource, /existing Memory or Wiki note/);
+assert.match(reviewViewModelSource, /getReviewProposalValidity\(proposal,\s*targetResolution\)/);
+assert.match(viewSource, /Withdraw approval and complete/);
+assert.match(targetPolicySource, /isReviewRemediationTargetPath = \(value: string\)/);
+assert.match(viewSource, /existing Memory\/Wiki notes in this Vault/);
 
 assert.match(modalSource, /createEl\('select'/);
 assert.match(modalSource, /Arbitrary paths are not accepted/);
@@ -51,7 +53,14 @@ assert.match(controllerSource, /dry_run: true/);
 assert.match(modalSource, /Generating writeback preview/);
 assert.match(modalSource, /Confirm apply/);
 assert.match(modalSource, /applyApprovedWriteback/);
+assert.match(stylesSource, /\.theme-light\s*\{[\s\S]*--tracekeeper-text-success:/);
+assert.match(stylesSource, /\.theme-light\s*\{[\s\S]*--tracekeeper-text-warning:/);
+assert.match(stylesSource, /\.theme-light\s*\{[\s\S]*--tracekeeper-text-error:/);
+assert.match(stylesSource, /--tracekeeper-text-success:[\s\S]*var\(--text-normal\)/);
+assert.match(stylesSource, /\.tracekeeper-badge--success\s*\{[\s\S]*--tracekeeper-text-success/);
+assert.match(stylesSource, /\.tracekeeper-badge--risk-medium\s*\{[\s\S]*--tracekeeper-text-warning/);
+assert.match(stylesSource, /button\.tracekeeper-confirm-button\s*\{[\s\S]*--tracekeeper-text-success/);
 assert.match(governanceSource, /incomplete proposal/i);
 assert.match(governanceSource, /Memory\/Wiki/i);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 36 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 43 })}\n`);

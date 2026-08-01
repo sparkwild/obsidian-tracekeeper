@@ -1,4 +1,5 @@
 export * from './markdown';
+export * from './knowledge-note';
 export * from './scan';
 export * from './recall';
 export * from './lint';
@@ -9,5 +10,8 @@ export * from './knowledge-architecture';
 export * from './source-analysis';
 export * from './legacy-structure';
 export * from './operation-journal';
+export * from './proposal-transition';
+export * from './record-lifecycle';
 export * from './knowledge-index';
 export * from './vault-repository';
+export * from './project-memory';

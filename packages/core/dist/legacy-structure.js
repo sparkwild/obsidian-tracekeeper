@@ -128,6 +128,8 @@ function renderLegacyMigrationReview(input) {
         `source_path: ${JSON.stringify(input.oldPath)}`,
         `target_path: ${JSON.stringify(input.newPath)}`,
         `migration_id: ${JSON.stringify(input.migrationId)}`,
+        `source_hash: ${JSON.stringify(input.sourceHash ?? 'unavailable')}`,
+        `target_hash: ${JSON.stringify(input.targetHash ?? 'missing')}`,
         '---',
         '',
         '# Legacy migration review',

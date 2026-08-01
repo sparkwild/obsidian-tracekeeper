@@ -37,8 +37,8 @@ export interface ToolContract<Name extends string = string> {
     readonly deprecated?: ToolDeprecation;
     readonly description?: string;
 }
-export type TracekeeperToolName = 'tracekeeper.status' | 'tracekeeper.graph_health' | 'tracekeeper.start_task' | 'tracekeeper.recall' | 'tracekeeper.project_context' | 'tracekeeper.project_history' | 'tracekeeper.read_note' | 'tracekeeper.review_queue' | 'tracekeeper.list_review_queue' | 'tracekeeper.list_source_requests' | 'tracekeeper.list_approved_writebacks' | 'tracekeeper.audit_recent' | 'tracekeeper.source_request' | 'tracekeeper.analyze_source_request' | 'tracekeeper.apply_approved_writeback' | 'tracekeeper.build_context_pack' | 'tracekeeper.lint' | 'tracekeeper.finish_task' | 'tracekeeper.distill_session' | 'tracekeeper.write_context_pack' | 'tracekeeper.write_session_note' | 'tracekeeper.capture_source' | 'tracekeeper.propose_memory';
-export declare const PUBLIC_TOOL_NAME_ORDER: readonly ["tracekeeper.status", "tracekeeper.lint", "tracekeeper.recall", "tracekeeper.read_note", "tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.build_context_pack", "tracekeeper.review_queue", "tracekeeper.apply_approved_writeback", "tracekeeper.source_request", "tracekeeper.capture_source", "tracekeeper.propose_memory"];
+export type TracekeeperToolName = 'tracekeeper.status' | 'tracekeeper.graph_health' | 'tracekeeper.start_task' | 'tracekeeper.recall' | 'tracekeeper.project_memory' | 'tracekeeper.project_context' | 'tracekeeper.project_history' | 'tracekeeper.read_note' | 'tracekeeper.review_queue' | 'tracekeeper.list_review_queue' | 'tracekeeper.list_source_requests' | 'tracekeeper.list_approved_writebacks' | 'tracekeeper.audit_recent' | 'tracekeeper.source_request' | 'tracekeeper.analyze_source_request' | 'tracekeeper.apply_approved_writeback' | 'tracekeeper.build_context_pack' | 'tracekeeper.lint' | 'tracekeeper.finish_task' | 'tracekeeper.distill_session' | 'tracekeeper.write_context_pack' | 'tracekeeper.write_session_note' | 'tracekeeper.capture_source' | 'tracekeeper.propose_memory';
+export declare const PUBLIC_TOOL_NAME_ORDER: readonly ["tracekeeper.status", "tracekeeper.lint", "tracekeeper.recall", "tracekeeper.project_memory", "tracekeeper.read_note", "tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.build_context_pack", "tracekeeper.review_queue", "tracekeeper.apply_approved_writeback", "tracekeeper.source_request", "tracekeeper.capture_source", "tracekeeper.propose_memory"];
 type PublicToolName = (typeof PUBLIC_TOOL_NAME_ORDER)[number];
 export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
@@ -102,6 +102,21 @@ export declare const toolContracts: readonly [{
     readonly workflowRole: "recall";
     readonly useCase: "recall";
     readonly description: "[read-only] Find relevant memory, Wiki, and source notes in the active local Obsidian Vault before read_note. Supports global, project, and project_history scopes.";
+    readonly inputSchema: ToolInputSchema;
+}, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
+    readonly name: "tracekeeper.project_memory";
+    readonly version: 1;
+    readonly visibility: "public";
+    readonly capability: "vault.read";
+    readonly risk: "read-only";
+    readonly effect: "read";
+    readonly idempotency: "natural";
+    readonly world: "closed";
+    readonly workflowRole: "memory";
+    readonly useCase: "project_memory";
+    readonly description: "[read-only] Enumerate the complete generation-bound project-memory catalog in the active local Obsidian Vault. Returns metadata only; use tracekeeper.read_note for full note bodies.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly deprecated: {

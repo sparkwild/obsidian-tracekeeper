@@ -58,7 +58,7 @@ Tracekeeper 在桌面端 Obsidian 开启时提供本机 Streamable HTTP MCP Runt
 
 服务 Bearer 只是访问门槛，不是客户端身份；OAuth 不创建每客户端凭据或权限。成功请求统一使用 Runtime 固定的 `local-user` 能力集合，MCP `clientInfo` 只作为客户端自报的观察信息。删除一个客户端配置不会在服务端单独撤销它；高级区的全局访问凭据重置会终止全部 Session，并要求所有客户端重新授权。
 
-AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 vault 上下文、构建 context pack、记录有限范围内的工作笔记，并按你的记忆规则提交更新。全局记忆默认进入知识变更审核；项目记忆可以按规则自动追加保存到项目记忆笔记。
+AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 vault 上下文、构建 context pack、记录有限范围内的工作笔记，并按你的记忆规则提交更新。全局记忆默认进入知识变更审核；启用项目自动保存后，每次符合条件的操作都会在稳定项目 Hub 下创建自己的不可变 Markdown 条目。
 
 Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选择 `no_track`、`recall_only` 或 `tracked_task`；tracked 工作只启动一次、使用返回的 task id、召回最小必要上下文并只结束一次。它不会保存 token、授予权限或复制 MCP 实现。召回内容会明确标记为知识数据而非指令，结构化 MCP action 则减少客户端二次猜测。参见 [Agent 工作流](./docs/features/AGENT_WORKFLOW.md)。
 
@@ -78,7 +78,9 @@ Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选
 
 审核通过和写入是两个独立动作。只有提案通过审核、完成预览并经你明确确认后，Tracekeeper 才会把内容写入对应目标笔记。
 
-项目记忆默认更轻量：项目级更新可以自动追加到 `01_knowledge/memory/projects/<project>/memory.md`，并使用内容签名避免重复写入。项目自动保存仍然要求有效的 Wiki 主题链接，避免记忆线和知识主题脱节。任务收尾默认使用自动模式：项目记忆按项目规则处理，全局记忆进入知识变更审核，只有 summary 的收尾只记录会话，不生成空记忆项。
+项目记忆默认更轻量：项目级更新可以自动保存为 `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/` 下的只创建条目。稳定操作身份会让完全相同的重试复用同一条目，并拒绝使用已存在身份覆盖不同载荷。每个新条目都会通过 Obsidian 原生链接连接稳定项目 Hub，以及已验证的 Wiki 或 Source 笔记。现有项目 `memory.md` 仍可读取并列入目录，但不会被自动改写、拆分或迁移。
+
+`tracekeeper.recall` 始终是按相关性选取的结果。当 Agent 需要完整枚举项目记忆时，只读的 `tracekeeper.project_memory` 会在同一个索引代次内分页列出不可变条目与旧版笔记，并且不返回笔记正文。
 
 ## 适合场景
 
@@ -86,7 +88,7 @@ Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选
 - 将反复出现的偏好、决策和经验沉淀为长期记忆。
 - 在 AI 生成内容写入 vault 前进行人工审核。
 - 让 AI 协作始终围绕自己的 Obsidian 知识库展开。
-- 使用稳定的 Memory + Wiki 结构，让项目记忆线能穿插到主题 hub 中。
+- 使用稳定的 Memory + Wiki 结构，让不可变项目记忆条目持续连接项目 Hub 与主题 Hub。
 - 建立一种“AI 提议，人来决定”的个人知识工作流。
 
 ## 知识图谱健康

@@ -3,9 +3,12 @@ import type TracekeeperPlugin from '../../main';
 import {
 	RUNTIME_LOG_CLEANUP_OPTIONS,
 	RUNTIME_LOG_FILTERS,
+	RUNTIME_LOG_MAX_EVENTS,
 	RUNTIME_LOG_PAGE_SIZE,
 	runtimeLogCleanupScopeLabel,
 	type RuntimeLogCategory,
+	type RuntimeLogCleanupFile,
+	type RuntimeLogCleanupPreview,
 	type RuntimeLogCleanupScope,
 	type RuntimeLogFilter,
 	type RuntimeLogItem,
@@ -17,6 +20,7 @@ import { trimText } from '../shared/markdown-record-parser';
 
 export class RuntimeLogCleanupModal extends Modal {
 	private selectedScope: RuntimeLogCleanupScope = 'older-than-week';
+	private preview: RuntimeLogCleanupPreview | null = null;
 
 	constructor(
 		app: App,
@@ -27,14 +31,24 @@ export class RuntimeLogCleanupModal extends Modal {
 	}
 
 	onOpen(): void {
+		this.contentEl.addClass('tracekeeper-runtime-log-cleanup-modal');
+		this.render();
+	}
+
+	private render(): void {
 		const { contentEl } = this;
 		contentEl.empty();
 		this.titleEl.setText(ui('清理运行日志', 'Clear runtime log'));
 
+		if (this.preview) {
+			this.renderPreview(this.preview);
+			return;
+		}
+
 		contentEl.createEl('p', {
 			text: ui(
-				'选择要清理的日志范围。该操作只会清理运行日志，不会删除任务、记忆或审核内容。',
-				'Choose which runtime log entries to clear. This only clears runtime logs; tasks, memories, and review items are not deleted.'
+				'先预览将按 Obsidian 当前“删除的文件”设置整体处理的审计文件。任务、记忆、审核项和含有新旧混合事件的文件不会被改写。',
+				'Preview the whole audit files that will be handled through Obsidian current deleted-files setting. Tasks, memories, review items, and files containing mixed old and new events are not rewritten.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
@@ -56,32 +70,176 @@ export class RuntimeLogCleanupModal extends Modal {
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
 		cancel.addEventListener('click', () => this.close());
-		const status = actions.createEl('span', { cls: 'tracekeeper-view__description' });
-		const confirm = actions.createEl('button', {
-			text: ui('清理', 'Clear'),
-			cls: 'mod-warning',
+		const status = actions.createEl('span', {
+			cls: 'tracekeeper-view__description',
+			attr: {
+				role: 'status',
+				'aria-live': 'polite',
+			},
 		});
-		confirm.addEventListener('click', () => {
+		const previewButton = actions.createEl('button', {
+			text: ui('预览', 'Preview'),
+			cls: 'mod-cta',
+		});
+		previewButton.addEventListener('click', () => {
 			void (async () => {
-				confirm.disabled = true;
+				previewButton.disabled = true;
 				cancel.disabled = true;
-				status.setText(ui('正在清理...', 'Clearing...'));
+				status.setText(ui('正在生成最新预览...', 'Building a fresh preview...'));
 				try {
-					const result = await this.plugin.cleanRuntimeLogs(this.selectedScope);
-					new Notice(ui(
-						`已清理 ${result.removedSections + result.removedFiles} 条日志记录。`,
-						`Cleared ${result.removedSections + result.removedFiles} runtime log record(s).`
-					));
-					await this.onCleaned();
-					this.close();
+					this.preview = await this.plugin.previewRuntimeLogCleanup(
+						this.selectedScope
+					);
+					this.render();
 				} catch (error) {
-					console.error('tracekeeper failed to clear runtime logs', error);
-					status.setText(ui('清理失败，请稍后重试。', 'Clear failed. Try again later.'));
-					confirm.disabled = false;
+					console.error('tracekeeper failed to preview runtime log cleanup', error);
+					status.setText(ui(
+						'预览失败，未处理任何文件。请刷新后重试。',
+						'Preview failed and no files were handled. Refresh and try again.'
+					));
+					previewButton.disabled = false;
 					cancel.disabled = false;
+					previewButton.focus();
 				}
 			})();
 		});
+		previewButton.focus();
+	}
+
+	private renderPreview(preview: RuntimeLogCleanupPreview): void {
+		const { contentEl } = this;
+		contentEl.createEl('p', {
+			text: ui(
+				`预览将按当前删除设置整体处理 ${preview.eligibleFiles.length} 个审计文件；保留 ${preview.retainedFiles.length} 个文件。不会重写文件内的部分事件。`,
+				`This preview handles ${preview.eligibleFiles.length} whole audit file(s) through the current deletion setting and retains ${preview.retainedFiles.length}. Individual events inside files are never rewritten.`
+			),
+			cls: 'tracekeeper-view__description',
+		});
+		contentEl.createEl('p', {
+			text: preview.trashBehavior,
+			cls: 'tracekeeper-view__description',
+		});
+
+		this.renderCleanupFileList(
+			ui('将按当前删除设置处理', 'Will follow the current deletion setting'),
+			preview.eligibleFiles
+		);
+		this.renderCleanupFileList(
+			ui('将保留', 'Will retain'),
+			preview.retainedFiles
+		);
+
+		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
+		const back = actions.createEl('button', { text: ui('返回', 'Back') });
+		back.addEventListener('click', () => {
+			this.preview = null;
+			this.render();
+		});
+		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
+		cancel.addEventListener('click', () => this.close());
+		const status = actions.createEl('span', {
+			cls: 'tracekeeper-view__description',
+			attr: {
+				role: 'status',
+				'aria-live': 'polite',
+			},
+		});
+		const confirm = actions.createEl('button', {
+			text: ui(
+				'确认按 Obsidian 当前删除设置处理',
+				'Confirm Obsidian file removal'
+			),
+			cls: 'mod-warning',
+		});
+		confirm.disabled = preview.eligibleFiles.length === 0;
+		confirm.addEventListener('click', () => {
+			void (async () => {
+				confirm.disabled = true;
+				back.disabled = true;
+				cancel.disabled = true;
+				status.setText(ui(
+					'正在重新校验并按当前删除设置处理文件...',
+					'Revalidating and applying the current deletion setting...'
+				));
+				try {
+					const result = await this.plugin.commitRuntimeLogCleanup(
+						preview,
+						preview.confirmationToken
+					);
+					await this.onCleaned();
+					if (result.status === 'partial') {
+						status.setText(ui(
+							`已确认处理 ${result.trashedPaths.length} 个文件，${result.failed.length} 个失败，${result.stale.length} 个已漂移或结果未知。未确认处理的文件不会自动重试；关闭后请重新预览。`,
+							`Confirmed ${result.trashedPaths.length} file(s) handled; ${result.failed.length} failed and ${result.stale.length} changed, disappeared, or have an unknown outcome. Unconfirmed files are not retried automatically; close and build a new preview.`
+						));
+						new Notice(ui(
+							'日志清理部分完成；请检查失败、漂移或结果未知的文件。',
+							'Runtime log cleanup partially completed; review failed, stale, or outcome-unknown files.'
+						));
+						cancel.disabled = false;
+						cancel.setText(ui('关闭', 'Close'));
+						cancel.focus();
+						return;
+					}
+					new Notice(ui(
+						`已按 Obsidian 当前删除设置处理 ${result.trashedPaths.length} 个审计文件。`,
+						`Handled ${result.trashedPaths.length} audit file(s) through Obsidian current deleted-files setting.`
+					));
+					this.close();
+				} catch (error) {
+					console.error('tracekeeper failed to commit runtime log cleanup', error);
+					status.setText(ui(
+						'预览已失效或清理失败；未处理的文件仍保留。请返回并生成新预览。',
+						'The preview became stale or cleanup failed. Unprocessed files remain; go back and build a new preview.'
+					));
+					back.disabled = false;
+					cancel.disabled = false;
+					confirm.disabled = preview.eligibleFiles.length === 0;
+					back.focus();
+				}
+			})();
+		});
+		cancel.focus();
+	}
+
+	private renderCleanupFileList(
+		title: string,
+		files: RuntimeLogCleanupFile[]
+	): void {
+		const section = this.contentEl.createDiv({
+			cls: 'tracekeeper-runtime-log-cleanup-modal__files',
+		});
+		section.createEl('h3', { text: `${title} (${files.length})` });
+		if (files.length === 0) {
+			section.createEl('p', {
+				text: ui('无', 'None'),
+				cls: 'tracekeeper-view__description',
+			});
+			return;
+		}
+		const list = section.createEl('ul', {
+			cls: 'tracekeeper-runtime-log-cleanup-modal__file-list',
+		});
+		for (const file of files) {
+			list.createEl('li', {
+				text: `${file.path} · ${file.eventCount} · ${this.cleanupReasonLabel(file)}`,
+			});
+		}
+	}
+
+	private cleanupReasonLabel(file: RuntimeLogCleanupFile): string {
+		switch (file.reason) {
+			case 'clear-all':
+				return ui('全部范围', 'clear-all selection');
+			case 'wholly-eligible':
+				return ui('全部事件早于截止时间', 'all events are older than the cutoff');
+			case 'mixed-age':
+				return ui('包含新旧混合事件', 'contains mixed old and new events');
+			case 'too-new':
+				return ui('事件未早于截止时间', 'events are not older than the cutoff');
+			case 'empty-or-unparseable':
+				return ui('空文件或时间不可解析', 'empty or unparseable timestamps');
+		}
 	}
 
 	private normalizeScope(value: string): RuntimeLogCleanupScope {
@@ -177,8 +335,12 @@ export class TracekeeperRuntimeLogView extends ItemView {
 
 		const summary = contentEl.createDiv({ cls: 'tracekeeper-view__description' });
 		summary.setText(ui(
-			`共 ${snapshot.totalItems} 条 · 第 ${snapshot.page} / ${snapshot.totalPages} 页`,
-			`${snapshot.totalItems} total · Page ${snapshot.page} of ${snapshot.totalPages}`
+			snapshot.isTruncated
+				? `显示最近 ${RUNTIME_LOG_MAX_EVENTS} 条中的 ${snapshot.totalItems} 条 · 第 ${snapshot.page} / ${snapshot.totalPages} 页`
+				: `共 ${snapshot.totalItems} 条 · 第 ${snapshot.page} / ${snapshot.totalPages} 页`,
+			snapshot.isTruncated
+				? `${snapshot.totalItems} of the latest ${RUNTIME_LOG_MAX_EVENTS} · Page ${snapshot.page} of ${snapshot.totalPages}`
+				: `${snapshot.totalItems} total · Page ${snapshot.page} of ${snapshot.totalPages}`
 		));
 
 		if (snapshot.items.length === 0) {

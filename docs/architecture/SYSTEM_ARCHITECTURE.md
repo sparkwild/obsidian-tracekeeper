@@ -97,9 +97,13 @@ and executable arguments.
 
 Project-aware workflows use one Runtime-owned identity resolver. The Runtime
 returns canonical project identity, confidence, and warnings; ambiguous or
-conflicting evidence does not cause a guessed project selection. A started task
-stores that identity, and later context or closeout input cannot silently change
-it.
+conflicting evidence does not cause a guessed project selection. Repository
+paths compare as complete identities rather than by leaf name: Windows-style
+paths use Windows case semantics, while POSIX-style paths remain case-sensitive.
+An uncertain project Recall or project-history request returns no note excerpts;
+it exposes only bounded candidate metadata and an explicit recovery action. A
+started task stores its resolved identity, and later context or closeout input
+cannot silently change it.
 
 ## Human And Agent Entry Points
 

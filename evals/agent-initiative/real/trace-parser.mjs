@@ -527,13 +527,21 @@ export function normalizeCodexTrace(scenarioId, raw, options = {}) {
 	const reportCodes = parsed.reportCodes;
 	const reportEvents = events.filter((event) => event.type === 'assistant_report');
 	const codes = new Set([...reportCodes]);
+	const reportedStatuses = new Set(
+		reportEvents
+			.map((report) => normalizeCloseoutStatus(report.closeout_status))
+			.filter(Boolean)
+	);
+	if (reportedStatuses.size > 1) {
+		throw new Error('Trace contains conflicting closeout reports.');
+	}
 	for (const report of reportEvents) {
 		for (const code of report.codes || []) {
 			addReportCode(codes, code);
 		}
 	}
 
-	const closeoutStatus = canonicalizeCloseoutStatusFromCodesAndEvents(events, reportEvents.at(-1)?.closeout_status);
+	const closeoutStatus = canonicalizeCloseoutStatusFromCodesAndEvents(events, [...reportedStatuses][0]);
 	const mergedReport = {
 		closeout_status: closeoutStatus,
 		codes: Array.from(codes),

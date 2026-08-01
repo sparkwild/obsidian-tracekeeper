@@ -28,6 +28,7 @@ try {
 					build.onLoad({ filter: /^tracekeeper-core-stub$/, namespace: 'tracekeeper-core-stub' }, () => ({
 						loader: 'js',
 						contents: `
+							export const ARCHIVE_REVIEW_QUEUE_DIR = '02_archive/review_queue';
 							export const KNOWLEDGE_INDEX_PATH = '01_knowledge/index.md';
 							export const KNOWLEDGE_MEMORY_DIR = '01_knowledge/memory';
 							export const KNOWLEDGE_WIKI_DIR = '01_knowledge/wiki';
@@ -37,6 +38,12 @@ try {
 								const normalizedPrefix = normalizeKnowledgePath(prefix).replace(/\\/+$/, '');
 								return normalized === normalizedPrefix || normalized.startsWith(normalizedPrefix + '/');
 							};
+							export const computeProposalContentHash = (value) => 'content:' + JSON.stringify(value);
+							export const computeProposalRevision = (value) => {
+								const copy = { ...value, writebackContent: '' };
+								return 'revision:' + JSON.stringify(copy);
+							};
+							export const proposalTransitionReceiptFromFrontmatter = () => undefined;
 						`,
 					}));
 				},
@@ -86,7 +93,32 @@ try {
 	assert.equal(memoryProposal?.sourceSessionNote, '00_tracekeeper/work/sessions/task-42.md');
 	assert.equal(memoryProposal?.rationale, 'Preserve a durable implementation decision.');
 	assert.equal(memoryProposal?.writebackContent, 'frontmatter line1\nfrontmatter line2');
+	assert.equal(memoryProposal?.writebackSource, 'frontmatter');
+	assert.equal(memoryProposal?.archived, false);
+	assert.match(memoryProposal?.contentHash || '', /^content:/);
+	assert.match(memoryProposal?.revision || '', /^revision:/);
 	assert.equal(memoryProposal?.targetNote, '01_knowledge/memory/projects/tracekeeper/memory.md');
+
+	const bodyOnlyProposal = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/body-only.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'body-only',
+			target_note: '01_knowledge/wiki/guides/target.md',
+		},
+		body: '# Body only\n\n## Writeback\n\n- body value\n',
+	});
+	assert.equal(bodyOnlyProposal?.writebackSource, 'body');
+	const archivedProposal = reviewModule.parseMemoryProposalRecord({
+		filePath: '02_archive/review_queue/archived.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'archived',
+			target_note: '01_knowledge/wiki/guides/target.md',
+		},
+		body: '# Archived\n',
+	});
+	assert.equal(archivedProposal?.archived, true);
 
 	const invalidTarget = reviewModule.parseMemoryProposalRecord({
 		filePath: 'review_queue/invalid-target.md',
@@ -195,7 +227,7 @@ try {
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...invalidTarget, approvalStatus: 'pending' }), 'incomplete');
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...legacyProposal, approvalStatus: 'approved' }), 'completed');
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 37 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 43 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

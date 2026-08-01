@@ -55,8 +55,25 @@ const RECALL_CALLS = [
 ];
 
 function auditSections(vaultRoot) {
-	const auditPath = path.join(vaultRoot, '00_tracekeeper', 'control', 'audit_log.md');
-	return fs.readFileSync(auditPath, 'utf8')
+	const auditRoot = path.join(vaultRoot, '00_tracekeeper', 'control', 'audit');
+	const documents = [];
+	if (fs.existsSync(auditRoot)) {
+		for (const year of fs.readdirSync(auditRoot, { withFileTypes: true })) {
+			if (!year.isDirectory() || !/^\d{4}$/.test(year.name)) {
+				continue;
+			}
+			const yearRoot = path.join(auditRoot, year.name);
+			for (const file of fs.readdirSync(yearRoot, { withFileTypes: true })) {
+				if (file.isFile() && /^\d{4}-\d{2}-\d{2}\.md$/.test(file.name)) {
+					documents.push(path.join(yearRoot, file.name));
+				}
+			}
+		}
+	}
+	return documents
+		.sort()
+		.map((documentPath) => fs.readFileSync(documentPath, 'utf8'))
+		.join('\n')
 		.split('\n## ')
 		.map((section) => section.trim())
 		.filter(Boolean);

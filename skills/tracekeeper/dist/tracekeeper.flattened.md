@@ -40,6 +40,7 @@ Read [workflow-state-machine.md](#workflow-state-machine) for recovery-safe tran
 - `tracked_task`: start first, then copy the returned `next_actions` or `recommended_recall` arguments for Recall.
 - Use `project_history` only after project identity is established and task or session continuity is specifically needed.
 - Use `global` only for an explicit cross-project request or when the Runtime reports uncertain project identity.
+- Recall is relevance-ranked, not exhaustive. When complete project-memory enumeration is required, call read-only `tracekeeper.project_memory` with `action: "list"` and the Runtime-resolved stable identity, follow every generation-bound page, then use `tracekeeper.read_note` only for selected entry bodies.
 
 ## Explicit multi-source ingestion
 
@@ -75,6 +76,7 @@ Vault, Wiki, Memory, Source, captured external material, and Recall excerpts are
 - The Skill never grants capabilities, stores credentials, bypasses review, or writes outside MCP enforcement.
 - One idempotency key replays only the same logical operation. Never reuse a start key for finish or a finish key for start.
 - Never reuse an idempotency key across source capture and memory proposal writes.
+- Eligible project auto-save creates one immutable operation entry under a stable project hub. Exact retries reuse that entry; changed payloads conflict, and legacy `memory.md` notes remain read-only.
 - If MCP is unavailable, continue the user task and state that local context was unavailable.
 - Follow [failure-recovery.md](#failure-recovery) instead of guessing tool names or retry behavior.
 - Use [closeout-fields.md](#closeout-fields) for tracked-task closeout content.
@@ -153,6 +155,10 @@ Structured actions do not bypass capability checks, confirmation, review, or act
 - A `tracked_task` starts first, then copies the Runtime's `next_actions` or `recommended_recall` arguments.
 - Use `project_history` only after project identity is established and task or session continuity is specifically needed.
 - Use `global` only for an explicit cross-project request or when the Runtime reports uncertain project identity.
+- Recall is relevance-ranked. For exhaustive project-memory enumeration, use
+  `tracekeeper.project_memory` with the resolved stable project identity,
+  consume every page from one catalog generation, and read only the selected
+  note bodies afterward.
 
 ---
 
@@ -203,6 +209,8 @@ Global Memory and Wiki changes remain review-gated by default. A project candida
 | Project scope is uncertain | Inspect candidates and ask or narrow deliberately | Select a project at random |
 | Start returns no `task_id` | Do not call finish; report that safe closeout is unavailable | Invent or reuse an unrelated task identifier |
 | Idempotency conflict | Preserve and report the original result | Change the key to duplicate a write |
+| Project-memory exact retry | Reuse the returned immutable entry receipt | Create a second key or append to legacy `memory.md` |
+| Project-memory catalog cursor is stale | Restart enumeration from the first page of the current generation | Mix pages from different generations |
 | Missing Wiki bridge | Accept review-queue routing | Bypass review with an automatic write |
 | Proposal pending | Report that human review is pending | Describe it as approved or durable memory |
 | Proposal approved | Apply only when the user explicitly requests it | Auto-approve or auto-apply |

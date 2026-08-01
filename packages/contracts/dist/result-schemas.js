@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.GENERIC_TOOL_OUTPUT_SCHEMA = exports.FINISH_TASK_OUTPUT_SCHEMA = exports.RECALL_OUTPUT_SCHEMA = exports.START_TASK_OUTPUT_SCHEMA = exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = exports.RECALL_SUCCESS_OUTPUT_SCHEMA = exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA = exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = exports.SCHEMA_VERSION = void 0;
+exports.GENERIC_TOOL_OUTPUT_SCHEMA = exports.FINISH_TASK_OUTPUT_SCHEMA = exports.PROJECT_MEMORY_OUTPUT_SCHEMA = exports.RECALL_OUTPUT_SCHEMA = exports.START_TASK_OUTPUT_SCHEMA = exports.PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA = exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = exports.RECALL_SUCCESS_OUTPUT_SCHEMA = exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA = exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = exports.SCHEMA_VERSION = void 0;
 const action_envelope_1 = require("./action-envelope");
 exports.SCHEMA_VERSION = 2;
 exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = {
@@ -308,6 +308,129 @@ exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = {
     ],
     additionalProperties: true,
 };
+const PROJECT_MEMORY_CATALOG_ENTRY_OUTPUT_SCHEMA = {
+    type: 'object',
+    oneOf: [
+        {
+            type: 'object',
+            required: [
+                'path',
+                'legacy',
+                'project_id',
+                'agent_type',
+                'operation_id',
+                'operation_kind',
+                'status',
+                'operation_hash',
+                'created_at',
+            ],
+            properties: {
+                path: { type: 'string', minLength: 1 },
+                legacy: { const: true, type: 'boolean' },
+                project_id: { type: 'string', minLength: 1 },
+                agent_type: { const: null, type: 'null' },
+                operation_id: { const: null, type: 'null' },
+                operation_kind: { const: null, type: 'null' },
+                status: { const: null, type: 'null' },
+                operation_hash: { const: null, type: 'null' },
+                created_at: { const: null, type: 'null' },
+            },
+            additionalProperties: false,
+        },
+        {
+            type: 'object',
+            required: [
+                'path',
+                'legacy',
+                'project_id',
+                'agent_type',
+                'operation_id',
+                'operation_kind',
+                'status',
+                'operation_hash',
+                'created_at',
+            ],
+            properties: {
+                path: { type: 'string', minLength: 1 },
+                legacy: { const: false, type: 'boolean' },
+                project_id: { type: 'string', minLength: 1 },
+                agent_type: { type: 'string', minLength: 1 },
+                operation_id: { type: 'string', minLength: 1 },
+                operation_kind: { type: 'string', minLength: 1 },
+                status: {
+                    type: 'string',
+                    enum: ['active', 'superseded', 'disputed', 'review'],
+                },
+                operation_hash: {
+                    type: 'string',
+                    pattern: '^sha256:[a-f0-9]{64}$',
+                },
+                created_at: { type: 'string', minLength: 1 },
+            },
+            additionalProperties: false,
+        },
+    ],
+};
+exports.PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA = {
+    type: 'object',
+    required: [
+        'schema_version',
+        'ok',
+        'tool',
+        'read_only',
+        'project_id',
+        'project_hub',
+        'generation',
+        'total',
+        'counts_by_agent',
+        'complete',
+        'sort',
+        'page',
+        'entries',
+    ],
+    properties: {
+        schema_version: { const: exports.SCHEMA_VERSION, type: 'integer' },
+        ok: { const: true, type: 'boolean' },
+        tool: { const: 'tracekeeper.project_memory' },
+        read_only: { const: true, type: 'boolean' },
+        project_id: { type: 'string', minLength: 1 },
+        project_hub: {
+            type: 'string',
+            minLength: 1,
+            description: 'Vault-relative path to the authoritative project hub.',
+        },
+        generation: { type: 'integer', minimum: 0 },
+        total: { type: 'integer', minimum: 0 },
+        counts_by_agent: {
+            type: 'object',
+            additionalProperties: { type: 'integer', minimum: 0 },
+        },
+        complete: { const: true, type: 'boolean' },
+        sort: {
+            const: 'created_at_desc_operation_id_path_asc',
+            type: 'string',
+        },
+        page: {
+            type: 'object',
+            required: ['page_size', 'next_cursor'],
+            properties: {
+                page_size: { type: 'integer', minimum: 1, maximum: 200 },
+                next_cursor: {
+                    oneOf: [
+                        { type: 'string', minLength: 1 },
+                        { type: 'null' },
+                    ],
+                },
+            },
+            additionalProperties: false,
+        },
+        entries: {
+            type: 'array',
+            items: PROJECT_MEMORY_CATALOG_ENTRY_OUTPUT_SCHEMA,
+        },
+    },
+    additionalProperties: false,
+};
 exports.START_TASK_OUTPUT_SCHEMA = {
     type: 'object',
     oneOf: [exports.START_TASK_SUCCESS_OUTPUT_SCHEMA, exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA],
@@ -315,6 +438,10 @@ exports.START_TASK_OUTPUT_SCHEMA = {
 exports.RECALL_OUTPUT_SCHEMA = {
     type: 'object',
     oneOf: [exports.RECALL_SUCCESS_OUTPUT_SCHEMA, exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA],
+};
+exports.PROJECT_MEMORY_OUTPUT_SCHEMA = {
+    type: 'object',
+    oneOf: [exports.PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA, exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA],
 };
 exports.FINISH_TASK_OUTPUT_SCHEMA = {
     type: 'object',

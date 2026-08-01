@@ -31,6 +31,44 @@ function commandBuffer(commandName, args, cwd) {
 	return result.status === 0 ? result.stdout : Buffer.alloc(0);
 }
 
+async function workingTreeFingerprint(repositoryRoot, status, trackedDiff) {
+	const untrackedOutput = commandBuffer(
+		'git',
+		['ls-files', '--others', '--exclude-standard', '-z'],
+		repositoryRoot
+	);
+	const untrackedPaths = untrackedOutput
+		.toString('utf8')
+		.split('\0')
+		.filter(Boolean)
+		.sort((left, right) => left.localeCompare(right));
+	const hash = crypto.createHash('sha256');
+	hash.update('status\0');
+	hash.update(status);
+	hash.update('\0tracked-diff\0');
+	hash.update(trackedDiff);
+	for (const relativePath of untrackedPaths) {
+		const absolutePath = path.join(repositoryRoot, relativePath);
+		const fileStat = await fs.lstat(absolutePath);
+		hash.update('\0untracked\0');
+		hash.update(relativePath);
+		hash.update('\0');
+		if (fileStat.isSymbolicLink()) {
+			hash.update('symlink\0');
+			hash.update(await fs.readlink(absolutePath));
+		} else if (fileStat.isFile()) {
+			hash.update('file\0');
+			hash.update(await fs.readFile(absolutePath));
+		} else {
+			hash.update(`other:${fileStat.mode}\0`);
+		}
+	}
+	return {
+		sha256: hash.digest('hex'),
+		untrackedFileCount: untrackedPaths.length,
+	};
+}
+
 async function fileSha(filePath) {
 	try {
 		return sha256(await fs.readFile(filePath));
@@ -45,12 +83,13 @@ export async function collectProvenance(options) {
 	const branch = command('git', ['branch', '--show-current'], repositoryRoot);
 	const status = command(
 		'git',
-		['status', '--porcelain', '--untracked-files=no'],
+		['status', '--porcelain', '--untracked-files=all'],
 		repositoryRoot
 	);
 	const trackedDiff = status
 		? commandBuffer('git', ['diff', '--binary', 'HEAD'], repositoryRoot)
 		: Buffer.alloc(0);
+	const workingTree = await workingTreeFingerprint(repositoryRoot, status, trackedDiff);
 	const cpu = os.cpus()[0] ?? { model: 'unknown' };
 	const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown';
 	const locale = Intl.DateTimeFormat().resolvedOptions().locale || 'unknown';
@@ -75,6 +114,8 @@ export async function collectProvenance(options) {
 			branch,
 			clean: status.length === 0,
 			tracked_diff_sha256: status ? sha256(trackedDiff) : null,
+			working_tree_sha256: workingTree.sha256,
+			untracked_file_count: workingTree.untrackedFileCount,
 		},
 		packages: packageVersions,
 		runtime: {

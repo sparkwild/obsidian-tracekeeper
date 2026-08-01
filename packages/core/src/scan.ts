@@ -2,24 +2,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isSafeDirectoryName, resolveVaultRoot, ensureInsideVaultRoot } from './safety';
 import { parseMarkdown } from './markdown';
+import {
+	cloneVaultFrontmatter,
+	hashVaultContent,
+	NORMALIZED_VAULT_NOTE_VERSION,
+	normalizeVaultRelativePath,
+	resolveNormalizedVaultEdges,
+	type NormalizedVaultNote,
+} from './knowledge-note';
 
-export interface ScannedNote {
+export interface ScannedNote extends NormalizedVaultNote {
 	absolutePath: string;
 	relativePath: string;
-	title: string;
-	size: number;
-	modifiedAt: string;
 	tokens: string;
-	frontmatter: Record<string, unknown>;
-	aliases: string[];
 	type?: string;
-	tags: string[];
-	headings: string[];
-	blockIds: string[];
 	wikilinks: ReturnType<typeof parseMarkdown>['wikilinks'];
 	claimBlocks: ReturnType<typeof parseMarkdown>['claimBlocks'];
 	evidenceBlocks: ReturnType<typeof parseMarkdown>['evidenceBlocks'];
-	content: string;
 }
 
 export interface ScanError {
@@ -35,6 +34,7 @@ export interface ScanResult {
 	index?: {
 		index_state: 'initializing' | 'rebuilding' | 'ready';
 		generation: number;
+		event_sequence?: number;
 		last_rebuild: string | null;
 	};
 }
@@ -101,25 +101,128 @@ function getAliases(frontmatter: Record<string, unknown>): string[] {
 export function scannedNoteFromContent(input: ScannedNoteContentInput): ScannedNote {
 	const parsed = parseMarkdown(input.content);
 	const aliases = getAliases(parsed.frontmatter.fields);
+	const relativePath = normalizeVaultRelativePath(input.relativePath);
+	const edges = parsed.edges.map((edge) => ({
+		...edge,
+		sourcePath: relativePath,
+	}));
 
 	return {
+		schemaVersion: NORMALIZED_VAULT_NOTE_VERSION,
+		path: relativePath,
+		exists: true,
+		contentHash: hashVaultContent(input.content),
 		absolutePath: input.absolutePath,
-		relativePath: input.relativePath.replace(/\\/g, '/'),
+		relativePath,
 		title: parsed.title || input.fallbackTitle,
 		size: input.size,
 		modifiedAt: input.modifiedAt,
 		tokens: parsed.searchText,
-		frontmatter: parsed.frontmatter.fields,
+		frontmatter: cloneVaultFrontmatter(parsed.frontmatter.fields),
+		semanticErrors: [...parsed.frontmatter.errors],
 		aliases,
 		type: typeof parsed.frontmatter.fields.type === 'string' ? parsed.frontmatter.fields.type : undefined,
 		tags: parsed.tags,
 		headings: parsed.headings,
 		blockIds: parsed.blockIds,
-		wikilinks: parsed.wikilinks,
+		sections: parsed.sections.map((section) => ({
+			...section,
+			position: {
+				start: { ...section.position.start },
+				end: { ...section.position.end },
+			},
+		})),
+		callouts: parsed.callouts.map(cloneCallout),
+		edges,
+		wikilinks: edges,
 		claimBlocks: parsed.claimBlocks,
 		evidenceBlocks: parsed.evidenceBlocks,
+		text: input.content,
 		content: parsed.body,
 	};
+}
+
+export function scannedNoteFromNormalized(note: NormalizedVaultNote, vaultRoot: string): ScannedNote {
+	if (note.schemaVersion !== NORMALIZED_VAULT_NOTE_VERSION || !note.exists) {
+		throw new Error('Normalized Vault note must use the current schema and exist.');
+	}
+	if (hashVaultContent(note.text) !== note.contentHash) {
+		throw new Error('Normalized Vault note content hash does not match its text.');
+	}
+
+	const relativePath = normalizeVaultRelativePath(note.path);
+	const absolutePath = ensureInsideVaultRoot(
+		resolveVaultRoot(vaultRoot),
+		path.join(resolveVaultRoot(vaultRoot), relativePath)
+	);
+	const edges = note.edges.map((edge) => ({
+		...edge,
+		sourcePath: relativePath,
+		position: {
+			start: { ...edge.position.start },
+			end: { ...edge.position.end },
+		},
+		resolution: { ...edge.resolution },
+	}));
+	const callouts = note.callouts.map(cloneCallout);
+
+	return {
+		...note,
+		path: relativePath,
+		absolutePath,
+		relativePath,
+		frontmatter: cloneVaultFrontmatter(note.frontmatter),
+		semanticErrors: [...note.semanticErrors],
+		aliases: [...note.aliases],
+		type: typeof note.type === 'string' ? note.type : undefined,
+		tags: [...note.tags],
+		headings: [...note.headings],
+		blockIds: [...note.blockIds],
+		sections: note.sections.map((section) => ({
+			...section,
+			position: {
+				start: { ...section.position.start },
+				end: { ...section.position.end },
+			},
+		})),
+		callouts,
+		edges,
+		tokens: [note.title, ...note.aliases, ...note.tags, ...note.headings, note.content]
+			.filter(Boolean)
+			.join('\n'),
+		wikilinks: edges,
+		claimBlocks: callouts.filter((callout) => callout.type.toLowerCase() === 'claim'),
+		evidenceBlocks: callouts.filter((callout) => callout.type.toLowerCase() === 'evidence'),
+	};
+}
+
+export function resolveScannedNoteEdges(notes: readonly ScannedNote[]): ScannedNote[] {
+	const resolved = resolveNormalizedVaultEdges(
+		notes.map((note) => ({
+			path: note.relativePath,
+			title: note.title,
+			aliases: note.aliases,
+			edges: note.edges,
+		}))
+	);
+
+	return [...notes]
+		.sort((left, right) => left.relativePath.localeCompare(right.relativePath))
+		.map((note) => {
+			const edges = (resolved.get(note.relativePath) ?? note.edges).map((edge) => ({
+				...edge,
+				position: {
+					start: { ...edge.position.start },
+					end: { ...edge.position.end },
+				},
+			}));
+			return {
+				...note,
+				frontmatter: cloneVaultFrontmatter(note.frontmatter),
+				edges,
+				wikilinks: edges,
+			};
+		});
 }
 
 function normalizeProtectedDirectoryName(configDir?: string): string {
@@ -149,7 +252,9 @@ function scanDirectory(
 	errors: ScanError[],
 	options: ScanVaultOptions
 ): void {
-	const entries = fs.readdirSync(directory, { withFileTypes: true });
+	const entries = fs
+		.readdirSync(directory, { withFileTypes: true })
+		.sort((left, right) => left.name.localeCompare(right.name));
 	for (const entry of entries) {
 		if (shouldSkipDirectory(entry.name, options)) {
 			continue;
@@ -180,14 +285,21 @@ function scanDirectory(
 			const stats = fs.statSync(safePath);
 			const relativePath = path.relative(vaultRoot, safePath).replace(/\\/g, '/');
 
-			notes.push(scannedNoteFromContent({
+			const note = scannedNoteFromContent({
 				absolutePath: safePath,
 				relativePath,
 				fallbackTitle: path.basename(entry.name, ext),
 				size: stats.size,
 				modifiedAt: stats.mtime.toISOString(),
 				content: fileContent,
-			}));
+			});
+			notes.push(note);
+			for (const semanticError of note.semanticErrors) {
+				errors.push({
+					path: safePath,
+					error: `Markdown semantics: ${semanticError}`,
+				});
+			}
 		} catch (error: unknown) {
 			errors.push({
 				path: safePath,
@@ -203,11 +315,23 @@ export function scanVault(vaultRoot: string, options: ScanVaultOptions = {}): Sc
 	const errors: ScanError[] = [];
 
 	scanDirectory(resolvedRoot, resolvedRoot, notes, errors, options);
+	const resolvedNotes = resolveScannedNoteEdges(notes);
 
 	return {
 		vaultRoot: resolvedRoot,
 		scannedAt: new Date().toISOString(),
-		notes,
-		errors,
+		notes: resolvedNotes,
+		errors: errors.sort((left, right) => left.path.localeCompare(right.path)),
+	};
+}
+
+function cloneCallout<T extends ReturnType<typeof parseMarkdown>['callouts'][number]>(callout: T): T {
+	return {
+		...callout,
+		sourceRefs: [...callout.sourceRefs],
+		position: {
+			start: { ...callout.position.start },
+			end: { ...callout.position.end },
+		},
 	};
 }

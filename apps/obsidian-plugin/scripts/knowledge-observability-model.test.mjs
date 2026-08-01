@@ -91,6 +91,7 @@ try {
 	} = require(output);
 
 	const persistedProjectPath = '01_knowledge/memory/projects/tracekeeper/memory.md';
+	const immutableProjectPath = '01_knowledge/memory/projects/tracekeeper/agents/codex/finish_task-op-1.md';
 	const persistedGlobalPath = '01_knowledge/memory/global/preferences.md';
 	const missingMemoryPath = '01_knowledge/memory/projects/tracekeeper/missing.md';
 	const sourcePath = '01_knowledge/sources/web/example.md';
@@ -107,6 +108,16 @@ try {
 					project_hint: 'tracekeeper',
 					source: 'tracekeeper.propose_memory',
 					task_id: 'task-0',
+				},
+			}),
+			note(immutableProjectPath, {
+				title: 'Immutable project entry',
+				type: 'project_memory_entry',
+				frontmatter: {
+					type: 'project_memory_entry',
+					project_id: 'tracekeeper-project',
+					agent_type: 'codex',
+					operation_id: 'op-1',
 				},
 			}),
 			note(persistedGlobalPath, {
@@ -151,13 +162,17 @@ try {
 		missingMemoryFolder: false,
 		now: '2026-07-28T05:00:00.000Z',
 	});
-	assert.equal(memory.totalItems, 4);
-	assert.equal(memory.records.filter((record) => record.state === 'persisted').length, 2);
+	assert.equal(memory.totalItems, 5);
+	assert.equal(memory.records.filter((record) => record.state === 'persisted').length, 3);
 	assert.equal(memory.records.filter((record) => record.state === 'queued').length, 1);
 	assert.equal(memory.records.filter((record) => record.state === 'missing').length, 1);
 	assert.equal(memory.staleRecordCount, 1);
 	assert.equal(memory.readFailures.length, 1);
 	assert.equal(memory.indexGeneration, 7);
+	assert.deepEqual(memory.projectMemoryCounts, {
+		immutableEntries: 1,
+		legacyNotes: 1,
+	});
 
 	const projectMemory = buildMemoryInspectorSnapshot({
 		index,
@@ -166,8 +181,11 @@ try {
 		missingMemoryFolder: false,
 		query: { scope: 'project', state: 'persisted' },
 	});
-	assert.equal(projectMemory.totalItems, 1);
-	assert.equal(projectMemory.records[0].path, persistedProjectPath);
+	assert.equal(projectMemory.totalItems, 2);
+	assert.deepEqual(
+		new Set(projectMemory.records.map((record) => record.path)),
+		new Set([persistedProjectPath, immutableProjectPath])
+	);
 
 	const focusedMemory = buildMemoryInspectorSnapshot({
 		index,

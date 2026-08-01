@@ -42,6 +42,14 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 		},
 		category: { zh: '检索', en: 'Recall' },
 	},
+	'tracekeeper.project_memory': {
+		title: { zh: '列出完整项目记忆', en: 'List project memory' },
+		description: {
+			zh: '按稳定项目身份分页列出当前索引代次中的全部项目记忆条目和旧版笔记；只返回元数据，完整正文需另行读取。',
+			en: 'Lists every project-memory entry and legacy note for one stable project identity within the current index generation. It returns metadata only; full note bodies require a separate read.',
+		},
+		category: { zh: '检索', en: 'Recall' },
+	},
 	'tracekeeper.project_context': {
 		title: { zh: '项目上下文', en: 'Project context' },
 		description: {

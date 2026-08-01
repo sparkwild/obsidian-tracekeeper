@@ -9,11 +9,9 @@ import { build } from 'esbuild';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-runtime-access-reset-test-'));
 const controllerOutput = path.join(tempRoot, 'runtime-access-reset-controller.mjs');
-const clientConfigOutput = path.join(tempRoot, 'client-config.mjs');
 
 const previousToken = Buffer.alloc(32, 0x31).toString('base64url');
 const replacementToken = Buffer.alloc(32, 0x32).toString('base64url');
-const endpoint = 'http://127.0.0.1:58437/mcp';
 
 function createHost({
 	enabled = true,
@@ -69,46 +67,17 @@ function createHost({
 	};
 }
 
-const localize = (_zh, en) => en;
-const codexProfile = {
-	id: 'codex',
-	displayName: 'Codex',
-	description: '',
-	preferredTransport: 'streamable-http',
-	supportsAutoConfigure: true,
-	restartRequired: true,
-	configFormat: 'codex-toml',
-	targetPath: '/tmp/config.toml',
-};
-
 try {
-	await Promise.all([
-		build({
-			entryPoints: [path.resolve('src/features/runtime/runtime-access-reset-controller.ts')],
-			outfile: controllerOutput,
-			bundle: true,
-			platform: 'node',
-			format: 'esm',
-			logLevel: 'silent',
-		}),
-		build({
-			entryPoints: [path.resolve('src/features/client-config/client-config.ts')],
-			outfile: clientConfigOutput,
-			bundle: true,
-			platform: 'node',
-			format: 'esm',
-			logLevel: 'silent',
-		}),
-	]);
+	await build({
+		entryPoints: [path.resolve('src/features/runtime/runtime-access-reset-controller.ts')],
+		outfile: controllerOutput,
+		bundle: true,
+		platform: 'node',
+		format: 'esm',
+		logLevel: 'silent',
+	});
 
 	const reset = await import(`${pathToFileURL(controllerOutput).href}?test=${Date.now()}`);
-	const clientConfig = await import(`${pathToFileURL(clientConfigOutput).href}?test=${Date.now()}`);
-
-	const configuredWithPreviousToken = clientConfig.buildClientConfigTexts(
-		codexProfile,
-		endpoint,
-		previousToken
-	).completeConfigText;
 	const successHost = createHost();
 	const successController = new reset.RuntimeAccessResetController(successHost.options);
 	const success = await successController.reset();
@@ -120,16 +89,6 @@ try {
 		sessions: [],
 		events: ['stop', 'set:replacement', 'save:replacement', 'start:replacement'],
 	});
-	assert.equal(
-		clientConfig.detectClientConfigStatus(
-			codexProfile,
-			configuredWithPreviousToken,
-			endpoint,
-			replacementToken,
-			localize
-		).state,
-		'needs_update'
-	);
 	assert.equal(JSON.stringify(success).includes(previousToken), false);
 	assert.equal(JSON.stringify(success).includes(replacementToken), false);
 
@@ -228,6 +187,7 @@ try {
 	assert.match(modalSource, /现有客户端需要重新授权/);
 	assert.doesNotMatch(modalSource, /现有客户端配置需要更新/);
 	assert.doesNotMatch(modalSource, /runtimeAccessToken|completeConfigText|copyToClipboard/);
+	assert.doesNotMatch(mainSource, /ClientConfigAdapter|applyClientConfig|removeClientConfig/);
 
 	process.stdout.write(`${JSON.stringify({
 		result: 'pass',

@@ -24,6 +24,29 @@ function countOccurrences(content, needle) {
 	return content.split(needle).length - 1;
 }
 
+function readAuditShards(vaultRoot) {
+	const auditRoot = path.join(vaultRoot, '00_tracekeeper/control/audit');
+	const documents = [];
+	const visit = (directory) => {
+		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+			const absolutePath = path.join(directory, entry.name);
+			if (entry.isDirectory()) {
+				visit(absolutePath);
+				continue;
+			}
+			const relativePath = path.relative(vaultRoot, absolutePath).replaceAll(path.sep, '/');
+			if (
+				entry.isFile()
+				&& /^00_tracekeeper\/control\/audit\/\d{4}\/\d{4}-\d{2}-\d{2}\.md$/.test(relativePath)
+			) {
+				documents.push(fs.readFileSync(absolutePath, 'utf8'));
+			}
+		}
+	};
+	visit(auditRoot);
+	return documents.join('\n');
+}
+
 function collectMatches(dir, matcher) {
 	return fs.existsSync(dir)
 		? fs.readdirSync(dir).filter((entry) => entry.endsWith('.md') && matcher(path.join(dir, entry)))
@@ -63,7 +86,25 @@ async function main() {
 			'# Recovery Task',
 			'',
 		].join('\n'));
-		writeNote(vaultRoot, '01_knowledge/memory/projects/recovery/memory.md', '# Recovery Memory');
+		writeNote(vaultRoot, '01_knowledge/memory/projects/recovery/index.md', [
+			'---',
+			'schema_version: 1',
+			'type: project_memory_index',
+			'project_id: recovery-id',
+			'project_key: recovery',
+			'project_hint: recovery',
+			'repo_path: /work/recovery',
+			'---',
+			'',
+			'# Recovery Project Memory',
+			'',
+		].join('\n'));
+		const legacyProjectMemory = '# Recovery Memory';
+		writeNote(
+			vaultRoot,
+			'01_knowledge/memory/projects/recovery/memory.md',
+			legacyProjectMemory
+		);
 		writeNote(vaultRoot, relatedWikiPath, [
 			'---',
 			'type: wiki',
@@ -253,6 +294,8 @@ async function main() {
 			summary: 'Repository-backed automatic memory closeout.',
 			decisions: ['Auto-write through repository'],
 			project_hint: 'recovery',
+			project_id: 'recovery-id',
+			repo_path: '/work/recovery',
 			memory_scope: 'project',
 			related_wiki: [relatedWikiPath],
 			review_proposal_mode: 'auto_propose',
@@ -272,21 +315,47 @@ async function main() {
 			},
 		};
 		const autoWrite = await callTool('tracekeeper.finish_task', autoWriteArgs, autoWriteContext);
-		assert.equal(autoWrite.isError, false);
+		assert.equal(
+			autoWrite.isError,
+			false,
+			JSON.stringify(autoWrite.structuredContent)
+		);
 		assert.equal(autoWrite.structuredContent?.auto_applied_count, 1);
 		assert.equal(autoWrite.structuredContent?.proposal_count, 0);
 		assert.equal(autoWrite.structuredContent?.auto_applied_memory_updates?.[0]?.status, 'written');
 		const replayedAutoWrite = await callTool('tracekeeper.finish_task', autoWriteArgs, autoWriteContext);
 		assert.deepEqual(replayedAutoWrite.structuredContent, autoWrite.structuredContent);
+		const projectMemoryPath = autoWrite.structuredContent?.auto_applied_memory_updates?.[0]?.path;
+		assert.equal(typeof projectMemoryPath, 'string');
+		assert.match(projectMemoryPath, /^01_knowledge\/memory\/projects\/recovery\/agents\/custom\//);
 		const projectMemoryText = fs.readFileSync(
-			path.join(vaultRoot, '01_knowledge/memory/projects/recovery/memory.md'),
+			path.join(vaultRoot, projectMemoryPath),
 			'utf8'
 		);
 		assert.equal(countOccurrences(projectMemoryText, 'Auto-write through repository'), 1);
-		const auditText = fs.readFileSync(path.join(vaultRoot, '00_tracekeeper/control/audit_log.md'), 'utf8');
+		assert.equal(
+			fs.readFileSync(
+				path.join(vaultRoot, '01_knowledge/memory/projects/recovery/memory.md'),
+				'utf8'
+			),
+			legacyProjectMemory
+		);
+		const auditText = readAuditShards(vaultRoot);
 		assert.equal(countOccurrences(auditText, `operation_id: "${failedOperation.operation_id}"`), 2);
 		assert.equal(countOccurrences(auditText, `operation_id: "${autoWrite.structuredContent.operation_id}"`), 2);
-		assert.equal(countOccurrences(auditText, 'audit_event_id:'), 4);
+		const operationAuditSections = auditText
+			.split('\n## ')
+			.filter(
+				(section) =>
+					section.includes(`operation_id: "${failedOperation.operation_id}"`)
+					|| section.includes(`operation_id: "${autoWrite.structuredContent.operation_id}"`)
+			);
+		assert.equal(operationAuditSections.length, 4);
+		const operationAuditEventIds = operationAuditSections.map(
+			(section) => section.match(/^- audit_event_id: "([^"]+)"$/m)?.[1] || ''
+		);
+		assert.equal(operationAuditEventIds.every(Boolean), true);
+		assert.equal(new Set(operationAuditEventIds).size, 4);
 
 		const operationFiles = fs.readdirSync(operationDir).filter((entry) => entry.startsWith('finish-task-') && entry.endsWith('.json'));
 		assert.equal(operationFiles.length, 2);

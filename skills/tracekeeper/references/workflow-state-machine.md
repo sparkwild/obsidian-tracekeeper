@@ -66,3 +66,7 @@ Structured actions do not bypass capability checks, confirmation, review, or act
 - A `tracked_task` starts first, then copies the Runtime's `next_actions` or `recommended_recall` arguments.
 - Use `project_history` only after project identity is established and task or session continuity is specifically needed.
 - Use `global` only for an explicit cross-project request or when the Runtime reports uncertain project identity.
+- Recall is relevance-ranked. For exhaustive project-memory enumeration, use
+  `tracekeeper.project_memory` with the resolved stable project identity,
+  consume every page from one catalog generation, and read only the selected
+  note bodies afterward.

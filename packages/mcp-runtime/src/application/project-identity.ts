@@ -76,12 +76,17 @@ function isLikelyRepoPath(value: string): boolean {
 }
 
 export function normalizeRepositoryPath(value: string): string {
-	let normalized = value.trim().replace(/\\/g, '/');
+	let normalized = value.trim().normalize('NFC').replace(/\\/g, '/');
 	if (!normalized) {
 		return '';
 	}
+	const fileUri = /^file:/i.test(normalized);
 	normalized = normalized.replace(/^file:(?:\/\/)?/i, '/');
+	const uncPath = !fileUri && normalized.startsWith('//');
 	normalized = normalized.replace(/\/{2,}/g, '/');
+	if (uncPath) {
+		normalized = `/${normalized}`;
+	}
 	if (normalized.length > 1) {
 		normalized = normalized.replace(/\/+$/, '');
 	}
@@ -93,23 +98,25 @@ function normalizedIdentityValue(value: string): string {
 }
 
 function repoPathMatches(left: string, right: string): boolean {
-	const normalizedLeft = normalizeRepositoryPath(left).toLowerCase();
-	const normalizedRight = normalizeRepositoryPath(right).toLowerCase();
-	if (!normalizedLeft || !normalizedRight) {
-		return false;
-	}
-	if (normalizedLeft === normalizedRight) {
-		return true;
-	}
-	const leftLeaf = normalizedLeft.split('/').filter(Boolean).pop() || normalizedLeft;
-	const rightLeaf = normalizedRight.split('/').filter(Boolean).pop() || normalizedRight;
-	return leftLeaf.length > 1 && leftLeaf === rightLeaf;
+	const normalizedLeft = normalizeRepositoryPath(left);
+	const normalizedRight = normalizeRepositoryPath(right);
+	const windowsStyle = (value: string): boolean => /^[A-Za-z]:\//.test(value) || value.startsWith('//');
+	const comparableLeft = windowsStyle(normalizedLeft) ? normalizedLeft.toLowerCase() : normalizedLeft;
+	const comparableRight = windowsStyle(normalizedRight) ? normalizedRight.toLowerCase() : normalizedRight;
+	return Boolean(
+		comparableLeft
+		&& comparableRight
+		&& comparableLeft === comparableRight
+	);
 }
 
 function candidateFromNote(note: ScannedNote): ProjectIdentityCandidate | null {
+	const pathHint = note.type === 'project_memory_entry'
+		? ''
+		: projectPathSegment(note);
 	const projectHint =
 		frontmatterString(note.frontmatter, ['project_hint', 'project', 'related_project', 'project_name']) ||
-		projectPathSegment(note);
+		pathHint;
 	const projectId = frontmatterString(note.frontmatter, ['project_id', 'projectId', 'project-id', 'pid']);
 	const repoPaths = [
 		frontmatterString(note.frontmatter, ['repo_path', 'repoPath', 'repository_path', 'repositoryPath']),
@@ -151,7 +158,10 @@ function collectCandidates(notes: ScannedNote[]): ProjectIdentityCandidate[] {
 				candidate.projectId &&
 				entry.projectId &&
 				normalizedIdentityValue(candidate.projectId) === normalizedIdentityValue(entry.projectId);
-			return (sameHint && compatibleId) || (!candidate.projectHint && !entry.projectHint && sameId);
+			return (
+				(sameHint && compatibleId)
+				|| (sameId && (!candidate.projectHint || !entry.projectHint))
+			);
 		});
 		if (existing) {
 			existing.projectHint ||= candidate.projectHint;
@@ -217,7 +227,19 @@ export function resolveProjectIdentity(
 		if (conflictingHint) {
 			warnings.push('project_hint_conflicts_with_project_id');
 		}
-		const uncertain = warnings.includes('ambiguous_vault_project_identity') || conflictingHint;
+		const conflictingRepoPath = Boolean(
+			candidate
+			&& repoPath
+			&& candidate.repoPaths.length > 0
+			&& !candidate.repoPaths.some((candidatePath) => repoPathMatches(candidatePath, repoPath))
+		);
+		if (conflictingRepoPath) {
+			warnings.push('repo_path_conflicts_with_project_id');
+		}
+		const uncertain =
+			warnings.includes('ambiguous_vault_project_identity')
+			|| conflictingHint
+			|| conflictingRepoPath;
 		return {
 			projectHint: candidate?.projectHint || explicitProjectHint,
 			projectId,

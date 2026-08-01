@@ -580,7 +580,10 @@ export class TracekeeperActivityView extends ItemView {
 			parts.push(ui('已保存会话记录', 'Session saved'));
 		}
 		if (memoryWriteCount > 0) {
-			parts.push(ui(`已保存项目记忆 ${memoryWriteCount}`, `${memoryWriteCount} project memory saved`));
+			parts.push(ui(
+				`已保存不可变项目记忆条目 ${memoryWriteCount}`,
+				`${memoryWriteCount} immutable project-memory entries saved`
+			));
 		}
 		if (proposalCount > 0) {
 			parts.push(ui(`待确认记忆 ${proposalCount}`, `${proposalCount} memory updates pending`));

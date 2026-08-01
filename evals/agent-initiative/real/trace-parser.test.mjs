@@ -34,7 +34,7 @@ test('normalizeCodexTrace builds tracked_task events and derives closeout status
 	assert.equal(report.closeout_status, 'recorded');
 });
 
-test('normalizeCodexTrace derives task closeout only from finish_task results', () => {
+test('normalizeCodexTrace rejects conflicting task closeout reports', () => {
 	const raw = [
 		'{"type":"tool_call","tool":"tracekeeper.start_task","arguments":{"goal":"Sync local Wiki"}}',
 		'{"type":"tool_result","tool":"tracekeeper.start_task","result":{"task_id":"task-1"}}',
@@ -46,10 +46,21 @@ test('normalizeCodexTrace derives task closeout only from finish_task results', 
 		'{"type":"tool_call","tool":"tracekeeper.finish_task","arguments":{"task_id":"task-1","summary":"Queued"}}',
 		'{"type":"tool_result","tool":"tracekeeper.finish_task","result":{"memory_closeout_status":"ignored","memory_closeout_state":"disabled"}}',
 	].join('\n');
-	const trace = normalizeCodexTrace('real-track-wiki-closeout', raw);
+	assert.throws(
+		() => normalizeCodexTrace('real-track-wiki-closeout', raw),
+		/conflicting closeout reports/
+	);
+});
+
+test('normalizeCodexTrace merges equivalent canonical closeout reports', () => {
+	const raw = [
+		'{"type":"assistant_report","closeout_status":"queued_for_review","codes":["proposal_not_applied"]}',
+		'{"type":"tool_result","tool":"tracekeeper.finish_task","result":{"memory_closeout_status":"queued"}}',
+	].join('\n');
+	const trace = normalizeCodexTrace('equivalent-closeout', raw);
 	const reports = trace.events.filter((event) => event.type === 'assistant_report');
 	assert.equal(reports.length, 1);
-	assert.equal(reports[0].closeout_status, 'ignored');
+	assert.equal(reports[0].closeout_status, 'queued');
 	assert.deepEqual(reports[0].codes, ['proposal_not_applied']);
 });
 

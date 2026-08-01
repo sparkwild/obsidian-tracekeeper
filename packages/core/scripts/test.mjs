@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,13 +8,17 @@ import path from 'node:path';
 import safety from '../dist/safety.js';
 import sourceAnalysisModule from '../dist/source-analysis.js';
 import scanModule from '../dist/scan.js';
+import markdownModule from '../dist/markdown.js';
 import graphHealthModule from '../dist/graph-health.js';
 import lintModule from '../dist/lint.js';
 import recallModule from '../dist/recall.js';
 import legacyStructureModule from '../dist/legacy-structure.js';
 import operationJournalModule from '../dist/operation-journal.js';
 import knowledgeIndexModule from '../dist/knowledge-index.js';
+import knowledgeNoteModule from '../dist/knowledge-note.js';
 import vaultRepositoryModule from '../dist/vault-repository.js';
+import proposalTransitionModule from '../dist/proposal-transition.js';
+import projectMemoryModule from '../dist/project-memory.js';
 
 const KNOWLEDGE_DIR = '01_knowledge';
 const CONFIG_DIR = 'vault-config';
@@ -167,6 +172,98 @@ function normalizeSnapshotNotes(snapshot) {
 	return normalized.sort((left, right) => left.path.localeCompare(right.path));
 }
 
+function scannedCharacterizationNote(relativePath, content, modifiedAt = '2026-07-30T00:00:00.000Z') {
+	return scanModule.scannedNoteFromContent({
+		absolutePath: path.resolve('/characterization-vault', relativePath),
+		relativePath,
+		fallbackTitle: path.basename(relativePath, path.extname(relativePath)),
+		size: Buffer.byteLength(content, 'utf8'),
+		modifiedAt,
+		content,
+	});
+}
+
+function characterizationScan(vaultRoot, notes) {
+	return {
+		vaultRoot,
+		scannedAt: '2026-07-30T00:00:00.000Z',
+		notes,
+		errors: [],
+	};
+}
+
+function normalizeDeterministicSnapshot(snapshot) {
+	return {
+		notes: [...snapshot.notes.entries()].map(([notePath, note]) => ({
+			notePath,
+			title: note.title,
+			aliases: [...note.aliases],
+			contentHash: note.contentHash,
+			edges: note.edges.map((edge) => ({
+				raw: edge.raw,
+				target: edge.target,
+				source: edge.source,
+				kind: edge.kind,
+				resolution: edge.resolution,
+			})),
+			backlinks: [...note.backlinks],
+		})),
+		outgoing: [...snapshot.graph.outgoing.entries()],
+		incoming: [...snapshot.graph.incoming.entries()],
+		edges: snapshot.graph.edges.map((edge) => ({
+			sourcePath: edge.sourcePath,
+			raw: edge.raw,
+			resolution: edge.resolution,
+		})),
+		unresolvedEdges: snapshot.graph.unresolvedEdges.map((edge) => ({
+			sourcePath: edge.sourcePath,
+			raw: edge.raw,
+			resolution: edge.resolution,
+		})),
+		byType: [...snapshot.scopes.byType.entries()],
+		byTag: [...snapshot.scopes.byTag.entries()],
+	};
+}
+
+function errorMessage(error) {
+	return error instanceof Error ? error.message : String(error);
+}
+
+async function runCharacterizationRows(suite, rows) {
+	const passed = [];
+	const failures = [];
+
+	for (const [name, execute] of rows) {
+		try {
+			await execute();
+			passed.push(name);
+			process.stdout.write(`${JSON.stringify({ suite, row: name, result: 'pass' })}\n`);
+		} catch (error) {
+			failures.push({ name, error });
+			process.stdout.write(`${JSON.stringify({
+				suite,
+				row: name,
+				result: 'fail',
+				error: errorMessage(error),
+			})}\n`);
+		}
+	}
+
+	process.stdout.write(`${JSON.stringify({
+		suite,
+		result: failures.length === 0 ? 'pass' : 'expected-characterization-failures',
+		passed,
+		failed: failures.map(({ name }) => name),
+	})}\n`);
+
+	if (failures.length > 0) {
+		throw new AggregateError(
+			failures.map(({ name }) => name),
+			`${suite} failed rows: ${failures.map(({ name }) => name).join(', ')}`
+		);
+	}
+}
+
 async function run() {
 	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-core-test-'));
 	let symlinkSupported = false;
@@ -187,6 +284,519 @@ async function run() {
 			allowHidden: false,
 			protectedDirectoryName: CONFIG_DIR,
 		});
+
+		const derivedAlpha = projectMemoryModule.deriveProjectIdentityFromRepoPath(
+			'/Users/example/work/alpha/'
+		);
+		const derivedAlphaFromFileUrl = projectMemoryModule.deriveProjectIdentityFromRepoPath(
+			'file:///Users/example/work/alpha'
+		);
+		const derivedOtherAlpha = projectMemoryModule.deriveProjectIdentityFromRepoPath(
+			'/Users/example/other/alpha'
+		);
+		const derivedWindowsAlpha = projectMemoryModule.deriveProjectIdentityFromRepoPath(
+			'C:\\work\\alpha'
+		);
+		const derivedWindowsAlphaFromFileUrl =
+			projectMemoryModule.deriveProjectIdentityFromRepoPath('file:///C:/work/alpha');
+		assert.deepEqual(derivedAlpha, derivedAlphaFromFileUrl);
+		assert.deepEqual(derivedWindowsAlpha, derivedWindowsAlphaFromFileUrl);
+		assert.equal(projectMemoryModule.normalizeProjectAgentType('Claude Code'), 'claude-code');
+		assert.equal(projectMemoryModule.normalizeProjectAgentType('../codex'), 'custom');
+		assert.notEqual(derivedAlpha.project_id, derivedOtherAlpha.project_id);
+		assert.notEqual(derivedAlpha.project_key, derivedOtherAlpha.project_key);
+		assert.equal(derivedAlpha.repo_path, '/Users/example/work/alpha');
+		assert.throws(
+			() => projectMemoryModule.deriveProjectIdentityFromRepoPath('../alpha'),
+			/absolute/
+		);
+		assert.throws(
+			() => projectMemoryModule.deriveProjectIdentityFromRepoPath('/Users/example/../alpha'),
+			/traversal/
+		);
+
+		const projectHub = `${KNOWLEDGE_DIR}/memory/projects/${derivedAlpha.project_key}/index.md`;
+		assert.deepEqual(
+			projectMemoryModule.deriveProjectMemoryHubBindingFromRepoPath(
+				derivedAlpha.repo_path
+			),
+			{
+				project_id: derivedAlpha.project_id,
+				project_key: derivedAlpha.project_key,
+				project_hub: projectHub,
+				repo_path: derivedAlpha.repo_path,
+				project_hint: 'alpha',
+			}
+		);
+		const operationBase = {
+			project_id: derivedAlpha.project_id,
+			agent_type: 'codex',
+			task_id: 'task-123',
+			operation_id: 'finish-task-456',
+			operation_kind: 'finish_task',
+			memory_kinds: ['task_decision', 'project_next_action'],
+			status: 'active',
+			project_hub: `[[${projectHub.replace(/\.md$/, '')}]]`,
+			related_wiki: [
+				'[[01_knowledge/wiki/example-b]]',
+				'[[01_knowledge/wiki/example-a]]',
+			],
+			supersedes: [],
+			body: 'Decision body.\r\n',
+		};
+		const operationHash = projectMemoryModule.computeProjectMemoryOperationHash(
+			operationBase
+		);
+		const equivalentOperationHash = projectMemoryModule.computeProjectMemoryOperationHash({
+			...operationBase,
+			memory_kinds: [...operationBase.memory_kinds].reverse(),
+			related_wiki: [...operationBase.related_wiki].reverse(),
+			body: 'Decision body.\n',
+		});
+		const changedOperationHash = projectMemoryModule.computeProjectMemoryOperationHash({
+			...operationBase,
+			body: 'Changed decision body.\n',
+		});
+		assert.match(operationHash, /^sha256:[a-f0-9]{64}$/);
+		assert.equal(operationHash, equivalentOperationHash);
+		assert.notEqual(operationHash, changedOperationHash);
+		assert.deepEqual(
+			projectMemoryModule.compareProjectMemoryOperationHashes(operationHash, equivalentOperationHash),
+			{ status: 'exact_retry', operation_hash: operationHash }
+		);
+		assert.deepEqual(
+			projectMemoryModule.compareProjectMemoryOperationHashes(operationHash, changedOperationHash),
+			{
+				status: 'conflict',
+				existing_operation_hash: operationHash,
+				requested_operation_hash: changedOperationHash,
+			}
+		);
+
+		const entryPath = projectMemoryModule.buildProjectMemoryEntryPath({
+			projectKey: derivedAlpha.project_key,
+			agentType: 'codex',
+			operationKind: 'finish_task',
+			operationId: 'finish-task-456',
+		});
+		assert.equal(
+			entryPath,
+			`${KNOWLEDGE_DIR}/memory/projects/${derivedAlpha.project_key}/agents/codex/finish_task-finish-task-456.md`
+		);
+		assert.notEqual(
+			entryPath,
+			projectMemoryModule.buildProjectMemoryEntryPath({
+				projectKey: derivedAlpha.project_key,
+				agentType: 'claude-code',
+				operationKind: 'finish_task',
+				operationId: 'finish-task-456',
+			})
+		);
+		assert.notEqual(
+			entryPath,
+			projectMemoryModule.buildProjectMemoryEntryPath({
+				projectKey: derivedAlpha.project_key,
+				agentType: 'codex',
+				operationKind: 'finish_task',
+				operationId: 'finish-task-789',
+			})
+		);
+		for (const unsafeInput of [
+			{
+				projectKey: '../alpha',
+				agentType: 'codex',
+				operationKind: 'finish_task',
+				operationId: 'finish-task-456',
+			},
+			{
+				projectKey: derivedAlpha.project_key,
+				agentType: '../codex',
+				operationKind: 'finish_task',
+				operationId: 'finish-task-456',
+			},
+			{
+				projectKey: derivedAlpha.project_key,
+				agentType: 'codex',
+				operationKind: '../finish_task',
+				operationId: 'finish-task-456',
+			},
+			{
+				projectKey: derivedAlpha.project_key,
+				agentType: 'codex',
+				operationKind: 'finish_task',
+				operationId: '../finish-task-456',
+			},
+		]) {
+			assert.throws(
+				() => projectMemoryModule.buildProjectMemoryEntryPath(unsafeInput),
+				/invalid|unsafe|traversal/i
+			);
+		}
+
+		const entryFrontmatter = {
+			schema_version: 1,
+			type: 'project_memory_entry',
+			project_id: derivedAlpha.project_id,
+			agent_type: 'codex',
+			task_id: 'task-123',
+			operation_id: 'finish-task-456',
+			operation_kind: 'finish_task',
+			memory_kinds: ['task_decision', 'project_next_action'],
+			status: 'active',
+			created_at: '2026-07-30T12:00:00.000Z',
+			operation_hash: operationHash,
+			project_hub: `[[${projectHub.replace(/\.md$/, '')}]]`,
+			related_wiki: ['[[01_knowledge/wiki/example]]'],
+			supersedes: [],
+		};
+		const builtEntry = projectMemoryModule.buildProjectMemoryEntry({
+			...operationBase,
+			project_key: derivedAlpha.project_key,
+			created_at: '2026-07-30T12:00:00.000Z',
+		});
+		assert.equal(builtEntry.entry.path, entryPath);
+		assert.equal(builtEntry.entry.operation_hash, operationHash);
+		assert.equal(builtEntry.body, 'Decision body.\n');
+		const parsedEntry = projectMemoryModule.parseProjectMemoryEntry({
+			path: entryPath,
+			frontmatter: entryFrontmatter,
+		});
+		assert.equal(parsedEntry.schema_version, 1);
+		assert.equal(parsedEntry.project_id, derivedAlpha.project_id);
+		assert.equal(parsedEntry.path, entryPath);
+		assert.throws(
+			() =>
+				projectMemoryModule.parseProjectMemoryEntry({
+					path: entryPath,
+					frontmatter: { ...entryFrontmatter, project_id: '' },
+				}),
+			/project_id/
+		);
+		assert.throws(
+			() =>
+				projectMemoryModule.parseProjectMemoryEntry({
+					path: entryPath,
+					frontmatter: { ...entryFrontmatter, schema_version: 2 },
+				}),
+			/schema_version/
+		);
+
+		const legacyPath = `${KNOWLEDGE_DIR}/memory/projects/${derivedAlpha.project_key}/memory.md`;
+		assert.deepEqual(
+			projectMemoryModule.classifyProjectMemoryNote({
+				path: legacyPath,
+				frontmatter: {},
+			}),
+			{
+				kind: 'legacy',
+				path: legacyPath,
+				project_key: derivedAlpha.project_key,
+				project_id: null,
+			}
+		);
+		assert.equal(
+			projectMemoryModule.classifyProjectMemoryNote({
+				path: entryPath,
+				frontmatter: entryFrontmatter,
+			}).kind,
+			'entry'
+		);
+		assert.deepEqual(
+			projectMemoryModule.classifyProjectMemoryNote({
+				path: `${KNOWLEDGE_DIR}/wiki/example.md`,
+				frontmatter: {},
+			}),
+			{
+				kind: 'unrelated',
+				path: `${KNOWLEDGE_DIR}/wiki/example.md`,
+			}
+		);
+
+		const projectBinding = {
+			project_id: derivedAlpha.project_id,
+			project_key: derivedAlpha.project_key,
+			project_hub: projectHub,
+			repo_path: derivedAlpha.repo_path,
+		};
+		assert.deepEqual(
+			projectMemoryModule.parseProjectMemoryHub({
+				path: projectHub,
+				frontmatter: {
+					schema_version: 1,
+					type: 'project_memory_index',
+					project_id: derivedAlpha.project_id,
+					project_key: derivedAlpha.project_key,
+					repo_path: derivedAlpha.repo_path,
+				},
+			}),
+			projectBinding
+		);
+		const otherProjectBinding = {
+			project_id: derivedOtherAlpha.project_id,
+			project_key: derivedOtherAlpha.project_key,
+			project_hub: `${KNOWLEDGE_DIR}/memory/projects/${derivedOtherAlpha.project_key}/index.md`,
+			repo_path: derivedOtherAlpha.repo_path,
+		};
+		assert.deepEqual(
+			projectMemoryModule.validateProjectMemoryOwnership([
+				projectBinding,
+				otherProjectBinding,
+			]),
+			[projectBinding, otherProjectBinding]
+		);
+		assert.throws(
+			() =>
+				projectMemoryModule.validateProjectMemoryOwnership([
+					projectBinding,
+					{ ...otherProjectBinding, project_id: projectBinding.project_id },
+				]),
+			/duplicate project_id/
+		);
+		assert.throws(
+			() =>
+				projectMemoryModule.resolveProjectMemoryNoteOwnership(
+					projectMemoryModule.classifyProjectMemoryNote({
+						path: legacyPath,
+						frontmatter: { project_id: otherProjectBinding.project_id },
+					}),
+					[projectBinding, otherProjectBinding]
+				),
+			/ambiguous|conflict/
+		);
+
+		const catalogEntries = [
+			{
+				path: entryPath,
+				legacy: false,
+				project_id: derivedAlpha.project_id,
+				agent_type: 'codex',
+				operation_id: 'finish-task-456',
+				operation_kind: 'finish_task',
+				status: 'active',
+				operation_hash: operationHash,
+				created_at: '2026-07-30T12:00:00.000Z',
+			},
+			{
+				path: projectMemoryModule.buildProjectMemoryEntryPath({
+					projectKey: derivedAlpha.project_key,
+					agentType: 'claude-code',
+					operationKind: 'propose_memory',
+					operationId: 'proposal-100',
+				}),
+				legacy: false,
+				project_id: derivedAlpha.project_id,
+				agent_type: 'claude-code',
+				operation_id: 'proposal-100',
+				operation_kind: 'propose_memory',
+				status: 'active',
+				operation_hash: changedOperationHash,
+				created_at: '2026-07-31T12:00:00.000Z',
+			},
+			{
+				path: projectMemoryModule.buildProjectMemoryEntryPath({
+					projectKey: derivedAlpha.project_key,
+					agentType: 'codex',
+					operationKind: 'propose_memory',
+					operationId: 'proposal-050',
+				}),
+				legacy: false,
+				project_id: derivedAlpha.project_id,
+				agent_type: 'codex',
+				operation_id: 'proposal-050',
+				operation_kind: 'propose_memory',
+				status: 'disputed',
+				operation_hash: changedOperationHash,
+				created_at: '2026-07-31T12:00:00.000Z',
+			},
+			{
+				path: legacyPath,
+				legacy: true,
+				project_id: derivedAlpha.project_id,
+				agent_type: null,
+				operation_id: null,
+				operation_kind: null,
+				status: null,
+				operation_hash: null,
+				created_at: null,
+			},
+		];
+		const firstCatalogPage = projectMemoryModule.buildProjectMemoryCatalogPage({
+			projectId: derivedAlpha.project_id,
+			projectHub,
+			generation: 7,
+			entries: catalogEntries,
+			pageSize: 2,
+		});
+		assert.equal(firstCatalogPage.sort, 'created_at_desc_operation_id_path_asc');
+		assert.equal(firstCatalogPage.total, 4);
+		assert.deepEqual(firstCatalogPage.counts_by_agent, {
+			'claude-code': 1,
+			codex: 2,
+		});
+		assert.equal(firstCatalogPage.complete, true);
+		assert.deepEqual(
+			firstCatalogPage.entries.map((entry) => entry.operation_id),
+			['proposal-050', 'proposal-100']
+		);
+		assert.equal(typeof firstCatalogPage.page.next_cursor, 'string');
+		const secondCatalogPage = projectMemoryModule.buildProjectMemoryCatalogPage({
+			projectId: derivedAlpha.project_id,
+			projectHub,
+			generation: 7,
+			entries: catalogEntries,
+			pageSize: 2,
+			cursor: firstCatalogPage.page.next_cursor,
+		});
+		assert.deepEqual(
+			secondCatalogPage.entries.map((entry) => entry.operation_id),
+			['finish-task-456', null]
+		);
+		assert.equal(secondCatalogPage.page.next_cursor, null);
+		assert.deepEqual(
+			projectMemoryModule.buildProjectMemoryCatalogPage({
+				projectId: derivedAlpha.project_id,
+				projectHub,
+				generation: 7,
+				entries: [...catalogEntries].reverse(),
+				pageSize: 2,
+			}).entries,
+			firstCatalogPage.entries
+		);
+		assert.throws(
+			() =>
+				projectMemoryModule.buildProjectMemoryCatalogPage({
+					projectId: derivedAlpha.project_id,
+					projectHub,
+					generation: 8,
+					entries: catalogEntries,
+					pageSize: 2,
+					cursor: firstCatalogPage.page.next_cursor,
+				}),
+			(error) =>
+				error instanceof projectMemoryModule.StaleProjectMemoryCursorError &&
+				error.code === 'stale_project_memory_cursor'
+		);
+		assert.throws(
+			() =>
+				projectMemoryModule.buildProjectMemoryCatalogPage({
+					projectId: otherProjectBinding.project_id,
+					projectHub: otherProjectBinding.project_hub,
+					generation: 7,
+					entries: [],
+					pageSize: 2,
+					cursor: firstCatalogPage.page.next_cursor,
+				}),
+			(error) =>
+				error instanceof projectMemoryModule.ProjectMemoryCursorError &&
+				error.code === 'invalid_project_memory_cursor'
+		);
+		const tamperedCursor =
+			`${firstCatalogPage.page.next_cursor.slice(0, -1)}${
+				firstCatalogPage.page.next_cursor.endsWith('A') ? 'B' : 'A'
+			}`;
+		assert.throws(
+			() =>
+				projectMemoryModule.buildProjectMemoryCatalogPage({
+					projectId: derivedAlpha.project_id,
+					projectHub,
+					generation: 7,
+					entries: catalogEntries,
+					pageSize: 2,
+					cursor: tamperedCursor,
+				}),
+			(error) =>
+				error instanceof projectMemoryModule.ProjectMemoryCursorError &&
+				error.code === 'invalid_project_memory_cursor'
+		);
+		assert.throws(
+			() =>
+				projectMemoryModule.buildProjectMemoryCatalogPage({
+					projectId: derivedAlpha.project_id,
+					projectHub,
+					generation: 7,
+					entries: [catalogEntries[0], { ...catalogEntries[0] }],
+					pageSize: 2,
+				}),
+			/duplicate operation identity|duplicate path/
+		);
+		assert.throws(
+			() =>
+				projectMemoryModule.buildProjectMemoryCatalogPage({
+					projectId: derivedAlpha.project_id,
+					projectHub,
+					generation: 7,
+					entries: [{
+						...catalogEntries[1],
+						project_id: derivedAlpha.project_id,
+						path: projectMemoryModule.buildProjectMemoryEntryPath({
+							projectKey: derivedOtherAlpha.project_key,
+							agentType: 'claude-code',
+							operationKind: 'propose_memory',
+							operationId: 'proposal-100',
+						}),
+					}],
+					pageSize: 2,
+				}),
+			/another project_key/
+		);
+
+		const completeCatalogEntries = Array.from({ length: 57 }, (_, index) => {
+			const operationId = `bulk-${String(index).padStart(3, '0')}`;
+			const agentType = index % 2 === 0 ? 'codex' : 'claude-code';
+			return {
+				path: projectMemoryModule.buildProjectMemoryEntryPath({
+					projectKey: derivedAlpha.project_key,
+					agentType,
+					operationKind: 'finish_task',
+					operationId,
+				}),
+				legacy: false,
+				project_id: derivedAlpha.project_id,
+				agent_type: agentType,
+				operation_id: operationId,
+				operation_kind: 'finish_task',
+				status: 'active',
+				operation_hash: operationHash,
+				created_at: new Date(
+					Date.UTC(2026, 6, 30, 0, 0, index)
+				).toISOString(),
+			};
+		});
+		let completeCatalogCursor = null;
+		const enumeratedCatalogPaths = [];
+		do {
+			const page = projectMemoryModule.buildProjectMemoryCatalogPage({
+				projectId: derivedAlpha.project_id,
+				projectHub,
+				generation: 11,
+				entries: completeCatalogEntries,
+				pageSize: 20,
+				cursor: completeCatalogCursor,
+			});
+			enumeratedCatalogPaths.push(...page.entries.map((entry) => entry.path));
+			completeCatalogCursor = page.page.next_cursor;
+			assert.equal(page.total, 57);
+			assert.deepEqual(page.counts_by_agent, {
+				'claude-code': 28,
+				codex: 29,
+			});
+		} while (completeCatalogCursor);
+		assert.equal(enumeratedCatalogPaths.length, 57);
+		assert.equal(new Set(enumeratedCatalogPaths).size, 57);
+		process.stdout.write(`${JSON.stringify({
+			suite: 'core-project-memory',
+			result: 'pass',
+			rows: [
+				'repository-derived-identity',
+				'collision-free-entry-paths',
+				'canonical-operation-hash',
+				'exact-retry-and-conflict',
+				'entry-schema-and-legacy-classification',
+				'ownership-rejection',
+				'catalog-order-counts-and-pagination',
+				'generation-bound-cursor-rejection',
+			],
+		})}\n`);
 
 		assert.equal(safety.isSafeDirectoryName(CONFIG_DIR, { protectedDirectoryName: CONFIG_DIR }), false);
 		assert.equal(safety.isSafeDirectoryName('.hidden', { allowHidden: false }), false);
@@ -357,13 +967,15 @@ async function run() {
 		assert.match(review, /type: legacy_migration_review/);
 		assert.match(review, /source_path: "00_control\/system.md"/);
 
-		const operationJournalDirectory = path.join(vaultRoot, 'operation-journal');
-		let stepResult = [];
-		const fixedOperationTime = '2026-07-22T00:00:00.000Z';
+			const operationJournalDirectory = path.join(vaultRoot, 'operation-journal');
+			let stepResult = [];
+			const fixedOperationTime = '2026-07-22T00:00:00.000Z';
+			const completedPayloadSecret = 'PRIVATE-COMPLETED-PAYLOAD';
+			const completedResultSecret = 'PRIVATE-COMPLETED-RESULT';
 		const normalRunner = new operationJournalModule.RecoverableOperationRunner({
 			operationId: 'op-normal',
 			idempotencyKey: 'idempotency-normal',
-			payload: { value: 42 },
+				payload: { value: completedPayloadSecret },
 			journal: new operationJournalModule.NodeFileOperationJournal({ directory: operationJournalDirectory }),
 			clock: () => fixedOperationTime,
 			steps: [
@@ -379,23 +991,158 @@ async function run() {
 						stepResult.push('step-2');
 					},
 				},
-			],
-			finalize: async () => {
-				return { status: 'completed', steps: 2 };
-			},
-		});
-		const normalOutcome = await normalRunner.run();
-		assert.deepEqual(normalOutcome, { status: 'completed', steps: 2 });
+				],
+				finalize: async () => {
+					return { status: 'completed', steps: 2, summary: completedResultSecret };
+				},
+			});
+			const normalOutcome = await normalRunner.run();
+			assert.deepEqual(normalOutcome, {
+				status: 'completed',
+				steps: 2,
+				summary: completedResultSecret,
+			});
 		assert.deepEqual(stepResult, ['step-1', 'step-2']);
 		const normalRecord = await new operationJournalModule.NodeFileOperationJournal({
 			directory: operationJournalDirectory,
 		}).loadById('op-normal');
 		assert.equal(normalRecord?.created_at, fixedOperationTime);
 		assert.equal(normalRecord?.updated_at, fixedOperationTime);
-		assert.deepEqual(normalRecord?.completed_steps.map((step) => step.completed_at), [
-			fixedOperationTime,
-			fixedOperationTime,
-		]);
+			assert.deepEqual(normalRecord?.completed_steps.map((step) => step.completed_at), [
+				fixedOperationTime,
+				fixedOperationTime,
+			]);
+			assert.deepEqual(normalRecord?.result, normalOutcome);
+			const normalPersistedRaw = fs.readFileSync(
+				path.join(operationJournalDirectory, 'op-normal.json'),
+				'utf8'
+			);
+			const normalPersisted = JSON.parse(normalPersistedRaw);
+			assert.equal(Object.prototype.hasOwnProperty.call(normalPersisted, 'payload'), false);
+			assert.equal(typeof normalPersisted.payload_encrypted?.ciphertext, 'string');
+			assert.equal(Object.prototype.hasOwnProperty.call(normalPersisted, 'result'), false);
+			assert.equal(typeof normalPersisted.result_encrypted?.ciphertext, 'string');
+			assert.equal(normalPersistedRaw.includes(completedPayloadSecret), false);
+			assert.equal(normalPersistedRaw.includes(completedResultSecret), false);
+
+		const persistedStepJournal = new operationJournalModule.NodeFileOperationJournal({
+			directory: operationJournalDirectory,
+		});
+		let persistedStepExecutions = 0;
+		let observedCompletedStepRecords = [];
+		const persistedStepConfig = {
+			operationId: 'op-persisted-step-result',
+			idempotencyKey: 'idempotency-persisted-step-result',
+			payload: { value: 'persisted-step-result' },
+			journal: persistedStepJournal,
+			steps: [
+				{
+					name: 'capture_receipt',
+					persistResult: true,
+					execute: async () => {
+						persistedStepExecutions += 1;
+						return {
+							receipt_id: 'receipt-1',
+							target_path: '01_knowledge/wiki/topic.md',
+						};
+					},
+				},
+				{
+					name: 'consume_receipt',
+					execute: async (_payload, context) => {
+						observedCompletedStepRecords = context.completedSteps;
+						return { must_not_be_persisted: true };
+					},
+				},
+			],
+			finalize: async () => ({ status: 'persisted-step-result-complete' }),
+		};
+		let interruptPersistedStep = true;
+		const interruptedPersistedStepRunner = new operationJournalModule.RecoverableOperationRunner({
+			...persistedStepConfig,
+			failureInjection: (context) => {
+				if (
+					interruptPersistedStep
+					&& context.phase === 'before_step'
+					&& context.stepName === 'consume_receipt'
+				) {
+					interruptPersistedStep = false;
+					throw new Error('interrupt after persisted receipt');
+				}
+			},
+		});
+		await assert.rejects(
+			() => interruptedPersistedStepRunner.run(),
+			/interrupt after persisted receipt/
+		);
+		const interruptedPersistedStepRecord = await persistedStepJournal.loadById(
+			'op-persisted-step-result'
+		);
+		assert.equal(interruptedPersistedStepRecord?.status, 'failed');
+		assert.equal(
+			Object.prototype.hasOwnProperty.call(interruptedPersistedStepRecord, 'result'),
+			false
+		);
+		assert.deepEqual(interruptedPersistedStepRecord?.completed_steps[0]?.result, {
+			receipt_id: 'receipt-1',
+			target_path: '01_knowledge/wiki/topic.md',
+		});
+		const persistedStepOutcome = await new operationJournalModule.RecoverableOperationRunner(
+			persistedStepConfig
+		).run();
+		assert.deepEqual(persistedStepOutcome, {
+			status: 'persisted-step-result-complete',
+		});
+		assert.equal(persistedStepExecutions, 1);
+		assert.deepEqual(observedCompletedStepRecords, [{
+			name: 'capture_receipt',
+			completed_at: interruptedPersistedStepRecord.completed_steps[0].completed_at,
+			result: {
+				receipt_id: 'receipt-1',
+				target_path: '01_knowledge/wiki/topic.md',
+			},
+		}]);
+		const completedPersistedStepRecord = await persistedStepJournal.loadById(
+			'op-persisted-step-result'
+		);
+		assert.equal(
+			Object.prototype.hasOwnProperty.call(
+				completedPersistedStepRecord?.completed_steps[0] || {},
+				'result'
+			),
+			true
+		);
+		assert.equal(
+			Object.prototype.hasOwnProperty.call(
+				completedPersistedStepRecord?.completed_steps[1] || {},
+				'result'
+			),
+			false
+		);
+
+		const oversizedStepResult = 'PRIVATE-STEP-RESULT'.repeat(2_000);
+		const oversizedStepRunner = new operationJournalModule.RecoverableOperationRunner({
+			operationId: 'op-oversized-step-result',
+			idempotencyKey: 'idempotency-oversized-step-result',
+			payload: { value: 'oversized-step-result' },
+			journal: persistedStepJournal,
+			steps: [{
+				name: 'oversized_receipt',
+				persistResult: true,
+				execute: async () => ({ body: oversizedStepResult }),
+			}],
+			finalize: async () => ({ status: 'must-not-complete' }),
+		});
+		await assert.rejects(
+			() => oversizedStepRunner.run(),
+			/persisted operation step result exceeds/i
+		);
+		const oversizedStepRecord = await persistedStepJournal.loadById(
+			'op-oversized-step-result'
+		);
+		assert.equal(oversizedStepRecord?.status, 'failed');
+		assert.deepEqual(oversizedStepRecord?.completed_steps, []);
+		assert.equal(JSON.stringify(oversizedStepRecord).includes(oversizedStepResult), false);
 
 		const concurrentSteps = [];
 		const concurrentRunner = new operationJournalModule.RecoverableOperationRunner({
@@ -446,6 +1193,23 @@ async function run() {
 		assert.equal(secondLockAcquired, true);
 		await releaseSecondProcessLock();
 
+		const orphanLockKey = 'orphan-empty-lock';
+		const orphanLockHash = createHash('sha256').update(orphanLockKey).digest('hex');
+		const orphanLockPath = path.join(
+			processLockDirectory,
+			`.idempotency-${orphanLockHash}.lock`
+		);
+		fs.writeFileSync(orphanLockPath, '', 'utf8');
+		const staleLockTime = new Date(Date.now() - 2_000);
+		fs.utimesSync(orphanLockPath, staleLockTime, staleLockTime);
+		const orphanLockJournal = new operationJournalModule.NodeFileOperationJournal({
+			directory: processLockDirectory,
+			lockWaitTimeoutMs: 1_000,
+		});
+		const releaseRecoveredOrphanLock = await orphanLockJournal.acquireLock(orphanLockKey);
+		await releaseRecoveredOrphanLock();
+		assert.equal(fs.existsSync(orphanLockPath), false);
+
 		const claimJournal = new operationJournalModule.NodeFileOperationJournal({ directory: processLockDirectory });
 		const claimBase = {
 			idempotency_key: 'atomic-claim-key',
@@ -468,7 +1232,7 @@ async function run() {
 		const replayRunner = new operationJournalModule.RecoverableOperationRunner({
 			operationId: 'op-normal',
 			idempotencyKey: 'idempotency-normal',
-			payload: { value: 42 },
+				payload: { value: completedPayloadSecret },
 			journal: new operationJournalModule.NodeFileOperationJournal({ directory: operationJournalDirectory }),
 			steps: [
 				{
@@ -498,7 +1262,7 @@ async function run() {
 		const operationIdConflictRunner = new operationJournalModule.RecoverableOperationRunner({
 			operationId: 'op-normal-id-mismatch',
 			idempotencyKey: 'idempotency-normal',
-			payload: { value: 42 },
+				payload: { value: completedPayloadSecret },
 			journal: new operationJournalModule.NodeFileOperationJournal({ directory: operationJournalDirectory }),
 			steps: [],
 			finalize: async () => ({ status: 'id-mismatch' }),
@@ -601,9 +1365,15 @@ async function run() {
 		const recoverableAfterFailure = await new operationJournalModule.NodeFileOperationJournal({
 			directory: operationJournalDirectory,
 		}).listRecoverable();
-		const recoverableFailure = recoverableAfterFailure.find((record) => record.operation_id === 'op-failure');
-		assert.deepEqual(recoverableFailure?.payload, { value: 'retry' });
-		assert.equal(recoverableFailure?.status, 'failed');
+			const recoverableFailure = recoverableAfterFailure.find((record) => record.operation_id === 'op-failure');
+			assert.deepEqual(recoverableFailure?.payload, { value: 'retry' });
+			assert.equal(recoverableFailure?.status, 'failed');
+			const failedOperationPath = path.join(operationJournalDirectory, 'op-failure.json');
+			const failedOperationRaw = fs.readFileSync(failedOperationPath, 'utf8');
+			const failedOperationPersisted = JSON.parse(failedOperationRaw);
+			assert.equal(Object.prototype.hasOwnProperty.call(failedOperationPersisted, 'payload'), false);
+			assert.equal(typeof failedOperationPersisted.payload_encrypted?.ciphertext, 'string');
+			assert.equal(failedOperationRaw.includes('retry'), false);
 
 		const resumeRunner = new operationJournalModule.RecoverableOperationRunner({
 			operationId: 'op-failure',
@@ -638,10 +1408,297 @@ async function run() {
 		const resumedOutcome = await resumeRunner.run();
 		assert.deepEqual(failureSteps, ['prepare', 'write', 'final', 'finalize']);
 		assert.deepEqual(resumedOutcome, { status: 'done', steps: 4 });
-		const recoverableAfterResume = await new operationJournalModule.NodeFileOperationJournal({
+			const recoverableAfterResume = await new operationJournalModule.NodeFileOperationJournal({
+				directory: operationJournalDirectory,
+			}).listRecoverable();
+			assert.equal(recoverableAfterResume.some((record) => record.operation_id === 'op-failure'), false);
+			const completedFailureRaw = fs.readFileSync(failedOperationPath, 'utf8');
+			const regressedFailureRecord = JSON.parse(completedFailureRaw);
+			regressedFailureRecord.completed_steps = regressedFailureRecord.completed_steps.slice(0, 1);
+			fs.writeFileSync(
+				failedOperationPath,
+				`${JSON.stringify(regressedFailureRecord, null, 2)}\n`,
+				'utf8'
+			);
+			const restoredFailureRecord = await new operationJournalModule.NodeFileOperationJournal({
+				directory: operationJournalDirectory,
+			}).loadById('op-failure');
+			assert.deepEqual(
+				restoredFailureRecord?.completed_steps.map((step) => step.name),
+				['prepare', 'write', 'final']
+			);
+			fs.writeFileSync(failedOperationPath, completedFailureRaw, 'utf8');
+
+		const auditCheckpointJournal = new operationJournalModule.NodeFileOperationJournal({
 			directory: operationJournalDirectory,
-		}).listRecoverable();
-		assert.equal(recoverableAfterResume.some((record) => record.operation_id === 'op-failure'), false);
+		});
+		let auditCheckpointAttempts = 0;
+		const auditCheckpointConfig = {
+			operationId: 'op-audit-checkpoint',
+			idempotencyKey: 'idempotency-audit-checkpoint',
+			payload: { value: 'audit-checkpoint' },
+			journal: auditCheckpointJournal,
+			steps: [{
+				name: 'append_audit',
+				failureStatus: 'audit_pending',
+				execute: async () => {
+					auditCheckpointAttempts += 1;
+					const checkpoint = await auditCheckpointJournal.loadById('op-audit-checkpoint');
+					assert.equal(checkpoint?.status, 'audit_pending');
+					if (auditCheckpointAttempts === 1) {
+						throw new Error('audit effect interrupted before step checkpoint');
+					}
+				},
+			}],
+			finalize: async () => ({ status: 'audit-checkpoint-complete' }),
+		};
+		await assert.rejects(
+			() => new operationJournalModule.RecoverableOperationRunner(auditCheckpointConfig).run(),
+			/audit effect interrupted/
+		);
+		const pendingAuditCheckpoint = await auditCheckpointJournal.loadById('op-audit-checkpoint');
+		assert.equal(pendingAuditCheckpoint?.status, 'audit_pending');
+		assert.deepEqual(pendingAuditCheckpoint?.completed_steps, []);
+		const auditCheckpointOutcome = await new operationJournalModule.RecoverableOperationRunner({
+			...auditCheckpointConfig,
+			failureInjection: async (context) => {
+				if (context.phase === 'after_step' && context.stepName === 'append_audit') {
+					const checkpoint = await auditCheckpointJournal.loadById('op-audit-checkpoint');
+					assert.equal(checkpoint?.status, 'in_progress');
+				}
+			},
+		}).run();
+		assert.deepEqual(auditCheckpointOutcome, {
+			status: 'audit-checkpoint-complete',
+		});
+		assert.equal(auditCheckpointAttempts, 2);
+		assert.equal(
+			(await auditCheckpointJournal.loadById('op-audit-checkpoint'))?.status,
+			'completed'
+		);
+
+		const absoluteSensitivePath = path.join(vaultRoot, 'private', 'proposal.md');
+		const sanitizedErrorJournal = new operationJournalModule.NodeFileOperationJournal({
+			directory: operationJournalDirectory,
+		});
+		await sanitizedErrorJournal.save({
+			operation_id: 'op-sanitized-error',
+			idempotency_key: 'idempotency-sanitized-error',
+			payload_hash: operationJournalModule.computePayloadHash({ value: 'sanitized-error' }),
+			payload: { value: 'sanitized-error' },
+			status: 'failed',
+			created_at: fixedOperationTime,
+			updated_at: fixedOperationTime,
+			completed_steps: [],
+			error: `Cannot read ${absoluteSensitivePath}; token=super-secret-token`,
+			failed_at: fixedOperationTime,
+		});
+		const sanitizedErrorRecord = await sanitizedErrorJournal.loadById('op-sanitized-error');
+		assert.equal(sanitizedErrorRecord?.error.includes(absoluteSensitivePath), false);
+		assert.equal(sanitizedErrorRecord?.error.includes('super-secret-token'), false);
+		assert.match(sanitizedErrorRecord?.error || '', /\[redacted-path\]/);
+		assert.match(sanitizedErrorRecord?.error || '', /token=\[redacted\]/);
+		assert.equal(Buffer.byteLength(sanitizedErrorRecord?.error || '', 'utf8') <= 512, true);
+
+		let dynamicFailureSelectorObservedError = false;
+		let terminalConflictStepExecutions = 0;
+		const sensitiveConflictText = 'PRIVATE-WRITEBACK-BODY '.repeat(80);
+		const terminalConflictConfig = {
+			operationId: 'op-terminal-conflict',
+			idempotencyKey: 'idempotency-terminal-conflict',
+			payload: { value: 'terminal-conflict' },
+			journal: sanitizedErrorJournal,
+			steps: [{
+				name: 'detect_conflict',
+				execute: async () => {
+					terminalConflictStepExecutions += 1;
+					throw new Error(
+						`writeback conflict at ${absoluteSensitivePath}: ${sensitiveConflictText}`
+					);
+				},
+				failureStatus: (error) => {
+					dynamicFailureSelectorObservedError = error instanceof Error
+						&& /writeback conflict/.test(error.message);
+					return 'conflicted';
+				},
+			}],
+			finalize: async () => ({ status: 'must-not-complete' }),
+		};
+		await assert.rejects(
+			() => new operationJournalModule.RecoverableOperationRunner(terminalConflictConfig).run(),
+			/writeback conflict/
+		);
+		assert.equal(dynamicFailureSelectorObservedError, true);
+		const terminalConflictRecord = await sanitizedErrorJournal.loadById('op-terminal-conflict');
+		assert.equal(terminalConflictRecord?.status, 'conflicted');
+		assert.equal(terminalConflictRecord?.error.includes(absoluteSensitivePath), false);
+		assert.equal(terminalConflictRecord?.error.includes('PRIVATE-WRITEBACK-BODY'), false);
+		assert.equal(Buffer.byteLength(terminalConflictRecord?.error || '', 'utf8') <= 512, true);
+		const recoverableWithoutConflict = await sanitizedErrorJournal.listRecoverable();
+		assert.equal(
+			recoverableWithoutConflict.some((record) => record.operation_id === 'op-terminal-conflict'),
+			false
+		);
+		await assert.rejects(
+			() => new operationJournalModule.RecoverableOperationRunner(terminalConflictConfig).run(),
+			(error) => error instanceof operationJournalModule.OperationConflictError
+		);
+		assert.equal(terminalConflictStepExecutions, 1);
+
+		const forgedPrefixDirectory = path.join(vaultRoot, 'operation-journal-forged-prefix');
+		const forgedPrefixJournal = new operationJournalModule.NodeFileOperationJournal({
+			directory: forgedPrefixDirectory,
+		});
+		fs.mkdirSync(forgedPrefixDirectory, { recursive: true });
+		const forgedPrefixPayload = { value: 'forged-prefix' };
+		fs.writeFileSync(
+			path.join(forgedPrefixDirectory, 'op-forged-prefix.json'),
+			`${JSON.stringify({
+				operation_id: 'op-forged-prefix',
+				idempotency_key: 'idempotency-forged-prefix',
+				payload_hash: operationJournalModule.computePayloadHash(forgedPrefixPayload),
+				payload: forgedPrefixPayload,
+				status: 'failed',
+				created_at: fixedOperationTime,
+				updated_at: fixedOperationTime,
+				completed_steps: [{
+					name: 'append_audit',
+					completed_at: fixedOperationTime,
+				}],
+				error: 'forged step prefix',
+				failed_at: fixedOperationTime,
+			}, null, 2)}\n`,
+			'utf8'
+		);
+		let forgedPrefixExecutions = 0;
+		const forgedPrefixRunner = new operationJournalModule.RecoverableOperationRunner({
+			operationId: 'op-forged-prefix',
+			idempotencyKey: 'idempotency-forged-prefix',
+			payload: forgedPrefixPayload,
+			journal: forgedPrefixJournal,
+			steps: [
+				{
+					name: 'apply_target',
+					execute: async () => {
+						forgedPrefixExecutions += 1;
+					},
+				},
+				{
+					name: 'append_audit',
+					execute: async () => {
+						forgedPrefixExecutions += 1;
+					},
+				},
+			],
+			finalize: async () => ({ status: 'must-not-complete' }),
+		});
+		await assert.rejects(
+			() => forgedPrefixRunner.run(),
+			(error) => error instanceof operationJournalModule.CorruptedOperationJournalError
+				&& /unique ordered prefix/.test(error.message)
+		);
+		assert.equal(forgedPrefixExecutions, 0);
+
+		const incompleteCompletedPayload = { value: 'incomplete-completed' };
+		fs.writeFileSync(
+			path.join(forgedPrefixDirectory, 'op-incomplete-completed.json'),
+			`${JSON.stringify({
+				operation_id: 'op-incomplete-completed',
+				idempotency_key: 'idempotency-incomplete-completed',
+				payload_hash: operationJournalModule.computePayloadHash(incompleteCompletedPayload),
+				payload: incompleteCompletedPayload,
+				status: 'completed',
+				created_at: fixedOperationTime,
+				updated_at: fixedOperationTime,
+				completed_steps: [{
+					name: 'apply_target',
+					completed_at: fixedOperationTime,
+				}],
+				result: { forged: true },
+			}, null, 2)}\n`,
+			'utf8'
+		);
+		const incompleteCompletedRunner = new operationJournalModule.RecoverableOperationRunner({
+			operationId: 'op-incomplete-completed',
+			idempotencyKey: 'idempotency-incomplete-completed',
+			payload: incompleteCompletedPayload,
+			journal: forgedPrefixJournal,
+			steps: [
+				{ name: 'apply_target', execute: async () => undefined },
+				{ name: 'append_audit', execute: async () => undefined },
+			],
+			finalize: async () => ({ status: 'must-not-complete' }),
+		});
+		await assert.rejects(
+			() => incompleteCompletedRunner.run(),
+			(error) => error instanceof operationJournalModule.CorruptedOperationJournalError
+				&& /does not contain every configured step/.test(error.message)
+		);
+
+		const invariantJournalDirectory = path.join(vaultRoot, 'operation-journal-invariants');
+		const invariantJournal = new operationJournalModule.NodeFileOperationJournal({
+			directory: invariantJournalDirectory,
+		});
+		fs.mkdirSync(invariantJournalDirectory, { recursive: true });
+		const invariantBase = {
+			idempotency_key: 'idempotency-invariant',
+			payload_hash: operationJournalModule.computePayloadHash({ value: 'invariant' }),
+			payload: { value: 'invariant' },
+			created_at: fixedOperationTime,
+			updated_at: fixedOperationTime,
+			completed_steps: [],
+		};
+		fs.writeFileSync(
+			path.join(invariantJournalDirectory, 'op-completed-missing-result.json'),
+			`${JSON.stringify({
+				...invariantBase,
+				operation_id: 'op-completed-missing-result',
+				status: 'completed',
+			}, null, 2)}\n`,
+			'utf8'
+		);
+		await assert.rejects(
+			() => invariantJournal.loadById('op-completed-missing-result'),
+			(error) => error instanceof operationJournalModule.CorruptedOperationJournalError
+				&& /missing result/.test(error.message)
+		);
+		fs.writeFileSync(
+			path.join(invariantJournalDirectory, 'op-failed-with-result.json'),
+			`${JSON.stringify({
+				...invariantBase,
+				operation_id: 'op-failed-with-result',
+				status: 'failed',
+				result: { forged: true },
+				error: 'failed invariant',
+				failed_at: fixedOperationTime,
+			}, null, 2)}\n`,
+			'utf8'
+		);
+		await assert.rejects(
+			() => invariantJournal.loadById('op-failed-with-result'),
+			(error) => error instanceof operationJournalModule.CorruptedOperationJournalError
+				&& /non-completed.*result/.test(error.message)
+		);
+		fs.writeFileSync(
+			path.join(invariantJournalDirectory, 'op-duplicate-steps.json'),
+			`${JSON.stringify({
+				...invariantBase,
+				operation_id: 'op-duplicate-steps',
+				status: 'failed',
+				completed_steps: [
+					{ name: 'duplicate', completed_at: fixedOperationTime },
+					{ name: 'duplicate', completed_at: fixedOperationTime },
+				],
+				error: 'duplicate steps',
+				failed_at: fixedOperationTime,
+			}, null, 2)}\n`,
+			'utf8'
+		);
+		await assert.rejects(
+			() => invariantJournal.loadById('op-duplicate-steps'),
+			(error) => error instanceof operationJournalModule.CorruptedOperationJournalError
+				&& /duplicate names/.test(error.message)
+		);
 
 		const corruptedJournalDir = path.join(vaultRoot, 'operation-journal-corrupt');
 		const corruptedJournal = new operationJournalModule.NodeFileOperationJournal({ directory: corruptedJournalDir });
@@ -664,6 +1721,452 @@ async function run() {
 			finalize: async () => ({ status: 'corrupt' }),
 		});
 		await assert.rejects(() => corruptedRunner.run(), (error) => error instanceof operationJournalModule.CorruptedOperationJournalError);
+
+		const transitionEnvironment = {
+			now: '2026-07-30T03:00:00.000Z',
+			actor: 'user',
+			targetExists: (targetPath) =>
+				targetPath === '01_knowledge/memory/projects/demo/memory.md'
+				|| targetPath === '01_knowledge/wiki/topic.md',
+		};
+		const proposalSnapshot = {
+			path: '00_tracekeeper/inbox/review_queue/proposal.md',
+			classification: 'memory_proposal',
+			proposalId: 'proposal-atomic',
+			proposalKind: 'project_update',
+			taskId: 'task-atomic',
+			status: 'pending',
+			targetPath: '01_knowledge/memory/projects/demo/memory.md',
+			writebackContent: '- private proposal body',
+			revisionComment: '',
+			revisionRequestedAt: '',
+			revisionRequestedBy: '',
+		};
+		const proposalRevision = proposalTransitionModule.computeProposalRevision(proposalSnapshot);
+		assert.equal(
+			proposalRevision,
+			proposalTransitionModule.computeProposalRevision({ ...proposalSnapshot })
+		);
+		assert.equal(
+			proposalRevision,
+			proposalTransitionModule.computeProposalRevision({
+				...proposalSnapshot,
+				writebackContent: '- changed private proposal body',
+			})
+		);
+		assert.notEqual(
+			proposalTransitionModule.computeProposalContentHash(proposalSnapshot),
+			proposalTransitionModule.computeProposalContentHash({
+				...proposalSnapshot,
+				writebackContent: '- changed private proposal body',
+			})
+		);
+		assert.equal(
+			proposalTransitionModule.isAllowedProposalTargetPath(
+				'01_knowledge/memory/projects/demo/memory.md'
+			),
+			true
+		);
+		assert.equal(
+			proposalTransitionModule.isAllowedProposalTargetPath('01_knowledge/wiki/topic.md'),
+			true
+		);
+		assert.equal(
+			proposalTransitionModule.isAllowedProposalTargetPath('05_misc/outside.md'),
+			false
+		);
+
+		const approveCommand = {
+			expectedRevision: proposalRevision,
+			expectedContentHash:
+				proposalTransitionModule.computeProposalContentHash(proposalSnapshot),
+			operationId: 'review-approve-atomic',
+			action: { kind: 'status', nextStatus: 'approved' },
+		};
+		const approvedDecision = proposalTransitionModule.transitionProposal(
+			proposalSnapshot,
+			approveCommand,
+			transitionEnvironment
+		);
+		assert.equal(approvedDecision.state.status, 'approved');
+		assert.equal(approvedDecision.frontmatter.approval_status, 'approved');
+		assert.equal(approvedDecision.frontmatter.status, 'approved');
+		assert.equal(approvedDecision.receipt.previousStatus, 'pending');
+		assert.equal(approvedDecision.receipt.nextStatus, 'approved');
+		assert.equal(approvedDecision.receipt.previousRevision, proposalRevision);
+		assert.equal(
+			approvedDecision.receipt.committedRevision,
+			proposalTransitionModule.computeProposalRevision(approvedDecision.state)
+		);
+		assert.equal(
+			JSON.stringify(approvedDecision.receipt).includes('private proposal body'),
+			false
+		);
+		assert.deepEqual(
+			proposalTransitionModule.proposalTransitionReceiptFromFrontmatter(
+				approvedDecision.frontmatter
+			),
+			approvedDecision.receipt
+		);
+		assert.throws(
+			() => proposalTransitionModule.proposalTransitionReceiptFromFrontmatter({
+				review_transition_id: 'incomplete',
+			}),
+			(error) => error instanceof proposalTransitionModule.ProposalTransitionValidationError
+		);
+		assert.throws(
+			() => proposalTransitionModule.proposalTransitionReceiptFromFrontmatter({
+				review_transition_payload_hash: 'orphaned-metadata',
+			}),
+			(error) => error instanceof proposalTransitionModule.ProposalTransitionValidationError
+		);
+
+		const replayedApproval = proposalTransitionModule.transitionProposal(
+			approvedDecision.state,
+			approveCommand,
+			transitionEnvironment
+		);
+		assert.equal(replayedApproval.replayed, true);
+		assert.deepEqual(replayedApproval.receipt, approvedDecision.receipt);
+		assert.deepEqual(replayedApproval.frontmatter, {});
+		await assert.rejects(
+			async () => proposalTransitionModule.transitionProposal(
+				approvedDecision.state,
+				{
+					...approveCommand,
+					action: { kind: 'status', nextStatus: 'rejected' },
+				},
+				transitionEnvironment
+			),
+			(error) => error instanceof proposalTransitionModule.ProposalTransitionConflictError
+		);
+		await assert.rejects(
+			async () => proposalTransitionModule.transitionProposal(
+				approvedDecision.state,
+				{
+					expectedRevision: proposalRevision,
+					operationId: 'review-second-action',
+					action: { kind: 'status', nextStatus: 'pending' },
+				},
+				transitionEnvironment
+			),
+			(error) => error instanceof proposalTransitionModule.ProposalTransitionConflictError
+		);
+
+		for (const [status, allowed] of Object.entries({
+			pending: ['approved', 'rejected', 'revision_requested'],
+			revision_requested: ['pending'],
+			approved: ['pending'],
+			rejected: ['pending'],
+			deferred: ['pending'],
+			applied: [],
+		})) {
+			const current = {
+				...proposalSnapshot,
+				status,
+			};
+			const currentRevision = proposalTransitionModule.computeProposalRevision(current);
+			for (const nextStatus of [
+				'pending',
+				'approved',
+				'rejected',
+				'deferred',
+				'revision_requested',
+				'applied',
+			]) {
+				if (allowed.includes(nextStatus)) {
+					const decision = proposalTransitionModule.transitionProposal(
+						current,
+						{
+							expectedRevision: currentRevision,
+							...(nextStatus === 'approved'
+								? {
+									expectedContentHash:
+										proposalTransitionModule.computeProposalContentHash(current),
+								}
+								: {}),
+							operationId: `review-${status}-${nextStatus}`,
+							action: { kind: 'status', nextStatus },
+						},
+						transitionEnvironment
+					);
+					assert.equal(decision.state.status, nextStatus);
+					continue;
+				}
+				await assert.rejects(
+					async () => proposalTransitionModule.transitionProposal(
+						current,
+						{
+							expectedRevision: currentRevision,
+							operationId: `review-invalid-${status}-${nextStatus}`,
+							action: { kind: 'status', nextStatus },
+						},
+						transitionEnvironment
+					),
+					(error) => error instanceof proposalTransitionModule.ProposalTransitionStateError
+				);
+			}
+		}
+
+		const revisionRequestedSnapshot = {
+			...proposalSnapshot,
+			status: 'revision_requested',
+			revisionComment: 'Original revision note',
+			revisionRequestedAt: '2026-07-30T02:00:00.000Z',
+			revisionRequestedBy: 'user',
+		};
+		const revisionNoteDecision = proposalTransitionModule.transitionProposal(
+			revisionRequestedSnapshot,
+			{
+				expectedRevision:
+					proposalTransitionModule.computeProposalRevision(revisionRequestedSnapshot),
+				operationId: 'review-update-revision-note',
+				action: {
+					kind: 'status',
+					nextStatus: 'revision_requested',
+					revisionComment: 'Updated revision note',
+				},
+			},
+			transitionEnvironment
+		);
+		assert.equal(revisionNoteDecision.state.status, 'revision_requested');
+		assert.equal(revisionNoteDecision.state.revisionComment, 'Updated revision note');
+		assert.equal(revisionNoteDecision.receipt.previousStatus, 'revision_requested');
+		assert.equal(revisionNoteDecision.receipt.nextStatus, 'revision_requested');
+
+		const legacyReviewSnapshot = {
+			...proposalSnapshot,
+			path: '00_tracekeeper/inbox/review_queue/legacy-review.md',
+			classification: 'legacy_migration_review',
+			proposalId: 'legacy-review',
+			proposalKind: 'legacy_migration_review',
+			taskId: '',
+			targetPath: '',
+			writebackContent: '',
+		};
+		const completedLegacyDecision = proposalTransitionModule.transitionProposal(
+			legacyReviewSnapshot,
+			{
+				expectedRevision:
+					proposalTransitionModule.computeProposalRevision(legacyReviewSnapshot),
+				operationId: 'review-complete-legacy',
+				action: { kind: 'status', nextStatus: 'applied' },
+			},
+			transitionEnvironment
+		);
+		assert.equal(completedLegacyDecision.state.status, 'applied');
+		assert.equal(completedLegacyDecision.receipt.kind, 'status');
+
+		const applyCommand = {
+			expectedRevision: approvedDecision.receipt.committedRevision,
+			expectedContentHash:
+				proposalTransitionModule.computeProposalContentHash(approvedDecision.state),
+			operationId: 'writeback-atomic',
+			action: { kind: 'apply' },
+		};
+		const applyDecision = proposalTransitionModule.transitionProposal(
+			approvedDecision.state,
+			applyCommand,
+			transitionEnvironment
+		);
+		assert.equal(applyDecision.state.status, 'applied');
+		assert.equal(applyDecision.state.appliedOperationId, 'writeback-atomic');
+		assert.equal(applyDecision.frontmatter.writeback_operation_id, 'writeback-atomic');
+		assert.equal(
+			proposalTransitionModule.transitionProposal(
+				applyDecision.state,
+				applyCommand,
+				transitionEnvironment
+			).replayed,
+			true
+		);
+		await assert.rejects(
+			async () => proposalTransitionModule.transitionProposal(
+				{ ...applyDecision.state, archived: true },
+				applyCommand,
+				transitionEnvironment
+			),
+			(error) =>
+				error instanceof proposalTransitionModule.ProposalTransitionStateError
+				|| error instanceof proposalTransitionModule.ProposalTransitionConflictError
+		);
+
+		for (const incomplete of [
+			{ targetPath: '' },
+			{ writebackContent: '' },
+			{ writebackContent: 'unknown' },
+			{ targetPath: '05_misc/outside.md' },
+			{ targetPath: '01_knowledge/wiki/missing.md' },
+		]) {
+			const current = { ...proposalSnapshot, ...incomplete };
+			await assert.rejects(
+				async () => proposalTransitionModule.transitionProposal(
+					current,
+					{
+						expectedRevision: proposalTransitionModule.computeProposalRevision(current),
+						expectedContentHash:
+							proposalTransitionModule.computeProposalContentHash(current),
+						operationId: `review-incomplete-${Object.keys(incomplete)[0]}`,
+						action: { kind: 'status', nextStatus: 'approved' },
+					},
+					transitionEnvironment
+				),
+				(error) => error instanceof proposalTransitionModule.ProposalTransitionValidationError
+			);
+		}
+		for (const malformed of [
+			{ path: '../outside.md' },
+			{ path: 'review\\proposal.md' },
+			{ proposalId: '' },
+			{ proposalId: ' proposal-atomic ' },
+			{ classification: 'unsupported' },
+		]) {
+			const current = { ...proposalSnapshot, ...malformed };
+			await assert.rejects(
+				async () => proposalTransitionModule.transitionProposal(
+					current,
+					{
+						expectedRevision: proposalTransitionModule.computeProposalRevision(current),
+						operationId: 'review-malformed',
+						action: { kind: 'status', nextStatus: 'rejected' },
+					},
+					transitionEnvironment
+				),
+				(error) => error instanceof proposalTransitionModule.ProposalTransitionValidationError
+			);
+		}
+
+		const draftDecision = proposalTransitionModule.transitionProposal(
+			{ ...proposalSnapshot, status: 'revision_requested' },
+			{
+				expectedRevision: proposalTransitionModule.computeProposalRevision({
+					...proposalSnapshot,
+					status: 'revision_requested',
+				}),
+				expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+					...proposalSnapshot,
+					status: 'revision_requested',
+				}),
+				operationId: 'review-edit-atomic',
+				action: {
+					kind: 'draft',
+					targetPath: '01_knowledge/wiki/topic.md',
+					writebackContent: '- revised content',
+				},
+			},
+			transitionEnvironment
+		);
+		assert.equal(draftDecision.state.targetPath, '01_knowledge/wiki/topic.md');
+		assert.equal(draftDecision.state.writebackContent, '- revised content');
+		assert.equal(draftDecision.state.status, 'revision_requested');
+		await assert.rejects(
+			async () => proposalTransitionModule.transitionProposal(
+				{
+					...proposalSnapshot,
+					writebackContent: '- changed after draft render',
+				},
+				{
+					expectedRevision: proposalTransitionModule.computeProposalRevision(proposalSnapshot),
+					expectedContentHash:
+						proposalTransitionModule.computeProposalContentHash(proposalSnapshot),
+					operationId: 'review-edit-stale-content',
+					action: {
+						kind: 'draft',
+						targetPath: '01_knowledge/wiki/topic.md',
+						writebackContent: '- user draft',
+					},
+				},
+				transitionEnvironment
+			),
+			(error) => error instanceof proposalTransitionModule.ProposalTransitionConflictError
+		);
+		for (const terminal of [
+			{ ...proposalSnapshot, status: 'applied' },
+			{ ...proposalSnapshot, archived: true },
+		]) {
+			await assert.rejects(
+				async () => proposalTransitionModule.transitionProposal(
+					terminal,
+					{
+						expectedRevision: proposalTransitionModule.computeProposalRevision(terminal),
+						expectedContentHash:
+							proposalTransitionModule.computeProposalContentHash(terminal),
+						operationId: 'review-terminal-edit',
+						action: {
+							kind: 'draft',
+							targetPath: '01_knowledge/wiki/topic.md',
+							writebackContent: '- blocked',
+						},
+					},
+					transitionEnvironment
+				),
+				(error) =>
+					error instanceof proposalTransitionModule.ProposalTransitionStateError
+					|| error instanceof proposalTransitionModule.ProposalTransitionValidationError
+			);
+		}
+
+		const repositoryProposalPath = '00_tracekeeper/inbox/review_queue/repository-proposal.md';
+		const repositoryInitialState = {
+			...proposalSnapshot,
+			path: repositoryProposalPath,
+		};
+		writeFile(repositoryProposalPath, JSON.stringify(repositoryInitialState), vaultRoot);
+		const proposalRepository = new vaultRepositoryModule.NodeFsVaultRepository({
+			vaultRoot,
+			protectedDirectoryName: CONFIG_DIR,
+		});
+		const repositoryFile = await proposalRepository.readText(repositoryProposalPath);
+		const repositoryDecision =
+			await proposalTransitionModule.commitProposalTransitionWithRepository(
+				proposalRepository,
+				{
+					parse: (_relativePath, content) => JSON.parse(content),
+					apply: (_content, decision) => JSON.stringify(decision.state),
+				},
+				{
+					proposalPath: repositoryProposalPath,
+					expectedVersion: repositoryFile.version,
+					transition: {
+						expectedRevision:
+							proposalTransitionModule.computeProposalRevision(repositoryInitialState),
+						expectedContentHash:
+							proposalTransitionModule.computeProposalContentHash(repositoryInitialState),
+						operationId: 'review-repository-approve',
+						action: { kind: 'status', nextStatus: 'approved' },
+					},
+					environment: transitionEnvironment,
+				}
+			);
+		assert.equal(repositoryDecision.state.status, 'approved');
+		assert.ok(repositoryDecision.writeReceipt);
+		const repositoryCommitted = JSON.parse(
+			(await proposalRepository.readText(repositoryProposalPath)).content
+		);
+		assert.equal(repositoryCommitted.status, 'approved');
+		const repositoryReplay =
+			await proposalTransitionModule.commitProposalTransitionWithRepository(
+				proposalRepository,
+				{
+					parse: (_relativePath, content) => JSON.parse(content),
+					apply: (_content, decision) => JSON.stringify(decision.state),
+				},
+				{
+					proposalPath: repositoryProposalPath,
+					expectedVersion: repositoryFile.version,
+					transition: {
+						expectedRevision:
+							proposalTransitionModule.computeProposalRevision(repositoryInitialState),
+						expectedContentHash:
+							proposalTransitionModule.computeProposalContentHash(repositoryInitialState),
+						operationId: 'review-repository-approve',
+						action: { kind: 'status', nextStatus: 'approved' },
+					},
+					environment: transitionEnvironment,
+				}
+			);
+		assert.equal(repositoryReplay.writeReceipt, null);
+		assert.deepEqual(repositoryReplay.receipt, repositoryDecision.receipt);
 
 		const initialIndex = new knowledgeIndexModule.InMemoryKnowledgeIndex({
 			vaultRoot,
@@ -829,6 +2332,13 @@ async function run() {
 		assert.equal(repositoryRead?.path, repositoryRootNote);
 		assert.equal(repositoryRead?.content, '# Repository Note\n');
 		assert.equal(repositoryRead?.version, repositoryCreated.version);
+		assert.equal(
+			repositoryRead?.version,
+			knowledgeIndexModule.computeFileVersion(
+				repositoryRead?.size ?? 0,
+				repositoryRead?.modifiedAt ?? ''
+			)
+		);
 
 		await assert.rejects(
 			() => repo.createText(repositoryRootNote, '# Duplicate Repository Note\n'),
@@ -854,23 +2364,1155 @@ async function run() {
 			() => repo.readText('../outside-repo.md'),
 			(error) => error instanceof safety.VaultPathError
 		);
+		if (symlinkSupported) {
+			await assert.rejects(
+				() => repo.readText('01_knowledge/sources/symlink_source.md'),
+				(error) => error instanceof safety.VaultPathError
+			);
+		}
 
 		const scopedNotes = await repo.listMarkdown(repoScope);
 		assert.ok(scopedNotes.some((note) => note.path === repositoryRootNote));
 
-		console.log(
-			JSON.stringify(
-				{
-					result: 'pass',
-					vaultRoot,
-					scannedNotes: scanBeforeSymlink.notes.length,
-					symlinkSupported,
-					skipped: results.skipped,
-				},
-				null,
-				2
-			)
-		);
+		process.stdout.write(`${JSON.stringify({
+			suite: 'core-legacy-baseline',
+			result: 'pass',
+			vaultRoot,
+			scannedNotes: scanBeforeSymlink.notes.length,
+			symlinkSupported,
+			skipped: results.skipped,
+		})}\n`);
+
+		await runCharacterizationRows('core-native-markdown-and-index', [
+			['yaml-block-and-nested-lists', () => {
+				const note = scannedCharacterizationNote('notes/yaml-block.md', [
+					'---',
+					'aliases:',
+					'  - Alpha',
+					'  - "Beta: Alias"',
+					'metadata:',
+					'  owners:',
+					'    - Ada',
+					'    - Lin',
+					'---',
+					'# YAML block fixture',
+				].join('\n'));
+				assert.deepEqual(note.aliases, ['Alpha', 'Beta: Alias']);
+				assert.deepEqual(note.frontmatter.metadata, { owners: ['Ada', 'Lin'] });
+			}],
+			['yaml-quoted-scalars', () => {
+				const note = scannedCharacterizationNote('notes/yaml-quotes.md', [
+					'---',
+					'title: "Quoted: Title"',
+					'summary: \'Agent: local-first\'',
+					'aliases: ["One: Alias", "Two"]',
+					'---',
+					'# YAML quote fixture',
+				].join('\n'));
+				assert.equal(note.title, 'Quoted: Title');
+				assert.equal(note.frontmatter.summary, 'Agent: local-first');
+				assert.deepEqual(note.aliases, ['One: Alias', 'Two', 'Quoted: Title']);
+			}],
+			['yaml-multiline-scalars', () => {
+				const note = scannedCharacterizationNote('notes/yaml-multiline.md', [
+					'---',
+					'literal: |',
+					'  first line',
+					'  second line',
+					'folded: >',
+					'  folded first',
+					'  folded second',
+					'---',
+					'# YAML multiline fixture',
+				].join('\n'));
+				assert.equal(note.frontmatter.literal, 'first line\nsecond line\n');
+				assert.equal(note.frontmatter.folded, 'folded first folded second\n');
+			}],
+			['yaml-frontmatter-links', () => {
+				const note = scannedCharacterizationNote('notes/yaml-links.md', [
+					'---',
+					'related:',
+					'  - "[[topics/Target|Target Alias]]"',
+					'source: "[[sources/Source#Evidence]]"',
+					'---',
+					'# Frontmatter links',
+				].join('\n'));
+				assert.deepEqual(
+					note.wikilinks.map(({ target }) => target).sort(),
+					['sources/Source', 'topics/Target']
+				);
+			}],
+			['callouts-standard-claim-and-evidence', () => {
+				const parsed = markdownModule.parseMarkdown([
+					'> [!claim] Standard claim',
+					'> Claim body',
+					'> source:: [[sources/claim]]',
+					'',
+					'> [!evidence] Standard evidence',
+					'> Evidence body',
+					'> source:: [[sources/evidence]]',
+				].join('\n'));
+				assert.equal(parsed.claimBlocks.length, 1);
+				assert.deepEqual(parsed.claimBlocks[0].sourceRefs, ['sources/claim']);
+				assert.equal(parsed.evidenceBlocks.length, 1);
+				assert.deepEqual(parsed.evidenceBlocks[0].sourceRefs, ['sources/evidence']);
+			}],
+			['callouts-foldable-claim-and-evidence', () => {
+				const parsed = markdownModule.parseMarkdown([
+					'> [!claim]- Folded claim',
+					'> Claim body',
+					'',
+					'> [!evidence]- Folded evidence',
+					'> Evidence body',
+				].join('\n'));
+				assert.equal(parsed.claimBlocks.length, 1);
+				assert.match(parsed.claimBlocks[0].rawHeader, /\[!claim\]-/i);
+				assert.equal(parsed.evidenceBlocks.length, 1);
+				assert.match(parsed.evidenceBlocks[0].rawHeader, /\[!evidence\]-/i);
+			}],
+			['callouts-unfoldable-claim-and-evidence', () => {
+				const parsed = markdownModule.parseMarkdown([
+					'> [!claim]+ Unfoldable claim',
+					'> Claim body',
+					'',
+					'> [!evidence]+ Unfoldable evidence',
+					'> Evidence body',
+				].join('\n'));
+				assert.equal(parsed.claimBlocks.length, 1);
+				assert.match(parsed.claimBlocks[0].rawHeader, /\[!claim\]\+/i);
+				assert.equal(parsed.evidenceBlocks.length, 1);
+				assert.match(parsed.evidenceBlocks[0].rawHeader, /\[!evidence\]\+/i);
+			}],
+			['syntax-fenced-code-exclusion', () => {
+				const parsed = markdownModule.parseMarkdown([
+					'# Real Heading',
+					'#real',
+					'```md',
+					'# Fake Heading',
+					'#fake',
+					'[[Fake/Fenced]]',
+					'> [!claim] Fake claim',
+					'^fake-fence',
+					'```',
+					'[[Real/Target]]',
+				].join('\n'));
+				assert.deepEqual(parsed.headings, ['Real Heading']);
+				assert.deepEqual(parsed.tags, ['real']);
+				assert.deepEqual(parsed.wikilinks.map(({ target }) => target), ['Real/Target']);
+				assert.deepEqual(parsed.blockIds, []);
+				assert.equal(parsed.claimBlocks.length, 0);
+			}],
+			['syntax-inline-code-exclusion', () => {
+				const parsed = markdownModule.parseMarkdown('Keep #real and `#fake [[Fake/Inline]]` with [[Real/Target]].');
+				assert.deepEqual(parsed.tags, ['real']);
+				assert.deepEqual(parsed.wikilinks.map(({ target }) => target), ['Real/Target']);
+			}],
+			['syntax-html-comment-exclusion', () => {
+				const parsed = markdownModule.parseMarkdown([
+					'<!--',
+					'#comment-only',
+					'[[Fake/Comment]]',
+					'^fake-comment',
+					'> [!evidence] Fake evidence',
+					'-->',
+					'#real',
+					'[[Real/Target]]',
+				].join('\n'));
+				assert.deepEqual(parsed.tags, ['real']);
+				assert.deepEqual(parsed.wikilinks.map(({ target }) => target), ['Real/Target']);
+				assert.deepEqual(parsed.blockIds, []);
+				assert.equal(parsed.evidenceBlocks.length, 0);
+			}],
+			['syntax-url-fragment-exclusion', () => {
+				const parsed = markdownModule.parseMarkdown(
+					'Browse https://example.test/docs#fragment, https://example.test/[[Not/A/VaultLink]], and obsidian://open?file=[[Also/Not/A/Link]].'
+				);
+				assert.deepEqual(parsed.tags, []);
+				assert.deepEqual(parsed.wikilinks, []);
+			}],
+			['tags-unicode-and-numeric-only', () => {
+				const parsed = markdownModule.parseMarkdown('#知识/图谱 #12345 #project/alpha_1');
+				assert.deepEqual(parsed.tags.sort(), ['project/alpha_1', '知识/图谱'].sort());
+			}],
+			['block-ids-standalone-and-paragraph-tail', () => {
+				const parsed = markdownModule.parseMarkdown([
+					'Paragraph with a tail block id. ^tail-id',
+					'',
+					'^standalone-id',
+				].join('\n'));
+				assert.deepEqual(parsed.blockIds.sort(), ['standalone-id', 'tail-id']);
+			}],
+			['links-wikilink-alias-heading-block-and-embed', () => {
+				const parsed = markdownModule.parseMarkdown([
+					'[[folder/Target Note#Heading|Alias]]',
+					'[[folder/Target Note#^block-id|Block Alias]]',
+					'![[assets/Diagram#^asset-block|Diagram Alias]]',
+				].join('\n'));
+				assert.deepEqual(
+					parsed.wikilinks.map(({ target, alias, heading }) => ({ target, alias, heading })),
+					[
+						{ target: 'folder/Target Note', alias: 'Alias', heading: 'Heading' },
+						{ target: 'folder/Target Note', alias: 'Block Alias', heading: '^block-id' },
+						{ target: 'assets/Diagram', alias: 'Diagram Alias', heading: '^asset-block' },
+					]
+				);
+				assert.equal(parsed.wikilinks[2].raw, '![[assets/Diagram#^asset-block|Diagram Alias]]');
+			}],
+			['links-markdown-and-reference-forms', () => {
+				const parsed = markdownModule.parseMarkdown([
+					'[Alias](../targets/note.md#Heading)',
+					'[Reference][note-ref]',
+					'',
+					'[note-ref]: ../targets/reference.md#^block-id',
+				].join('\n'));
+				assert.deepEqual(
+					parsed.wikilinks.map(({ target }) => target),
+					['../targets/note.md', '../targets/reference.md']
+				);
+			}],
+			['links-missing-reference-definition-remains-unresolved', () => {
+				const source = scannedCharacterizationNote(
+					'notes/missing-reference.md',
+					'[Missing target][missing-ref]'
+				);
+				const snapshot = knowledgeIndexModule.buildKnowledgeSnapshot(
+					characterizationScan('/characterization-vault', [source]),
+					{ indexState: 'ready', generation: 1 }
+				);
+				const edge = snapshot.notes.get(source.relativePath)?.edges[0];
+				assert.equal(edge?.kind, 'reference');
+				assert.equal(edge?.referenceLabel, 'missing-ref');
+				assert.deepEqual(edge?.resolution, {
+					status: 'unresolved',
+					reason: 'missing_reference_definition',
+					authority: 'fallback',
+				});
+				assert.equal(snapshot.graph.unresolvedEdges.length, 1);
+			}],
+			['links-relative-shortest-and-alias-resolution', () => {
+				const target = scannedCharacterizationNote('01_knowledge/wiki/topics/target.md', [
+					'---',
+					'aliases: [Topic Alias]',
+					'---',
+					'# Target',
+				].join('\n'));
+				const shortestSource = scannedCharacterizationNote(
+					'01_knowledge/wiki/shortest-source.md',
+					'[[target]]\n[[Topic Alias]]'
+				);
+				const relativeSource = scannedCharacterizationNote(
+					'01_knowledge/wiki/sub/relative-source.md',
+					'[[../topics/target.md]]'
+				);
+				const snapshot = knowledgeIndexModule.buildKnowledgeSnapshot(
+					characterizationScan('/characterization-vault', [target, shortestSource, relativeSource]),
+					{ indexState: 'ready', generation: 1 }
+				);
+				assert.deepEqual(
+					snapshot.graph.outgoing.get(shortestSource.relativePath),
+					[target.relativePath]
+				);
+				assert.deepEqual(
+					snapshot.graph.outgoing.get(relativeSource.relativePath),
+					[target.relativePath]
+				);
+				assert.deepEqual(
+					snapshot.graph.incoming.get(target.relativePath)?.sort(),
+					[relativeSource.relativePath, shortestSource.relativePath].sort()
+				);
+			}],
+			['links-unresolved-explicit-without-phantom-node', () => {
+				const source = scannedCharacterizationNote(
+					'01_knowledge/wiki/unresolved-source.md',
+					'[[Missing Note]]'
+				);
+				const snapshot = knowledgeIndexModule.buildKnowledgeSnapshot(
+					characterizationScan('/characterization-vault', [source]),
+					{ indexState: 'ready', generation: 1 }
+				);
+				assert.deepEqual(snapshot.graph.outgoing.get(source.relativePath), []);
+				assert.equal(snapshot.graph.incoming.has('Missing Note'), false);
+				assert.deepEqual(
+					snapshot.notes.get(source.relativePath)?.wikilinks.map(({ target }) => target),
+					['Missing Note']
+				);
+			}],
+			['native-unresolved-edge-is-not-fallback-resolved', () => {
+				const target = scannedCharacterizationNote(
+					'01_knowledge/wiki/native-unresolved-target.md',
+					'---\naliases: [Native Maybe]\n---\n# Target'
+				);
+				const parsedSource = scannedCharacterizationNote(
+					'01_knowledge/wiki/native-unresolved-source.md',
+					'[[Native Maybe]]'
+				);
+				const nativeEdges = parsedSource.edges.map((edge) => ({
+					...edge,
+					resolution: {
+						status: 'unresolved',
+						reason: 'not_found',
+						authority: 'native',
+					},
+				}));
+				const source = {
+					...parsedSource,
+					edges: nativeEdges,
+					wikilinks: nativeEdges,
+				};
+				const snapshot = knowledgeIndexModule.buildKnowledgeSnapshot(
+					characterizationScan('/characterization-vault', [source, target]),
+					{ indexState: 'ready', generation: 1 }
+				);
+				assert.deepEqual(snapshot.graph.outgoing.get(source.relativePath), []);
+				assert.deepEqual(snapshot.graph.incoming.get(target.relativePath), []);
+				assert.deepEqual(snapshot.graph.unresolvedEdges[0]?.resolution, {
+					status: 'unresolved',
+					reason: 'not_found',
+					authority: 'native',
+				});
+				const graph = graphHealthModule.analyzeGraphHealth([source, target]);
+				const lint = lintModule.lintNotes(
+					'/characterization-vault',
+					[source, target],
+					{ graphProfile: 'off' }
+				);
+				assert.equal(graph.resolved_edge_count, 0);
+				assert.equal(graph.unresolved_edge_count, 1);
+				assert.equal(
+					lint.issues.some((issue) => issue.kind === 'broken_wikilink'),
+					true
+				);
+			}],
+			['native-resolved-edge-can-target-a-non-markdown-vault-file', () => {
+				const binaryTargetPath = '01_knowledge/sources/attachments/diagram.png';
+				const parsedSource = scannedCharacterizationNote(
+					'01_knowledge/wiki/native-binary-source.md',
+					'![[01_knowledge/sources/attachments/diagram.png]]'
+				);
+				const nativeEdges = parsedSource.edges.map((edge) => ({
+					...edge,
+					resolution: {
+						status: 'resolved',
+						path: binaryTargetPath,
+						authority: 'native',
+					},
+				}));
+				const source = {
+					...parsedSource,
+					edges: nativeEdges,
+					wikilinks: nativeEdges,
+				};
+				const snapshot = knowledgeIndexModule.buildKnowledgeSnapshot(
+					characterizationScan('/characterization-vault', [source]),
+					{ indexState: 'ready', generation: 1 }
+				);
+				assert.deepEqual(
+					snapshot.graph.outgoing.get(source.relativePath),
+					[binaryTargetPath]
+				);
+				assert.deepEqual(
+					snapshot.graph.incoming.get(binaryTargetPath),
+					[source.relativePath]
+				);
+				assert.equal(snapshot.graph.edges.length, 1);
+				assert.equal(snapshot.graph.unresolvedEdges.length, 0);
+				const graph = graphHealthModule.analyzeGraphHealth([source]);
+				const strict = graphHealthModule.evaluateGraphProfile(graph, 'strict');
+				assert.equal(graph.resolved_edge_count, 1);
+				assert.equal(graph.unresolved_edge_count, 0);
+				assert.equal(
+					strict.profile_issues.some((issue) => issue.kind === 'graph_unresolved_wikilink'),
+					false
+				);
+			}],
+			['fallback-link-extraction-keeps-mixed-link-positions-bounded-and-exact', () => {
+				const lines = Array.from({ length: 20 }, (_, index) =>
+					index % 2 === 0
+						? `[[Topic ${index}|Wiki ${index}]]`
+						: `[Markdown ${index}](Topic-${index}.md)`
+				);
+				const parsed = markdownModule.parseMarkdown(lines.join('\n'));
+				assert.equal(parsed.edges.length, lines.length);
+				assert.deepEqual(
+					parsed.edges.map((edge) => edge.position.start.line),
+					lines.map((_, index) => index + 1)
+				);
+				assert.deepEqual(
+					parsed.edges.map((edge) => edge.position.start.column),
+					lines.map(() => 1)
+				);
+			}],
+			['normalized-dto-version-hash-and-explicit-edge-state', () => {
+				const target = scannedCharacterizationNote('notes/target.md', '# Target');
+				const source = scannedCharacterizationNote(
+					'notes/source.md',
+					'---\ntitle: Source\n---\n# Source\n\n[[target]]\n[[missing]]'
+				);
+				const snapshot = knowledgeIndexModule.buildKnowledgeSnapshot(
+					characterizationScan('/characterization-vault', [source, target]),
+					{ indexState: 'ready', generation: 1, eventSequence: 4 }
+				);
+				const indexed = snapshot.notes.get(source.relativePath);
+				assert.equal(indexed?.schemaVersion, knowledgeNoteModule.NORMALIZED_VAULT_NOTE_VERSION);
+				assert.equal(indexed?.exists, true);
+				assert.match(indexed?.contentHash ?? '', /^[a-f0-9]{64}$/);
+				assert.equal(snapshot.event_sequence, 4);
+				assert.equal(indexed?.edges[0].resolution.status, 'resolved');
+				assert.equal(indexed?.edges[1].resolution.status, 'unresolved');
+				assert.equal(snapshot.graph.edges.length, 1);
+				assert.equal(snapshot.graph.unresolvedEdges.length, 1);
+			}],
+			['content-hash-covers-frontmatter-and-current-text', () => {
+				const first = scannedCharacterizationNote(
+					'notes/hash.md',
+					'---\ntitle: Alpha\n---\n# Same body'
+				);
+				const second = scannedCharacterizationNote(
+					'notes/hash.md',
+					'---\ntitle: Bravo\n---\n# Same body'
+				);
+				assert.notEqual(first.contentHash, second.contentHash);
+				assert.equal(first.contentHash, knowledgeNoteModule.hashVaultContent(first.text));
+				assert.equal(second.contentHash, knowledgeNoteModule.hashVaultContent(second.text));
+			}],
+			['yaml-malformed-input-is-bounded-and-visible', () => {
+				const content = [
+					'---',
+					'aliases: [unterminated',
+					'---',
+					'# Body survives',
+					'[[Target]]',
+				].join('\n');
+				const parsed = markdownModule.parseMarkdown(content);
+				const note = scannedCharacterizationNote('notes/malformed.md', content);
+				assert.deepEqual(parsed.frontmatter.fields, {});
+				assert.equal(parsed.frontmatter.errors.length > 0, true);
+				assert.deepEqual(parsed.headings, ['Body survives']);
+				assert.deepEqual(parsed.wikilinks.map(({ target }) => target), ['Target']);
+				assert.equal(note.semanticErrors.length > 0, true);
+			}],
+			['normalized-note-path-safety-is-fail-closed', () => {
+				assert.throws(
+					() => scannedCharacterizationNote('../outside.md', '# Outside'),
+					(error) => error instanceof knowledgeNoteModule.VaultSemanticPathError
+				);
+				assert.throws(
+					() => knowledgeNoteModule.normalizeVaultRelativePath('/absolute.md'),
+					(error) => error instanceof knowledgeNoteModule.VaultSemanticPathError
+				);
+			}],
+			['snapshot-is-deterministic-across-input-order', () => {
+				const alpha = scannedCharacterizationNote(
+					'notes/alpha.md',
+					'---\ntags: [stable]\n---\n# Alpha\n\n[[beta]]'
+				);
+				const beta = scannedCharacterizationNote(
+					'notes/beta.md',
+					'---\naliases: [Beta Alias]\n---\n# Beta\n\n[[missing]]'
+				);
+				const forward = knowledgeIndexModule.buildKnowledgeSnapshot(
+					characterizationScan('/characterization-vault', [alpha, beta]),
+					{ indexState: 'ready', generation: 1 }
+				);
+				const reverse = knowledgeIndexModule.buildKnowledgeSnapshot(
+					characterizationScan('/characterization-vault', [beta, alpha]),
+					{ indexState: 'ready', generation: 1 }
+				);
+				assert.deepEqual(
+					normalizeDeterministicSnapshot(forward),
+					normalizeDeterministicSnapshot(reverse)
+				);
+			}],
+			['ambiguous-short-link-remains-explicitly-unresolved', () => {
+				const first = scannedCharacterizationNote('notes/a/target.md', '# First');
+				const second = scannedCharacterizationNote('notes/b/target.md', '# Second');
+				const source = scannedCharacterizationNote('notes/source.md', '[[target]]');
+				const snapshot = knowledgeIndexModule.buildKnowledgeSnapshot(
+					characterizationScan('/characterization-vault', [first, source, second]),
+					{ indexState: 'ready', generation: 1 }
+				);
+				const edge = snapshot.notes.get(source.relativePath)?.edges[0];
+				assert.deepEqual(edge?.resolution, {
+					status: 'unresolved',
+					reason: 'ambiguous',
+					authority: 'fallback',
+				});
+				assert.deepEqual(snapshot.graph.outgoing.get(source.relativePath), []);
+			}],
+			['graph-health-and-lint-consume-shared-resolved-edges', () => {
+				const target = scannedCharacterizationNote(
+					'01_knowledge/wiki/topics/target.md',
+					'---\naliases: [Topic Alias]\n---\n# Target'
+				);
+				const source = scannedCharacterizationNote(
+					'01_knowledge/wiki/source.md',
+					'[[Topic Alias]]'
+				);
+				const graph = graphHealthModule.analyzeGraphHealth([source, target]);
+				const lint = lintModule.lintNotes(
+					'/characterization-vault',
+					[source, target],
+					{ graphProfile: 'off' }
+				);
+				assert.equal(graph.resolved_edge_count, 1);
+				assert.equal(graph.unresolved_edge_count, 0);
+				assert.equal(
+					lint.issues.some((issue) => issue.kind === 'broken_wikilink'),
+					false
+				);
+			}],
+			['event-same-size-same-mtime-replacement', async () => {
+				const notePath = '01_knowledge/wiki/same-tuple.md';
+				const modifiedAt = '2026-07-30T01:00:00.000Z';
+				const initial = scannedCharacterizationNote(notePath, '# Same\n\nalpha', modifiedAt);
+				const replacement = scannedCharacterizationNote(notePath, '# Same\n\nbravo', modifiedAt);
+				assert.equal(replacement.size, initial.size);
+				const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+				await index.rebuild(characterizationScan(vaultRoot, [initial]));
+				const before = await index.snapshot();
+				await index.applyScanned({
+					kind: 'modify',
+					path: notePath,
+					fileVersion: knowledgeIndexModule.computeFileVersion(replacement.size, replacement.modifiedAt),
+				}, replacement);
+				const after = await index.snapshot();
+				assert.notEqual(after.notes.get(notePath)?.contentHash, before.notes.get(notePath)?.contentHash);
+				assert.match(after.notes.get(notePath)?.excerptSource ?? '', /bravo/);
+				assert.equal(after.generation, before.generation + 1);
+			}],
+			['event-mismatched-delete-removes-ghost', async () => {
+				const notePath = '01_knowledge/wiki/delete-ghost.md';
+				const initial = scannedCharacterizationNote(notePath, '# Delete ghost');
+				const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+				await index.rebuild(characterizationScan(vaultRoot, [initial]));
+				const before = await index.snapshot();
+				await index.applyScanned({
+					kind: 'delete',
+					path: notePath,
+					fileVersion: knowledgeIndexModule.computeFileVersion(initial.size + 1, initial.modifiedAt),
+				});
+				const after = await index.snapshot();
+				assert.equal(after.notes.has(notePath), false);
+				assert.equal(after.generation, before.generation + 1);
+			}],
+			['event-rename-removes-old-identity', async () => {
+				const oldPath = '01_knowledge/wiki/before-rename.md';
+				const newPath = '01_knowledge/wiki/after-rename.md';
+				const initial = scannedCharacterizationNote(oldPath, '# Rename identity');
+				const renamed = scannedCharacterizationNote(newPath, '# Rename identity');
+				const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+				await index.rebuild(characterizationScan(vaultRoot, [initial]));
+				const before = await index.snapshot();
+				const staleVersion = knowledgeIndexModule.computeFileVersion(renamed.size + 1, renamed.modifiedAt);
+				await index.applyScanned({
+					kind: 'rename',
+					path: oldPath,
+					newPath,
+					fileVersion: staleVersion,
+				}, renamed);
+				const after = await index.snapshot();
+				assert.equal(after.notes.has(oldPath), false);
+				assert.equal(after.notes.has(newPath), true);
+				assert.equal(after.generation, before.generation + 1);
+			}],
+			['event-sequence-rejects-stale-and-deduplicates-generation', async () => {
+				const notePath = '01_knowledge/wiki/sequence.md';
+				const modifiedAt = '2026-07-30T03:00:00.000Z';
+				const initial = scannedCharacterizationNote(notePath, '# Sequence\n\nalpha', modifiedAt);
+				const replacement = scannedCharacterizationNote(notePath, '# Sequence\n\nbravo', modifiedAt);
+				const stale = scannedCharacterizationNote(notePath, '# Sequence\n\ncharlie', modifiedAt);
+				const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+				await index.rebuild(characterizationScan(vaultRoot, [initial]));
+				const before = await index.snapshot();
+				await index.applyScanned({
+					kind: 'modify',
+					path: notePath,
+					fileVersion: knowledgeIndexModule.computeFileVersion(replacement.size, replacement.modifiedAt),
+					sequence: 2,
+					contentHash: replacement.contentHash,
+				}, replacement);
+				await index.applyScanned({
+					kind: 'modify',
+					path: notePath,
+					fileVersion: knowledgeIndexModule.computeFileVersion(stale.size, stale.modifiedAt),
+					sequence: 1,
+					contentHash: stale.contentHash,
+				}, stale);
+				const afterStale = await index.snapshot();
+				assert.match(afterStale.notes.get(notePath)?.excerptSource ?? '', /bravo/);
+				assert.equal(afterStale.generation, before.generation + 1);
+				assert.equal(afterStale.event_sequence, 2);
+				await index.applyScanned({
+					kind: 'modify',
+					path: notePath,
+					fileVersion: knowledgeIndexModule.computeFileVersion(replacement.size, replacement.modifiedAt),
+					sequence: 3,
+					contentHash: replacement.contentHash,
+				}, replacement);
+				const afterDuplicate = await index.snapshot();
+				assert.equal(afterDuplicate.generation, afterStale.generation);
+				assert.equal(afterDuplicate.event_sequence, 3);
+			}],
+			['semantic-event-admits-versioned-normalized-note', async () => {
+				const notePath = '01_knowledge/wiki/semantic-event.md';
+				const initial = scannedCharacterizationNote(notePath, '# Semantic\n\nbefore');
+				const replacement = scannedCharacterizationNote(notePath, '# Semantic\n\nafter');
+				const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+				await index.rebuild(characterizationScan(vaultRoot, [initial]));
+				await index.applySemantic({
+					schemaVersion: knowledgeNoteModule.NORMALIZED_VAULT_NOTE_VERSION,
+					sequence: 1,
+					kind: 'modify',
+					path: notePath,
+					exists: true,
+					contentHash: replacement.contentHash,
+					note: replacement,
+				});
+				const snapshot = await index.snapshot();
+				assert.match(snapshot.notes.get(notePath)?.excerptSource ?? '', /after/);
+				assert.equal(snapshot.event_sequence, 1);
+				await assert.rejects(
+					() => index.applySemantic({
+						schemaVersion: knowledgeNoteModule.NORMALIZED_VAULT_NOTE_VERSION,
+						sequence: 2,
+						kind: 'modify',
+						path: notePath,
+						exists: true,
+						contentHash: 'wrong-hash',
+						note: replacement,
+					}),
+					/Vault semantic event content hash/
+				);
+			}],
+			['semantic-event-updates-native-metadata-with-stable-content-hash', async () => {
+				const sourcePath = '01_knowledge/wiki/native-resolution-source.md';
+				const firstTargetPath = '01_knowledge/wiki/topics/first-target.md';
+				const secondTargetPath = '01_knowledge/wiki/topics/second-target.md';
+				const source = scannedCharacterizationNote(sourcePath, '# Source\n\n[[Stable Alias]]');
+				const firstTarget = scannedCharacterizationNote(firstTargetPath, '# First target');
+				const secondTarget = scannedCharacterizationNote(secondTargetPath, '# Second target');
+				const withNativeTarget = (targetPath) => {
+					const edges = source.edges.map((edge) => ({
+						...edge,
+						resolution: {
+							status: 'resolved',
+							path: targetPath,
+							authority: 'native',
+						},
+					}));
+					return {
+						...source,
+						edges,
+						wikilinks: edges,
+					};
+				};
+				const initial = withNativeTarget(firstTargetPath);
+				const replacement = withNativeTarget(secondTargetPath);
+				const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+				await index.rebuild(characterizationScan(vaultRoot, [
+					initial,
+					firstTarget,
+					secondTarget,
+				]));
+				const before = await index.snapshot();
+				await index.applySemantic({
+					schemaVersion: knowledgeNoteModule.NORMALIZED_VAULT_NOTE_VERSION,
+					sequence: 1,
+					kind: 'modify',
+					path: sourcePath,
+					exists: true,
+					contentHash: replacement.contentHash,
+					note: replacement,
+				});
+				const after = await index.snapshot();
+				assert.equal(after.notes.get(sourcePath)?.contentHash, before.notes.get(sourcePath)?.contentHash);
+				assert.deepEqual(after.graph.outgoing.get(sourcePath), [secondTargetPath]);
+				assert.equal(after.notes.get(sourcePath)?.edges[0]?.resolution.authority, 'native');
+				assert.equal(after.generation, before.generation + 1);
+				assert.equal(after.event_sequence, 1);
+				await index.applySemantic({
+					schemaVersion: knowledgeNoteModule.NORMALIZED_VAULT_NOTE_VERSION,
+					sequence: 2,
+					kind: 'modify',
+					path: sourcePath,
+					exists: true,
+					contentHash: replacement.contentHash,
+					note: replacement,
+				});
+				const afterDuplicate = await index.snapshot();
+				assert.equal(afterDuplicate.generation, after.generation);
+				assert.equal(afterDuplicate.event_sequence, 2);
+			}],
+			['semantic-event-clears-recovered-scan-error', async () => {
+				const notePath = '01_knowledge/wiki/recovered-metadata.md';
+				const recovered = scannedCharacterizationNote(notePath, '# Recovered');
+				const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+				await index.rebuild({
+					...characterizationScan(vaultRoot, []),
+					errors: [{
+						path: path.join(vaultRoot, notePath),
+						error: 'Metadata unavailable',
+					}],
+				});
+				assert.equal(index.scanSnapshot().errors.length, 1);
+				await index.applySemantic({
+					schemaVersion: knowledgeNoteModule.NORMALIZED_VAULT_NOTE_VERSION,
+					sequence: 1,
+					kind: 'create',
+					path: notePath,
+					exists: true,
+					contentHash: recovered.contentHash,
+					note: recovered,
+				});
+				assert.equal(index.scanSnapshot().errors.length, 0);
+				assert.equal((await index.snapshot()).notes.has(notePath), true);
+			}],
+			['snapshot-frontmatter-is-deeply-isolated', async () => {
+				const notePath = '01_knowledge/wiki/deep-clone.md';
+				const note = scannedCharacterizationNote(
+					notePath,
+					'---\nmetadata:\n  owners: [Ada]\n---\n# Clone'
+				);
+				const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+				await index.rebuild(characterizationScan(vaultRoot, [note]));
+				const first = await index.snapshot();
+				first.notes.get(notePath).frontmatter.metadata.owners.push('Mutated');
+				const second = await index.snapshot();
+				assert.deepEqual(second.notes.get(notePath)?.frontmatter.metadata, {
+					owners: ['Ada'],
+				});
+			}],
+			['incremental-rename-refreshes-shared-resolved-edges', async () => {
+				const oldPath = '01_knowledge/wiki/topics/old-target.md';
+				const newPath = '01_knowledge/wiki/topics/new-target.md';
+				const target = scannedCharacterizationNote(
+					oldPath,
+					'---\naliases: [Stable Alias]\n---\n# Target'
+				);
+				const source = scannedCharacterizationNote(
+					'01_knowledge/wiki/source.md',
+					'[[Stable Alias]]'
+				);
+				const renamed = scannedCharacterizationNote(
+					newPath,
+					'---\naliases: [Stable Alias]\n---\n# Target'
+				);
+				const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+				await index.rebuild(characterizationScan(vaultRoot, [target, source]));
+				await index.applyScanned({
+					kind: 'rename',
+					path: oldPath,
+					newPath,
+					fileVersion: 'stale-tuple',
+					sequence: 1,
+					contentHash: renamed.contentHash,
+				}, renamed);
+				const snapshot = await index.snapshot();
+				assert.equal(snapshot.notes.has(oldPath), false);
+				assert.equal(snapshot.notes.has(newPath), true);
+				assert.deepEqual(snapshot.graph.outgoing.get(source.relativePath), [newPath]);
+				assert.deepEqual(snapshot.graph.incoming.get(newPath), [source.relativePath]);
+				assert.equal(snapshot.graph.unresolvedEdges.length, 0);
+			}],
+			['event-rebuild-converges-same-tuple-content', async () => {
+				const notePath = '01_knowledge/wiki/rebuild-same-tuple.md';
+				const modifiedAt = '2026-07-30T02:00:00.000Z';
+				const initial = scannedCharacterizationNote(notePath, '# Rebuild\n\nold', modifiedAt);
+				const replacement = scannedCharacterizationNote(notePath, '# Rebuild\n\nnew', modifiedAt);
+				assert.equal(replacement.size, initial.size);
+				const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+				await index.rebuild(characterizationScan(vaultRoot, [initial]));
+				const before = await index.snapshot();
+				await index.rebuild(characterizationScan(vaultRoot, [replacement]));
+				const after = await index.snapshot();
+				assert.notEqual(after.notes.get(notePath)?.contentHash, before.notes.get(notePath)?.contentHash);
+				assert.match(after.notes.get(notePath)?.excerptSource ?? '', /new/);
+				assert.equal(after.generation, before.generation + 1);
+			}],
+		]);
+
+		const loadRecordLifecycle = async () => {
+			const loaded = await import('../dist/record-lifecycle.js');
+			return loaded.default ?? loaded;
+		};
+
+		await runCharacterizationRows('core-native-record-lifecycle-red', [
+			['proposal-history-resolves-id-across-active-and-archive', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const stableId = lifecycle.buildStableProposalId('finish-task-identity');
+				assert.match(stableId, /^proposal-[a-f0-9]{24}$/);
+				assert.equal(
+					lifecycle.buildStableProposalId('finish-task-identity'),
+					stableId
+				);
+				assert.throws(
+					() => lifecycle.buildStableProposalId('  '),
+					/identity seed must not be empty/
+				);
+				const records = [
+					{
+						path: '00_tracekeeper/inbox/review_queue/proposal-active.md',
+						proposalId: 'proposal-active',
+						location: 'active',
+						contentHash: 'active-hash',
+					},
+					{
+						path: '02_archive/review_queue/proposal-one.md',
+						proposalId: 'proposal-one',
+						location: 'archive',
+						contentHash: 'archive-hash',
+					},
+				];
+				const active = lifecycle.resolveProposalHistoryById(records, 'proposal-active');
+				assert.equal(active.status, 'resolved');
+				assert.equal(active.record.path, '00_tracekeeper/inbox/review_queue/proposal-active.md');
+				assert.equal(active.record.location, 'active');
+				const archived = lifecycle.resolveProposalHistoryById(records, 'proposal-one');
+				assert.equal(archived.status, 'resolved');
+				assert.equal(archived.record.path, '02_archive/review_queue/proposal-one.md');
+				assert.equal(archived.record.location, 'archive');
+				assert.deepEqual(
+					lifecycle.resolveProposalHistoryById(records, 'missing'),
+					{ status: 'missing', proposalId: 'missing', matches: [] }
+				);
+			}],
+			['proposal-history-rejects-duplicate-id', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const result = lifecycle.resolveProposalHistoryById([
+					{
+						path: '00_tracekeeper/inbox/review_queue/duplicate.md',
+						proposalId: 'duplicate',
+						location: 'active',
+						contentHash: 'active-hash',
+					},
+					{
+						path: '02_archive/review_queue/duplicate.md',
+						proposalId: 'duplicate',
+						location: 'archive',
+						contentHash: 'archive-hash',
+					},
+				], 'duplicate');
+				assert.equal(result.status, 'ambiguous');
+				assert.deepEqual(
+					result.matches.map((record) => record.path),
+					[
+						'00_tracekeeper/inbox/review_queue/duplicate.md',
+						'02_archive/review_queue/duplicate.md',
+					]
+				);
+			}],
+			['path-only-backfill-requires-one-proven-id', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const unique = lifecycle.planProposalReferenceBackfill({
+					referencePath: '00_tracekeeper/inbox/review_queue/legacy.md',
+					proposals: [{
+						path: '00_tracekeeper/inbox/review_queue/legacy.md',
+						proposalId: 'legacy',
+						location: 'active',
+						contentHash: 'legacy-hash',
+					}],
+				});
+				assert.equal(unique.status, 'ready');
+				assert.equal(unique.proposalId, 'legacy');
+				const ambiguous = lifecycle.planProposalReferenceBackfill({
+					referencePath: '00_tracekeeper/inbox/review_queue/legacy.md',
+					proposals: [
+						{
+							path: '00_tracekeeper/inbox/review_queue/legacy.md',
+							proposalId: 'legacy',
+							location: 'active',
+							contentHash: 'first-hash',
+						},
+						{
+							path: '00_tracekeeper/inbox/review_queue/legacy.md',
+							proposalId: 'other',
+							location: 'active',
+							contentHash: 'second-hash',
+						},
+					],
+				});
+				assert.equal(ambiguous.status, 'ambiguous');
+			}],
+			['path-only-backfill-refuses-stale-and-unmanaged-records', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const proposal = {
+					path: '02_archive/review_queue/legacy.md',
+					proposalId: 'legacy',
+					location: 'archive',
+					contentHash: 'proposal-hash',
+				};
+				const stale = lifecycle.planProposalReferenceBackfill({
+					referencePath: '00_tracekeeper/inbox/review_queue/legacy.md',
+					expectedReferenceHash: 'reference-before',
+					currentReferenceHash: 'reference-after',
+					managedRecord: true,
+					proposals: [proposal],
+				});
+				assert.equal(stale.status, 'stale');
+				const unmanaged = lifecycle.planProposalReferenceBackfill({
+					referencePath: '00_tracekeeper/inbox/review_queue/legacy.md',
+					expectedReferenceHash: 'reference-current',
+					currentReferenceHash: 'reference-current',
+					managedRecord: false,
+					proposals: [proposal],
+				});
+				assert.equal(unmanaged.status, 'unmanaged');
+				const unresolved = lifecycle.planProposalReferenceBackfill({
+					referencePath: '00_tracekeeper/inbox/review_queue/missing.md',
+					managedRecord: true,
+					proposals: [proposal],
+				});
+				assert.equal(unresolved.status, 'missing');
+			}],
+			['audit-shard-path-and-event-id-are-stable', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				assert.equal(
+					lifecycle.auditShardPath('2026-07-30T23:59:59.000Z'),
+					'00_tracekeeper/control/audit/2026/2026-07-30.md'
+				);
+				const event = {
+					operationId: 'operation-one',
+					type: 'tool-call',
+					event: 'tool-call',
+					tool: 'tracekeeper.status',
+					status: 'success',
+					targetPaths: [],
+				};
+				assert.equal(
+					lifecycle.buildStableAuditEventId(event),
+					lifecycle.buildStableAuditEventId({ ...event, timestamp: '2026-07-31T00:00:00.000Z' })
+				);
+				assert.equal(
+					lifecycle.auditShardPath('2026-07-31T00:00:00.000Z'),
+					'00_tracekeeper/control/audit/2026/2026-07-31.md'
+				);
+				assert.notEqual(
+					lifecycle.buildStableAuditEventId(event),
+					lifecycle.buildStableAuditEventId({ ...event, operationId: 'operation-two' })
+				);
+			}],
+			['audit-merge-deduplicates-legacy-and-shards', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const merged = lifecycle.mergeAuditEvents([
+					{
+						auditEventId: 'audit-one',
+						timestamp: '2026-07-30T01:00:00.000Z',
+						sourcePath: '00_tracekeeper/control/audit_log.md',
+						sourceKind: 'legacy',
+					},
+					{
+						auditEventId: 'audit-one',
+						timestamp: '2026-07-30T01:00:00.000Z',
+						sourcePath: '00_tracekeeper/control/audit/2026/2026-07-30.md',
+						sourceKind: 'shard',
+					},
+					{
+						auditEventId: 'audit-two',
+						timestamp: '2026-07-30T02:00:00.000Z',
+						sourcePath: '00_tracekeeper/control/audit/2026/2026-07-30.md',
+						sourceKind: 'shard',
+					},
+				]);
+				assert.deepEqual(merged.map((event) => event.auditEventId), ['audit-two', 'audit-one']);
+				assert.equal(merged[1].sourceKind, 'shard');
+			}],
+			['audit-merge-orders-legacy-rows-without-ids-deterministically', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const events = [
+					{
+						timestamp: '2026-07-30T01:00:00.000Z',
+						sourcePath: '00_tracekeeper/control/audit_log.md',
+						sourceKind: 'legacy',
+						action: 'legacy-one',
+					},
+					{
+						timestamp: '2026-07-30T01:00:00.000Z',
+						sourcePath: '00_tracekeeper/control/audit_log.md',
+						sourceKind: 'legacy',
+						action: 'legacy-one',
+					},
+					{
+						timestamp: '2026-07-31T01:00:00.000Z',
+						sourcePath: '00_tracekeeper/control/audit/2026/2026-07-31.md',
+						sourceKind: 'shard',
+						action: 'newer',
+					},
+				];
+				const first = lifecycle.mergeAuditEvents(events);
+				const second = lifecycle.mergeAuditEvents([...events].reverse());
+				assert.deepEqual(first, second);
+				assert.equal(first.length, 2);
+				assert.equal(first[0].action, 'newer');
+				assert.equal(first[1].action, 'legacy-one');
+			}],
+			['cleanup-preview-retains-mixed-age-files', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const preview = lifecycle.buildAuditCleanupPreview({
+					cutoff: '2026-07-30T12:00:00.000Z',
+					files: [
+						{
+							path: '00_tracekeeper/control/audit/2026/2026-07-29.md',
+							contentHash: 'old',
+							version: 'old-version',
+							eventTimes: ['2026-07-29T01:00:00.000Z'],
+						},
+						{
+							path: '00_tracekeeper/control/audit_log.md',
+							contentHash: 'mixed',
+							version: 'mixed-version',
+							eventTimes: [
+								'2026-07-29T01:00:00.000Z',
+								'2026-07-30T13:00:00.000Z',
+							],
+						},
+						{
+							path: '00_tracekeeper/control/audit/2026/2026-07-30.md',
+							contentHash: 'equal-cutoff',
+							version: 'equal-cutoff-version',
+							eventTimes: ['2026-07-30T12:00:00.000Z'],
+						},
+					],
+				});
+				assert.deepEqual(preview.eligiblePaths, [
+					'00_tracekeeper/control/audit/2026/2026-07-29.md',
+				]);
+				assert.deepEqual(preview.retained.map((row) => [row.path, row.reason]), [
+					['00_tracekeeper/control/audit_log.md', 'mixed-age'],
+					[
+						'00_tracekeeper/control/audit/2026/2026-07-30.md',
+						'too-new',
+					],
+				]);
+			}],
+			['cleanup-preview-clear-all-selects-only-audit-files', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const preview = lifecycle.buildAuditCleanupPreview({
+					cutoff: null,
+					files: [
+						{
+							path: '00_tracekeeper/control/audit/2026/2026-07-30.md',
+							contentHash: 'shard',
+							version: 'shard-version',
+							eventTimes: ['2026-07-30T01:00:00.000Z'],
+						},
+						{
+							path: '00_tracekeeper/control/audit_log.md',
+							contentHash: 'legacy',
+							version: 'legacy-version',
+							eventTimes: [
+								'2026-07-29T01:00:00.000Z',
+								'2026-07-30T13:00:00.000Z',
+							],
+						},
+						{
+							path: '00_tracekeeper/work/tasks/task.md',
+							contentHash: 'task',
+							version: 'task-version',
+							eventTimes: ['2026-07-29T01:00:00.000Z'],
+						},
+					],
+				});
+				assert.deepEqual(preview.eligiblePaths, [
+					'00_tracekeeper/control/audit/2026/2026-07-30.md',
+					'00_tracekeeper/control/audit_log.md',
+				]);
+				assert.deepEqual(preview.retained.map((row) => [row.path, row.reason]), [
+					['00_tracekeeper/work/tasks/task.md', 'non-audit'],
+				]);
+			}],
+			['cleanup-validation-rejects-stale-hash-cutoff-and-non-audit-targets', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const preview = lifecycle.buildAuditCleanupPreview({
+					cutoff: '2026-07-30T12:00:00.000Z',
+					files: [
+						{
+							path: '00_tracekeeper/control/audit/2026/2026-07-29.md',
+							contentHash: 'preview-hash',
+							version: 'preview-version',
+							eventTimes: ['2026-07-29T01:00:00.000Z'],
+						},
+						{
+							path: '00_tracekeeper/control/audit_log.md',
+							contentHash: 'retained-hash',
+							version: 'retained-version',
+							eventTimes: ['2026-07-30T13:00:00.000Z'],
+						},
+					],
+				});
+				const currentFiles = [
+					{
+						path: '00_tracekeeper/control/audit/2026/2026-07-29.md',
+						contentHash: 'preview-hash',
+						version: 'preview-version',
+					},
+					{
+						path: '00_tracekeeper/control/audit_log.md',
+						contentHash: 'retained-hash',
+						version: 'retained-version',
+					},
+				];
+				const staleHash = lifecycle.validateAuditCleanupPreview({
+					preview,
+					cutoff: '2026-07-30T12:00:00.000Z',
+					currentFiles: currentFiles.map((file) =>
+						file.path.endsWith('2026-07-29.md')
+							? { ...file, contentHash: 'changed-hash' }
+							: file
+					),
+				});
+				assert.equal(staleHash.status, 'stale');
+				const staleCutoff = lifecycle.validateAuditCleanupPreview({
+					preview,
+					cutoff: '2026-07-30T13:00:00.000Z',
+					currentFiles,
+				});
+				assert.equal(staleCutoff.status, 'stale');
+				const injected = lifecycle.validateAuditCleanupPreview({
+					preview: {
+						...preview,
+						eligiblePaths: ['00_tracekeeper/work/tasks/task.md'],
+					},
+					cutoff: '2026-07-30T12:00:00.000Z',
+					currentFiles: [{
+						path: '00_tracekeeper/work/tasks/task.md',
+						contentHash: 'task-hash',
+						version: 'task-version',
+					}],
+				});
+				assert.equal(injected.status, 'rejected');
+				const retainedTamper = lifecycle.validateAuditCleanupPreview({
+					preview: {
+						...preview,
+						retained: preview.retained.map((row) => ({
+							...row,
+							contentHash: 'tampered-retained-hash',
+						})),
+					},
+					cutoff: '2026-07-30T12:00:00.000Z',
+					currentFiles,
+				});
+				assert.equal(retainedTamper.status, 'rejected');
+				const missingRetained = lifecycle.validateAuditCleanupPreview({
+					preview,
+					cutoff: '2026-07-30T12:00:00.000Z',
+					currentFiles: [currentFiles[0]],
+				});
+				assert.equal(missingRetained.status, 'stale');
+				const newFile = lifecycle.validateAuditCleanupPreview({
+					preview,
+					cutoff: '2026-07-30T12:00:00.000Z',
+					currentFiles: [
+						...currentFiles,
+						{
+							path: '00_tracekeeper/control/audit/2026/2026-07-30.md',
+							contentHash: 'new-file-hash',
+							version: 'new-file-version',
+						},
+					],
+				});
+				assert.equal(newFile.status, 'stale');
+			}],
+		]);
 	} finally {
 		fs.rmSync(tempRoot, { recursive: true, force: true });
 	}

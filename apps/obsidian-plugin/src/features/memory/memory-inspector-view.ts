@@ -195,6 +195,13 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 			text: `${ui('索引代次', 'Index generation')} ${snapshot.indexGeneration} · ${ui('最后刷新', 'Last refreshed')} ${this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt))}`,
 			cls: 'tracekeeper-view__description',
 		});
+		summary.createEl('div', {
+			text: ui(
+				`项目记忆：不可变条目 ${snapshot.projectMemoryCounts.immutableEntries} · 旧版笔记 ${snapshot.projectMemoryCounts.legacyNotes}。此计数来自当前索引；Recall 只按相关性选择，不能替代完整目录。`,
+				`Project memory: ${snapshot.projectMemoryCounts.immutableEntries} immutable entries · ${snapshot.projectMemoryCounts.legacyNotes} legacy notes. These counts come from the current index; Recall selects by relevance and is not a complete catalog.`
+			),
+			cls: 'tracekeeper-view__description',
+		});
 		const controls = filters.createDiv({ cls: 'tracekeeper-action-row' });
 		const scopeSelect = controls.createEl('select') as HTMLSelectElement;
 		this.addOption(scopeSelect, 'all', ui('全部范围', 'All scopes'), snapshot.scope);

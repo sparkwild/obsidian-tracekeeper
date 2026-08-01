@@ -169,6 +169,19 @@ test('rejects contracts that restore direct Header bootstrap or omit OAuth PKCE'
 	});
 });
 
+test('rejects unsafe examples across public ecosystem documentation', async () => {
+	await withFixture(async (root) => {
+		const readmePath = path.join(root, 'README.zh-CN.md');
+		await writeFile(readmePath, `${await readFile(readmePath, 'utf8')}\n示例路径：/Users/developer/private-vault\n`, 'utf8');
+		const connectionPath = path.join(root, 'docs/features/AGENT_CONNECTION.md');
+		await writeFile(connectionPath, `${await readFile(connectionPath, 'utf8')}\naccess_token=examplecredential12345\n`, 'utf8');
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(result.errors.join('\n'), /absolute developer path found in README\.zh-CN\.md/);
+		assert.match(result.errors.join('\n'), /sensitive credential example found in docs\/features\/AGENT_CONNECTION\.md/);
+	});
+});
+
 test('rejects a shared Agent Skill prompt that stops using the state-aware prompt model', async () => {
 	await withFixture(async (root) => {
 		const promptPath = path.join(root, 'apps/obsidian-plugin/src/features/skill-installation/client-skill-prompt.ts');
@@ -268,6 +281,27 @@ test('rejects deprecated tool names even when hashes are regenerated', async () 
 		const result = await checkAgentEcosystem(root);
 		assert.equal(result.ok, false);
 		assert.match(result.errors.join('\n'), /deprecated or unknown Tracekeeper tool name/);
+	});
+});
+
+test('rejects a bundle that loses complete immutable project-memory guidance', async () => {
+	await withFixture(async (root) => {
+		const skillPath = path.join(root, 'skills/tracekeeper/SKILL.md');
+		const skill = await readFile(skillPath, 'utf8');
+		await writeFile(
+			skillPath,
+			skill
+				.replace(/- Recall is relevance-ranked, not exhaustive\.[^\n]*\n/, '')
+				.replace(/- Eligible project auto-save creates one immutable operation entry[^\n]*\n/, ''),
+			'utf8',
+		);
+		await writeTracekeeperSkillBundle(root);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(
+			result.errors.join('\n'),
+			/(complete project-memory enumeration|relevance-ranked Recall|immutable project-memory operation entries)/
+		);
 	});
 });
 

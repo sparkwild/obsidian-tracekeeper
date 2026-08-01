@@ -194,6 +194,19 @@ function commandResult(command, args, options = {}) {
 	};
 }
 
+function commandBufferResult(command, args, options = {}) {
+	const result = spawnSync(command, args, {
+		encoding: null,
+		timeout: 5000,
+		stdio: ['ignore', 'pipe', 'pipe'],
+		...options,
+	});
+	return {
+		ok: result.status === 0,
+		stdout: result.status === 0 ? result.stdout : Buffer.alloc(0),
+	};
+}
+
 function hashStable(value) {
 	return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -385,15 +398,40 @@ function getCodexBinaryVersion(binaryPath) {
 	return version || 'unknown';
 }
 
-async function buildWorkingTreeMetadata() {
-	const head = commandResult('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot });
-	const status = commandResult('git', ['status', '--porcelain'], { cwd: repositoryRoot });
-	const dirty = status.ok ? normalizeText(status.stdout).length > 0 : true;
-	const diff = commandResult('git', ['diff', '--binary', 'HEAD', '--', '.'], { cwd: repositoryRoot });
+async function buildWorkingTreeMetadata(root = repositoryRoot) {
+	const head = commandResult('git', ['rev-parse', 'HEAD'], { cwd: root });
+	const status = commandBufferResult('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: root });
+	const diff = commandBufferResult('git', ['diff', '--binary', 'HEAD', '--', '.'], { cwd: root });
+	const untracked = commandBufferResult('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root });
+	const untrackedPaths = untracked.ok
+		? untracked.stdout.toString('utf8').split('\0').filter(Boolean).sort((left, right) => left.localeCompare(right))
+		: [];
+	const fingerprint = crypto.createHash('sha256');
+	fingerprint.update('status\0');
+	fingerprint.update(status.stdout);
+	fingerprint.update('\0tracked-diff\0');
+	fingerprint.update(diff.stdout);
+	for (const relativePath of untrackedPaths) {
+		const absolutePath = path.join(root, relativePath);
+		const fileStat = await fs.lstat(absolutePath);
+		fingerprint.update('\0untracked\0');
+		fingerprint.update(relativePath);
+		fingerprint.update('\0');
+		if (fileStat.isSymbolicLink()) {
+			fingerprint.update('symlink\0');
+			fingerprint.update(await fs.readlink(absolutePath));
+		} else if (fileStat.isFile()) {
+			fingerprint.update('file\0');
+			fingerprint.update(await fs.readFile(absolutePath));
+		} else {
+			fingerprint.update(`other:${fileStat.mode}\0`);
+		}
+	}
 	return {
 		commit_sha: head.ok ? head.stdout.trim() : 'unknown',
-		dirty,
-		working_tree_diff_sha256: hashStable(diff.ok ? diff.stdout : ''),
+		dirty: status.ok ? status.stdout.length > 0 : true,
+		working_tree_diff_sha256: fingerprint.digest('hex'),
+		untracked_file_count: untrackedPaths.length,
 	};
 }
 
@@ -1892,6 +1930,7 @@ export {
 	makeCheckpointRunKey,
 	compareExperimentConfig,
 	buildRunConfigFingerprint,
+	buildWorkingTreeMetadata,
 	parseEvaluationAndSummary,
 	replayRealReport,
 	runFailureTrace,

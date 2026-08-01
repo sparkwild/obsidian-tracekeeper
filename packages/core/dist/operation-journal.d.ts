@@ -1,8 +1,10 @@
 export type OperationPhase = 'before_step' | 'after_step' | 'before_finalize' | 'after_finalize';
-export type OperationStatus = 'in_progress' | 'completed' | 'failed';
+export type OperationStatus = 'in_progress' | 'audit_pending' | 'completed' | 'conflicted' | 'failed';
+export type OperationFailureStatus = Extract<OperationStatus, 'audit_pending' | 'conflicted' | 'failed'>;
 export interface StepExecutionRecord {
     name: string;
     completed_at: string;
+    result?: unknown;
 }
 export interface OperationRecord<TResult = unknown> {
     operation_id: string;
@@ -34,9 +36,14 @@ export interface OperationFailureInjectionContext {
 }
 export type OperationFailureInjection = (context: OperationFailureInjectionContext) => void | Promise<void>;
 export type OperationClock = () => string;
+export interface RecoverableOperationStepContext {
+    completedSteps: readonly StepExecutionRecord[];
+}
 export interface RecoverableOperationStep<TPayload> {
     name: string;
-    execute: (payload: TPayload) => Promise<unknown> | unknown;
+    execute: (payload: TPayload, context: RecoverableOperationStepContext) => Promise<unknown> | unknown;
+    persistResult?: boolean;
+    failureStatus?: OperationFailureStatus | ((error: unknown) => OperationFailureStatus);
 }
 export interface RecoverableOperationRunnerConfig<TPayload, TResult> {
     operationId: string;
@@ -61,17 +68,35 @@ export interface NodeFileOperationJournalOptions {
 export declare class NodeFileOperationJournal implements OperationJournal {
     private readonly directory;
     private readonly lockWaitTimeoutMs;
+    private readonly corruptLockGraceMs;
+    private payloadKeyPromise;
     constructor(options: NodeFileOperationJournalOptions);
     private ensureValidOperationId;
     private recordPath;
+    private payloadKeyPath;
+    private progressAnchorPath;
     private idempotencyReferencePath;
     private idempotencyLockPath;
     private ensureDirectory;
     private parseOperationRecord;
     private readRecord;
+    private payloadKey;
+    private loadOrCreatePayloadKey;
+    private operationValueAdditionalData;
+    private encryptOperationValue;
+    private decryptOperationValue;
+    private persistedRecord;
+    private terminalStatus;
+    private completedStepsHash;
+    private anchorBinding;
+    private buildProgressAnchor;
+    private saveProgressAnchor;
+    private verifyProgressAnchor;
+    private assertMonotonicProgress;
     private buildTempPath;
     acquireLock(idempotencyKey: string): Promise<() => Promise<void>>;
     private removeStaleLock;
+    private removeCorruptLockAfterGrace;
     loadById<TResult = unknown>(operationId: string): Promise<OperationRecord<TResult> | null>;
     loadByIdempotencyKey<TResult = unknown>(idempotencyKey: string): Promise<OperationRecord<TResult> | null>;
     private saveIdempotencyReference;
@@ -85,11 +110,16 @@ export declare class RecoverableOperationRunner<TPayload, TResult> {
     constructor(config: RecoverableOperationRunnerConfig<TPayload, TResult>);
     private injectFailure;
     private completedStepSet;
+    private stepContext;
     private now;
     private withFailureContext;
     private markFailed;
     private markCompleted;
     private markStepCompleted;
+    private failureStatusForStep;
+    private markAuditPending;
+    private validateRecordForRun;
+    private throwIfTerminalConflict;
     private markRunning;
     run(): Promise<TResult>;
     private loadClaimedRecord;

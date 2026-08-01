@@ -145,6 +145,7 @@ try {
 						loader: 'js',
 						contents: `
 							export const TRACEKEEPER_REVIEW_QUEUE_DIR = 'review_queue';
+							export const ARCHIVE_REVIEW_QUEUE_DIR = '02_archive/review_queue';
 							export const KNOWLEDGE_INDEX_PATH = '01_knowledge/index.md';
 							export const KNOWLEDGE_MEMORY_DIR = '01_knowledge/memory';
 							export const KNOWLEDGE_WIKI_DIR = '01_knowledge/wiki';
@@ -154,6 +155,12 @@ try {
 								const normalizedPrefix = normalizeKnowledgePath(prefix).replace(/\\/+$/, '');
 								return normalized === normalizedPrefix || normalized.startsWith(normalizedPrefix + '/');
 							};
+							export const computeProposalContentHash = (value) => 'content:' + JSON.stringify(value);
+							export const computeProposalRevision = (value) => {
+								const copy = { ...value, writebackContent: '' };
+								return 'revision:' + JSON.stringify(copy);
+							};
+							export const proposalTransitionReceiptFromFrontmatter = () => undefined;
 						`,
 					}));
 				},

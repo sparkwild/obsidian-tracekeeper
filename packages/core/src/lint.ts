@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import {
 	DEFAULT_GRAPH_PROFILE,
@@ -23,6 +22,7 @@ import {
 	resolvePreferredKnowledgePath,
 	normalizeKnowledgePath as normalizeVaultPath,
 } from './knowledge-architecture';
+import { resolveNormalizedVaultEdges } from './knowledge-note';
 import { ScannedNote } from './scan';
 
 export type LintIssueKind =
@@ -99,28 +99,6 @@ function readListLikeFrontmatter(note: ScannedNote, keys: readonly string[]): st
 	return [...new Set(values)];
 }
 
-function buildLinkCandidate(vaultRoot: string, sourceDir: string, wikilinkTarget: string): string {
-	const sanitized = wikilinkTarget.replace(/\/+/g, '/').trim();
-	const splitHash = sanitized.split('#', 2);
-	const candidateBase = splitHash[0].trim();
-	if (!candidateBase) {
-		return '';
-	}
-
-	let candidatePath = candidateBase;
-	if (!path.extname(candidatePath)) {
-		candidatePath = `${candidatePath}.md`;
-	}
-	if (!path.isAbsolute(candidatePath)) {
-		candidatePath = path.resolve(sourceDir, candidatePath);
-	}
-	if (!isInsideVault(vaultRoot, candidatePath)) {
-		return '';
-	}
-
-	return candidatePath;
-}
-
 function buildRelationCandidate(raw: string, sourcePath: string): string {
 	const bracketMatch = raw.match(/^\[\[(.*?)\]\]$/);
 	let candidate = (bracketMatch ? bracketMatch[1] : raw).split('|', 2)[0].trim();
@@ -176,22 +154,6 @@ function readPathIndex(notes: ScannedNote[]): PathIndex {
 	return { noteByLowerPath, noteNoExtByLowerPath, basenameToLowerPaths };
 }
 
-function isInsideVault(vaultRoot: string, candidatePath: string): boolean {
-	const root = path.resolve(vaultRoot);
-	const candidate = path.resolve(candidatePath);
-	const relative = path.relative(root, candidate);
-	return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-function hasFile(candidatePath: string): boolean {
-	const normalizedPath = path.normalize(candidatePath);
-	if (!normalizedPath || !fs.existsSync(normalizedPath)) {
-		return false;
-	}
-	const stat = fs.statSync(normalizedPath);
-	return stat.isFile();
-}
-
 function isPathLikeRelation(raw: string): boolean {
 	return raw.includes('/') || raw.includes('\\') || raw.includes('.md') || raw.includes('.markdown');
 }
@@ -203,6 +165,9 @@ function hasBodyWikilinkReference(note: ScannedNote, ref: string, sourcePath: st
 	}
 	const normalizedRef = normalizeVaultPath(stripKnownExtension(resolvedRef.toLowerCase()));
 	return note.wikilinks.some((link) => {
+		if (link.source !== 'body') {
+			return false;
+		}
 		const resolvedLink = resolveReference(link.target, sourcePath, paths) || buildRelationCandidate(link.target, sourcePath);
 		if (!resolvedLink) {
 			return false;
@@ -337,6 +302,14 @@ export function lintNotes(vaultRoot: string, notes: ScannedNote[], options: Lint
 	const graphProfile = normalizeGraphProfile(options.graphProfile);
 	const strictStructureSeverity = graphProfile === 'strict' ? 'error' : 'warning';
 	const graphStructureEnabled = graphProfile !== 'off';
+	const resolvedEdges = resolveNormalizedVaultEdges(
+		notes.map((note) => ({
+			path: note.relativePath,
+			title: note.title,
+			aliases: note.aliases,
+			edges: note.edges,
+		}))
+	);
 
 	const pathIndex = readPathIndex(notes);
 	const notePathSet = new Set(notes.map((note) => normalizeVaultPath(note.relativePath)).filter(Boolean));
@@ -349,12 +322,17 @@ export function lintNotes(vaultRoot: string, notes: ScannedNote[], options: Lint
 	const wikiToMemoryYamlBySource = new Map<string, Set<string>>();
 	const wikiToMemoryLinkBySource = new Map<string, Set<string>>();
 
-	for (const note of notes) {
-		const sourceDir = path.dirname(note.absolutePath);
-		const normalizedPath = normalizeVaultPath(note.relativePath);
+	for (const originalNote of notes) {
+		const normalizedPath = normalizeVaultPath(originalNote.relativePath);
 		if (!normalizedPath) {
 			continue;
 		}
+		const semanticEdges = [...(resolvedEdges.get(normalizedPath) ?? originalNote.edges)];
+		const note: ScannedNote = {
+			...originalNote,
+			edges: semanticEdges,
+			wikilinks: semanticEdges,
+		};
 
 		const sourceKinds = getSourceType(note);
 		if (isInLegacyDirectory(normalizedPath)) {
@@ -368,36 +346,24 @@ export function lintNotes(vaultRoot: string, notes: ScannedNote[], options: Lint
 		}
 
 		for (const link of note.wikilinks) {
-			if (EXTERNAL_LINK.test(link.target) || link.target.includes('|')) {
+			if (link.source === 'frontmatter' || EXTERNAL_LINK.test(link.target) || link.target.includes('|')) {
 				continue;
 			}
 
-			const candidate = buildLinkCandidate(vaultRoot, sourceDir, link.target);
-			if (!candidate) {
+			if (link.resolution.status !== 'resolved') {
+				const unresolvedTarget = link.target || link.referenceLabel || link.raw;
 				issues.push({
-					severity: 'warning',
+					severity: link.resolution.reason === 'unsafe_path' ? 'warning' : 'error',
 					kind: 'broken_wikilink',
 					path: note.relativePath,
 					line: link.line,
-					message: `Broken wikilink target: ${link.target}`,
+					message: `Broken wikilink target: ${unresolvedTarget}`,
 					context: link.raw,
 				});
 				continue;
 			}
 
-			if (!hasFile(candidate)) {
-				issues.push({
-					severity: 'error',
-					kind: 'broken_wikilink',
-					path: note.relativePath,
-					line: link.line,
-					message: `Broken wikilink target: ${link.target}`,
-					context: link.raw,
-				});
-				continue;
-			}
-
-			const targetRelative = normalizeVaultPath(path.relative(vaultRoot, candidate));
+			const targetRelative = normalizeVaultPath(link.resolution.path);
 			if (sourceKinds.isMemory && isKnowledgeWikiPath(targetRelative)) {
 				addRelationEdge(
 					memoryToWikiLinkBySource,

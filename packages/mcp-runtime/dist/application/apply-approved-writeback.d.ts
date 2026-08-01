@@ -1,12 +1,33 @@
-import { type OperationFailureInjection, type OperationJournal } from '@tracekeeper/core';
+import { type OperationFailureInjection, type OperationJournal, type ProposalTransitionReceipt } from '@tracekeeper/core';
 export interface ApplyApprovedWritebackPayload {
+    schemaVersion: 1;
     proposalId: string;
     proposalPath: string;
+    proposalRevision: string;
+    proposalContentHash: string;
+    proposalFileHash: string;
+    approvalOperationId: string;
     targetPath: string;
+    targetContentHash: string;
+    proposalTaskId: string;
     taskId: string | null;
-    writebackBlock: string;
+    taskPath: string | null;
+    taskContentHash: string;
+    taskLinkedContentHash: string;
+    taskHadTargetReference: boolean;
+    taskHadProposalReference: boolean;
+    taskHadProposalIdReference?: boolean;
+    taskHadProposalPathEvidence?: boolean;
+    writebackContentHash: string;
+    writebackBlockHash: string;
     writebackMarker: string;
+    touchedNotes: string[];
+    confirmationTokenHash: string;
+    confirmationExpiresAt: string;
     auditPath: string;
+    auditAgentId: string;
+    auditSessionId: string;
+    auditClientName: string;
 }
 export interface ApplyApprovedWritebackCommand {
     operationId: string;
@@ -26,11 +47,18 @@ export interface ApplyApprovedWritebackResult {
     touched_notes: string[];
     audit_path: string;
 }
+export interface ApplyApprovedWritebackTaskLinkReceipt {
+    taskPath: string | null;
+    targetReferenceAdded: boolean;
+    proposalReferenceAdded: boolean;
+}
 export interface ApplyApprovedWritebackPort {
     applyTarget(payload: ApplyApprovedWritebackPayload, operationId: string): Promise<void> | void;
-    markProposalApplied(payload: ApplyApprovedWritebackPayload, operationId: string): Promise<void> | void;
-    linkTask(payload: ApplyApprovedWritebackPayload, operationId: string): Promise<void> | void;
-    appendAudit(payload: ApplyApprovedWritebackPayload, operationId: string): Promise<void> | void;
+    rollbackTarget(payload: ApplyApprovedWritebackPayload, operationId: string): Promise<void> | void;
+    markProposalApplied(payload: ApplyApprovedWritebackPayload, operationId: string): Promise<ProposalTransitionReceipt> | ProposalTransitionReceipt;
+    linkTask(payload: ApplyApprovedWritebackPayload, operationId: string): Promise<ApplyApprovedWritebackTaskLinkReceipt> | ApplyApprovedWritebackTaskLinkReceipt;
+    rollbackTask(payload: ApplyApprovedWritebackPayload, operationId: string, receipt: ApplyApprovedWritebackTaskLinkReceipt): Promise<void> | void;
+    appendAudit(payload: ApplyApprovedWritebackPayload, operationId: string, receipt: ProposalTransitionReceipt): Promise<void> | void;
 }
 export interface ApplyApprovedWritebackServiceOptions {
     journal: OperationJournal;

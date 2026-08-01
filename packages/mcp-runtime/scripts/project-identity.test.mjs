@@ -15,6 +15,7 @@ function note(relativePath, frontmatter) {
 		modifiedAt: '2026-07-23T00:00:00.000Z',
 		tokens: '',
 		frontmatter,
+		type: typeof frontmatter.type === 'string' ? frontmatter.type : undefined,
 		aliases: [],
 		tags: [],
 		headings: [],
@@ -59,7 +60,7 @@ test('resolves POSIX path-valued project_hint through durable Vault metadata', (
 
 test('normalizes Windows paths before matching Vault project metadata', () => {
 	const result = resolveProjectIdentity(
-		{ project_hint: 'C:\\Users\\alice\\work\\tracekeeper\\' },
+		{ project_hint: 'c:\\USERS\\ALICE\\work\\tracekeeper\\' },
 		[
 			note('01_knowledge/memory/projects/tracekeeper/memory.md', {
 				project_hint: 'tracekeeper',
@@ -68,8 +69,26 @@ test('normalizes Windows paths before matching Vault project metadata', () => {
 		]
 	);
 	assert.equal(result.projectHint, 'tracekeeper');
-	assert.equal(result.repoPath, 'C:/Users/alice/work/tracekeeper');
+	assert.equal(result.repoPath, 'c:/USERS/ALICE/work/tracekeeper');
 	assert.equal(result.source, 'vault_match');
+});
+
+test('keeps POSIX repository path matching case-sensitive', () => {
+	const result = resolveProjectIdentity(
+		{ repo_path: '/Volumes/Case/Repo' },
+		[
+			note('01_knowledge/memory/projects/repo/index.md', {
+				type: 'project_memory_index',
+				project_hint: 'repo',
+				project_id: 'repo-id',
+				repo_path: '/Volumes/case/repo',
+			}),
+		]
+	);
+	assert.equal(result.projectHint, 'Repo');
+	assert.equal(result.projectId, '');
+	assert.equal(result.source, 'repo_leaf');
+	assert.equal(result.confidence, 'derived');
 });
 
 test('keeps explicit project id and canonical hint as stronger evidence', () => {
@@ -89,6 +108,34 @@ test('keeps explicit project id and canonical hint as stronger evidence', () => 
 	assert.equal(byHint.projectHint, 'atlas');
 	assert.equal(byHint.projectId, 'atlas-id');
 	assert.equal(byHint.source, 'explicit_project_hint');
+});
+
+test('collapses hub and project-memory entries with one stable project id', () => {
+	const result = resolveProjectIdentity(
+		{ project_id: 'atlas-id' },
+		[
+			note('01_knowledge/memory/projects/atlas-stable/index.md', {
+				type: 'project_memory_index',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+				repo_path: '/work/atlas',
+			}),
+			note('01_knowledge/memory/projects/atlas-stable/agents/codex/finish_task-op-1.md', {
+				type: 'project_memory_entry',
+				project_id: 'atlas-id',
+			}),
+			note('01_knowledge/memory/projects/atlas-stable/agents/claude-code/finish_task-op-2.md', {
+				type: 'project_memory_entry',
+				project_id: 'atlas-id',
+			}),
+		]
+	);
+
+	assert.equal(result.projectHint, 'atlas');
+	assert.equal(result.projectId, 'atlas-id');
+	assert.equal(result.source, 'explicit_project_id');
+	assert.equal(result.confidence, 'exact');
+	assert.equal(result.warnings.includes('ambiguous_vault_project_identity'), false);
 });
 
 test('canonicalizes an unmatched Agent hint when the repository uniquely matches durable Vault identity', () => {
@@ -147,6 +194,44 @@ test('marks contradictory explicit identity evidence uncertain instead of silent
 	assert.equal(result.source, 'explicit_project_id');
 	assert.equal(result.confidence, 'uncertain');
 	assert.ok(result.warnings.includes('project_hint_conflicts_with_project_id'));
+});
+
+test('marks an explicit project id and contradictory repository path uncertain', () => {
+	const result = resolveProjectIdentity(
+		{ project_id: 'atlas-id', repo_path: '/work/beta' },
+		[
+			note('01_knowledge/memory/projects/atlas/index.md', {
+				type: 'project_memory_index',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+				repo_path: '/work/atlas',
+			}),
+		]
+	);
+	assert.equal(result.projectHint, 'atlas');
+	assert.equal(result.projectId, 'atlas-id');
+	assert.equal(result.source, 'explicit_project_id');
+	assert.equal(result.confidence, 'uncertain');
+	assert.ok(result.warnings.includes('repo_path_conflicts_with_project_id'));
+});
+
+test('does not match repositories merely because their leaf names are equal', () => {
+	const result = resolveProjectIdentity(
+		{ repo_path: '/other/root/atlas' },
+		[
+			note('01_knowledge/memory/projects/atlas/index.md', {
+				type: 'project_memory_index',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+				repo_path: '/work/atlas',
+			}),
+		]
+	);
+	assert.equal(result.projectHint, 'atlas');
+	assert.equal(result.projectId, '');
+	assert.equal(result.source, 'repo_leaf');
+	assert.equal(result.confidence, 'derived');
+	assert.ok(result.warnings.includes('project_hint_derived_from_repo_leaf'));
 });
 
 test('marks a duplicate canonical project hint uncertain', () => {

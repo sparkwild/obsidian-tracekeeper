@@ -40,6 +40,7 @@ assert.ok(activitySource.includes('currently online'));
 assert.equal(activitySource.includes('credential-authenticated activities'), false);
 assert.equal(activitySource.includes('近期认证活动'), false);
 assert.ok(activitySource.includes("ui('最近事件', 'Recent events')"));
+assert.ok(activitySource.includes('immutable project-memory entries saved'));
 assert.ok(activitySource.includes("ui('查看全部', 'View all')"));
 assert.ok(activitySource.includes('TRACEKEEPER_RUNTIME_LOG_VIEW'));
 assert.equal(activitySource.includes('continue_onboarding'), false);
@@ -69,5 +70,10 @@ assert.ok(runtimeStatusSource.includes('openSettingsTab'));
 
 assert.ok(activityControllerSource.includes('recentAgents,'));
 assert.ok(activityControllerSource.includes('buildRecentObservedClientConnections'));
+assert.ok(activityControllerSource.includes('RUNTIME_LOG_MAX_EVENTS + 1'));
+assert.equal(
+	/loadRuntimeLogSnapshot[\s\S]*?readRecentAuditEvents\(Number\.MAX_SAFE_INTEGER\)/.test(activityControllerSource),
+	false
+);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 51 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 53 })}\n`);

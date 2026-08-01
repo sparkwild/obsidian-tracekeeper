@@ -72,6 +72,7 @@ export interface SkillInstallResult {
 
 export interface ClientSkillFileApi {
 	existsSync(path: string): boolean;
+	lstatSync(path: string): { isSymbolicLink(): boolean };
 	readFileSync(path: string, encoding: 'utf8'): string;
 	writeFileSync(path: string, content: string, encoding: 'utf8'): void;
 	mkdirSync(path: string, options: { recursive: boolean }): void;
@@ -128,9 +129,13 @@ export class ClientSkillAdapter {
 		if (!profile.supportsManagedInstall || !profile.targetDirectory) {
 			return this.state(profile, 'copy_only', false, false, '', 'This client uses copy-only Skill guidance.');
 		}
+		this.assertNoSymbolicLinkSegments(profile.targetDirectory);
 
 		const primaryHasManagedFiles = this.hasManagedFiles(profile.targetDirectory);
 		const legacyTargetDirectories = profile.legacyTargetDirectories ?? [];
+		for (const legacyDirectory of legacyTargetDirectories) {
+			this.assertNoSymbolicLinkSegments(legacyDirectory);
+		}
 		const legacyWithManagedFiles = legacyTargetDirectories.filter((legacyDirectory) => this.hasManagedFiles(legacyDirectory));
 
 		if (primaryHasManagedFiles && legacyWithManagedFiles.length > 0) {
@@ -296,21 +301,27 @@ export class ClientSkillAdapter {
 		const stageDirectory = `${plan.targetDirectory}.tracekeeper-stage-${stamp}-${nonce}`;
 		const backupDirectory = `${plan.targetDirectory}.tracekeeper-backup-${stamp}-${nonce}`;
 		const changedFiles = plan.files.filter((file) => file.change !== 'unchanged');
+		this.assertNoSymbolicLinkSegments(stageDirectory);
+		this.assertNoSymbolicLinkSegments(backupDirectory);
 		this.options.fs.mkdirSync(stageDirectory, { recursive: true });
+		this.assertNoSymbolicLinkSegments(stageDirectory);
 		for (const file of changedFiles) {
 			const stagePath = this.resolve(stageDirectory, file.path);
 			this.options.fs.mkdirSync(this.options.path.dirname(stagePath), { recursive: true });
+			this.assertNoSymbolicLinkSegments(this.options.path.dirname(stagePath));
 			this.options.fs.writeFileSync(stagePath, this.options.bundle.installFiles[file.path], 'utf8');
 		}
 
 		const originals = new Map<string, string>();
 		for (const file of changedFiles) {
 			const targetPath = this.resolve(plan.targetDirectory, file.path);
+			this.assertNoSymbolicLinkSegments(targetPath);
 			if (!this.options.fs.existsSync(targetPath)) continue;
 			const original = this.options.fs.readFileSync(targetPath, 'utf8');
 			originals.set(file.path, original);
 			const backupPath = this.resolve(backupDirectory, file.path);
 			this.options.fs.mkdirSync(this.options.path.dirname(backupPath), { recursive: true });
+			this.assertNoSymbolicLinkSegments(this.options.path.dirname(backupPath));
 			this.options.fs.writeFileSync(backupPath, original, 'utf8');
 		}
 
@@ -322,6 +333,8 @@ export class ClientSkillAdapter {
 					throw new ClientSkillPlanConflictError('Skill content changed during installation. Preview the change again.');
 				}
 				this.options.fs.mkdirSync(this.options.path.dirname(targetPath), { recursive: true });
+				this.assertNoSymbolicLinkSegments(this.options.path.dirname(targetPath));
+				this.assertNoSymbolicLinkSegments(targetPath);
 				touched.add(file.path);
 				this.options.fs.rmSync(targetPath, { force: true });
 				this.options.fs.renameSync(this.resolve(stageDirectory, file.path), targetPath);
@@ -354,6 +367,7 @@ export class ClientSkillAdapter {
 	}
 
 	private hasManagedFiles(targetDirectory: string): boolean {
+		this.assertNoSymbolicLinkSegments(targetDirectory);
 		return Object.keys(this.options.bundle.installFiles).some((filePath) =>
 			this.options.fs.existsSync(this.resolve(targetDirectory, filePath))
 		);
@@ -539,6 +553,7 @@ export class ClientSkillAdapter {
 
 	private currentHash(targetDirectory: string, filePath: string): string | null {
 		const targetPath = this.resolve(targetDirectory, filePath);
+		this.assertNoSymbolicLinkSegments(targetPath);
 		return this.options.fs.existsSync(targetPath)
 			? hashSkillFileContent(this.options.fs.readFileSync(targetPath, 'utf8'))
 			: null;
@@ -547,6 +562,32 @@ export class ClientSkillAdapter {
 	private resolve(directory: string, filePath: string): string {
 		if (!isSafeRelativePath(filePath)) throw new Error(`Unsafe Skill bundle path: ${filePath}`);
 		return this.options.path.join(directory, ...filePath.split('/'));
+	}
+
+	private assertNoSymbolicLinkSegments(targetPath: string): void {
+		let cursor = targetPath;
+		while (cursor) {
+			if (this.options.fs.existsSync(cursor)) {
+				let state: { isSymbolicLink(): boolean };
+				try {
+					state = this.options.fs.lstatSync(cursor);
+				} catch {
+					throw new ClientSkillPlanConflictError(
+						`Skill path changed while it was being inspected: ${cursor}`
+					);
+				}
+				if (state.isSymbolicLink()) {
+					throw new ClientSkillPlanConflictError(
+						`Skill path contains a symbolic link: ${cursor}`
+					);
+				}
+			}
+			const parent = this.options.path.dirname(cursor);
+			if (!parent || parent === cursor) {
+				break;
+			}
+			cursor = parent;
+		}
 	}
 
 	private state(

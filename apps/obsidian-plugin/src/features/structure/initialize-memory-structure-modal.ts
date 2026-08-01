@@ -1,6 +1,7 @@
 import { App, Modal, Notice } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import type {
+	LegacyCleanupPreview,
 	LegacyCleanupResult,
 	LegacyMigrationResult,
 	LegacyStructurePlan,
@@ -11,6 +12,7 @@ import { ui } from '../../ui/localization';
 export class InitializeMemoryStructureModal extends Modal {
 	private snapshot: StructureOrganizerSnapshot;
 	private migrationResult: LegacyMigrationResult | null = null;
+	private cleanupPreview: LegacyCleanupPreview | null = null;
 	private cleanupResult: LegacyCleanupResult | null = null;
 	private busy = false;
 
@@ -115,18 +117,17 @@ export class InitializeMemoryStructureModal extends Modal {
 	}
 
 	private renderLegacyDetected(contentEl: HTMLElement, plan: LegacyStructurePlan, baseMissingCount: number): void {
-		const readyForCleanup = plan.legacyRoots.length > 0 && plan.copyCount === 0 && plan.conflictCount === 0 && plan.uncoveredCount === 0;
 		const detail = contentEl.createDiv({ cls: 'tracekeeper-card' });
 		detail.createEl('h3', { text: ui('发现旧目录结构', 'Legacy structure found') });
 		detail.createEl('p', {
-			text: readyForCleanup
+			text: plan.recovery
 				? ui(
-					'旧目录内容已能在新结构中找到，可直接确认清理旧目录。',
-					'Legacy content is already covered by the current structure. You can confirm cleanup now.'
+					'发现可恢复的迁移日志。Tracekeeper 会按已记录状态继续，不会冒认或覆盖目标。',
+					'A recoverable migration journal was found. Tracekeeper will resume from recorded state without adopting or overwriting targets.'
 				)
 				: ui(
-					`将先复制重建 ${plan.copyCount} 个文件；${plan.conflictCount} 个冲突会进入知识变更审核；旧目录会保留到你再次确认清理。`,
-					`${plan.copyCount} file(s) will be copied first; ${plan.conflictCount} conflict(s) will enter Knowledge Change Review; legacy folders remain until you confirm cleanup.`
+					`将通过 Obsidian 原生移动 ${plan.moveCount} 个文件；${plan.conflictCount} 个冲突会进入知识变更审核。迁移与清理分别确认。`,
+					`${plan.moveCount} file(s) will be moved through Obsidian; ${plan.conflictCount} conflict(s) will enter Knowledge Change Review. Migration and cleanup require separate confirmations.`
 				),
 		});
 		if (plan.uncoveredCount > 0) {
@@ -141,23 +142,45 @@ export class InitializeMemoryStructureModal extends Modal {
 		const facts = detail.createDiv({ cls: 'tracekeeper-detail-grid' });
 		this.renderFact(facts, ui('Markdown', 'Markdown'), String(plan.markdownCount));
 		this.renderFact(facts, ui('其他文件', 'Other files'), String(plan.nonMarkdownCount));
-		this.renderFact(facts, ui('已存在', 'Existing'), String(plan.skipCount));
+		this.renderFact(facts, ui('原生移动', 'Native moves'), String(plan.moveCount));
+		this.renderFact(facts, ui('已移动/恢复', 'Moved/recovery'), String(plan.alreadyMovedCount));
 		this.renderFact(facts, ui('基础缺失', 'Base missing'), String(baseMissingCount));
+		this.renderFact(facts, ui('计划哈希', 'Plan hash'), plan.planHash);
+		this.renderFact(
+			facts,
+			ui('链接预检', 'Link preflight'),
+			plan.linkCapability.status
+		);
+
+		const mapping = detail.createDiv({ cls: 'tracekeeper-structure-migration-preview' });
+		mapping.createEl('h4', { text: ui('精确迁移预览', 'Exact migration preview') });
+		const list = mapping.createEl('ul');
+		for (const item of plan.items) {
+			list.createEl('li', {
+				text: `${item.oldPath} → ${item.newPath || ui('未映射', 'unmapped')} [${item.action}]`,
+			});
+		}
 
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		actions.createEl('button', { text: ui('取消', 'Cancel') }).addEventListener('click', () => this.close());
-		if (readyForCleanup) {
-			const cleanup = actions.createEl('button', { text: ui('确认清理旧目录', 'Confirm cleanup'), cls: 'mod-warning' });
-			cleanup.disabled = this.busy;
-			cleanup.addEventListener('click', () => {
+		if (baseMissingCount > 0) {
+			const repair = actions.createEl('button', {
+				text: ui('先补齐基础结构', 'Repair base structure first'),
+				cls: 'mod-cta',
+			});
+			repair.disabled = this.busy;
+			repair.addEventListener('click', () => {
 				void (async () => {
 					this.busy = true;
 					this.render();
 					try {
-						this.cleanupResult = await this.options.plugin.cleanupLegacyStructure(plan.migrationId);
+						await this.options.plugin.initializeMemoryStructure(this.snapshot.basePlan);
+						this.snapshot = await this.options.plugin.buildStructureOrganizerSnapshot(
+							plan.migrationId
+						);
 					} catch (error) {
-						console.error('tracekeeper failed to cleanup legacy structure', error);
-						new Notice(ui('旧目录清理失败，请查看控制台。', 'Legacy cleanup failed. Check the console.'));
+						console.error('tracekeeper failed to repair structure before migration', error);
+						new Notice(ui('基础结构补齐失败。', 'Base structure repair failed.'));
 					} finally {
 						this.busy = false;
 						this.render();
@@ -166,7 +189,47 @@ export class InitializeMemoryStructureModal extends Modal {
 			});
 			return;
 		}
-		const migrate = actions.createEl('button', { text: ui('复制重建', 'Copy and rebuild'), cls: 'mod-cta' });
+
+		if (
+			plan.linkCapability.status === 'required'
+			|| plan.linkCapability.status === 'blocked'
+		) {
+			const preflight = actions.createEl('button', {
+				text: ui('运行链接安全预检', 'Run link safety preflight'),
+				cls: 'mod-cta',
+			});
+			preflight.disabled =
+				this.busy
+				|| plan.metadataState !== 'ready'
+				|| plan.linkCapability.inboundLinkCount === 0;
+			preflight.addEventListener('click', () => {
+				void (async () => {
+					this.busy = true;
+					this.render();
+					try {
+						const refreshed = await this.options.plugin.runLegacyLinkPreflight(plan);
+						this.snapshot = {
+							...this.snapshot,
+							legacyPlan: refreshed,
+						};
+					} catch (error) {
+						console.error('tracekeeper failed to run legacy link preflight', error);
+						new Notice(ui('链接安全预检失败。', 'Link safety preflight failed.'));
+					} finally {
+						this.busy = false;
+						this.render();
+					}
+				})();
+			});
+			return;
+		}
+
+		const migrate = actions.createEl('button', {
+			text: plan.recovery
+				? ui('继续已记录迁移', 'Resume journaled migration')
+				: ui('确认原生迁移', 'Confirm native migration'),
+			cls: 'mod-cta',
+		});
 		migrate.disabled = this.busy || plan.fileCount === 0;
 		migrate.addEventListener('click', () => {
 			void (async () => {
@@ -176,7 +239,7 @@ export class InitializeMemoryStructureModal extends Modal {
 					this.migrationResult = await this.options.plugin.migrateLegacyStructure(this.snapshot);
 				} catch (error) {
 					console.error('tracekeeper failed to migrate legacy structure', error);
-					new Notice(ui('旧目录复制重建失败。', 'Legacy copy and rebuild failed.'));
+					new Notice(ui('旧目录原生迁移失败，可从日志恢复。', 'Native legacy migration failed and can be resumed from its journal.'));
 				} finally {
 					this.busy = false;
 					this.render();
@@ -187,28 +250,74 @@ export class InitializeMemoryStructureModal extends Modal {
 
 	private renderMigrationDone(contentEl: HTMLElement, result: LegacyMigrationResult): void {
 		const card = contentEl.createDiv({ cls: 'tracekeeper-card' });
-		card.createEl('h3', { text: ui('复制重建已完成', 'Copy and rebuild complete') });
+		card.createEl('h3', { text: ui('原生迁移已写入日志', 'Native migration journal updated') });
 		card.createEl('p', {
 			text: ui(
-				'旧目录还没有清理。确认清理后，旧目录会移入系统回收站。',
-				'Legacy folders have not been cleaned yet. Confirm cleanup to move them to system trash.'
+				'旧目录尚未清理。只有全部文件验证通过且旧根目录无剩余文件时，才能另行预览并确认清理。',
+				'Legacy folders are not cleaned yet. Cleanup requires a separate preview and confirmation after every file is verified and no files remain.'
 			),
 		});
 		const facts = card.createDiv({ cls: 'tracekeeper-detail-grid' });
-		this.renderFact(facts, ui('已复制', 'Copied'), String(result.copiedCount));
+		this.renderFact(facts, ui('已移动', 'Moved'), String(result.movedCount));
+		this.renderFact(facts, ui('已验证', 'Verified'), String(result.verifiedCount));
+		this.renderFact(facts, ui('阻塞', 'Blocked'), String(result.blockedCount));
+		this.renderFact(facts, ui('失败', 'Failed'), String(result.failedCount));
 		this.renderFact(facts, ui('变更提案', 'Change proposals'), String(result.reviewCount));
 		this.renderFact(facts, ui('迁移报告', 'Migration report'), result.reportMdPath);
+		this.renderFact(facts, ui('操作日志', 'Operation journal'), result.journalPath);
+
+		if (this.cleanupPreview) {
+			const preview = card.createDiv({ cls: 'tracekeeper-card' });
+			preview.createEl('h4', { text: ui('清理预览', 'Cleanup preview') });
+			this.renderFact(
+				preview,
+				ui('可清理目录', 'Eligible roots'),
+				String(this.cleanupPreview.eligibleRoots.length)
+			);
+			this.renderFact(
+				preview,
+				ui('剩余文件', 'Remaining files'),
+				String(this.cleanupPreview.remainingFiles.length)
+			);
+			this.renderFact(
+				preview,
+				ui('已缺失目录', 'Missing roots'),
+				String(this.cleanupPreview.missingRoots.length)
+			);
+			this.renderFact(
+				preview,
+				ui('阻塞项', 'Blocking items'),
+				String(this.cleanupPreview.blockingItems.length)
+			);
+		}
 
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		actions.createEl('button', { text: ui('稍后清理', 'Clean later') }).addEventListener('click', () => this.close());
-		const cleanup = actions.createEl('button', { text: ui('确认清理旧目录', 'Confirm cleanup'), cls: 'mod-warning' });
-		cleanup.disabled = this.busy;
+		const cleanup = actions.createEl('button', {
+			text: this.cleanupPreview
+				? ui('确认清理已验证空目录', 'Confirm cleanup of verified empty roots')
+				: ui('预览清理', 'Preview cleanup'),
+			cls: this.cleanupPreview ? 'mod-warning' : 'mod-cta',
+		});
+		cleanup.disabled =
+			this.busy
+				|| !result.cleanupAvailable
+				|| Boolean(this.cleanupPreview && !this.cleanupPreview.canCleanup);
 		cleanup.addEventListener('click', () => {
 			void (async () => {
 				this.busy = true;
 				this.render();
 				try {
-					this.cleanupResult = await this.options.plugin.cleanupLegacyStructure(result.migrationId);
+					if (!this.cleanupPreview) {
+						this.cleanupPreview =
+							await this.options.plugin.previewLegacyStructureCleanup(
+								result.migrationId
+							);
+					} else {
+						this.cleanupResult = await this.options.plugin.cleanupLegacyStructure(
+							this.cleanupPreview
+						);
+					}
 				} catch (error) {
 					console.error('tracekeeper failed to cleanup legacy structure', error);
 					new Notice(ui('旧目录清理失败，请查看控制台。', 'Legacy cleanup failed. Check the console.'));

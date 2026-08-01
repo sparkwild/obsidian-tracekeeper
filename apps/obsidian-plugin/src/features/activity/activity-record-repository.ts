@@ -1,8 +1,16 @@
 import { App, TFile, TFolder } from 'obsidian';
 import {
+	ARCHIVE_REVIEW_QUEUE_DIR,
 	KNOWLEDGE_SOURCES_DIR,
 	TRACEKEEPER_AGENT_REQUESTS_DIR,
 	TRACEKEEPER_CONTEXT_PACKS_DIR,
+	TRACEKEEPER_SESSIONS_DIR,
+	TRACEKEEPER_TASKS_DIR,
+	hashVaultContent,
+	planProposalReferenceBackfill,
+	proposalHistoryLocation,
+	resolveProposalHistoryById,
+	type ProposalHistoryRecord,
 } from '@tracekeeper/core';
 import { compareProposalRecords, parseMemoryProposalRecord, type MemoryProposalRecord } from '../review/review-view-model';
 import { REVIEW_QUEUE_PATH } from '../review/review-queue-model';
@@ -25,6 +33,92 @@ const SOURCE_REQUESTS_PATH = TRACEKEEPER_AGENT_REQUESTS_DIR;
 const CONTEXT_PACKS_PATH = TRACEKEEPER_CONTEXT_PACKS_DIR;
 const SOURCES_PATH = KNOWLEDGE_SOURCES_DIR;
 
+interface MemoryProposalFileSnapshot {
+	record: MemoryProposalRecord;
+	explicitProposalId: string;
+}
+
+export type MemoryProposalHistoryResolution =
+	| {
+		status: 'resolved';
+		proposalId: string;
+		record: MemoryProposalRecord;
+		matches: MemoryProposalRecord[];
+	}
+	| {
+		status: 'missing';
+		proposalId: string;
+		matches: [];
+	}
+	| {
+		status: 'ambiguous';
+		proposalId: string;
+		matches: MemoryProposalRecord[];
+	};
+
+export type ManagedProposalReferenceBackfillResult =
+	| {
+		status: 'updated' | 'unchanged';
+		recordPath: string;
+		proposalIds: string[];
+		proposalPaths: string[];
+	}
+	| {
+		status: 'missing' | 'ambiguous' | 'stale' | 'unmanaged';
+		recordPath: string;
+		unresolvedPaths: string[];
+	};
+
+const isManagedProposalReferencePath = (recordPath: string): boolean =>
+	[
+		TRACEKEEPER_TASKS_DIR,
+		TRACEKEEPER_SESSIONS_DIR,
+	].some((root) => recordPath.startsWith(`${root}/`));
+
+const replaceManagedProposalReferenceFields = (
+	content: string,
+	proposalIds: readonly string[],
+	proposalPaths: readonly string[]
+): string | null => {
+	const normalized = content.replace(/\r\n?/g, '\n');
+	const lines = normalized.split('\n');
+	if (lines[0]?.trim() !== '---') {
+		return null;
+	}
+	const closingIndex = lines.findIndex(
+		(line, index) =>
+			index > 0 && (line.trim() === '---' || line.trim() === '...')
+	);
+	if (closingIndex < 0) {
+		return null;
+	}
+	const removedKeys = new Set(['proposal_ids', 'proposal_paths', 'proposals']);
+	const preserved: string[] = [];
+	for (let index = 1; index < closingIndex; index += 1) {
+		const line = lines[index];
+		const key = line.match(/^([A-Za-z0-9_-]+)\s*:/)?.[1];
+		if (!key || !removedKeys.has(key)) {
+			preserved.push(line);
+			continue;
+		}
+		while (
+			index + 1 < closingIndex
+			&& /^\s+-\s+/.test(lines[index + 1])
+		) {
+			index += 1;
+		}
+	}
+	const next = [
+		'---',
+		...preserved,
+		`proposal_ids: ${JSON.stringify(proposalIds)}`,
+		`proposal_paths: ${JSON.stringify(proposalPaths)}`,
+		lines[closingIndex],
+		...lines.slice(closingIndex + 1),
+	].join('\n');
+	return normalized.endsWith('\n') && !next.endsWith('\n') ? `${next}\n` : next;
+};
+
 export class ActivityRecordRepository {
 	constructor(private readonly app: App) {}
 
@@ -46,7 +140,7 @@ async readSourceRequestFile(file: TFile): Promise<SourceRequestRecord | null> {
 		let content = '';
 		try {
 			content = await this.app.vault.cachedRead(file);
-		} catch (error) {
+	} catch (error) {
 			console.error(`tracekeeper failed to read source request: ${file.path}`, error);
 			content = '';
 		}
@@ -203,22 +297,267 @@ async readRecentMemoryProposals(limit: number): Promise<MemoryProposalRecord[]> 
 			.slice(0, limit);
 	}
 
+async readRecentProposalHistory(limit: number): Promise<MemoryProposalRecord[]> {
+	const snapshots = await this.readProposalHistorySnapshots();
+	const records = snapshots
+		.map((snapshot) => snapshot.record)
+		.sort((left, right) => compareProposalRecords(left, right)
+			|| left.path.localeCompare(right.path));
+	if (!Number.isFinite(limit) || limit >= records.length) {
+		return records;
+	}
+	return records.slice(0, Math.max(0, Math.floor(limit)));
+}
+
+async readProposalHistoryById(proposalId: string): Promise<MemoryProposalHistoryResolution> {
+		const snapshots = await this.readProposalHistorySnapshots();
+		const recordsByPath = new Map(
+			snapshots.map((snapshot) => [snapshot.record.path, snapshot.record])
+		);
+		const historyRecords = snapshots
+			.filter((snapshot) => Boolean(snapshot.explicitProposalId))
+			.flatMap((snapshot): ProposalHistoryRecord[] => {
+				const location = proposalHistoryLocation(snapshot.record.path);
+				if (!location) {
+					return [];
+				}
+				return [{
+					path: snapshot.record.path,
+					proposalId: snapshot.explicitProposalId,
+					location,
+					contentHash: snapshot.record.fileContentHash,
+				}];
+			});
+		const resolution = resolveProposalHistoryById(historyRecords, proposalId);
+		if (resolution.status === 'missing') {
+			return resolution;
+		}
+		const matches = resolution.matches
+			.map((match) => recordsByPath.get(match.path))
+			.filter((record): record is MemoryProposalRecord => Boolean(record));
+		if (resolution.status === 'ambiguous') {
+			return {
+				status: 'ambiguous',
+				proposalId: resolution.proposalId,
+				matches,
+			};
+		}
+		const record = recordsByPath.get(resolution.record.path);
+		if (!record) {
+			return {
+				status: 'missing',
+				proposalId: resolution.proposalId,
+				matches: [],
+			};
+		}
+		return {
+			status: 'resolved',
+			proposalId: resolution.proposalId,
+			record,
+			matches,
+		};
+	}
+
+async backfillManagedProposalReferences(
+	recordPath: string,
+	expectedContentHash: string
+): Promise<ManagedProposalReferenceBackfillResult> {
+		if (!isManagedProposalReferencePath(recordPath)) {
+			return {
+				status: 'unmanaged',
+				recordPath,
+				unresolvedPaths: [],
+			};
+		}
+		const file = this.app.vault.getAbstractFileByPath(recordPath);
+		if (!(file instanceof TFile)) {
+			return {
+				status: 'missing',
+				recordPath,
+				unresolvedPaths: [recordPath],
+			};
+		}
+		const content = await this.app.vault.cachedRead(file);
+		if (!expectedContentHash || hashVaultContent(content) !== expectedContentHash) {
+			return {
+				status: 'stale',
+				recordPath,
+				unresolvedPaths: [recordPath],
+			};
+		}
+		const parsed = readFrontmatter(content);
+		const normalizedType = firstString(parsed.fields, ['type'])
+			.toLowerCase()
+			.replace(/_/g, '-');
+		if (normalizedType !== 'agent-task' && normalizedType !== 'session-note') {
+			return {
+				status: 'unmanaged',
+				recordPath,
+				unresolvedPaths: [],
+			};
+		}
+		const legacyPaths = readStringList(parsed.fields, ['proposals']);
+		const existingProposalIds = readStringList(parsed.fields, ['proposal_ids']);
+		const existingProposalPaths = readStringList(parsed.fields, ['proposal_paths']);
+		if (legacyPaths.length === 0) {
+			return existingProposalIds.length > 0
+				? {
+					status: 'unchanged',
+					recordPath,
+					proposalIds: existingProposalIds,
+					proposalPaths: existingProposalPaths,
+				}
+				: {
+					status: 'missing',
+					recordPath,
+					unresolvedPaths: [],
+				};
+		}
+
+		const snapshots = await this.readProposalHistorySnapshots();
+		const snapshotsByPath = new Map(
+			snapshots.map((snapshot) => [snapshot.record.path, snapshot])
+		);
+		const historyRecords = snapshots.flatMap((snapshot): ProposalHistoryRecord[] => {
+			const location = proposalHistoryLocation(snapshot.record.path);
+			if (!location || !snapshot.explicitProposalId) {
+				return [];
+			}
+			return [{
+				path: snapshot.record.path,
+				proposalId: snapshot.explicitProposalId,
+				location,
+				contentHash: snapshot.record.fileContentHash,
+			}];
+		});
+		const resolvedIds: string[] = [];
+		for (const legacyPath of legacyPaths) {
+			const plan = planProposalReferenceBackfill({
+				referencePath: legacyPath,
+				proposals: historyRecords,
+				expectedReferenceHash: expectedContentHash,
+				currentReferenceHash: hashVaultContent(content),
+				managedRecord: true,
+			});
+			if (plan.status !== 'ready') {
+				return {
+					status: plan.status,
+					recordPath,
+					unresolvedPaths: [legacyPath],
+				};
+			}
+			const idResolution = resolveProposalHistoryById(
+				historyRecords,
+				plan.proposalId
+			);
+			if (
+				idResolution.status !== 'resolved'
+				|| idResolution.record.path !== plan.proposalPath
+			) {
+				return {
+					status: idResolution.status === 'missing' ? 'missing' : 'ambiguous',
+					recordPath,
+					unresolvedPaths: [legacyPath],
+				};
+			}
+			const snapshot = snapshotsByPath.get(plan.proposalPath);
+			const proposalFile = this.app.vault.getAbstractFileByPath(plan.proposalPath);
+			if (!(proposalFile instanceof TFile) || !snapshot) {
+				return {
+					status: 'missing',
+					recordPath,
+					unresolvedPaths: [legacyPath],
+				};
+			}
+			const currentProposalContent = await this.app.vault.read(proposalFile);
+			if (hashVaultContent(currentProposalContent) !== snapshot.record.fileContentHash) {
+				return {
+					status: 'stale',
+					recordPath,
+					unresolvedPaths: [legacyPath],
+				};
+			}
+			resolvedIds.push(plan.proposalId);
+		}
+
+		const proposalIds = [...new Set([...existingProposalIds, ...resolvedIds])];
+		const proposalPaths = [...new Set([...existingProposalPaths, ...legacyPaths])];
+		let outcome: ManagedProposalReferenceBackfillResult = {
+			status: 'stale',
+			recordPath,
+			unresolvedPaths: [recordPath],
+		};
+		await this.app.vault.process(file, (current) => {
+			if (hashVaultContent(current) !== expectedContentHash) {
+				return current;
+			}
+			const next = replaceManagedProposalReferenceFields(
+				current,
+				proposalIds,
+				proposalPaths
+			);
+			if (next === null) {
+				outcome = {
+					status: 'unmanaged',
+					recordPath,
+					unresolvedPaths: [],
+				};
+				return current;
+			}
+			outcome = {
+				status: next === current ? 'unchanged' : 'updated',
+				recordPath,
+				proposalIds,
+				proposalPaths,
+			};
+			return next;
+		});
+		return outcome;
+	}
+
 async readMemoryProposalFile(file: TFile): Promise<MemoryProposalRecord | null> {
+		return (await this.readMemoryProposalFileSnapshot(file))?.record ?? null;
+	}
+
+private async readProposalHistorySnapshots(): Promise<MemoryProposalFileSnapshot[]> {
+		const folders = [REVIEW_QUEUE_PATH, ARCHIVE_REVIEW_QUEUE_DIR]
+			.map((folderPath) => this.app.vault.getAbstractFileByPath(folderPath))
+			.filter((folder): folder is TFolder => folder instanceof TFolder);
+		const files = folders.flatMap((folder) => this.collectMarkdownFiles(folder));
+		const snapshots = await Promise.all(
+			files.map((file) => this.readMemoryProposalFileSnapshot(file))
+		);
+		return snapshots
+			.filter((snapshot): snapshot is MemoryProposalFileSnapshot => Boolean(snapshot))
+			.sort((left, right) => left.record.path.localeCompare(right.record.path));
+	}
+
+private async readMemoryProposalFileSnapshot(
+		file: TFile
+	): Promise<MemoryProposalFileSnapshot | null> {
 		let content = '';
 		try {
-			content = await this.app.vault.cachedRead(file);
+			content = await this.app.vault.read(file);
 		} catch (error) {
 			console.error(`tracekeeper failed to read memory proposal: ${file.path}`, error);
 			content = '';
 		}
 
 		const parsed = readFrontmatter(content);
-		return parseMemoryProposalRecord({
+		const record = parseMemoryProposalRecord({
 			filePath: file.path,
 			fields: parsed.fields,
 			body: parsed.body,
 			fileMtime: file.stat?.mtime,
+			fileContentHash: hashVaultContent(content),
 		});
+		if (!record) {
+			return null;
+		}
+		return {
+			record,
+			explicitProposalId: firstString(parsed.fields, ['proposal_id', 'proposalId']).trim(),
+		};
 	}
 
 collectMarkdownFiles(folder: TFolder): TFile[] {
@@ -261,6 +600,9 @@ async readAgentTaskFile(file: TFile): Promise<AgentTaskRecord> {
 			startedAt || finishedAt,
 			file.stat?.mtime
 		);
+		const proposalIds = readStringList(data, ['proposal_ids', 'proposalIds']);
+		const proposalPaths = readStringList(data, ['proposal_paths', 'proposalPaths']);
+		const legacyProposalPaths = readStringList(data, ['proposals']);
 
 		return {
 			path,
@@ -277,7 +619,9 @@ async readAgentTaskFile(file: TFile): Promise<AgentTaskRecord> {
 			memoryReads: readStringList(data, ['memory_reads', 'memoryReads']),
 			memoryWrites: readStringList(data, ['memory_writes', 'memoryWrites']),
 			sourceCaptures: readStringList(data, ['source_captures', 'sourceCaptures']),
-			proposals: readStringList(data, ['proposals']),
+			proposalIds,
+			proposalPaths,
+			proposals: proposalPaths.length > 0 ? proposalPaths : legacyProposalPaths,
 			memoryCandidates: readStringList(data, ['memory_candidates', 'memoryCandidates']),
 			snippet: snippetFromText(parsed.body, objective || file.basename),
 			sortTimestamp,

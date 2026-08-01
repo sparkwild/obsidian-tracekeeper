@@ -1,6 +1,7 @@
 import {
 	GENERIC_TOOL_OUTPUT_SCHEMA,
 	FINISH_TASK_OUTPUT_SCHEMA,
+	PROJECT_MEMORY_OUTPUT_SCHEMA,
 	RECALL_OUTPUT_SCHEMA,
 	START_TASK_OUTPUT_SCHEMA,
 } from './result-schemas';
@@ -61,6 +62,7 @@ export type TracekeeperToolName =
 	| 'tracekeeper.graph_health'
 	| 'tracekeeper.start_task'
 	| 'tracekeeper.recall'
+	| 'tracekeeper.project_memory'
 	| 'tracekeeper.project_context'
 	| 'tracekeeper.project_history'
 	| 'tracekeeper.read_note'
@@ -109,6 +111,7 @@ export const PUBLIC_TOOL_NAME_ORDER = [
 	'tracekeeper.status',
 	'tracekeeper.lint',
 	'tracekeeper.recall',
+	'tracekeeper.project_memory',
 	'tracekeeper.read_note',
 	'tracekeeper.start_task',
 	'tracekeeper.finish_task',
@@ -292,6 +295,48 @@ export const toolContracts = [
 			max_items: { type: 'integer', description: 'Maximum number of matches to return.' },
 		}),
 		...withResultSchema(RECALL_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.project_memory',
+		version: 1,
+		visibility: 'public',
+		capability: 'vault.read',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'memory',
+		useCase: 'project_memory',
+		description:
+			'[read-only] Enumerate the complete generation-bound project-memory catalog in the active local Obsidian Vault. Returns metadata only; use tracekeeper.read_note for full note bodies.',
+		inputSchema: withVaultRoot(
+			{
+				action: {
+					const: 'list',
+					type: 'string',
+					enum: ['list'],
+					description: 'Project-memory catalog action.',
+				},
+				project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
+				project_id: { type: 'string', description: 'Project id for scoped matching.' },
+				repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
+				repo: { type: 'string', description: 'Alias of repo_path for repository-scoped matching.' },
+				project_path: { type: 'string', description: 'Alias of repo_path for workspace/project path matching.' },
+				cursor: {
+					type: 'string',
+					minLength: 1,
+					description: 'Opaque cursor bound to the project identity, catalog sort, and snapshot generation.',
+				},
+				page_size: {
+					type: 'integer',
+					minimum: 1,
+					maximum: 200,
+					description: 'Number of catalog descriptors to return, from 1 through 200.',
+				},
+			},
+			['action'],
+		),
+		...withResultSchema(PROJECT_MEMORY_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.project_context',
@@ -567,6 +612,11 @@ export const toolContracts = [
 			path: { type: 'string', description: 'Alias of proposal_path.' },
 			task_id: { type: 'string', description: 'Optional task id to update with the applied writeback target.' },
 			dry_run: { type: 'boolean', description: 'When true, return the writeback plan without modifying files.' },
+			confirmation_token: {
+				type: 'string',
+				description:
+					'Opaque confirmation token returned by the dry-run preview. Required when applying that preview and expires at the time reported with the preview.',
+			},
 		}),
 		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
 	},
@@ -850,6 +900,11 @@ export const toolContracts = [
 				risk_level: { type: 'string', description: 'Risk level label.' },
 				task_id: { type: 'string', description: 'Optional task id for traceability.' },
 				project_hint: { type: 'string', description: 'Optional project hint for project memory routing.' },
+				project_id: { type: 'string', description: 'Optional stable project id for project memory routing.' },
+				repo_path: {
+					type: 'string',
+					description: 'Optional repository/workspace path used to resolve and corroborate local project identity.',
+				},
 				memory_scope: { type: 'string', enum: ['global', 'project'], description: 'Optional memory scope override.' },
 				related_wiki: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],

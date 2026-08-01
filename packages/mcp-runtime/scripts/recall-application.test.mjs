@@ -8,7 +8,7 @@ import {
 	PUBLIC_TOOL_NAME_ORDER,
 	getContractByName,
 } from '@tracekeeper/contracts';
-import { scannedNoteFromContent } from '@tracekeeper/core';
+import { resolveScannedNoteEdges, scannedNoteFromContent } from '@tracekeeper/core';
 import {
 	LOCAL_TRUST_CAPABILITIES,
 	LOCAL_TRUST_PRINCIPAL_ID,
@@ -97,7 +97,7 @@ function buildNotes(vaultRoot) {
 			: `# Atlas source ${index + 1}\nsource evidence ${index + 1}.`,
 	}));
 
-	return [
+	const notes = [
 		atlasMemory,
 		...wikiNotes,
 		...sourceNotes,
@@ -163,6 +163,10 @@ function buildNotes(vaultRoot) {
 			}
 		)),
 	];
+	const resolvedByPath = new Map(
+		resolveScannedNoteEdges(notes).map((entry) => [entry.relativePath, entry])
+	);
+	return notes.map((entry) => resolvedByPath.get(entry.relativePath) ?? entry);
 }
 
 function createFixture(t, {
@@ -520,8 +524,21 @@ test('identity: canonical hint, stable id, repository, path-valued hint, conflic
 	}, context);
 	assert.equal(conflict.payload.project_identity.confidence, 'uncertain');
 	assert.equal(conflict.payload.uncertain, true);
+	assert.equal(conflict.payload.scope_mode, 'project');
+	assert.deepEqual(conflict.payload.entries, []);
 	assert.ok(conflict.payload.project_identity.warnings.includes('project_hint_conflicts_with_repo_path'));
 	assert.equal(conflict.payload.next_actions[0].reason_code, 'PROJECT_SCOPE_UNCERTAIN');
+	assert.ok(conflict.payload.candidate_notes.length > 0);
+
+	const conflictHistory = await successfulCall('tracekeeper.recall', {
+		scope: 'project_history',
+		query: 'betafixture',
+		project_hint: 'atlas',
+		repo_path: '/work/beta',
+	}, context);
+	assert.equal(conflictHistory.payload.uncertain, true);
+	assert.equal(conflictHistory.payload.total_matches, 0);
+	assert.deepEqual(conflictHistory.payload.entries, []);
 
 	const ambiguous = await successfulCall('tracekeeper.recall', {
 		scope: 'project',
@@ -530,6 +547,7 @@ test('identity: canonical hint, stable id, repository, path-valued hint, conflic
 	}, context);
 	assert.equal(ambiguous.payload.project_identity.confidence, 'uncertain');
 	assert.ok(ambiguous.payload.project_identity.warnings.includes('ambiguous_vault_project_identity'));
+	assert.deepEqual(ambiguous.payload.entries, []);
 
 	const unknown = await successfulCall('tracekeeper.recall', {
 		scope: 'project',
@@ -538,6 +556,7 @@ test('identity: canonical hint, stable id, repository, path-valued hint, conflic
 	assert.equal(unknown.payload.project_identity.source, 'unknown');
 	assert.equal(unknown.payload.project_identity.confidence, 'uncertain');
 	assert.equal(unknown.payload.uncertain, true);
+	assert.deepEqual(unknown.payload.entries, []);
 });
 
 test('snapshot: injected ready and rebuilding generations, scan errors, and provider invocation remain characterized', async (t) => {
@@ -567,6 +586,17 @@ test('snapshot: injected ready and rebuilding generations, scan errors, and prov
 	assert.equal(rebuildingResult.payload.recall.snapshot_generation, 12);
 	assert.match(rebuildingResult.payload.recall.snapshot_warning, /previous snapshot generation/);
 	assert.equal(rebuildingResult.payload.next_actions[0].reason_code, 'INDEX_REBUILDING');
+
+	const initializing = createFixture(t, {
+		indexState: 'initializing',
+		generation: 13,
+	});
+	const initializingResult = await successfulCall('tracekeeper.recall', {
+		query: 'globalfixture',
+	}, initializing.context);
+	assert.equal(initializingResult.payload.recall.index_state, 'initializing');
+	assert.equal(initializingResult.payload.recall.snapshot_generation, 13);
+	assert.match(initializingResult.payload.recall.snapshot_warning, /metadata is still initializing/);
 });
 
 test('snapshot and security: filesystem fallback excludes config and symlink content while returning Vault-relative match evidence', async (t) => {
@@ -662,6 +692,7 @@ test('relations and output: verified Wiki/Source evidence is deduplicated and bo
 	assert.match(match.why_matched, /^Project recall - matched tokens:/);
 	assert.ok(match.excerpt.length <= 480);
 	assert.equal(match.graph_links.length, 8);
+	assert.equal(match.graph_links[0], WIKI_PATHS[0]);
 	assert.equal(match.relation_evidence.related_wiki.length, 8);
 	assert.equal(match.relation_evidence.related_sources.length, 8);
 	assert.deepEqual(match.relation_evidence.related_wiki[0].declared_via, [
@@ -683,6 +714,147 @@ test('relations and output: verified Wiki/Source evidence is deduplicated and bo
 	}, context);
 	assert.equal(generated.payload.matches[0].path, '00_tracekeeper/work/tasks/atlas-task.md');
 	assert.equal(generated.payload.matches[0].content_origin, 'tracekeeper_generated');
+});
+
+test('shared edge authority: Recall graph links and relation evidence use the native resolved target and snapshot generation', async (t) => {
+	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-recall-native-edge-'));
+	t.after(() => fs.rmSync(vaultRoot, { recursive: true, force: true }));
+	const firstTargetPath = '01_knowledge/wiki/concepts/native-first.md';
+	const secondTargetPath = '01_knowledge/wiki/concepts/native-second.md';
+	const firstTarget = note(vaultRoot, firstTargetPath, {
+		content: '---\naliases: [Native Alias]\n---\n# First',
+	});
+	const secondTarget = note(vaultRoot, secondTargetPath, {
+		content: '---\naliases: [Native Alias]\n---\n# Second',
+	});
+	const parsedSource = note(vaultRoot, '01_knowledge/memory/projects/native/memory.md', {
+		content: [
+			'---',
+			'type: project-memory',
+			'related_wiki: "[[Native Alias#Native Heading]]"',
+			'---',
+			'# Native memory',
+			'nativeedgefixture [[Native Alias#^native-block]]',
+		].join('\n'),
+	});
+	const nativeEdges = parsedSource.edges.map((edge) => ({
+		...edge,
+		resolution: {
+			status: 'resolved',
+			path: firstTargetPath,
+			authority: 'native',
+		},
+	}));
+	const source = {
+		...parsedSource,
+		edges: nativeEdges,
+		wikilinks: nativeEdges,
+	};
+	const scan = {
+		vaultRoot,
+		scannedAt: '2026-07-30T00:00:00.000Z',
+		notes: [source, firstTarget, secondTarget],
+		errors: [],
+		index: {
+			index_state: 'ready',
+			generation: 17,
+			last_rebuild: '2026-07-30T00:00:00.000Z',
+		},
+	};
+	const context = {
+		defaultVaultRoot: vaultRoot,
+		principalId: LOCAL_TRUST_PRINCIPAL_ID,
+		credentialCapabilities: LOCAL_TRUST_CAPABILITIES,
+		agentId: 'recall-native-edge-agent',
+		sessionId: 'recall-native-edge-session',
+		clientName: 'recall-native-edge-client',
+		knowledgeSnapshotProvider: () => scan,
+	};
+	const { payload } = await successfulCall('tracekeeper.recall', {
+		query: 'nativeedgefixture',
+		max_items: 1,
+	}, context);
+	const match = payload.matches[0];
+	assert.equal(payload.recall.snapshot_generation, 17);
+	assert.deepEqual(new Set(match.graph_links), new Set([
+		`${firstTargetPath}#Native Heading`,
+		`${firstTargetPath}#^native-block`,
+	]));
+	assert.deepEqual(match.relation_evidence.related_wiki, [{
+		path: firstTargetPath,
+		declared_by: source.relativePath,
+		declared_via: ['frontmatter', 'body_wikilink'],
+		verified_by: 'active_vault_snapshot',
+	}]);
+	const graphHealth = await successfulCall('tracekeeper.graph_health', {
+		max_items: 20,
+	}, context);
+	assert.equal(graphHealth.payload.snapshot_generation, 17);
+	assert.equal(graphHealth.payload.resolved_edge_count, 2);
+	assert.equal(graphHealth.payload.unresolved_edge_count, 0);
+});
+
+test('shared edge authority: unresolved native edges are not reinterpreted by relation fallback', async (t) => {
+	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-recall-unresolved-edge-'));
+	t.after(() => fs.rmSync(vaultRoot, { recursive: true, force: true }));
+	const targetPath = '01_knowledge/wiki/concepts/native-present.md';
+	const target = note(vaultRoot, targetPath, {
+		content: '# Native present',
+	});
+	const parsedSource = note(vaultRoot, '01_knowledge/memory/projects/native/unresolved.md', {
+		content: [
+			'---',
+			'type: project-memory',
+			`related_wiki: "[[${targetPath}]]"`,
+			'---',
+			'# Native unresolved memory',
+			`nativeunresolvedfixture [[${targetPath}]]`,
+		].join('\n'),
+	});
+	const nativeEdges = parsedSource.edges.map((edge) => ({
+		...edge,
+		resolution: {
+			status: 'unresolved',
+			reason: 'native_unresolved',
+			authority: 'native',
+		},
+	}));
+	const source = {
+		...parsedSource,
+		edges: nativeEdges,
+		wikilinks: nativeEdges,
+	};
+	const scan = {
+		vaultRoot,
+		scannedAt: '2026-07-30T00:00:00.000Z',
+		notes: [source, target],
+		errors: [],
+		index: {
+			index_state: 'ready',
+			generation: 18,
+			last_rebuild: '2026-07-30T00:00:00.000Z',
+		},
+	};
+	const context = {
+		defaultVaultRoot: vaultRoot,
+		principalId: LOCAL_TRUST_PRINCIPAL_ID,
+		credentialCapabilities: LOCAL_TRUST_CAPABILITIES,
+		agentId: 'recall-unresolved-edge-agent',
+		sessionId: 'recall-unresolved-edge-session',
+		clientName: 'recall-unresolved-edge-client',
+		knowledgeSnapshotProvider: () => scan,
+	};
+	const { payload } = await successfulCall('tracekeeper.recall', {
+		query: 'nativeunresolvedfixture',
+		max_items: 1,
+	}, context);
+	const match = payload.matches[0];
+	assert.equal(payload.recall.snapshot_generation, 18);
+	assert.deepEqual(match.graph_links, []);
+	assert.deepEqual(match.relation_evidence, {
+		related_wiki: [],
+		related_sources: [],
+	});
 });
 
 test('workflow and output: zero-result behavior, stable recall correlation, bounded read action, data-only trust, and text/structured parity remain exact', async (t) => {

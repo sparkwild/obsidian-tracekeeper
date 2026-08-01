@@ -1,8 +1,26 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { resolveVaultRoot, ensureInsideVaultRoot } from './safety';
-import { scannedNoteFromContent, scanVault, type ScanResult, type ScannedNote } from './scan';
+import {
+	resolveScannedNoteEdges,
+	scannedNoteFromNormalized,
+	scannedNoteFromContent,
+	scanVault,
+	type ScanResult,
+	type ScannedNote,
+} from './scan';
+import {
+	cloneVaultFrontmatter,
+	NORMALIZED_VAULT_NOTE_VERSION,
+	normalizeVaultRelativePath,
+	resolveNormalizedVaultEdges,
+	type NormalizedVaultCallout,
+	type NormalizedVaultEdge,
+	type NormalizedVaultNote,
+	type NormalizedVaultSection,
+	type VaultSemanticEvent,
+} from './knowledge-note';
 
 export const KNOWLEDGE_INDEX_VERSION = '1.0';
 
@@ -16,6 +34,9 @@ export type VaultIndexEventKind = 'create' | 'modify' | 'delete' | 'rename';
 export interface VaultIndexEventBase {
 	path: VaultPath;
 	fileVersion: FileVersion;
+	sequence?: number;
+	exists?: boolean;
+	contentHash?: string;
 }
 
 export interface CreateVaultIndexEvent extends VaultIndexEventBase {
@@ -32,43 +53,33 @@ export interface DeleteVaultIndexEvent extends VaultIndexEventBase {
 
 export interface RenameVaultIndexEvent {
 	kind: 'rename';
-		path: VaultPath;
+	path: VaultPath;
 	newPath: VaultPath;
 	fileVersion: FileVersion;
+	sequence?: number;
+	exists?: boolean;
+	contentHash?: string;
 }
 
 export type VaultIndexEvent = CreateVaultIndexEvent | ModifyVaultIndexEvent | DeleteVaultIndexEvent | RenameVaultIndexEvent;
 
-export interface IndexedWikilink {
-	raw: string;
-	target: string;
-	alias?: string;
-	heading?: string;
-	line: number;
-}
+export interface IndexedWikilink extends NormalizedVaultEdge {}
 
-export interface IndexedKnowledgeNote {
+export interface IndexedKnowledgeNote extends NormalizedVaultNote {
 	path: VaultPath;
 	fileVersion: FileVersion;
-	title: string;
-	aliases: readonly string[];
 	type: string | null;
-	tags: readonly string[];
-	frontmatter: Readonly<Record<string, unknown>>;
-	headings: readonly string[];
-	blockIds: readonly string[];
 	wikilinks: readonly IndexedWikilink[];
 	backlinks: readonly VaultPath[];
 	searchTokens: readonly string[];
 	excerptSource: string;
-	contentHash: string;
-	modifiedAt: string;
-	size: number;
 }
 
 export interface KnowledgeGraphSnapshot {
 	outgoing: ReadonlyMap<VaultPath, readonly VaultPath[]>;
 	incoming: ReadonlyMap<VaultPath, readonly VaultPath[]>;
+	edges: readonly NormalizedVaultEdge[];
+	unresolvedEdges: readonly NormalizedVaultEdge[];
 }
 
 export interface KnowledgeScopeIndex {
@@ -80,6 +91,7 @@ export interface KnowledgeSnapshot {
 	version: string;
 	createdAt: string;
 	generation: number;
+	event_sequence: number;
 	index_state: KnowledgeIndexState;
 	notes: ReadonlyMap<VaultPath, IndexedKnowledgeNote>;
 	graph: KnowledgeGraphSnapshot;
@@ -91,6 +103,7 @@ export interface KnowledgeSnapshot {
 export interface KnowledgeIndexReport {
 	index_state: KnowledgeIndexState;
 	generation: number;
+	event_sequence: number;
 	note_count: number;
 	created_at: string;
 	warnings: readonly string[];
@@ -102,6 +115,7 @@ export interface KnowledgeIndex {
 	rebuild(scanResult?: ScanResult): Promise<KnowledgeIndexReport>;
 	apply(event: VaultIndexEvent): Promise<void>;
 	applyScanned(event: VaultIndexEvent, note?: ScannedNote | null): Promise<void>;
+	applySemantic(event: VaultSemanticEvent): Promise<void>;
 }
 
 export interface KnowledgeIndexOptions {
@@ -115,6 +129,7 @@ interface InternalKnowledgeState {
 	graph: KnowledgeGraphSnapshot;
 	scopes: KnowledgeScopeIndex;
 	generation: number;
+	eventSequence: number;
 	indexState: KnowledgeIndexState;
 	lastEvent: VaultIndexEvent | null;
 	lastRebuild: string | null;
@@ -129,12 +144,15 @@ const DEFAULT_INITIAL_STATE: InternalKnowledgeState = {
 	graph: {
 		outgoing: new Map(),
 		incoming: new Map(),
+		edges: [],
+		unresolvedEdges: [],
 	},
 	scopes: {
 		byType: new Map(),
 		byTag: new Map(),
 	},
 	generation: 0,
+	eventSequence: 0,
 	indexState: 'initializing',
 	lastEvent: null,
 	lastRebuild: null,
@@ -147,27 +165,35 @@ export function computeFileVersion(size: number, modifiedAt: string): FileVersio
 
 export function toIndexedKnowledgeNote(note: ScannedNote): IndexedKnowledgeNote {
 	return {
+		schemaVersion: NORMALIZED_VAULT_NOTE_VERSION,
 		path: note.relativePath,
+		exists: note.exists,
 		fileVersion: computeFileVersion(note.size, note.modifiedAt),
 		title: note.title,
-		aliases: note.aliases,
+		aliases: [...note.aliases],
 		type: note.type ?? null,
-		tags: note.tags,
-		frontmatter: { ...note.frontmatter },
+		tags: [...note.tags],
+		frontmatter: cloneVaultFrontmatter(note.frontmatter),
+		semanticErrors: [...note.semanticErrors],
 		headings: [...note.headings],
 		blockIds: [...note.blockIds],
+		sections: note.sections.map(cloneSection),
+		callouts: note.callouts.map(cloneCallout),
+		edges: note.edges.map(cloneEdge),
 		wikilinks: note.wikilinks.map((item) => ({ ...item })),
 		backlinks: [],
 		searchTokens: note.tokens.split(/\s+/).filter(Boolean),
 		excerptSource: note.content.slice(0, SNIPPET_MAX_LENGTH).trim(),
-		contentHash: createHash('sha256').update(note.content, 'utf8').digest('hex'),
+		contentHash: note.contentHash,
+		text: note.text,
+		content: note.content,
 		modifiedAt: note.modifiedAt,
 		size: note.size,
 	};
 }
 
 function normalizeVaultPath(value: string): string {
-	return value.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/g, '');
+	return normalizeVaultRelativePath(value);
 }
 
 function cloneIndexMap<T>(input: ReadonlyMap<string, readonly T[]>): ReadonlyMap<string, readonly T[]> {
@@ -183,31 +209,119 @@ function cloneNote(note: IndexedKnowledgeNote): IndexedKnowledgeNote {
 		...note,
 		aliases: [...note.aliases],
 		tags: [...note.tags],
-		frontmatter: { ...note.frontmatter },
+		frontmatter: cloneVaultFrontmatter(note.frontmatter),
+		semanticErrors: [...note.semanticErrors],
 		headings: [...note.headings],
 		blockIds: [...note.blockIds],
-		wikilinks: note.wikilinks.map((item) => ({ ...item })),
+		sections: note.sections.map(cloneSection),
+		callouts: note.callouts.map(cloneCallout),
+		edges: note.edges.map(cloneEdge),
+		wikilinks: note.wikilinks.map(cloneEdge),
 		backlinks: [...note.backlinks],
 		searchTokens: [...note.searchTokens],
 	};
 }
 
+function hasSameSemanticState(left: IndexedKnowledgeNote, right: IndexedKnowledgeNote): boolean {
+	return isDeepStrictEqual(
+		{
+			schemaVersion: left.schemaVersion,
+			path: left.path,
+			exists: left.exists,
+			contentHash: left.contentHash,
+			title: left.title,
+			aliases: left.aliases,
+			type: left.type,
+			frontmatter: left.frontmatter,
+			semanticErrors: left.semanticErrors,
+			tags: left.tags,
+			headings: left.headings,
+			blockIds: left.blockIds,
+			sections: left.sections,
+			callouts: left.callouts,
+			edges: left.edges,
+			text: left.text,
+			content: left.content,
+		},
+		{
+			schemaVersion: right.schemaVersion,
+			path: right.path,
+			exists: right.exists,
+			contentHash: right.contentHash,
+			title: right.title,
+			aliases: right.aliases,
+			type: right.type,
+			frontmatter: right.frontmatter,
+			semanticErrors: right.semanticErrors,
+			tags: right.tags,
+			headings: right.headings,
+			blockIds: right.blockIds,
+			sections: right.sections,
+			callouts: right.callouts,
+			edges: right.edges,
+			text: right.text,
+			content: right.content,
+		}
+	);
+}
+
 function cloneScannedNote(note: ScannedNote): ScannedNote {
 	return {
 		...note,
-		frontmatter: { ...note.frontmatter },
+		frontmatter: cloneVaultFrontmatter(note.frontmatter),
+		semanticErrors: [...note.semanticErrors],
 		aliases: [...note.aliases],
 		tags: [...note.tags],
 		headings: [...note.headings],
 		blockIds: [...note.blockIds],
-		wikilinks: note.wikilinks.map((item) => ({ ...item })),
-		claimBlocks: note.claimBlocks.map((item) => ({ ...item })),
-		evidenceBlocks: note.evidenceBlocks.map((item) => ({ ...item })),
+		sections: note.sections.map(cloneSection),
+		callouts: note.callouts.map(cloneCallout),
+		edges: note.edges.map(cloneEdge),
+		wikilinks: note.wikilinks.map(cloneEdge),
+		claimBlocks: note.claimBlocks.map(cloneCallout),
+		evidenceBlocks: note.evidenceBlocks.map(cloneCallout),
 	};
 }
 
 function scanNotesByPath(notes: readonly ScannedNote[]): Map<VaultPath, ScannedNote> {
-	return new Map(notes.map((note) => [normalizeVaultPath(note.relativePath), cloneScannedNote(note)]));
+	return new Map(
+		resolveScannedNoteEdges(notes).map((note) => [
+			normalizeVaultPath(note.relativePath),
+			cloneScannedNote(note),
+		])
+	);
+}
+
+function cloneEdge<T extends NormalizedVaultEdge>(edge: T): T {
+	return {
+		...edge,
+		position: {
+			start: { ...edge.position.start },
+			end: { ...edge.position.end },
+		},
+		resolution: { ...edge.resolution },
+	};
+}
+
+function cloneSection<T extends NormalizedVaultSection>(section: T): T {
+	return {
+		...section,
+		position: {
+			start: { ...section.position.start },
+			end: { ...section.position.end },
+		},
+	};
+}
+
+function cloneCallout<T extends NormalizedVaultCallout>(callout: T): T {
+	return {
+		...callout,
+		sourceRefs: [...callout.sourceRefs],
+		position: {
+			start: { ...callout.position.start },
+			end: { ...callout.position.end },
+		},
+	};
 }
 
 function snapshotToReadonly(state: InternalKnowledgeState): KnowledgeSnapshot {
@@ -215,18 +329,25 @@ function snapshotToReadonly(state: InternalKnowledgeState): KnowledgeSnapshot {
 		version: KNOWLEDGE_INDEX_VERSION,
 		createdAt: state.createdAt,
 		generation: state.generation,
+		event_sequence: state.eventSequence,
 		index_state: state.indexState,
 		notes: new Map(Array.from(state.notes.entries()).map(([notePath, note]) => [notePath, cloneNote(note)])),
-		graph: {
-			outgoing: cloneIndexMap(state.graph.outgoing),
-			incoming: cloneIndexMap(state.graph.incoming),
-		},
+		graph: cloneGraph(state.graph),
 		scopes: {
 			byType: cloneIndexMap(state.scopes.byType),
 			byTag: cloneIndexMap(state.scopes.byTag),
 		},
 		last_event: state.lastEvent ? { ...state.lastEvent } : null,
 		last_rebuild: state.lastRebuild,
+	};
+}
+
+function cloneGraph(graph: KnowledgeGraphSnapshot): KnowledgeGraphSnapshot {
+	return {
+		outgoing: cloneIndexMap(graph.outgoing),
+		incoming: cloneIndexMap(graph.incoming),
+		edges: graph.edges.map(cloneEdge),
+		unresolvedEdges: graph.unresolvedEdges.map(cloneEdge),
 	};
 }
 
@@ -237,6 +358,8 @@ function mergeAndSortUnique(items: readonly string[]): string[] {
 function buildKnowledgeGraph(notes: ReadonlyMap<VaultPath, IndexedKnowledgeNote>): KnowledgeGraphSnapshot {
 	const outgoing = new Map<string, Set<string>>();
 	const incoming = new Map<string, Set<string>>();
+	const edges: NormalizedVaultEdge[] = [];
+	const unresolvedEdges: NormalizedVaultEdge[] = [];
 
 	for (const notePath of notes.keys()) {
 		outgoing.set(notePath, new Set());
@@ -244,26 +367,41 @@ function buildKnowledgeGraph(notes: ReadonlyMap<VaultPath, IndexedKnowledgeNote>
 	}
 
 	for (const [notePath, note] of notes.entries()) {
-		for (const link of note.wikilinks) {
-			const target = normalizeVaultPath(link.target);
-			if (!target) {
+		for (const link of note.edges) {
+			if (
+				link.resolution.status !== 'resolved'
+				|| (
+					!notes.has(link.resolution.path)
+					&& link.resolution.authority !== 'native'
+				)
+			) {
+				unresolvedEdges.push(
+					link.resolution.status === 'resolved'
+						? {
+								...cloneEdge(link),
+								resolution: {
+									status: 'unresolved',
+									reason: 'not_found',
+									authority: link.resolution.authority,
+								},
+						  }
+						: cloneEdge(link)
+				);
 				continue;
 			}
+			const target = link.resolution.path;
 			const outgoingTargets = outgoing.get(notePath);
 			if (!outgoingTargets) {
 				continue;
 			}
 
+			edges.push(cloneEdge(link));
 			outgoingTargets.add(target);
-			let backlinksForTarget = incoming.get(target);
-			if (!backlinksForTarget) {
-				backlinksForTarget = new Set();
-				incoming.set(target, backlinksForTarget);
-			}
-			backlinksForTarget.add(notePath);
-
-			if (!notes.has(target)) {
-				outgoingTargets.delete(target);
+			const backlinksForTarget = incoming.get(target);
+			if (backlinksForTarget) {
+				backlinksForTarget.add(notePath);
+			} else {
+				incoming.set(target, new Set([notePath]));
 			}
 		}
 	}
@@ -279,7 +417,44 @@ function buildKnowledgeGraph(notes: ReadonlyMap<VaultPath, IndexedKnowledgeNote>
 				Array.from(incoming.entries()).map(([toPath, fromPaths]) => [toPath, mergeAndSortUnique(Array.from(fromPaths))])
 			)
 		),
+		edges: edges.sort(compareGraphEdges),
+		unresolvedEdges: unresolvedEdges.sort(compareGraphEdges),
 	};
+}
+
+function compareGraphEdges(left: NormalizedVaultEdge, right: NormalizedVaultEdge): number {
+	return (
+		(left.sourcePath ?? '').localeCompare(right.sourcePath ?? '') ||
+		left.position.start.offset - right.position.start.offset ||
+		left.raw.localeCompare(right.raw)
+	);
+}
+
+function resolveIndexedNoteEdges(
+	notes: ReadonlyMap<VaultPath, IndexedKnowledgeNote>
+): Map<VaultPath, IndexedKnowledgeNote> {
+	const resolved = resolveNormalizedVaultEdges(
+		Array.from(notes.values()).map((note) => ({
+			path: note.path,
+			title: note.title,
+			aliases: note.aliases,
+			edges: note.edges,
+		}))
+	);
+	const result = new Map<VaultPath, IndexedKnowledgeNote>();
+	for (const notePath of [...notes.keys()].sort()) {
+		const note = notes.get(notePath);
+		if (!note) {
+			continue;
+		}
+		const edges = (resolved.get(notePath) ?? note.edges).map(cloneEdge);
+		result.set(notePath, {
+			...cloneNote(note),
+			edges,
+			wikilinks: edges,
+		});
+	}
+	return result;
 }
 
 function buildScopeIndex(notes: ReadonlyMap<VaultPath, IndexedKnowledgeNote>): KnowledgeScopeIndex {
@@ -355,33 +530,37 @@ function readNoteFromVault(vaultRoot: string, notePath: VaultPath): ScannedNote 
 	});
 }
 
-export function buildKnowledgeSnapshot(scanResult: ScanResult, options: { indexState?: KnowledgeIndexState; generation?: number; lastEvent?: VaultIndexEvent | null; lastRebuild?: string | null } = {}): KnowledgeSnapshot {
+export function buildKnowledgeSnapshot(
+	scanResult: ScanResult,
+	options: {
+		indexState?: KnowledgeIndexState;
+		generation?: number;
+		eventSequence?: number;
+		lastEvent?: VaultIndexEvent | null;
+		lastRebuild?: string | null;
+	} = {}
+): KnowledgeSnapshot {
 	const notesByPath = new Map<string, IndexedKnowledgeNote>();
-	for (const scannedNote of scanResult.notes) {
-		notesByPath.set(scannedNote.relativePath, toIndexedKnowledgeNote(scannedNote));
+	for (const scannedNote of [...scanResult.notes].sort((left, right) =>
+		left.relativePath.localeCompare(right.relativePath)
+	)) {
+		const normalizedPath = normalizeVaultPath(scannedNote.relativePath);
+		notesByPath.set(normalizedPath, toIndexedKnowledgeNote(scannedNote));
 	}
 
-	const graph = buildKnowledgeGraph(notesByPath);
-	const scopes = buildScopeIndex(notesByPath);
-	const notes = new Map<string, IndexedKnowledgeNote>();
-	for (const [notePath, note] of notesByPath.entries()) {
-		const backlinks = graph.incoming.get(notePath) ?? [];
-		notes.set(notePath, {
-			...note,
-			backlinks,
-		});
-	}
+	const resolvedNotes = resolveIndexedNoteEdges(notesByPath);
+	const graph = buildKnowledgeGraph(resolvedNotes);
+	const notes = enrichNoteBacklinks(resolvedNotes, graph);
+	const scopes = buildScopeIndex(notes);
 
 	return {
 		version: KNOWLEDGE_INDEX_VERSION,
 		createdAt: scanResult.scannedAt,
 		generation: options.generation ?? 0,
+		event_sequence: options.eventSequence ?? scanResult.index?.event_sequence ?? 0,
 		index_state: options.indexState ?? 'ready',
 		notes,
-		graph: {
-			outgoing: cloneIndexMap(graph.outgoing),
-			incoming: cloneIndexMap(graph.incoming),
-		},
+		graph: cloneGraph(graph),
 		scopes,
 		last_event: options.lastEvent ? { ...options.lastEvent } : null,
 		last_rebuild: options.lastRebuild ?? null,
@@ -436,12 +615,15 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			graph: {
 				outgoing: new Map(),
 				incoming: new Map(),
+				edges: [],
+				unresolvedEdges: [],
 			},
 			scopes: {
 				byType: new Map(),
 				byTag: new Map(),
 			},
 			generation: 0,
+			eventSequence: 0,
 			indexState: 'initializing',
 			lastEvent: null,
 			lastRebuild: null,
@@ -472,6 +654,7 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			index: {
 				index_state: this.state.indexState,
 				generation: this.state.generation,
+				event_sequence: this.state.eventSequence,
 				last_rebuild: this.state.lastRebuild,
 			},
 		};
@@ -488,17 +671,15 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			const built = rebuildFromState(this.vaultRoot, this.vaultConfigDir, sourceScan);
 			const withBacklinks = enrichNoteBacklinks(built.notes, built.graph);
 			const scopes = buildScopeIndex(withBacklinks);
-			const graph = {
-				outgoing: cloneIndexMap(built.graph.outgoing),
-				incoming: cloneIndexMap(built.graph.incoming),
-			};
+			const graph = cloneGraph(built.graph);
 			const generation = this.state.generation + 1;
 
 			this.state = {
 				notes: withBacklinks,
-				graph: graph,
+				graph,
 				scopes,
 				generation,
+				eventSequence: this.state.eventSequence,
 				indexState: 'ready',
 				lastEvent: this.state.lastEvent,
 				lastRebuild: built.lastRebuild,
@@ -510,6 +691,7 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			return {
 				index_state: this.state.indexState,
 				generation,
+				event_sequence: this.state.eventSequence,
 				note_count: this.state.notes.size,
 				created_at: this.state.createdAt,
 				warnings: [],
@@ -527,10 +709,81 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 		await this.applyScanned(normalized, note);
 	}
 
+	async applySemantic(event: VaultSemanticEvent): Promise<void> {
+		if (
+			event.schemaVersion !== NORMALIZED_VAULT_NOTE_VERSION ||
+			!Number.isSafeInteger(event.sequence) ||
+			event.sequence <= 0
+		) {
+			throw new Error('Vault semantic event must use the current schema and a positive sequence.');
+		}
+		if (event.kind === 'delete' && event.exists) {
+			throw new Error('Delete semantic events must report a missing note.');
+		}
+		if ((event.kind === 'create' || event.kind === 'modify') && (!event.exists || !event.note)) {
+			throw new Error(`${event.kind} semantic events must include the current note.`);
+		}
+		if (event.kind === 'rename' && !event.newPath) {
+			throw new Error('Rename semantic events must include a new path.');
+		}
+		if (
+			event.kind === 'rename' &&
+			event.exists &&
+			isMarkdownPath(event.newPath!) &&
+			!event.note
+		) {
+			throw new Error('Markdown rename semantic events must include the current target note.');
+		}
+		if (event.note && event.contentHash !== event.note.contentHash) {
+			throw new Error('Vault semantic event content hash must match its note.');
+		}
+
+		const note = event.note ? scannedNoteFromNormalized(event.note, this.vaultRoot) : null;
+		const fileVersion = note ? computeFileVersion(note.size, note.modifiedAt) : '';
+		const compatibilityEvent: VaultIndexEvent = event.kind === 'rename'
+			? {
+					kind: 'rename',
+					path: event.path,
+					newPath: event.newPath!,
+					fileVersion,
+					sequence: event.sequence,
+					exists: event.exists,
+					contentHash: event.contentHash,
+			  }
+			: {
+					kind: event.kind,
+					path: event.path,
+					fileVersion,
+					sequence: event.sequence,
+					exists: event.exists,
+					contentHash: event.contentHash,
+			  };
+		await this.applyScanned(compatibilityEvent, note);
+	}
+
+	async advanceEventSequenceAfterRebuild(sequence: number): Promise<void> {
+		if (!Number.isSafeInteger(sequence) || sequence <= 0) {
+			throw new Error('Rebuild event sequence must be a positive safe integer.');
+		}
+		await this.enqueueWrite(async () => {
+			if (sequence > this.state.eventSequence) {
+				this.state.eventSequence = sequence;
+			}
+		});
+	}
+
 	async applyScanned(event: VaultIndexEvent, note?: ScannedNote | null): Promise<void> {
 		await this.enqueueWrite(async () => {
 			const now = new Date().toISOString();
 			const normalized = normalizeVaultEvent(event);
+			if (
+				normalized.sequence !== undefined &&
+				(!Number.isSafeInteger(normalized.sequence) ||
+					normalized.sequence <= 0 ||
+					normalized.sequence <= this.state.eventSequence)
+			) {
+				return;
+			}
 
 			let changed = false;
 			if (normalized.kind === 'create' || normalized.kind === 'modify') {
@@ -540,6 +793,7 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			} else {
 				changed = await this.applyRename(normalized, note ?? null);
 			}
+			this.clearRecoveredSourceErrors(normalized, note ?? null);
 
 			if (changed) {
 				this.state.lastEvent = {
@@ -548,6 +802,13 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 				};
 				this.state.createdAt = now;
 				this.state.generation += 1;
+				this.state.eventSequence = normalized.sequence ?? this.state.eventSequence + 1;
+			} else if (normalized.sequence !== undefined) {
+				this.state.lastEvent = {
+					...normalized,
+					path: normalizeVaultPath(normalized.path),
+				};
+				this.state.eventSequence = normalized.sequence;
 			}
 		});
 	}
@@ -565,46 +826,75 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 		return next;
 	}
 
+	private clearRecoveredSourceErrors(event: VaultIndexEvent, note: ScannedNote | null): void {
+		const recoveredPaths = new Set<string>();
+		const eventPath = normalizeVaultPath(event.path);
+		if (event.kind === 'delete') {
+			recoveredPaths.add(eventPath);
+		} else if (event.kind === 'create' || event.kind === 'modify') {
+			if (
+				note &&
+				event.exists !== false &&
+				normalizeVaultPath(note.relativePath) === eventPath &&
+				(!event.contentHash || event.contentHash === note.contentHash)
+			) {
+				recoveredPaths.add(eventPath);
+			}
+		} else {
+			const targetPath = normalizeVaultPath(event.newPath);
+			if (!note && (event.exists === false || !isMarkdownPath(targetPath))) {
+				recoveredPaths.add(eventPath);
+			} else if (
+				note &&
+				normalizeVaultPath(note.relativePath) === targetPath &&
+				(!event.contentHash || event.contentHash === note.contentHash)
+			) {
+				recoveredPaths.add(eventPath);
+				recoveredPaths.add(targetPath);
+			}
+		}
+		if (recoveredPaths.size > 0) {
+			this.sourceErrors = this.sourceErrors.filter((error) => {
+				const errorPath = normalizeScanErrorPath(this.vaultRoot, error.path);
+				return !errorPath || !recoveredPaths.has(errorPath);
+			});
+		}
+	}
+
 	private applyCreateOrModify(event: CreateVaultIndexEvent | ModifyVaultIndexEvent, suppliedNote: ScannedNote | null): Promise<boolean> {
 		return Promise.resolve().then(() => {
 			const normalizedPath = normalizeVaultPath(event.path);
 			const existing = this.state.notes.get(normalizedPath);
-			if (existing && event.fileVersion && existing.fileVersion === event.fileVersion) {
+			const scanned = suppliedNote;
+			if (!scanned || event.exists === false) {
 				return false;
 			}
-			const scanned = suppliedNote;
-			if (!scanned) {
+			if (normalizeVaultPath(scanned.relativePath) !== normalizedPath) {
 				return false;
 			}
 
 			const indexed = toIndexedKnowledgeNote(scanned);
-			if (event.fileVersion && indexed.fileVersion !== event.fileVersion) {
-				if (existing && existing.fileVersion === indexed.fileVersion) {
-					return false;
-				}
+			if (event.contentHash && indexed.contentHash !== event.contentHash) {
 				return false;
 			}
-			if (existing && existing.fileVersion === indexed.fileVersion) {
+			const candidateNotes = new Map(this.state.notes);
+			candidateNotes.set(normalizedPath, indexed);
+			const resolvedCandidate = resolveIndexedNoteEdges(candidateNotes).get(normalizedPath);
+			if (existing && resolvedCandidate && hasSameSemanticState(existing, resolvedCandidate)) {
 				return false;
 			}
-			if (existing && Date.parse(indexed.modifiedAt) < Date.parse(existing.modifiedAt)) {
+			if (
+				event.sequence === undefined &&
+				existing &&
+				Date.parse(indexed.modifiedAt) < Date.parse(existing.modifiedAt)
+			) {
 				return false;
 			}
 
 			const nextNotes = new Map(this.state.notes);
 			nextNotes.set(normalizedPath, indexed);
 			this.sourceNotes.set(normalizedPath, cloneScannedNote(scanned));
-			const graph = buildKnowledgeGraph(nextNotes);
-			const nextWithBacklinks = enrichNoteBacklinks(nextNotes, graph);
-			this.state.notes = nextWithBacklinks;
-			this.state.graph = graph;
-			this.state.scopes = buildScopeIndex(nextWithBacklinks);
-			this.state.lastEvent = {
-				kind: event.kind,
-				path: normalizedPath,
-				fileVersion: indexed.fileVersion,
-			};
-			this.state.createdAt = new Date().toISOString();
+			this.updateDerivedState(nextNotes);
 			return true;
 		});
 	}
@@ -617,24 +907,10 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 				return false;
 			}
 
-			if (event.fileVersion && existing.fileVersion !== event.fileVersion) {
-				return false;
-			}
-
 			const nextNotes = new Map(this.state.notes);
 			nextNotes.delete(normalizedPath);
 			this.sourceNotes.delete(normalizedPath);
-			const graph = buildKnowledgeGraph(nextNotes);
-			const nextWithBacklinks = enrichNoteBacklinks(nextNotes, graph);
-			this.state.notes = nextWithBacklinks;
-			this.state.graph = graph;
-			this.state.scopes = buildScopeIndex(nextWithBacklinks);
-			this.state.lastEvent = {
-				kind: 'delete',
-				path: normalizedPath,
-				fileVersion: existing.fileVersion,
-			};
-			this.state.createdAt = new Date().toISOString();
+			this.updateDerivedState(nextNotes);
 			return true;
 		});
 	}
@@ -646,23 +922,41 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			const existingSource = this.state.notes.get(fromPath);
 			const scannedTarget = suppliedNote;
 			if (!scannedTarget) {
+				if (existingSource && (!isMarkdownPath(toPath) || event.exists === false)) {
+					const nextNotes = new Map(this.state.notes);
+					nextNotes.delete(fromPath);
+					this.sourceNotes.delete(fromPath);
+					this.updateDerivedState(nextNotes);
+					return true;
+				}
+				return false;
+			}
+			if (normalizeVaultPath(scannedTarget.relativePath) !== toPath) {
 				return false;
 			}
 
 			const indexedTarget = toIndexedKnowledgeNote(scannedTarget);
-			if (event.fileVersion && indexedTarget.fileVersion !== event.fileVersion) {
-				if (this.state.notes.get(toPath)?.fileVersion === event.fileVersion) {
-					return false;
-				}
+			if (event.contentHash && indexedTarget.contentHash !== event.contentHash) {
 				return false;
 			}
 
 			if (!existingSource) {
 				const existingTarget = this.state.notes.get(toPath);
-				if (existingTarget && existingTarget.fileVersion === indexedTarget.fileVersion) {
+				const candidateNotes = new Map(this.state.notes);
+				candidateNotes.set(toPath, indexedTarget);
+				const resolvedCandidate = resolveIndexedNoteEdges(candidateNotes).get(toPath);
+				if (
+					existingTarget &&
+					resolvedCandidate &&
+					hasSameSemanticState(existingTarget, resolvedCandidate)
+				) {
 					return false;
 				}
-				if (existingTarget && Date.parse(indexedTarget.modifiedAt) < Date.parse(existingTarget.modifiedAt)) {
+				if (
+					event.sequence === undefined &&
+					existingTarget &&
+					Date.parse(indexedTarget.modifiedAt) < Date.parse(existingTarget.modifiedAt)
+				) {
 					return false;
 				}
 			}
@@ -675,20 +969,19 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			nextNotes.set(toPath, indexedTarget);
 			this.sourceNotes.set(toPath, cloneScannedNote(scannedTarget));
 
-			const graph = buildKnowledgeGraph(nextNotes);
-			const nextWithBacklinks = enrichNoteBacklinks(nextNotes, graph);
-			this.state.notes = nextWithBacklinks;
-			this.state.graph = graph;
-			this.state.scopes = buildScopeIndex(nextWithBacklinks);
-			this.state.lastEvent = {
-				kind: 'rename',
-				path: fromPath,
-				newPath: toPath,
-				fileVersion: indexedTarget.fileVersion,
-			};
-			this.state.createdAt = new Date().toISOString();
+			this.updateDerivedState(nextNotes);
 			return true;
 		});
+	}
+
+	private updateDerivedState(notes: Map<VaultPath, IndexedKnowledgeNote>): void {
+		const resolvedNotes = resolveIndexedNoteEdges(notes);
+		const graph = buildKnowledgeGraph(resolvedNotes);
+		const withBacklinks = enrichNoteBacklinks(resolvedNotes, graph);
+		this.state.notes = withBacklinks;
+		this.state.graph = graph;
+		this.state.scopes = buildScopeIndex(withBacklinks);
+		this.sourceNotes = scanNotesByPath([...this.sourceNotes.values()]);
 	}
 
 	private toMutableState(snapshot: KnowledgeSnapshot): InternalKnowledgeState {
@@ -697,12 +990,15 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			graph: {
 				outgoing: new Map(snapshot.graph.outgoing),
 				incoming: new Map(snapshot.graph.incoming),
+				edges: snapshot.graph.edges.map(cloneEdge),
+				unresolvedEdges: snapshot.graph.unresolvedEdges.map(cloneEdge),
 			},
 			scopes: {
 				byType: new Map(snapshot.scopes.byType),
 				byTag: new Map(snapshot.scopes.byTag),
 			},
 			generation: snapshot.generation,
+			eventSequence: snapshot.event_sequence,
 			indexState: snapshot.index_state,
 			lastEvent: snapshot.last_event,
 			lastRebuild: snapshot.last_rebuild,
@@ -714,10 +1010,9 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 function normalizeVaultEvent(event: VaultIndexEvent): VaultIndexEvent {
 	if (event.kind === 'rename') {
 		return {
-			kind: 'rename',
+			...event,
 			path: normalizeVaultPath(event.path),
 			newPath: normalizeVaultPath(event.newPath),
-			fileVersion: event.fileVersion,
 		};
 	}
 
@@ -725,4 +1020,19 @@ function normalizeVaultEvent(event: VaultIndexEvent): VaultIndexEvent {
 		...event,
 		path: normalizeVaultPath(event.path),
 	};
+}
+
+function isMarkdownPath(notePath: string): boolean {
+	return NOTES_EXTENSIONS.has(path.posix.extname(notePath).toLowerCase());
+}
+
+function normalizeScanErrorPath(vaultRoot: string, errorPath: string): string | null {
+	try {
+		const candidate = path.isAbsolute(errorPath)
+			? path.relative(vaultRoot, errorPath).replace(/\\/g, '/')
+			: errorPath;
+		return normalizeVaultPath(candidate);
+	} catch {
+		return null;
+	}
 }

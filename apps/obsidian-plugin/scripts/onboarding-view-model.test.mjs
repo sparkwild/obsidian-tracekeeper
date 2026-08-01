@@ -161,6 +161,7 @@ try {
 		onboarding: { ...base, selectedClientId: 'cursor', clientConfiguredAt: '2026-07-23T00:00:00.000Z', skillUserConfirmedAt: '2026-07-23T00:00:00.000Z' },
 	});
 	assert.equal(selfAttested.skillSetupConfirmed, true);
+	assert.equal(selfAttested.clientConfigured, true);
 	assert.equal(selfAttested.skillFileVerified, false);
 	assert.equal(selfAttested.skillUserConfirmed, true);
 

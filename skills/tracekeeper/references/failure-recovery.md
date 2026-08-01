@@ -9,6 +9,8 @@
 | Project scope is uncertain | Inspect candidates and ask or narrow deliberately | Select a project at random |
 | Start returns no `task_id` | Do not call finish; report that safe closeout is unavailable | Invent or reuse an unrelated task identifier |
 | Idempotency conflict | Preserve and report the original result | Change the key to duplicate a write |
+| Project-memory exact retry | Reuse the returned immutable entry receipt | Create a second key or append to legacy `memory.md` |
+| Project-memory catalog cursor is stale | Restart enumeration from the first page of the current generation | Mix pages from different generations |
 | Missing Wiki bridge | Accept review-queue routing | Bypass review with an automatic write |
 | Proposal pending | Report that human review is pending | Describe it as approved or durable memory |
 | Proposal approved | Apply only when the user explicitly requests it | Auto-approve or auto-apply |

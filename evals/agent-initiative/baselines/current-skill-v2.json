@@ -1,16 +1,16 @@
 {
 	"baseline_id": "current-skill-v2-static-characterization",
 	"kind": "static_skill_characterization",
-	"tracekeeper_version": "0.2.4",
+	"tracekeeper_version": "0.3.0",
 	"skill_path": "skills/tracekeeper/SKILL.md",
-	"skill_sha256": "33748e871b97d0b039780cacd2ee8e7f2414e74eed701dd0689c16f3bca78b9c",
+	"skill_sha256": "2388dcb42f4052bb4b64793f20f45ab79c17a5661665cbba2165de115686db6d",
 	"skill_sources": [
-		{ "path": "skills/tracekeeper/SKILL.md", "sha256": "33748e871b97d0b039780cacd2ee8e7f2414e74eed701dd0689c16f3bca78b9c" },
+		{ "path": "skills/tracekeeper/SKILL.md", "sha256": "2388dcb42f4052bb4b64793f20f45ab79c17a5661665cbba2165de115686db6d" },
 		{ "path": "skills/tracekeeper/references/closeout-fields.md", "sha256": "67c19a831ca9407602f8bf184f1ccfe9cb7ca736007645c8d84f3080f7bd0213" },
-		{ "path": "skills/tracekeeper/references/failure-recovery.md", "sha256": "2b95aef2ffdf4af49fd4344a30ea13e32f789b895777bbb406ec61542ffac597" },
+		{ "path": "skills/tracekeeper/references/failure-recovery.md", "sha256": "2a934ad8bd40dae3574f072d134bd27d75974dadc469d2bd4086acc11af770c5" },
 		{ "path": "skills/tracekeeper/references/ingestion-workflow.md", "sha256": "30bf0205dd2a3e8036d504312c56346a75e3a4f192a901f6dbfc9b4c5de06306" },
 		{ "path": "skills/tracekeeper/references/instruction-isolation.md", "sha256": "2bf2f2f047bba9a968d2ca841029f130c12a9829e2e294e3b8d56659fd8c9357" },
-		{ "path": "skills/tracekeeper/references/workflow-state-machine.md", "sha256": "34d9a52169cbfb9dd75ea9d43961c79ccb8c97cc45c64959697d06571cfa4cae" }
+		{ "path": "skills/tracekeeper/references/workflow-state-machine.md", "sha256": "c1da593ac52b6334668a1598db2bac8d65ab1f79f23f94ea6961588d35866bfc" }
 	],
 	"scenario_count": 37,
 	"trace_generator": "evals/agent-initiative/evaluator/current-skill-v2.mjs",
@@ -23,6 +23,6 @@
 		"average_score": 100,
 		"passed_count": 37,
 		"failed_scenario_ids": [],
-		"report_sha256": "e07e3e2c2cd528cd892a1bf3d9f0d375141a625dc93b40d2e13c3d45de72b880"
+		"report_sha256": "ddf4e1f085905d9007fe880695ee2633159e3a2ba720669ed47a4406a9637824"
 	}
 }

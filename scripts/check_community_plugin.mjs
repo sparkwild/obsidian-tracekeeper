@@ -9,6 +9,11 @@ const VERSIONS_PATH = 'versions.json';
 const RELEASE_WORKFLOW_PATH = '.github/workflows/release.yml';
 const MCP_HANDLER_PATH = 'packages/mcp-runtime/src/handler.ts';
 const PLUGIN_MAIN_PATH = 'apps/obsidian-plugin/src/main.ts';
+const CODEX_SAFE_VERIFY_PATH = 'scripts/verify_codex_safe.sh';
+const EXTERNAL_LOOPBACK_QA_PATH = 'scripts/qa_external_loopback.sh';
+const ROOT_PACKAGE_PATH = 'package.json';
+const RUNTIME_PACKAGE_PATH = 'packages/mcp-runtime/package.json';
+const MCP_SERVER_PACKAGE_PATH = 'apps/mcp-server/package.json';
 
 function readJson(path) {
 	return JSON.parse(fs.readFileSync(path, 'utf8'));
@@ -32,6 +37,11 @@ function main() {
 	const releaseWorkflow = fs.readFileSync(RELEASE_WORKFLOW_PATH, 'utf8');
 	const mcpHandler = fs.readFileSync(MCP_HANDLER_PATH, 'utf8');
 	const pluginMain = fs.readFileSync(PLUGIN_MAIN_PATH, 'utf8');
+	const codexSafeVerify = fs.readFileSync(CODEX_SAFE_VERIFY_PATH, 'utf8');
+	const externalLoopbackQa = fs.readFileSync(EXTERNAL_LOOPBACK_QA_PATH, 'utf8');
+	const rootPackage = readJson(ROOT_PACKAGE_PATH);
+	const runtimePackage = readJson(RUNTIME_PACKAGE_PATH);
+	const mcpServerPackage = readJson(MCP_SERVER_PACKAGE_PATH);
 	const communityEntry = {
 		id: manifest.id,
 		name: manifest.name,
@@ -76,13 +86,46 @@ function main() {
 	assert(mcpHandler.includes(`MCP_SERVER_VERSION = '${manifest.version}'`), 'MCP server version constant must match root manifest.');
 	assert(pluginMain.includes('StreamableHttpMcpRuntime'), 'Plugin must compose the shared MCP runtime package.');
 	assert(releaseWorkflow.includes('workflow_dispatch:'), 'Release workflow must support manually rebuilding an existing community release.');
+	assert(releaseWorkflow.includes('publish:'), 'Release workflow must expose an explicit publish decision for manual runs.');
 	assert(releaseWorkflow.includes('id-token: write'), 'Release workflow must grant id-token: write for artifact attestations.');
 	assert(releaseWorkflow.includes('attestations: write'), 'Release workflow must grant attestations: write.');
 	assert(releaseWorkflow.includes('artifact-metadata: write'), 'Release workflow must grant artifact-metadata: write.');
 	assert(releaseWorkflow.includes('actions/attest@'), 'Release workflow must generate GitHub artifact attestations.');
+	assert(releaseWorkflow.includes('fetch-depth: 0'), 'Release workflow must fetch the version tag before binding it to the checked commit.');
+	assert(releaseWorkflow.includes('refs/tags/$VERSION^{commit}'), 'Release workflow must resolve the exact version tag commit.');
+	assert(releaseWorkflow.includes('TAG_SHA') && releaseWorkflow.includes('CHECKED_SHA'), 'Release workflow must reject a version tag and checkout SHA mismatch.');
+	assert(releaseWorkflow.includes('actions/upload-artifact@'), 'Release workflow must stage exact candidate assets before publication.');
+	assert(releaseWorkflow.includes("github.event_name == 'push' || inputs.publish"), 'Release mutation steps must require a tag push or explicit manual publish decision.');
 	assert(releaseWorkflow.includes('apps/obsidian-plugin/plugin/main.js'), 'Release workflow must upload the packaged main.js.');
 	assert(releaseWorkflow.includes('apps/obsidian-plugin/plugin/manifest.json'), 'Release workflow must upload the packaged manifest.json.');
 	assert(releaseWorkflow.includes('apps/obsidian-plugin/plugin/styles.css'), 'Release workflow must upload the packaged styles.css.');
+
+	assert(rootPackage.scripts?.['verify:codex-safe'] === 'bash ./scripts/verify_codex_safe.sh', 'Root package must expose the bounded Codex-safe verification lane.');
+	assert(rootPackage.scripts?.['qa:external-loopback'] === 'bash ./scripts/qa_external_loopback.sh', 'Root package must expose the guarded external loopback QA lane.');
+	assert(codexSafeVerify.includes('test:non-listener packages/mcp-runtime'), 'Codex-safe verification must use the explicit Runtime non-listener allowlist.');
+	assert(codexSafeVerify.includes('test:non-listener apps/mcp-server'), 'Codex-safe verification must use the explicit MCP Server non-listener allowlist.');
+	assert(!codexSafeVerify.includes('test:loopback'), 'Codex-safe verification must not invoke listener-bearing loopback tests.');
+	assert(!codexSafeVerify.includes('qa:external-loopback'), 'Codex-safe verification must not invoke external loopback QA.');
+	assert(!codexSafeVerify.includes('npm run test --workspaces'), 'Codex-safe verification must not use the workspace test wildcard.');
+
+	const runtimeNonListener = runtimePackage.scripts?.['test:non-listener'] || '';
+	const runtimeLoopback = runtimePackage.scripts?.['test:loopback'] || '';
+	const mcpServerNonListener = mcpServerPackage.scripts?.['test:non-listener'] || '';
+	const mcpServerLoopback = mcpServerPackage.scripts?.['test:loopback'] || '';
+	assert(runtimeNonListener.includes('source-request.test.mjs'), 'Runtime non-listener allowlist must include Source Request regression coverage.');
+	assert(!runtimeNonListener.includes('local-oauth.test.mjs') && !runtimeNonListener.includes('*.test.mjs'), 'Runtime non-listener allowlist must exclude OAuth and test wildcards.');
+	assert(runtimeLoopback.includes('local-oauth.test.mjs') && !runtimeLoopback.includes('*.test.mjs'), 'Runtime loopback lane must name the fixed OAuth test explicitly.');
+	assert(!mcpServerNonListener.includes('smoke.mjs'), 'MCP Server non-listener allowlist must exclude protocol smoke.');
+	assert(mcpServerLoopback === 'node ./scripts/smoke.mjs', 'MCP Server loopback lane must name only the fixed protocol smoke script.');
+
+	const externalRunIndex = externalLoopbackQa.indexOf('npm run test:loopback');
+	const externalAuthorizationIndex = externalLoopbackQa.indexOf('TRACEKEEPER_EXTERNAL_LOOPBACK_QA');
+	const externalCleanIndex = externalLoopbackQa.indexOf('status --porcelain --untracked-files=all');
+	const externalCandidateIndex = externalLoopbackQa.indexOf('TRACEKEEPER_CANDIDATE_SHA');
+	assert(externalRunIndex > 0, 'External loopback QA must run the named loopback scripts.');
+	assert(externalAuthorizationIndex >= 0 && externalAuthorizationIndex < externalRunIndex, 'External loopback QA authorization guard must run before listener tests.');
+	assert(externalCleanIndex >= 0 && externalCleanIndex < externalRunIndex, 'External loopback QA clean-worktree guard must run before listener tests.');
+	assert(externalCandidateIndex >= 0 && externalCandidateIndex < externalRunIndex, 'External loopback QA candidate guard must run before listener tests.');
 
 	console.log(JSON.stringify({ result: 'pass', communityEntry }, null, 2));
 }

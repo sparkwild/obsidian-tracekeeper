@@ -36,7 +36,32 @@ function decodeResponse(line) {
 }
 
 function readAuditLog(vaultRoot) {
-	return fs.readFileSync(path.join(vaultRoot, '00_tracekeeper/control/audit_log.md'), 'utf8');
+	const documents = [];
+	const legacyPath = path.join(vaultRoot, '00_tracekeeper/control/audit_log.md');
+	if (fs.existsSync(legacyPath)) {
+		documents.push(fs.readFileSync(legacyPath, 'utf8'));
+	}
+	const auditRoot = path.join(vaultRoot, '00_tracekeeper/control/audit');
+	if (fs.existsSync(auditRoot)) {
+		const visit = (directory) => {
+			for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+				const absolutePath = path.join(directory, entry.name);
+				if (entry.isDirectory()) {
+					visit(absolutePath);
+					continue;
+				}
+				const relativePath = path.relative(vaultRoot, absolutePath).replaceAll(path.sep, '/');
+				if (
+					entry.isFile()
+					&& /^00_tracekeeper\/control\/audit\/\d{4}\/\d{4}-\d{2}-\d{2}\.md$/.test(relativePath)
+				) {
+					documents.push(fs.readFileSync(absolutePath, 'utf8'));
+				}
+			}
+		};
+		visit(auditRoot);
+	}
+	return documents.join('\n');
 }
 
 function countReviewQueueFiles(vaultRoot) {
@@ -75,15 +100,25 @@ function managedWorkflowArtifactSnapshot(vaultRoot) {
 	return files.sort();
 }
 
+function includesAuditNeedle(content, needle) {
+	if (content.includes(needle)) {
+		return true;
+	}
+	const scalar = needle.match(/^(- [a-z_]+: )([A-Za-z0-9._-]+)$/);
+	return scalar
+		? content.includes(`${scalar[1]}${JSON.stringify(scalar[2])}`)
+		: false;
+}
+
 function hasSectionWithValues(log, linesToMatch) {
-	return linesToMatch.every((needle) => log.includes(needle));
+	return linesToMatch.every((needle) => includesAuditNeedle(log, needle));
 }
 
 function findSectionWithValues(log, linesToMatch) {
 	return log
 		.split('\n## ')
 		.map((entry) => entry.trim())
-		.find((section) => linesToMatch.every((needle) => section.includes(needle))) || '';
+		.find((section) => linesToMatch.every((needle) => includesAuditNeedle(section, needle))) || '';
 }
 
 function assertToolCallEvent(log, toolName, status) {
@@ -99,7 +134,8 @@ function hasToolCallSection(log, toolName, status, extraNeedles = []) {
 		if (!section) {
 			continue;
 		}
-		const hasType = section.includes('- type: tool-call');
+		const hasType =
+			section.includes('- type: tool-call') || section.includes('- type: "tool-call"');
 		const hasTool =
 			section.includes(`- tool_name: ${toolName}`) || section.includes(`- tool_name: ${quotedToolName}`);
 		const hasStatus =
@@ -442,6 +478,7 @@ function ensureToolNames(result, names) {
 async function main() {
 	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-mcp-smoke-'));
 	const vaultRoot = path.join(tempRoot, 'vault');
+	const atlasRepoPath = path.join(vaultRoot, 'repo', 'atlas-temp');
 	const vaultConfigDir = 'vault-config';
 	const fixturePath = path.join(vaultRoot, '00_tracekeeper', 'inbox', 'agent_requests', 'local-source-request.md');
 	const lintFixturePath = path.join(vaultRoot, '01_knowledge', 'wiki', 'concepts', 'smoke-lint-fixture.md');
@@ -545,11 +582,15 @@ async function main() {
 		writeNote(vaultRoot, '01_knowledge/wiki/index.md', '# Wiki Index\n\n- [[hubs/index]]\n- [[concepts/smoke-lint-fixture]]\n');
 		writeNote(vaultRoot, '01_knowledge/wiki/hubs/index.md', '# Wiki Hubs\n\n- [[smoke-hub]]\n');
 		writeNote(vaultRoot, '01_knowledge/sources/index.md', '# Sources Index\n\n- [[local-source]]\n');
-		writeNote(vaultRoot, '01_knowledge/memory/projects/demo/index.md', [
-			'---',
-			'type: project_memory_index',
-			'project_hint: demo',
-			'related_wiki: [01_knowledge/wiki/hubs/smoke-hub.md]',
+			writeNote(vaultRoot, '01_knowledge/memory/projects/demo/index.md', [
+				'---',
+				'schema_version: 1',
+				'type: project_memory_index',
+				'project_id: demo-proj-id',
+				'project_key: demo',
+				'project_hint: demo',
+				'repo_path: /repo/demo-temp',
+				'related_wiki: [01_knowledge/wiki/hubs/smoke-hub.md]',
 			'---',
 			'# Demo Project Memory',
 			'',
@@ -602,7 +643,7 @@ async function main() {
 			'type: memory',
 			'project_hint: atlas',
 			'project_id: atlas-proj-id',
-			'repo_path: repo/atlas-temp',
+			`repo_path: ${JSON.stringify(atlasRepoPath)}`,
 			'---',
 			'# Atlas Scope Match',
 			'project-scope-filter-token for context pack filtering validation.',
@@ -611,7 +652,7 @@ async function main() {
 			'---',
 			'type: memory',
 			'project_hint: atlas',
-			'repo_path: repo/atlas-temp',
+			`repo_path: ${JSON.stringify(atlasRepoPath)}`,
 			'related_wiki: [01_knowledge/wiki/hubs/atlas-hub.md]',
 			'---',
 			'# Atlas Memory (Explicit Repo Match)',
@@ -967,6 +1008,7 @@ async function main() {
 			'tracekeeper.status',
 			'tracekeeper.lint',
 			'tracekeeper.recall',
+			'tracekeeper.project_memory',
 			'tracekeeper.read_note',
 			'tracekeeper.start_task',
 			'tracekeeper.finish_task',
@@ -975,7 +1017,7 @@ async function main() {
 			'tracekeeper.capture_source',
 			'tracekeeper.propose_memory',
 		]);
-		assert.equal(listedTools.length, 10, 'tools/list should expose the fixed local trust toolset');
+		assert.equal(listedTools.length, 11, 'tools/list should expose the fixed local trust toolset');
 		assert.equal(listedTools.includes('tracekeeper.review_queue'), false);
 		assert.equal(listedTools.includes('tracekeeper.apply_approved_writeback'), false);
 		for (const hiddenTool of [
@@ -1309,14 +1351,14 @@ async function main() {
 			name: 'tracekeeper.start_task',
 			arguments: {
 				goal: 'project-scope-filter-token',
-				project_hint: path.join(vaultRoot, 'repo', 'atlas-temp'),
+				project_hint: atlasRepoPath,
 				idempotency_key: 'smoke-start-task-atlas',
 			},
 		}));
 		assert.equal(atlasStartTask.ok, true);
 		assert.equal(atlasStartTask.project_hint, 'atlas');
 		assert.equal(atlasStartTask.project_id, 'atlas-proj-id');
-		assert.equal(atlasStartTask.repo_path, path.join(vaultRoot, 'repo', 'atlas-temp'));
+		assert.equal(atlasStartTask.repo_path, atlasRepoPath);
 		assert.equal(atlasStartTask.project_identity?.source, 'vault_match');
 		assert.equal(atlasStartTask.project_identity?.confidence, 'exact');
 		assert.ok(atlasStartTask.project_identity?.warnings?.includes('path_project_hint_treated_as_repo_path'));
@@ -1324,7 +1366,7 @@ async function main() {
 		assert.equal(atlasStartTask.recommended_recall?.arguments?.project_id, 'atlas-proj-id');
 		assert.equal(
 			atlasStartTask.recommended_recall?.arguments?.repo_path,
-			path.join(vaultRoot, 'repo', 'atlas-temp')
+			atlasRepoPath
 		);
 		const atlasStartContextPaths = (atlasStartTask.context_pack_summary?.relevant_notes || [])
 			.map((entry) => entry.path || entry.relativePath || '')
@@ -1354,7 +1396,7 @@ async function main() {
 				query: 'project-scope-filter-token',
 				scope: 'project',
 				project_hint: 'atlas-short-name',
-				repo_path: path.join(vaultRoot, 'repo', 'atlas-temp'),
+				repo_path: atlasRepoPath,
 				max_items: 6,
 			},
 		}));
@@ -1811,8 +1853,11 @@ async function main() {
 		assert.equal(defaultAutoFinish.proposal_count, 0);
 		assert.equal(defaultAutoFinish.auto_applied_count, 1);
 		assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeDefaultAuto);
-		const defaultAutoMemoryPath = defaultAutoFinish.auto_applied_memory_updates?.[0]?.path;
-		assert.equal(defaultAutoMemoryPath, '01_knowledge/memory/projects/demo/memory.md');
+			const defaultAutoMemoryPath = defaultAutoFinish.auto_applied_memory_updates?.[0]?.path;
+			assert.match(
+				defaultAutoMemoryPath,
+				/^01_knowledge\/memory\/projects\/demo\/agents\/custom\//
+			);
 
 		const queueCountBeforeDefaultGlobal = countReviewQueueFiles(vaultRoot);
 		const defaultGlobalFinish = buildStructured(await client.call('tools/call', {
@@ -1895,7 +1940,7 @@ async function main() {
 				query: 'atlasfixture',
 				scope: 'project',
 				project_hint: 'Atlas',
-				repo_path: 'repo/atlas-temp',
+				repo_path: atlasRepoPath,
 				max_items: 6,
 			},
 		}));
@@ -1912,7 +1957,7 @@ async function main() {
 				query: '继续 Atlas 项目的架构工作：基于既有决策，为订单投影重建制定可执行的三步实施计划，并总结本次决定和下一步',
 				scope: 'project',
 				project_hint: 'Atlas',
-				repo_path: 'repo/atlas-temp',
+				repo_path: atlasRepoPath,
 				max_items: 6,
 			},
 		}));
@@ -1945,7 +1990,7 @@ async function main() {
 			arguments: {
 				query: 'atlasfixture',
 				scope: 'project',
-				repo_path: 'repo/atlas-temp',
+				repo_path: atlasRepoPath,
 				max_items: 6,
 			},
 		}));
@@ -2105,18 +2150,23 @@ async function main() {
 		assert.equal(finishWithProposals.memory_closeout_status, 'auto_saved');
 		assert.equal(finishWithProposals.suggestion_count, undefined);
 		assert.equal(finishWithProposals.suggested_memory_updates, undefined);
-		assert.equal(finishWithProposals.proposal_count, 0);
-		assert.deepEqual(finishWithProposals.proposals, []);
-		assert.equal(finishWithProposals.auto_applied_count, 6);
-		assert.ok(Array.isArray(finishWithProposals.auto_applied_memory_updates));
-		assert.equal(finishWithProposals.auto_applied_memory_updates.length, 6);
-		const kinds = finishWithProposals.auto_applied_memory_updates.map((update) => update.kind).sort();
-		assert.ok(kinds.includes('task_decision'));
-		assert.ok(kinds.includes('solution_change'));
-		assert.ok(kinds.includes('lesson_learned'));
-		assert.ok(kinds.includes('user_preference'));
-		assert.ok(kinds.includes('project_next_action'));
-		assert.ok(kinds.includes('memory_candidate'));
+			assert.equal(finishWithProposals.proposal_count, 0);
+			assert.deepEqual(finishWithProposals.proposals, []);
+			assert.equal(finishWithProposals.auto_applied_count, 1);
+			assert.ok(Array.isArray(finishWithProposals.auto_applied_memory_updates));
+			assert.equal(finishWithProposals.auto_applied_memory_updates.length, 1);
+			assert.equal(finishWithProposals.auto_applied_memory_updates[0]?.kind, 'finish_task');
+			assert.deepEqual(
+				[...finishWithProposals.auto_applied_memory_updates[0].memory_kinds].sort(),
+				[
+					'lesson_learned',
+					'memory_candidate',
+					'project_next_action',
+					'solution_change',
+					'task_decision',
+					'user_preference',
+				]
+			);
 		const queueCountAfterAutoPropose = countReviewQueueFiles(vaultRoot);
 		const retryFinishWithProposals = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.finish_task',
@@ -2137,8 +2187,8 @@ async function main() {
 					idempotency_key: 'smoke-auto-finish',
 			},
 		}));
-		assert.equal(retryFinishWithProposals.proposal_count, 0);
-		assert.equal(retryFinishWithProposals.auto_applied_count, 6);
+			assert.equal(retryFinishWithProposals.proposal_count, 0);
+			assert.equal(retryFinishWithProposals.auto_applied_count, 1);
 		assert.deepEqual(
 			retryFinishWithProposals.auto_applied_memory_updates.map((update) => `${update.kind}:${update.path}`).sort(),
 			finishWithProposals.auto_applied_memory_updates.map((update) => `${update.kind}:${update.path}`).sort(),
@@ -2240,13 +2290,31 @@ async function main() {
 				capabilities: {},
 				clientInfo: {
 					name: 'tracekeeper-smoke-auto-memory',
-					version: '0.2.1',
-				},
-			});
-			const queueCountBeforeAutoMemory = countReviewQueueFiles(vaultRoot);
-			const autoMemory = buildStructured(await autoMemoryClient.call('tools/call', {
-				name: 'tracekeeper.propose_memory',
-				arguments: {
+						version: '0.2.1',
+					},
+				});
+					const projectMemoryArgs = {
+						action: 'list',
+						project_id: 'demo-proj-id',
+						project_hint: 'demo',
+						repo_path: '/repo/demo-temp',
+						page_size: 25,
+					};
+					const projectMemoryBefore = buildStructured(
+						await autoMemoryClient.call('tools/call', {
+							name: 'tracekeeper.project_memory',
+							arguments: projectMemoryArgs,
+						})
+					);
+					assert.equal(projectMemoryBefore.ok, true);
+					assert.equal(projectMemoryBefore.complete, true);
+					assert.equal(projectMemoryBefore.page.next_cursor, null);
+					const queueCountBeforeAutoMemory = countReviewQueueFiles(vaultRoot);
+				const legacyAutoMemoryText = fs.readFileSync(
+					path.join(vaultRoot, '01_knowledge/memory/projects/demo/memory.md'),
+					'utf8'
+				);
+				const autoMemoryArgs = {
 					proposal_kind: 'project_update',
 					content: '- Auto-saved project memory from smoke test.',
 					evidence: 'smoke test',
@@ -2259,37 +2327,93 @@ async function main() {
 						'01_knowledge/sources/local-source.md',
 						'01_knowledge/sources/missing-source.md',
 					],
-				},
-			}));
-			assert.equal(autoMemory.ok, true);
-			assert.equal(autoMemory.auto_applied, true);
-			assert.equal(autoMemory.path, '01_knowledge/memory/projects/demo/memory.md');
-			assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeAutoMemory);
-			assert.equal(Array.isArray(autoMemory.missing_graph_bridges), true);
-			assert.equal(autoMemory.missing_wiki_bridge, false);
-			assert.deepEqual(autoMemory.related_sources, ['01_knowledge/sources/local-source.md']);
-			assert.deepEqual(autoMemory.missing_related_sources, ['01_knowledge/sources/missing-source.md']);
-			const autoTargetText = fs.readFileSync(path.join(vaultRoot, '01_knowledge/memory/projects/demo/memory.md'), 'utf8');
-			assert.ok(autoTargetText.includes('Auto-saved project memory from smoke test.'));
-			assert.ok(autoTargetText.includes('content_signature:'));
+					idempotency_key: 'smoke-auto-project-memory',
+				};
+				const autoMemory = buildStructured(await autoMemoryClient.call('tools/call', {
+					name: 'tracekeeper.propose_memory',
+					arguments: autoMemoryArgs,
+				}));
+				assert.equal(autoMemory.ok, true);
+				assert.equal(autoMemory.auto_applied, true);
+				assert.match(
+					autoMemory.path,
+					/^01_knowledge\/memory\/projects\/demo\/agents\/custom\//
+				);
+				assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeAutoMemory);
+				assert.equal(Array.isArray(autoMemory.missing_graph_bridges), true);
+				assert.equal(autoMemory.missing_wiki_bridge, false);
+				assert.deepEqual(autoMemory.related_sources, ['01_knowledge/sources/local-source.md']);
+				assert.deepEqual(autoMemory.missing_related_sources, ['01_knowledge/sources/missing-source.md']);
+				const autoTargetText = fs.readFileSync(path.join(vaultRoot, autoMemory.path), 'utf8');
+				assert.ok(autoTargetText.includes('Auto-saved project memory from smoke test.'));
+				assert.ok(autoTargetText.includes('operation_hash:'));
+				assert.equal(
+					fs.readFileSync(
+						path.join(vaultRoot, '01_knowledge/memory/projects/demo/memory.md'),
+						'utf8'
+					),
+					legacyAutoMemoryText
+				);
 
-			const duplicateAutoMemory = buildStructured(await autoMemoryClient.call('tools/call', {
-				name: 'tracekeeper.propose_memory',
-				arguments: {
-					proposal_kind: 'project_update',
-					content: '- Auto-saved project memory from smoke test.',
-					evidence: 'smoke test',
-					risk_level: 'medium',
-					task_id: taskId,
-					project_hint: 'demo',
-					memory_scope: 'project',
-					related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
-					related_sources: ['01_knowledge/sources/local-source.md'],
-				},
-			}));
-			assert.equal(duplicateAutoMemory.ok, true);
-			assert.equal(duplicateAutoMemory.status, 'skipped');
-			assert.equal(duplicateAutoMemory.duplicate, true);
+				const duplicateAutoMemory = buildStructured(await autoMemoryClient.call('tools/call', {
+					name: 'tracekeeper.propose_memory',
+					arguments: autoMemoryArgs,
+				}));
+				assert.equal(duplicateAutoMemory.ok, true);
+				assert.deepEqual(duplicateAutoMemory, autoMemory);
+					const projectMemoryCall = await autoMemoryClient.call('tools/call', {
+						name: 'tracekeeper.project_memory',
+						arguments: projectMemoryArgs,
+					});
+				const projectMemory = buildStructured(projectMemoryCall);
+				assert.equal(projectMemory.ok, true);
+				assert.equal(projectMemory.tool, 'tracekeeper.project_memory');
+				assert.equal(projectMemory.read_only, true);
+				assert.equal(projectMemory.project_id, 'demo-proj-id');
+				assert.equal(projectMemory.project_hub, '01_knowledge/memory/projects/demo/index.md');
+				assert.equal(projectMemory.complete, true);
+					assert.equal(projectMemory.total, projectMemoryBefore.total + 1);
+					assert.equal(projectMemory.entries.length, projectMemory.total);
+					assert.equal(projectMemory.page.page_size, 25);
+					assert.equal(projectMemory.page.next_cursor, null);
+					assert.equal(
+						projectMemoryBefore.entries.some((entry) => entry.path === autoMemory.path),
+						false
+					);
+					assert.equal(
+						projectMemory.entries.filter((entry) => entry.path === autoMemory.path).length,
+						1
+					);
+				assert.ok(projectMemory.entries.some(
+					(entry) => entry.path === '01_knowledge/memory/projects/demo/memory.md'
+						&& entry.legacy === true
+				));
+				for (const entry of projectMemory.entries) {
+					for (const forbidden of ['absolutePath', 'absolute_path', 'body', 'content', 'text', 'excerpt']) {
+						assert.equal(Object.hasOwn(entry, forbidden), false);
+					}
+				}
+				assert.deepEqual(
+					JSON.parse(projectMemoryCall.content[0]?.text),
+					projectMemoryCall.structuredContent
+				);
+					const projectMemoryAudit = findSectionWithValues(readAuditLog(vaultRoot), [
+						'- tool_name: "tracekeeper.project_memory"',
+						'- result_status: "success"',
+						'- result_summary:',
+						`total=${projectMemory.total}`,
+					]);
+					assert.match(projectMemoryAudit, /project_id=demo-proj-id/);
+					assert.match(projectMemoryAudit, new RegExp(`total=${projectMemory.total}`));
+				assert.match(projectMemoryAudit, /complete=true/);
+				assert.match(projectMemoryAudit, /generation=/);
+				assert.match(projectMemoryAudit, /page_size=25/);
+				assert.match(projectMemoryAudit, /has_next_page=false/);
+				assert.equal(projectMemoryAudit.includes('next_cursor='), false);
+				assertContainsNoSensitiveText(projectMemoryAudit, [
+					'/repo/demo-temp',
+					'Auto-saved project memory from smoke test.',
+				]);
 			assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeAutoMemory);
 			const missingBridgeAutoMemory = buildStructured(await autoMemoryClient.call('tools/call', {
 				name: 'tracekeeper.propose_memory',
@@ -2333,13 +2457,28 @@ async function main() {
 			}));
 			assert.equal(autoFinish.ok, true);
 			assert.equal(autoFinish.review_proposal_mode, 'auto_propose');
-			assert.equal(autoFinish.memory_closeout_status, 'auto_saved');
-			assert.equal(autoFinish.proposal_count, 0);
-			assert.equal(autoFinish.auto_applied_count, 6);
-			assert.equal(countReviewQueueFiles(vaultRoot), autoFinishQueueBefore);
-			const autoProjectMemoryText = fs.readFileSync(path.join(vaultRoot, '01_knowledge/memory/projects/demo/memory.md'), 'utf8');
-			assert.ok(autoProjectMemoryText.includes('Project memory can save without repeated manual review'));
-			assert.ok(autoProjectMemoryText.includes('Keep global memory reviewed by default'));
+				assert.equal(autoFinish.memory_closeout_status, 'auto_saved');
+				assert.equal(autoFinish.proposal_count, 0);
+				assert.equal(autoFinish.auto_applied_count, 1);
+				assert.equal(countReviewQueueFiles(vaultRoot), autoFinishQueueBefore);
+				const autoProjectMemoryPath = autoFinish.auto_applied_memory_updates?.[0]?.path;
+				assert.match(
+					autoProjectMemoryPath,
+					/^01_knowledge\/memory\/projects\/demo\/agents\/custom\//
+				);
+				const autoProjectMemoryText = fs.readFileSync(
+					path.join(vaultRoot, autoProjectMemoryPath),
+					'utf8'
+				);
+				assert.ok(autoProjectMemoryText.includes('Project memory can save without repeated manual review'));
+				assert.ok(autoProjectMemoryText.includes('Keep global memory reviewed by default'));
+				assert.equal(
+					fs.readFileSync(
+						path.join(vaultRoot, '01_knowledge/memory/projects/demo/memory.md'),
+						'utf8'
+					),
+					legacyAutoMemoryText
+				);
 			assert.equal(autoFinish.architecture_status === 'healthy' || autoFinish.architecture_status === 'needs_attention', true);
 			assert.equal(Array.isArray(autoFinish.missing_graph_bridges), true);
 

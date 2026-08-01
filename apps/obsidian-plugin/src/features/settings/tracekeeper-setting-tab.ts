@@ -347,8 +347,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('项目记忆', 'Project memory'))
 			.setDesc(ui(
-				'项目、仓库或工作区相关记忆默认进入审核。仅当你明确选择自动时，才会在既有安全条件下追加保存。',
-				'Project, repository, or workspace memory starts in review. It appends automatically under the existing safeguards only after you explicitly choose Auto.'
+				'项目、仓库或工作区相关记忆默认进入审核。仅当你明确选择自动时，才会在稳定项目 Hub 下为每次操作创建独立条目；旧版共享记忆笔记不会被改写。',
+				'Project, repository, or workspace memory starts in review. Only after you explicitly choose Auto does each operation create its own entry under a stable project hub; legacy shared memory notes are not rewritten.'
 			))
 			.addDropdown((dropdown) => {
 				for (const rule of MEMORY_PROPOSAL_RULES) {
@@ -367,8 +367,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('任务结束记忆提案', 'Task closeout memory proposals'))
 			.setDesc(ui(
-				'自动会让项目记忆按规则保存、全局记忆进入知识变更审核；审核会统一进入知识变更审核；忽略不生成提案。',
-				'Auto saves project memory by rule and sends global memory to Knowledge Change Review; Review sends all updates there; Ignore creates no proposals.'
+				'自动会按规则创建一次不可变项目记忆条目，并让全局记忆进入知识变更审核；审核会统一进入知识变更审核；忽略不生成提案。',
+				'Auto creates one immutable project-memory entry by rule and sends global memory to Knowledge Change Review; Review sends all updates there; Ignore creates no proposals.'
 			))
 			.addDropdown((dropdown) => {
 				for (const mode of TASK_MEMORY_PROPOSAL_MODES) {

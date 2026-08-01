@@ -1,4 +1,5 @@
 import { type ScanResult, type ScannedNote } from './scan';
+import { type NormalizedVaultEdge, type NormalizedVaultNote, type VaultSemanticEvent } from './knowledge-note';
 export declare const KNOWLEDGE_INDEX_VERSION = "1.0";
 export type VaultPath = string;
 export type FileVersion = string;
@@ -7,6 +8,9 @@ export type VaultIndexEventKind = 'create' | 'modify' | 'delete' | 'rename';
 export interface VaultIndexEventBase {
     path: VaultPath;
     fileVersion: FileVersion;
+    sequence?: number;
+    exists?: boolean;
+    contentHash?: string;
 }
 export interface CreateVaultIndexEvent extends VaultIndexEventBase {
     kind: 'create';
@@ -22,36 +26,27 @@ export interface RenameVaultIndexEvent {
     path: VaultPath;
     newPath: VaultPath;
     fileVersion: FileVersion;
+    sequence?: number;
+    exists?: boolean;
+    contentHash?: string;
 }
 export type VaultIndexEvent = CreateVaultIndexEvent | ModifyVaultIndexEvent | DeleteVaultIndexEvent | RenameVaultIndexEvent;
-export interface IndexedWikilink {
-    raw: string;
-    target: string;
-    alias?: string;
-    heading?: string;
-    line: number;
+export interface IndexedWikilink extends NormalizedVaultEdge {
 }
-export interface IndexedKnowledgeNote {
+export interface IndexedKnowledgeNote extends NormalizedVaultNote {
     path: VaultPath;
     fileVersion: FileVersion;
-    title: string;
-    aliases: readonly string[];
     type: string | null;
-    tags: readonly string[];
-    frontmatter: Readonly<Record<string, unknown>>;
-    headings: readonly string[];
-    blockIds: readonly string[];
     wikilinks: readonly IndexedWikilink[];
     backlinks: readonly VaultPath[];
     searchTokens: readonly string[];
     excerptSource: string;
-    contentHash: string;
-    modifiedAt: string;
-    size: number;
 }
 export interface KnowledgeGraphSnapshot {
     outgoing: ReadonlyMap<VaultPath, readonly VaultPath[]>;
     incoming: ReadonlyMap<VaultPath, readonly VaultPath[]>;
+    edges: readonly NormalizedVaultEdge[];
+    unresolvedEdges: readonly NormalizedVaultEdge[];
 }
 export interface KnowledgeScopeIndex {
     byType: ReadonlyMap<string, readonly VaultPath[]>;
@@ -61,6 +56,7 @@ export interface KnowledgeSnapshot {
     version: string;
     createdAt: string;
     generation: number;
+    event_sequence: number;
     index_state: KnowledgeIndexState;
     notes: ReadonlyMap<VaultPath, IndexedKnowledgeNote>;
     graph: KnowledgeGraphSnapshot;
@@ -71,6 +67,7 @@ export interface KnowledgeSnapshot {
 export interface KnowledgeIndexReport {
     index_state: KnowledgeIndexState;
     generation: number;
+    event_sequence: number;
     note_count: number;
     created_at: string;
     warnings: readonly string[];
@@ -81,6 +78,7 @@ export interface KnowledgeIndex {
     rebuild(scanResult?: ScanResult): Promise<KnowledgeIndexReport>;
     apply(event: VaultIndexEvent): Promise<void>;
     applyScanned(event: VaultIndexEvent, note?: ScannedNote | null): Promise<void>;
+    applySemantic(event: VaultSemanticEvent): Promise<void>;
 }
 export interface KnowledgeIndexOptions {
     vaultRoot: string;
@@ -92,6 +90,7 @@ export declare function toIndexedKnowledgeNote(note: ScannedNote): IndexedKnowle
 export declare function buildKnowledgeSnapshot(scanResult: ScanResult, options?: {
     indexState?: KnowledgeIndexState;
     generation?: number;
+    eventSequence?: number;
     lastEvent?: VaultIndexEvent | null;
     lastRebuild?: string | null;
 }): KnowledgeSnapshot;
@@ -107,10 +106,14 @@ export declare class InMemoryKnowledgeIndex implements KnowledgeIndex {
     scanSnapshot(): ScanResult;
     rebuild(scanResult?: ScanResult): Promise<KnowledgeIndexReport>;
     apply(event: VaultIndexEvent): Promise<void>;
+    applySemantic(event: VaultSemanticEvent): Promise<void>;
+    advanceEventSequenceAfterRebuild(sequence: number): Promise<void>;
     applyScanned(event: VaultIndexEvent, note?: ScannedNote | null): Promise<void>;
     private enqueueWrite;
+    private clearRecoveredSourceErrors;
     private applyCreateOrModify;
     private applyDelete;
     private applyRename;
+    private updateDerivedState;
     private toMutableState;
 }

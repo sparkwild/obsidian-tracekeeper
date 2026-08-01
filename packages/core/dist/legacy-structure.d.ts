@@ -11,6 +11,8 @@ export interface LegacyStructureReviewInput {
     kind: LegacyStructureKind;
     reason: string;
     sourceContent: string;
+    sourceHash?: string;
+    targetHash?: string | null;
 }
 export declare function isLegacyStructurePath(relativePath: string): boolean;
 export declare function getLegacyStructureTarget(relativePath: string): LegacyStructureTarget | null;

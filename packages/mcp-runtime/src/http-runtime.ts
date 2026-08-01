@@ -10,6 +10,7 @@ import {
 	LOCAL_TRUST_PRINCIPAL_ID,
 	appendRuntimeDiagnosticAuditEvent,
 	recoverPendingOperations,
+	type ProposalTransitionPort,
 	type ToolInvocationContext,
 } from './tools';
 import {
@@ -50,6 +51,7 @@ export interface StreamableHttpRuntimeOptions {
 	defaultVaultRoot?: string;
 	vaultConfigDir?: string;
 	vaultRepository?: VaultRepository;
+	proposalTransitionPort?: ProposalTransitionPort;
 	knowledgeSnapshotProvider?: NonNullable<ConstructorParameters<typeof McpJsonRpcHandler>[0]>['knowledgeSnapshotProvider'];
 	graphProfile?: unknown;
 	memoryRules?: NonNullable<ConstructorParameters<typeof McpJsonRpcHandler>[0]>['memoryRules'];
@@ -213,11 +215,13 @@ export class StreamableHttpMcpRuntime {
 		this.recoveryContext = {
 			vaultConfigDir: options.vaultConfigDir,
 			vaultRepository: options.vaultRepository,
+			proposalTransitionPort: options.proposalTransitionPort,
 			knowledgeSnapshotProvider: options.knowledgeSnapshotProvider,
 			graphProfile: options.graphProfile,
 			memoryRules: options.memoryRules,
 			contentLanguage: options.contentLanguage,
 			contentLanguageSource: options.contentLanguageSource,
+			writebackConfirmationSecret: this.serviceTokenHash,
 			runtimeVersion: this.runtimeVersion,
 			principalId: LOCAL_TRUST_PRINCIPAL_ID,
 			credentialCapabilities: LOCAL_TRUST_CAPABILITIES,
@@ -226,11 +230,13 @@ export class StreamableHttpMcpRuntime {
 			defaultVaultRoot: options.defaultVaultRoot,
 			vaultConfigDir: options.vaultConfigDir,
 			vaultRepository: options.vaultRepository,
+			proposalTransitionPort: options.proposalTransitionPort,
 			knowledgeSnapshotProvider: options.knowledgeSnapshotProvider,
 			graphProfile: options.graphProfile,
 			memoryRules: options.memoryRules,
 			contentLanguage: options.contentLanguage,
 			contentLanguageSource: options.contentLanguageSource,
+			writebackConfirmationSecret: this.serviceTokenHash,
 			runtimeVersion: this.runtimeVersion,
 			transport: STREAMABLE_HTTP_TRANSPORT,
 		});

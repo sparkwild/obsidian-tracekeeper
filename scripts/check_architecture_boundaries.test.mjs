@@ -47,3 +47,39 @@ test('rejects plugin self-MCP client symbols', () => {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test('ignores import-like text and forbidden symbols inside comments and strings', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'apps/obsidian-plugin/src/main.ts', [
+			"// import '../../../packages/mcp-runtime/src/index';",
+			"const note = 'callLocalMcpTool uiMcpSession';",
+			'',
+		].join('\n'));
+		write(root, 'packages/mcp-runtime/src/index.ts', 'export {};\n');
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, true);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('rejects multiline dynamic imports and re-exports across workspaces', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'apps/obsidian-plugin/src/main.ts', [
+			"export { runtime } from '../../../packages/mcp-runtime/src/index';",
+			"void import(",
+			"  '../../../packages/core/src/index'",
+			');',
+			'',
+		].join('\n'));
+		write(root, 'packages/mcp-runtime/src/index.ts', 'export const runtime = true;\n');
+		write(root, 'packages/core/src/index.ts', 'export {};\n');
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, false);
+		assert.equal(result.errors.filter((error) => /relative cross-workspace import/.test(error)).length, 2);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});

@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.NodeFsVaultRepository = void 0;
 const node_crypto_1 = __importDefault(require("node:crypto"));
+const node_fs_1 = require("node:fs");
 const promises_1 = __importDefault(require("node:fs/promises"));
 const node_path_1 = __importDefault(require("node:path"));
 const knowledge_index_1 = require("./knowledge-index");
@@ -84,6 +85,9 @@ class NodeFsVaultRepository {
     }
     computeVersionFromStats(stats) {
         return (0, knowledge_index_1.computeFileVersion)(stats.size, stats.mtime.toISOString());
+    }
+    sameFileIdentity(left, right) {
+        return left.dev === right.dev && left.ino === right.ino;
     }
     async readStats(targetPath) {
         await this.assertNoSymlinkSegments(targetPath);
@@ -225,18 +229,49 @@ class NodeFsVaultRepository {
     }
     async readText(relativePath) {
         const absolutePath = this.resolveRelativePath(relativePath);
-        const state = await this.readStats(absolutePath);
-        if (state === null) {
-            return null;
+        await this.assertNoSymlinkSegments(absolutePath);
+        const readFlags = process.platform === 'win32'
+            ? node_fs_1.constants.O_RDONLY
+            : node_fs_1.constants.O_RDONLY | node_fs_1.constants.O_NOFOLLOW;
+        let handle;
+        try {
+            handle = await promises_1.default.open(absolutePath, readFlags);
         }
-        const content = await promises_1.default.readFile(absolutePath, 'utf8');
-        return {
-            path: this.normalizeRelativePath(relativePath),
-            content,
-            version: this.computeVersionFromStats(state),
-            size: state.size,
-            modifiedAt: state.mtime.toISOString(),
-        };
+        catch (error) {
+            if (error instanceof Error && error.code === 'ENOENT') {
+                return null;
+            }
+            if (error instanceof Error && error.code === 'ELOOP') {
+                throw new safety_1.VaultPathError(`Vault path points to a symbolic link: ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`);
+            }
+            throw error;
+        }
+        try {
+            const openedState = await handle.stat();
+            if (!openedState.isFile()) {
+                throw new safety_1.VaultPathError(`Vault path is not a file: ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`);
+            }
+            const content = await handle.readFile({ encoding: 'utf8' });
+            const completedState = await handle.stat();
+            const pathState = await this.readStats(absolutePath);
+            if (pathState === null
+                || !this.sameFileIdentity(openedState, completedState)
+                || !this.sameFileIdentity(completedState, pathState)
+                || this.computeVersionFromStats(openedState) !== this.computeVersionFromStats(completedState)
+                || this.computeVersionFromStats(completedState) !== this.computeVersionFromStats(pathState)) {
+                throw new operation_journal_1.OperationConflictError(`Vault file changed during read: ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`);
+            }
+            return {
+                path: this.normalizeRelativePath(relativePath),
+                content,
+                version: this.computeVersionFromStats(completedState),
+                size: completedState.size,
+                modifiedAt: completedState.mtime.toISOString(),
+            };
+        }
+        finally {
+            await handle.close();
+        }
     }
     async createText(relativePath, content) {
         const absolutePath = this.resolveRelativePath(relativePath);

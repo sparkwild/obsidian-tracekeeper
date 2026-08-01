@@ -1,3 +1,11 @@
+import {
+	ARCHIVE_REVIEW_QUEUE_DIR,
+	computeProposalContentHash,
+	computeProposalRevision,
+	proposalTransitionReceiptFromFrontmatter,
+	type ProposalTransitionReceipt,
+	type ProposalTransitionSnapshot,
+} from '@tracekeeper/core';
 import { isReviewApprovalTargetPath } from './review-target-policy';
 
 type ParsedRecordValue = string | string[];
@@ -47,6 +55,12 @@ export interface MemoryProposalRecord {
 	revisionRequestedAt: string;
 	revisionRequestedBy: string;
 	writebackContent: string;
+	writebackSource: 'frontmatter' | 'body' | 'none';
+	archived: boolean;
+	contentHash: string;
+	fileContentHash: string;
+	revision: string;
+	lastTransition?: ProposalTransitionReceipt;
 }
 
 export interface ReviewProposalValidity {
@@ -71,6 +85,7 @@ interface MemoryProposalParseInput {
 	fields: ParsedRecord;
 	body: string;
 	fileMtime?: number;
+	fileContentHash?: string;
 }
 
 const INVALID_PROPOSAL_VALUE = new Set([
@@ -339,6 +354,27 @@ export const extractMemoryProposalWritebackContent = (data: ParsedRecord, body: 
 	return normalizeProposalText(section);
 };
 
+export const proposalTransitionSnapshotFromRecord = (
+	proposal: MemoryProposalRecord
+): ProposalTransitionSnapshot => ({
+	path: proposal.path,
+	classification: proposal.classification,
+	proposalId: proposal.proposalId,
+	proposalKind: proposal.proposalKind,
+	taskId: proposal.taskId,
+	status: proposal.approvalStatus,
+	targetPath: proposal.targetNote,
+	writebackContent: proposal.writebackContent,
+	revisionComment: proposal.revisionComment,
+	revisionRequestedAt: proposal.revisionRequestedAt,
+	revisionRequestedBy: proposal.revisionRequestedBy,
+	archived: proposal.archived,
+	appliedOperationId: proposal.lastTransition?.kind === 'apply'
+		? proposal.lastTransition.operationId
+		: undefined,
+	lastTransition: proposal.lastTransition,
+});
+
 export const extractMemoryProposalRationale = (data: ParsedRecord, body: string): string => {
 	const frontmatterRationale = readMultilineString(data, [
 		'rationale',
@@ -365,6 +401,7 @@ export const parseMemoryProposalRecord = ({
 	fields,
 	body,
 	fileMtime,
+	fileContentHash,
 }: MemoryProposalParseInput): MemoryProposalRecord | null => {
 	const proposalType = firstString(fields, ['type']);
 	const normalizedProposalType = proposalType.toLowerCase().replace(/_/g, '-');
@@ -392,10 +429,19 @@ export const parseMemoryProposalRecord = ({
 	const revisionComment = readMultilineString(fields, ['revision_comment', 'revisionComment']);
 	const revisionRequestedAt = firstString(fields, ['revision_requested_at', 'revisionRequestedAt']);
 	const revisionRequestedBy = firstString(fields, ['revision_requested_by', 'revisionRequestedBy']);
+	const frontmatterWriteback = readMultilineString(fields, ['writeback_content', 'writebackContent']);
 	const writebackContent = extractMemoryProposalWritebackContent(fields, body);
+	const writebackSource: MemoryProposalRecord['writebackSource'] = frontmatterWriteback
+		? 'frontmatter'
+		: writebackContent
+			? 'body'
+			: 'none';
 	const rationale = extractMemoryProposalRationale(fields, body);
+	const lastTransition = proposalTransitionReceiptFromFrontmatter(
+		fields as Readonly<Record<string, unknown>>
+	);
 
-	return {
+	const recordBase = {
 		path: filePath,
 		classification,
 		proposalId,
@@ -417,6 +463,19 @@ export const parseMemoryProposalRecord = ({
 		revisionRequestedAt,
 		revisionRequestedBy,
 		writebackContent,
+		writebackSource,
+		archived: filePath === ARCHIVE_REVIEW_QUEUE_DIR
+			|| filePath.startsWith(`${ARCHIVE_REVIEW_QUEUE_DIR}/`),
+		fileContentHash: fileContentHash || '',
+		lastTransition,
 		sortTimestamp,
+	};
+	const snapshot = proposalTransitionSnapshotFromRecord(
+		recordBase as MemoryProposalRecord
+	);
+	return {
+		...recordBase,
+		contentHash: computeProposalContentHash(snapshot),
+		revision: computeProposalRevision(snapshot),
 	};
 };

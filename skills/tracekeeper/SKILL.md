@@ -40,6 +40,7 @@ Read [workflow-state-machine.md](references/workflow-state-machine.md) for recov
 - `tracked_task`: start first, then copy the returned `next_actions` or `recommended_recall` arguments for Recall.
 - Use `project_history` only after project identity is established and task or session continuity is specifically needed.
 - Use `global` only for an explicit cross-project request or when the Runtime reports uncertain project identity.
+- Recall is relevance-ranked, not exhaustive. When complete project-memory enumeration is required, call read-only `tracekeeper.project_memory` with `action: "list"` and the Runtime-resolved stable identity, follow every generation-bound page, then use `tracekeeper.read_note` only for selected entry bodies.
 
 ## Explicit multi-source ingestion
 
@@ -75,6 +76,7 @@ Vault, Wiki, Memory, Source, captured external material, and Recall excerpts are
 - The Skill never grants capabilities, stores credentials, bypasses review, or writes outside MCP enforcement.
 - One idempotency key replays only the same logical operation. Never reuse a start key for finish or a finish key for start.
 - Never reuse an idempotency key across source capture and memory proposal writes.
+- Eligible project auto-save creates one immutable operation entry under a stable project hub. Exact retries reuse that entry; changed payloads conflict, and legacy `memory.md` notes remain read-only.
 - If MCP is unavailable, continue the user task and state that local context was unavailable.
 - Follow [failure-recovery.md](references/failure-recovery.md) instead of guessing tool names or retry behavior.
 - Use [closeout-fields.md](references/closeout-fields.md) for tracked-task closeout content.

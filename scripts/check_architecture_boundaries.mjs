@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import ts from 'typescript';
 
 const WORKSPACES = [
 	'apps/mcp-server',
@@ -13,7 +14,6 @@ const WORKSPACES = [
 
 const SOURCE_EXTENSIONS = new Set(['.ts', '.mjs', '.js']);
 const IGNORED_DIRECTORIES = new Set(['dist', 'node_modules', 'plugin']);
-const IMPORT_PATTERN = /(?:\bfrom\s+|\bimport\s+|\bimport\s*\(\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/g;
 
 function collectSourceFiles(root, relativeDirectory, output) {
 	const absoluteDirectory = path.resolve(root, relativeDirectory);
@@ -38,6 +38,60 @@ function workspaceForPath(relativePath) {
 	return WORKSPACES.find((workspace) => normalized === workspace || normalized.startsWith(`${workspace}/`)) || null;
 }
 
+function moduleSpecifiers(sourceFile) {
+	const specifiers = [];
+	const visit = (node) => {
+		if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+			&& node.moduleSpecifier
+			&& ts.isStringLiteralLike(node.moduleSpecifier)) {
+			specifiers.push(node.moduleSpecifier.text);
+		}
+		if (ts.isImportEqualsDeclaration(node)
+			&& ts.isExternalModuleReference(node.moduleReference)
+			&& node.moduleReference.expression
+			&& ts.isStringLiteralLike(node.moduleReference.expression)) {
+			specifiers.push(node.moduleReference.expression.text);
+		}
+		if (ts.isCallExpression(node)
+			&& node.arguments.length === 1
+			&& ts.isStringLiteralLike(node.arguments[0])
+			&& (node.expression.kind === ts.SyntaxKind.ImportKeyword
+				|| (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
+			specifiers.push(node.arguments[0].text);
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+	return specifiers;
+}
+
+function hasForbiddenPluginIdentifier(sourceFile) {
+	let found = false;
+	const visit = (node) => {
+		if (found) {
+			return;
+		}
+		if (ts.isIdentifier(node)
+			&& (node.text === 'callLocalMcpTool' || node.text === 'uiMcpSession')) {
+			found = true;
+			return;
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+	return found;
+}
+
+function parseSource(relativeFile, content) {
+	return ts.createSourceFile(
+		relativeFile,
+		content,
+		ts.ScriptTarget.Latest,
+		true,
+		path.extname(relativeFile) === '.ts' ? ts.ScriptKind.TS : ts.ScriptKind.JS
+	);
+}
+
 export function checkArchitectureBoundaries(root = process.cwd()) {
 	const errors = [];
 	const files = [];
@@ -49,8 +103,8 @@ export function checkArchitectureBoundaries(root = process.cwd()) {
 		const sourceWorkspace = workspaceForPath(relativeFile);
 		const absoluteFile = path.resolve(root, relativeFile);
 		const content = fs.readFileSync(absoluteFile, 'utf8');
-		for (const match of content.matchAll(IMPORT_PATTERN)) {
-			const specifier = match[1];
+		const sourceFile = parseSource(relativeFile, content);
+		for (const specifier of moduleSpecifiers(sourceFile)) {
 			if (!specifier.startsWith('.')) {
 				continue;
 			}
@@ -65,7 +119,7 @@ export function checkArchitectureBoundaries(root = process.cwd()) {
 	const pluginMainPath = path.resolve(root, 'apps/obsidian-plugin/src/main.ts');
 	if (fs.existsSync(pluginMainPath)) {
 		const pluginMain = fs.readFileSync(pluginMainPath, 'utf8');
-		if (/\bcallLocalMcpTool\b|\buiMcpSession\b/.test(pluginMain)) {
+		if (hasForbiddenPluginIdentifier(parseSource('apps/obsidian-plugin/src/main.ts', pluginMain))) {
 			errors.push('apps/obsidian-plugin/src/main.ts: plugin UI must not call its own MCP transport');
 		}
 	}

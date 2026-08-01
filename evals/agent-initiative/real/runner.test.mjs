@@ -17,6 +17,7 @@ import {
 	replayRealReport,
 	buildRunPlan,
 	buildPairedOutcomes,
+	buildWorkingTreeMetadata,
 	resolveOutputPaths,
 	repositoryRoot,
 	mcpRuntimePath,
@@ -94,6 +95,27 @@ function createFakeRunSingle(resultByKey = {}) {
 		calls: () => calls,
 	};
 }
+
+test('working-tree provenance changes when untracked bytes change', async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tracekeeper-eval-git-state-'));
+	try {
+		spawnSync('git', ['init', '-q'], { cwd: root });
+		await fs.writeFile(path.join(root, 'tracked.txt'), 'tracked\n', 'utf8');
+		spawnSync('git', ['add', '.'], { cwd: root });
+		spawnSync('git', ['-c', 'user.name=Tracekeeper Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture'], { cwd: root });
+		await fs.writeFile(path.join(root, 'untracked.txt'), 'first\n', 'utf8');
+		const first = await buildWorkingTreeMetadata(root);
+		await fs.writeFile(path.join(root, 'untracked.txt'), 'second\n', 'utf8');
+		const second = await buildWorkingTreeMetadata(root);
+
+		assert.equal(first.dirty, true);
+		assert.equal(first.untracked_file_count, 1);
+		assert.match(first.working_tree_diff_sha256, /^[a-f0-9]{64}$/);
+		assert.notEqual(first.working_tree_diff_sha256, second.working_tree_diff_sha256);
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
 
 function createFlakyRunSingle(attemptsByKey = {}) {
 	let calls = 0;

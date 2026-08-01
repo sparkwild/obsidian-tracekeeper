@@ -1,7 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
-	TRACEKEEPER_AUDIT_LOG_PATH,
 	TRACEKEEPER_REVIEW_QUEUE_DIR,
 	TRACEKEEPER_SYSTEM_PATH,
 	KNOWLEDGE_INDEX_PATH,
@@ -23,7 +22,9 @@ import {
 	toolDefinitions,
 	toolPrompts,
 	appendConnectionAuditEvent,
+	readMergedAuditSections,
 	recordRejectedToolCallAuditEvent,
+	type ProposalTransitionPort,
 	type ToolInvocationContext,
 } from './tools';
 import type { VaultRepository } from '@tracekeeper/core';
@@ -132,11 +133,13 @@ export interface McpJsonRpcHandlerOptions {
 	defaultVaultRoot?: string;
 	vaultConfigDir?: string;
 	vaultRepository?: VaultRepository;
+	proposalTransitionPort?: ProposalTransitionPort;
 	knowledgeSnapshotProvider?: ToolInvocationContext['knowledgeSnapshotProvider'];
 	graphProfile?: unknown;
 	memoryRules?: ToolInvocationContext['memoryRules'];
 	contentLanguage?: unknown;
 	contentLanguageSource?: unknown;
+	writebackConfirmationSecret?: string | Uint8Array;
 	runtimeVersion?: string;
 	transport?: string;
 }
@@ -145,11 +148,13 @@ export class McpJsonRpcHandler {
 	private defaultVaultRoot?: string;
 	private vaultConfigDir?: string;
 	private vaultRepository?: VaultRepository;
+	private proposalTransitionPort?: ProposalTransitionPort;
 	private knowledgeSnapshotProvider?: ToolInvocationContext['knowledgeSnapshotProvider'];
 	private graphProfile?: unknown;
 	private memoryRules?: ToolInvocationContext['memoryRules'];
 	private contentLanguage?: unknown;
 	private contentLanguageSource?: unknown;
+	private writebackConfirmationSecret?: string | Uint8Array;
 	private runtimeVersion: string;
 	private transport: string;
 
@@ -157,11 +162,13 @@ export class McpJsonRpcHandler {
 		this.defaultVaultRoot = options.defaultVaultRoot;
 		this.vaultConfigDir = options.vaultConfigDir;
 		this.vaultRepository = options.vaultRepository;
+		this.proposalTransitionPort = options.proposalTransitionPort;
 		this.knowledgeSnapshotProvider = options.knowledgeSnapshotProvider;
 		this.graphProfile = options.graphProfile;
 		this.memoryRules = options.memoryRules;
 		this.contentLanguage = options.contentLanguage;
 		this.contentLanguageSource = options.contentLanguageSource;
+		this.writebackConfirmationSecret = options.writebackConfirmationSecret;
 		this.runtimeVersion = options.runtimeVersion || MCP_SERVER_VERSION;
 		this.transport = options.transport || STREAMABLE_HTTP_TRANSPORT;
 	}
@@ -188,7 +195,7 @@ export class McpJsonRpcHandler {
 		}
 
 		try {
-			const result = await this.dispatch(method, params, state);
+			const result = await this.dispatch(method, params, state, requestId);
 			if (isNotification || method.startsWith('notifications/')) {
 				return null;
 			}
@@ -211,7 +218,12 @@ export class McpJsonRpcHandler {
 		return typeof id === 'string' || typeof id === 'number' || id === null ? id : undefined;
 	}
 
-	private async dispatch(method: string, params: Record<string, unknown>, state: McpConnectionState): Promise<unknown> {
+	private async dispatch(
+		method: string,
+		params: Record<string, unknown>,
+		state: McpConnectionState,
+		requestId?: JsonRpcId
+	): Promise<unknown> {
 			switch (method) {
 			case 'initialize':
 				state.protocolVersion = this.negotiateProtocolVersion(params.protocolVersion);
@@ -234,7 +246,7 @@ export class McpJsonRpcHandler {
 			case 'tools/list':
 				return { tools: toolDefinitions(state.credentialCapabilities) };
 			case 'tools/call':
-				return this.handleToolsCall(params, state);
+				return this.handleToolsCall(params, state, requestId);
 			case 'resources/list':
 				return {
 					resources: RESOURCES.map((resource) => ({
@@ -393,36 +405,46 @@ export class McpJsonRpcHandler {
 		);
 	}
 
-	private async handleToolsCall(params: Record<string, unknown>, state: McpConnectionState): Promise<unknown> {
+	private async handleToolsCall(
+		params: Record<string, unknown>,
+		state: McpConnectionState,
+		requestId?: JsonRpcId
+	): Promise<unknown> {
 		const name = params.name;
 		const argumentsValue = params.arguments ?? {};
 		if (typeof name !== 'string' || name.trim() === '') {
 			await recordRejectedToolCallAuditEvent(
-				this.buildToolInvocationContext(state),
+				this.buildToolInvocationContext(state, requestId),
 				'tool_call_invalid_name'
 			);
 			throw new RpcError({ code: -32602, message: '`name` is required for tools/call.' });
 		}
 		if (!isRecord(argumentsValue)) {
 			await recordRejectedToolCallAuditEvent(
-				this.buildToolInvocationContext(state),
+				this.buildToolInvocationContext(state, requestId),
 				'tool_call_invalid_arguments'
 			);
 			throw new RpcError({ code: -32602, message: '`arguments` must be an object.' });
 		}
-		return await callTool(name, argumentsValue, this.buildToolInvocationContext(state));
+		return await callTool(name, argumentsValue, this.buildToolInvocationContext(state, requestId));
 	}
 
-	private buildToolInvocationContext(state: McpConnectionState): ToolInvocationContext {
+	private buildToolInvocationContext(
+		state: McpConnectionState,
+		requestId?: JsonRpcId
+	): ToolInvocationContext {
 		return {
+			requestId: requestId == null ? undefined : String(requestId),
 			defaultVaultRoot: this.defaultVaultRoot,
 			vaultConfigDir: this.vaultConfigDir,
 			vaultRepository: this.vaultRepository,
+			proposalTransitionPort: this.proposalTransitionPort,
 			knowledgeSnapshotProvider: this.knowledgeSnapshotProvider,
 			graphProfile: this.graphProfile,
 			memoryRules: this.memoryRules,
 			contentLanguage: this.contentLanguage,
 			contentLanguageSource: this.contentLanguageSource,
+			writebackConfirmationSecret: this.writebackConfirmationSecret,
 			principalId: state.principalId,
 			credentialCapabilities: state.credentialCapabilities,
 			agentId: state.agentId,
@@ -682,47 +704,38 @@ async function readReviewQueueResource(vaultRoot: string, context: ResourceReadC
 }
 
 async function readAgentActivityResource(vaultRoot: string, context: ResourceReadContext): Promise<string> {
-	const auditLog = await readAuditRecentRaw(vaultRoot, context);
-	if (!auditLog) {
+	const sections = await readMergedAuditSections(vaultRoot, context);
+	if (sections.length === 0) {
 		return '## Agent Activity\nNo activity entries are available.';
 	}
 
-	const lines = auditLog
-		.split('\n')
-		.filter((line) => line.trim().length > 0)
-		.slice(-MAX_REVIEW_QUEUE_LINES)
-		.join('\n');
-
-	return boundResourceText(`# Agent Activity\n${lines}`);
+	const rendered = sections
+		.slice(0, MAX_REVIEW_QUEUE_LINES)
+		.map((section) => [
+			`## ${section.heading}`,
+			`source_path: ${section.source_path}`,
+			`source_kind: ${section.source_kind}`,
+			...(section.audit_event_id ? [`audit_event_id: ${section.audit_event_id}`] : []),
+			...section.body,
+		].join('\n'));
+	return boundResourceText(['# Agent Activity', ...rendered].join('\n\n'));
 }
 
 async function readAuditRecentResource(vaultRoot: string, context: ResourceReadContext): Promise<string> {
-	const auditLog = await readAuditRecentRaw(vaultRoot, context);
-	if (!auditLog) {
-		return '# Recent Audit\nNo sections are available.';
-	}
-
-	const sections = parseAuditSections(auditLog).slice(-MAX_REVIEW_QUEUE_LINES);
+	const sections = (await readMergedAuditSections(vaultRoot, context))
+		.slice(0, MAX_REVIEW_QUEUE_LINES);
 	if (sections.length === 0) {
 		return '# Recent Audit\nNo sections are available.';
 	}
 
-	const rendered = sections.map((section) => `## ${section.heading}\n${section.body.join('\n')}`);
+	const rendered = sections.map((section) => [
+		`## ${section.heading}`,
+		`source_path: ${section.source_path}`,
+		`source_kind: ${section.source_kind}`,
+		...(section.audit_event_id ? [`audit_event_id: ${section.audit_event_id}`] : []),
+		...section.body,
+	].join('\n'));
 	return boundResourceText(['# Recent Audit', ...rendered].join('\n\n'));
-}
-
-async function readAuditRecentRaw(vaultRoot: string, context: ResourceReadContext): Promise<string> {
-	try {
-		return await readResourceText(TRACEKEEPER_AUDIT_LOG_PATH, vaultRoot, context);
-	} catch (error) {
-		if (error instanceof ToolInputError) {
-			return '';
-		}
-		if (error instanceof Error && error.message.startsWith('Resource not found')) {
-			return '';
-		}
-		throw error;
-	}
 }
 
 function readResourceText(relativePath: string, vaultRoot: string, context: ResourceReadContext): Promise<string> {
@@ -761,47 +774,4 @@ function boundResourceText(text: string): string {
 
 function toBoundText(text: string, maxLength: number): string {
 	return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
-}
-
-function parseAuditSections(content: string) {
-	const lines = content.split('\n');
-	const sections: Array<{ heading: string; body: string[]; atLine: number }> = [];
-	let currentHeading = '';
-	let currentBody: string[] = [];
-	let currentLine = 0;
-	let started = false;
-
-	for (let index = 0; index < lines.length; index += 1) {
-		const line = lines[index] || '';
-		const match = line.match(/^#{2,6}\s+(.+)$/);
-		if (!match) {
-			if (started) {
-				currentBody.push(line);
-			}
-			continue;
-		}
-
-		if (started) {
-			sections.push({
-				heading: currentHeading,
-				body: currentBody,
-				atLine: currentLine,
-			});
-		}
-
-		started = true;
-		currentHeading = match[1]?.trim() || 'section';
-		currentBody = [];
-		currentLine = index + 1;
-	}
-
-	if (started) {
-		sections.push({
-			heading: currentHeading,
-			body: currentBody,
-			atLine: currentLine,
-		});
-	}
-
-	return sections;
 }
