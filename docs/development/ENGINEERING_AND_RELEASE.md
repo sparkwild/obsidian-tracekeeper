@@ -132,6 +132,33 @@ release qualification:
 7. record the exact app versions, fixture paths, packaged artifact hashes,
    results, and unresolved limitations outside `docs/`.
 
+Use the deterministic upgrade tool before the real-plugin upgrade row:
+
+```bash
+npm run release:upgrade-fixture -- create --assets <published-0.2.3-assets> --output <new-fixture-directory>
+npm run release:upgrade-fixture -- snapshot --fixture <fixture.json> --vault <fixture-vault> --phase before --output <before.json>
+npm run release:upgrade-fixture -- snapshot --fixture <fixture.json> --vault <fixture-vault> --phase after --output <after.json>
+npm run release:upgrade-fixture -- compare --before <before.json> --after <after.json> --expected-target-assets <qualified-assets.json> --expected-version <x.y.z>
+```
+
+The tool never downloads release assets or starts Obsidian. `create` accepts
+only the immutable published `0.2.3` sizes and SHA-256 values, writes a new
+synthetic disposable Vault, and refuses an existing output path. The fixture
+contains sixteen task, session, context, memory, Wiki, source, review, legacy,
+Agent-observation, and audit records plus two unrelated protected files. The
+external operator records the `before` snapshot, replaces only the three plugin
+assets, runs the candidate and required restarts, then records `after`.
+`qualified-assets.json` contains `bytes` and `sha256` for each retained T03
+asset. Comparison rejects a missing, changed, moved, or duplicate seeded
+record; any added or removed durable Tracekeeper inventory; preserved-setting
+drift; retained legacy credentials; invalid current access token; legacy-token
+reuse; memory-rule version mismatch; or candidate asset mismatch. The snapshots
+contain only boolean credential-state evidence, never token values. The after
+state must initialize onboarding, language, and managed-Skill receipt storage
+without claiming an Agent connection, Skill setup evidence, or Skill ownership.
+Actual client configuration and legacy/current Skill-file interaction still
+requires the isolated real-Obsidian upgrade row.
+
 Stubbed fixtures remain required for deterministic conflict and interruption
 coverage, but they cannot substitute for the real-plugin matrix. Never point
 this qualification at a real user Vault. A partial or unavailable version,

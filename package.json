@@ -28,6 +28,8 @@
 		"test": "npm run test --workspaces --if-present",
 		"package": "npm run package --workspace apps/obsidian-plugin",
 		"qa:external-loopback": "bash ./scripts/qa_external_loopback.sh",
+		"release:upgrade-fixture": "node ./scripts/release_upgrade_fixture.mjs",
+		"release:upgrade-fixture:test": "node --test ./scripts/release_upgrade_fixture.test.mjs",
 		"verify:codex-safe": "bash ./scripts/verify_codex_safe.sh",
 		"verify": "bash ./scripts/verify.sh",
 		"version": "node ./version-bump.mjs && node ./scripts/build_tracekeeper_skill.mjs && git add manifest.json versions.json package.json package-lock.json apps/obsidian-plugin/manifest.json apps/obsidian-plugin/package.json apps/obsidian-plugin/package-lock.json apps/obsidian-plugin/src/composition/local-tool-executor.ts apps/mcp-server/package.json apps/mcp-server/package-lock.json packages/contracts/package.json packages/core/package.json packages/core/package-lock.json packages/mcp-runtime/package.json packages/mcp-runtime/src/handler.ts skills/tracekeeper/release.json skills/tracekeeper/manifest.json skills/tracekeeper/dist/tracekeeper.flattened.md"

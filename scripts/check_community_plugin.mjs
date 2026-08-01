@@ -11,6 +11,7 @@ const MCP_HANDLER_PATH = 'packages/mcp-runtime/src/handler.ts';
 const PLUGIN_MAIN_PATH = 'apps/obsidian-plugin/src/main.ts';
 const CODEX_SAFE_VERIFY_PATH = 'scripts/verify_codex_safe.sh';
 const EXTERNAL_LOOPBACK_QA_PATH = 'scripts/qa_external_loopback.sh';
+const VERIFY_PATH = 'scripts/verify.sh';
 const ROOT_PACKAGE_PATH = 'package.json';
 const RUNTIME_PACKAGE_PATH = 'packages/mcp-runtime/package.json';
 const MCP_SERVER_PACKAGE_PATH = 'apps/mcp-server/package.json';
@@ -39,6 +40,7 @@ function main() {
 	const pluginMain = fs.readFileSync(PLUGIN_MAIN_PATH, 'utf8');
 	const codexSafeVerify = fs.readFileSync(CODEX_SAFE_VERIFY_PATH, 'utf8');
 	const externalLoopbackQa = fs.readFileSync(EXTERNAL_LOOPBACK_QA_PATH, 'utf8');
+	const verify = fs.readFileSync(VERIFY_PATH, 'utf8');
 	const rootPackage = readJson(ROOT_PACKAGE_PATH);
 	const runtimePackage = readJson(RUNTIME_PACKAGE_PATH);
 	const mcpServerPackage = readJson(MCP_SERVER_PACKAGE_PATH);
@@ -109,6 +111,10 @@ function main() {
 
 	assert(rootPackage.scripts?.['verify:codex-safe'] === 'bash ./scripts/verify_codex_safe.sh', 'Root package must expose the bounded Codex-safe verification lane.');
 	assert(rootPackage.scripts?.['qa:external-loopback'] === 'bash ./scripts/qa_external_loopback.sh', 'Root package must expose the guarded external loopback QA lane.');
+	assert(rootPackage.scripts?.['release:upgrade-fixture'] === 'node ./scripts/release_upgrade_fixture.mjs', 'Root package must expose the deterministic previous-release upgrade fixture tool.');
+	assert(rootPackage.scripts?.['release:upgrade-fixture:test'] === 'node --test ./scripts/release_upgrade_fixture.test.mjs', 'Root package must expose upgrade fixture regression tests.');
+	assert(verify.includes('run_root_script release:upgrade-fixture:test'), 'Full verification must run upgrade fixture regression tests.');
+	assert(codexSafeVerify.includes('run_root_script release:upgrade-fixture:test'), 'Codex-safe verification must run upgrade fixture regression tests.');
 	assert(codexSafeVerify.includes('test:non-listener packages/mcp-runtime'), 'Codex-safe verification must use the explicit Runtime non-listener allowlist.');
 	assert(codexSafeVerify.includes('test:non-listener apps/mcp-server'), 'Codex-safe verification must use the explicit MCP Server non-listener allowlist.');
 	assert(!codexSafeVerify.includes('test:loopback'), 'Codex-safe verification must not invoke listener-bearing loopback tests.');
