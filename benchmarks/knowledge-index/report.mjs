@@ -8,6 +8,25 @@ import { spawnSync } from 'node:child_process';
 import { canonicalJson, REPORT_SCHEMA, sha256 } from './config.mjs';
 import { summarizeNanoseconds } from './normalize.mjs';
 
+const PHASE_KEYS = Object.freeze([
+	'fixture_generate',
+	'scan',
+	'core_rebuild',
+	'core_first_ready',
+	'adapter_first_ready',
+	'runtime_first_ready',
+	'rebuild_after_events',
+]);
+const MEMORY_BYTE_KEYS = Object.freeze([
+	'rss_before_bytes',
+	'rss_peak_bytes',
+	'rss_after_bytes',
+	'heap_used_before_bytes',
+	'heap_used_peak_bytes',
+	'heap_used_after_bytes',
+	'external_after_bytes',
+]);
+
 function command(commandName, args, cwd) {
 	const result = spawnSync(commandName, args, {
 		cwd,
@@ -243,6 +262,55 @@ function phaseSummary(samples, key) {
 	);
 }
 
+function summarizeBytes(values) {
+	const summary = summarizeNanoseconds(values);
+	return {
+		count: summary.count,
+		min_bytes: summary.min_ns,
+		p50_bytes: summary.p50_ns,
+		p95_bytes: summary.p95_ns,
+		max_bytes: summary.max_ns,
+		mean_bytes: summary.mean_ns,
+	};
+}
+
+function memorySummary(samples, phaseKey) {
+	const memoryRows = samples
+		.filter((entry) => entry.status === 'passed')
+		.map((entry) => entry.phases?.[phaseKey]?.memory)
+		.filter(Boolean);
+	return {
+		...Object.fromEntries(MEMORY_BYTE_KEYS.map((key) => [
+			key,
+			summarizeBytes(memoryRows.map((memory) => memory[key])),
+		])),
+		gc_available: memoryRows.length > 0 && memoryRows.every((memory) => memory.gc_available),
+		gc_invoked_before_baseline:
+			memoryRows.length > 0 && memoryRows.every((memory) => memory.gc_invoked_before_baseline),
+		sampling_interval_ms: [...new Set(memoryRows.map((memory) => memory.sampling_interval_ms))]
+			.sort((left, right) => left - right),
+	};
+}
+
+function recallSummary(samples) {
+	const grouped = new Map();
+	for (const sample of samples.filter((entry) => entry.status === 'passed')) {
+		for (const recall of sample.recall ?? []) {
+			if (recall.status !== 'passed') {
+				continue;
+			}
+			const durations = grouped.get(recall.query_id) ?? [];
+			durations.push(recall.duration_ns);
+			grouped.set(recall.query_id, durations);
+		}
+	}
+	return Object.fromEntries(
+		[...grouped.entries()]
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([queryId, values]) => [queryId, summarizeNanoseconds(values)])
+	);
+}
+
 export function summarizeSamples(samples) {
 	const passed = samples.filter((sample) => sample.status === 'passed');
 	const failed = samples.filter((sample) => sample.status === 'failed');
@@ -251,20 +319,28 @@ export function summarizeSamples(samples) {
 		sample_count: samples.length,
 		passed_count: passed.length,
 		failed_count: failed.length,
-		phases: {
-			fixture_generate: phaseSummary(samples, 'fixture_generate'),
-			scan: phaseSummary(samples, 'scan'),
-			core_rebuild: phaseSummary(samples, 'core_rebuild'),
-			core_first_ready: phaseSummary(samples, 'core_first_ready'),
-			adapter_first_ready: phaseSummary(samples, 'adapter_first_ready'),
-			runtime_first_ready: phaseSummary(samples, 'runtime_first_ready'),
-			rebuild_after_events: phaseSummary(samples, 'rebuild_after_events'),
-		},
+		phases: Object.fromEntries(PHASE_KEYS.map((key) => [key, phaseSummary(samples, key)])),
+		memory: Object.fromEntries(PHASE_KEYS.map((key) => [key, memorySummary(samples, key)])),
 		incremental_events: groupEventDurations(samples),
+		recall: recallSummary(samples),
 		correctness_passed:
 			passed.length > 0 &&
 			passed.every((sample) => sample.correctness?.ok === true),
 	};
+}
+
+function milliseconds(value) {
+	return value === null ? 'n/a' : (value / 1_000_000).toFixed(3);
+}
+
+function mebibytes(value) {
+	return value === null ? 'n/a' : (value / (1024 * 1024)).toFixed(2);
+}
+
+function latencyRows(entries) {
+	return Object.entries(entries).map(([name, values]) =>
+		`| \`${name}\` | ${values.count} | ${milliseconds(values.p50_ns)} | ${milliseconds(values.p95_ns)} |`
+	);
 }
 
 function renderMarkdown(summary, provenance) {
@@ -279,6 +355,36 @@ function renderMarkdown(summary, provenance) {
 		`- Passed: ${summary.passed_count}`,
 		`- Failed: ${summary.failed_count}`,
 		`- Correctness: ${summary.correctness_passed ? 'passed' : 'failed or incomplete'}`,
+		'',
+		'## Phase latency',
+		'',
+		'| Phase | Count | p50 ms | p95 ms |',
+		'| --- | ---: | ---: | ---: |',
+		...latencyRows(summary.phases),
+		'',
+		'## Incremental event latency',
+		'',
+		'| Event | Count | p50 ms | p95 ms |',
+		'| --- | ---: | ---: | ---: |',
+		...latencyRows(summary.incremental_events),
+		'',
+		'## Recall latency',
+		'',
+		'| Query | Count | p50 ms | p95 ms |',
+		'| --- | ---: | ---: | ---: |',
+		...latencyRows(summary.recall),
+		'',
+		'## Peak memory',
+		'',
+		'| Phase | RSS p50 MiB | RSS p95 MiB | Heap p50 MiB | Heap p95 MiB |',
+		'| --- | ---: | ---: | ---: | ---: |',
+		...Object.entries(summary.memory).map(([phase, memory]) => [
+			`| \`${phase}\``,
+			mebibytes(memory.rss_peak_bytes.p50_bytes),
+			mebibytes(memory.rss_peak_bytes.p95_bytes),
+			mebibytes(memory.heap_used_peak_bytes.p50_bytes),
+			`${mebibytes(memory.heap_used_peak_bytes.p95_bytes)} |`,
+		].join(' | ')),
 		'',
 		'This report is synthetic evidence. It is not a product SLO or a cache decision.',
 		'',

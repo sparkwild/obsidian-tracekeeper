@@ -15,6 +15,7 @@ import {
 import {
 	buildAdapterBundle,
 	createMarkdownFileCatalog,
+	runReplayStress,
 	runSingleRepetition,
 } from './harness.mjs';
 import {
@@ -301,8 +302,25 @@ test('summary uses nearest-rank p50/p95 and keeps raw failures out of latency ag
 	const summary = summarizeSamples([
 		{
 			status: 'passed',
-			phases: { scan: { duration_ns: 10 } },
+			phases: {
+				scan: {
+					duration_ns: 10,
+					memory: {
+						rss_before_bytes: 100,
+						rss_peak_bytes: 200,
+						rss_after_bytes: 150,
+						heap_used_before_bytes: 50,
+						heap_used_peak_bytes: 120,
+						heap_used_after_bytes: 80,
+						external_after_bytes: 10,
+						gc_available: true,
+						gc_invoked_before_baseline: true,
+						sampling_interval_ms: 10,
+					},
+				},
+			},
 			incremental_events: [],
+			recall: [{ query_id: 'global_exact', duration_ns: 25, status: 'passed' }],
 			correctness: { ok: true },
 		},
 		{
@@ -313,6 +331,10 @@ test('summary uses nearest-rank p50/p95 and keeps raw failures out of latency ag
 	]);
 	assert.equal(summary.phases.scan.count, 1);
 	assert.equal(summary.phases.scan.max_ns, 10);
+	assert.equal(summary.memory.scan.rss_peak_bytes.p50_bytes, 200);
+	assert.equal(summary.memory.scan.gc_available, true);
+	assert.deepEqual(summary.memory.scan.sampling_interval_ms, [10]);
+	assert.equal(summary.recall.global_exact.p95_ns, 25);
 	assert.equal(summary.failed_count, 1);
 });
 
@@ -383,4 +405,49 @@ test('tiny harness measures separate phases, converges, retains no fixture, and 
 		await fsPromises.rm(fixtureRoot, { recursive: true, force: true });
 	}
 	assert.equal(fs.existsSync(fixtureRoot), false);
+});
+
+test('queued replay stress directly observes coalescing and converges with ordered reference state', async () => {
+	const supportRoot = tempDirectory('tracekeeper-index-replay-support-');
+	const fixtureRoot = tempDirectory('tracekeeper-index-replay-fixture-');
+	const referenceRoot = tempDirectory('tracekeeper-index-replay-reference-');
+	try {
+		const adapterBundlePath = await buildAdapterBundle(supportRoot);
+		const result = await runReplayStress({
+			fixtureRoot,
+			referenceRoot,
+			adapterBundlePath,
+			tier: 'tiny',
+			seed: 'tracekeeper-index-v1',
+			retainFixture: false,
+		});
+		assert.equal(result.status, 'passed');
+		assert.equal(result.metrics.attempted_event_count, 88);
+		assert.equal(result.metrics.queued_event_count, 80);
+		assert.ok(result.metrics.base_rebuild_ns >= 0);
+		assert.ok(result.metrics.queued_apply_ns >= 0);
+		assert.ok(result.metrics.total_rebuild_replay_ns >= result.metrics.queued_apply_ns);
+		assert.deepEqual(result.pending_before_release, {
+			pending_path_count: 0,
+			rescan_pending: true,
+		});
+		assert.equal(result.generation.adapter_initial, 1);
+		assert.equal(result.generation.adapter_final, 3);
+		assert.equal(result.generation.adapter_event_sequence, 80);
+		assert.equal(result.generation.reference_final, 81);
+		assert.equal(result.generation.reference_event_sequence, 80);
+		assert.equal(result.correctness.queued_attempt_count, 80);
+		assert.equal(result.correctness.rejected_attempt_count, 8);
+		assert.equal(result.correctness.queue_sequences_unique, true);
+		assert.equal(result.correctness.queue_sequences_contiguous, true);
+		assert.equal(result.correctness.content_converged, true);
+		assert.deepEqual(result.correctness.stale_replay_paths, []);
+		assert.equal(result.correctness.ok, true);
+	} finally {
+		await fsPromises.rm(supportRoot, { recursive: true, force: true });
+		await fsPromises.rm(fixtureRoot, { recursive: true, force: true });
+		await fsPromises.rm(referenceRoot, { recursive: true, force: true });
+	}
+	assert.equal(fs.existsSync(fixtureRoot), false);
+	assert.equal(fs.existsSync(referenceRoot), false);
 });

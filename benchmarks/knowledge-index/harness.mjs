@@ -269,15 +269,43 @@ export function createMarkdownFileCatalog(root) {
 	};
 }
 
-function fakeObsidianApp(root, fileCatalog) {
+function createReadController(root) {
+	let gate = null;
+	return {
+		blockNextRead(filePath) {
+			let announceEntered;
+			let releaseRead;
+			const entered = new Promise((resolve) => {
+				announceEntered = resolve;
+			});
+			const released = new Promise((resolve) => {
+				releaseRead = resolve;
+			});
+			gate = { filePath, announceEntered, released };
+			return {
+				entered,
+				release: () => releaseRead(),
+			};
+		},
+		async read(file) {
+			if (gate?.filePath === file.path) {
+				const activeGate = gate;
+				gate = null;
+				activeGate.announceEntered();
+				await activeGate.released;
+			}
+			return fsPromises.readFile(path.join(root, ...file.path.split('/')), 'utf8');
+		},
+	};
+}
+
+function fakeObsidianApp(root, fileCatalog, readController) {
 	return {
 		vault: {
 			getMarkdownFiles: () => fileCatalog.all(),
 			getAbstractFileByPath: (filePath) => fileCatalog.find(filePath),
-			cachedRead: async (file) =>
-				fsPromises.readFile(path.join(root, ...file.path.split('/')), 'utf8'),
-			read: async (file) =>
-				fsPromises.readFile(path.join(root, ...file.path.split('/')), 'utf8'),
+			cachedRead: (file) => readController.read(file),
+			read: (file) => readController.read(file),
 		},
 		metadataCache: {
 			getFileCache: (file) => nativeMetadata(root, file),
@@ -335,7 +363,11 @@ async function waitForReady(adapter, vaultRoot, rebuildState) {
 async function createReadyAdapter(bundlePath, fixtureRoot) {
 	const Adapter = loadAdapter(bundlePath);
 	const fileCatalog = createMarkdownFileCatalog(fixtureRoot);
-	const adapter = Adapter.create(fakeObsidianApp(fixtureRoot, fileCatalog), fixtureRoot);
+	const readController = createReadController(fixtureRoot);
+	const adapter = Adapter.create(
+		fakeObsidianApp(fixtureRoot, fileCatalog, readController),
+		fixtureRoot
+	);
 	const rebuildPromise = adapter.rebuild();
 	const rebuildState = { settled: false, error: null };
 	void rebuildPromise.then(
@@ -355,6 +387,7 @@ async function createReadyAdapter(bundlePath, fixtureRoot) {
 	return {
 		adapter,
 		fileCatalog,
+		readController,
 		report,
 		readyScan,
 		runtimeFirstReadyNs: elapsedNs(runtimeStartedAt),
@@ -430,6 +463,430 @@ async function applyIncrementalEvents(adapter, fileCatalog, fixtureRoot, eventSc
 		}
 	}
 	return results;
+}
+
+function fileVersion(file) {
+	return `${new Date(file.stat.mtime).toISOString()}|${file.stat.size}`;
+}
+
+function currentFileVersions(fileCatalog) {
+	return new Map(fileCatalog.all().map((file) => [file.path, fileVersion(file)]));
+}
+
+function replayPrecondition(event, versions) {
+	const currentVersion = versions.get(event.path) ?? null;
+	if (currentVersion !== event.before_file_version) {
+		return {
+			accepted: false,
+			reason: 'source_version_mismatch',
+			current_version: currentVersion,
+		};
+	}
+	if (
+		event.kind === 'rename' &&
+		event.new_path !== event.path &&
+		versions.has(event.new_path)
+	) {
+		return {
+			accepted: false,
+			reason: 'target_exists',
+			current_version: currentVersion,
+		};
+	}
+	return { accepted: true, reason: null, current_version: currentVersion };
+}
+
+async function mutateReplayFilesystem(root, fileCatalog, versions, event) {
+	if (event.kind === 'create' || event.kind === 'modify') {
+		const content = contentForIncrementalEvent(event);
+		const absolutePath = path.join(root, ...event.path.split('/'));
+		await writeEventContent(absolutePath, content, event.modified_at);
+		const file = abstractFile(root, event.path);
+		fileCatalog.upsert(file);
+		versions.set(event.path, fileVersion(file));
+		if (versions.get(event.path) !== event.after_file_version) {
+			throw new Error(`Replay ${event.kind} ${event.sequence} produced an unexpected file version.`);
+		}
+		return { file };
+	}
+	if (event.kind === 'delete') {
+		const file = fileCatalog.find(event.path);
+		if (!file) {
+			throw new Error(`Replay delete ${event.sequence} has no current file.`);
+		}
+		await fsPromises.unlink(path.join(root, ...event.path.split('/')));
+		fileCatalog.remove(event.path);
+		versions.delete(event.path);
+		return { file };
+	}
+
+	const file = fileCatalog.find(event.path);
+	if (!file) {
+		throw new Error(`Replay rename ${event.sequence} has no current source file.`);
+	}
+	const sourcePath = path.join(root, ...event.path.split('/'));
+	const targetPath = path.join(root, ...event.new_path.split('/'));
+	await fsPromises.mkdir(path.dirname(targetPath), { recursive: true });
+	await fsPromises.rename(sourcePath, targetPath);
+	const renamedFile = abstractFile(root, event.new_path);
+	fileCatalog.rename(event.path, renamedFile);
+	versions.delete(event.path);
+	versions.set(event.new_path, fileVersion(renamedFile));
+	return { file: renamedFile, oldFile: file };
+}
+
+async function queueReplayAttempts(adapterState, replayEvents) {
+	const versions = currentFileVersions(adapterState.fileCatalog);
+	const attempts = [];
+	for (const event of replayEvents.events) {
+		const precondition = replayPrecondition(event, versions);
+		if (!precondition.accepted) {
+			if (event.expected_generation_delta !== 0) {
+				throw new Error(`Replay event ${event.sequence} failed a required precondition.`);
+			}
+			attempts.push({
+				sequence: event.sequence,
+				kind: event.kind,
+				case: event.case ?? null,
+				status: 'rejected_precondition',
+				reason: precondition.reason,
+				expected_generation_delta: event.expected_generation_delta,
+			});
+			continue;
+		}
+		if (event.expected_generation_delta !== 1) {
+			throw new Error(`Replay event ${event.sequence} unexpectedly passed its precondition.`);
+		}
+
+		const mutationStartedAt = nowNs();
+		const mutation = await mutateReplayFilesystem(
+			adapterState.fixtureRoot,
+			adapterState.fileCatalog,
+			versions,
+			event
+		);
+		const filesystemMutationNs = elapsedNs(mutationStartedAt);
+		const applyStartedAt = nowNs();
+		if (event.kind === 'create') {
+			await adapterState.adapter.applyCreate(mutation.file);
+		} else if (event.kind === 'modify') {
+			await adapterState.adapter.applyModify(mutation.file);
+		} else if (event.kind === 'delete') {
+			await adapterState.adapter.applyDelete(mutation.file);
+		} else {
+			await adapterState.adapter.applyRename(mutation.file, event.path);
+		}
+		attempts.push({
+			sequence: event.sequence,
+			kind: event.kind,
+			case: event.case ?? null,
+			status: 'queued',
+			filesystem_mutation_ns: filesystemMutationNs,
+			public_apply_ns: elapsedNs(applyStartedAt),
+			expected_generation_delta: event.expected_generation_delta,
+		});
+	}
+	return attempts;
+}
+
+async function applyReferenceReplay(referenceState, replayEvents) {
+	const versions = currentFileVersions(referenceState.fileCatalog);
+	const trace = [];
+	for (const event of replayEvents.events) {
+		const before = await referenceState.adapter.knowledgeSnapshot();
+		const precondition = replayPrecondition(event, versions);
+		if (!precondition.accepted) {
+			if (event.expected_generation_delta !== 0) {
+				throw new Error(`Reference replay event ${event.sequence} failed unexpectedly.`);
+			}
+			trace.push({
+				sequence: event.sequence,
+				kind: event.kind,
+				case: event.case ?? null,
+				status: 'rejected_precondition',
+				generation_before: before.generation,
+				generation_after: before.generation,
+				expected_generation_delta: event.expected_generation_delta,
+			});
+			continue;
+		}
+
+		const mutation = await mutateReplayFilesystem(
+			referenceState.fixtureRoot,
+			referenceState.fileCatalog,
+			versions,
+			event
+		);
+		if (event.kind === 'create') {
+			await referenceState.adapter.applyCreate(mutation.file);
+		} else if (event.kind === 'modify') {
+			await referenceState.adapter.applyModify(mutation.file);
+		} else if (event.kind === 'delete') {
+			await referenceState.adapter.applyDelete(mutation.file);
+		} else {
+			await referenceState.adapter.applyRename(mutation.file, event.path);
+		}
+		const after = await referenceState.adapter.knowledgeSnapshot();
+		const generationDelta = after.generation - before.generation;
+		if (generationDelta !== event.expected_generation_delta) {
+			throw new Error(
+				`Reference replay event ${event.sequence} changed generation by ${generationDelta}.`
+			);
+		}
+		trace.push({
+			sequence: event.sequence,
+			kind: event.kind,
+			case: event.case ?? null,
+			status: 'applied',
+			generation_before: before.generation,
+			generation_after: after.generation,
+			expected_generation_delta: event.expected_generation_delta,
+		});
+	}
+	return { trace, snapshot: await referenceState.adapter.knowledgeSnapshot() };
+}
+
+function installReplayObserver(adapter) {
+	const queueCalls = [];
+	let rebuildStartedAt = null;
+	let replay = null;
+	const originalQueuePendingEvent = adapter.queuePendingEvent.bind(adapter);
+	const originalReplayPendingEvents = adapter.replayPendingEvents.bind(adapter);
+	adapter.queuePendingEvent = (event) => {
+		const result = originalQueuePendingEvent(event);
+		queueCalls.push({
+			sequence: event.sequence,
+			kind: event.kind === 'upsert' ? event.eventKind : event.kind,
+			path: event.path,
+			new_path: event.kind === 'rename' ? event.newPath : null,
+			pending_path_count: adapter.pendingEvents.size,
+			rescan_pending: Boolean(adapter.pendingRescanEvent),
+		});
+		return result;
+	};
+	adapter.replayPendingEvents = async (...args) => {
+		const replayStartedAt = nowNs();
+		const pendingPathCount = adapter.pendingEvents.size;
+		const rescanPending = Boolean(adapter.pendingRescanEvent);
+		const warnings = await originalReplayPendingEvents(...args);
+		replay = {
+			base_rebuild_ns: rebuildStartedAt === null
+				? null
+				: Number(replayStartedAt - rebuildStartedAt),
+			queued_apply_ns: elapsedNs(replayStartedAt),
+			pending_path_count_at_start: pendingPathCount,
+			rescan_pending_at_start: rescanPending,
+			warning_count: warnings.length,
+		};
+		return warnings;
+	};
+	return {
+		queueCalls,
+		markRebuildStart: () => {
+			rebuildStartedAt = nowNs();
+			return rebuildStartedAt;
+		},
+		result: () => replay,
+	};
+}
+
+function replayPaths(snapshot) {
+	return [...snapshot.notes.keys()].filter((notePath) =>
+		notePath.startsWith('01_knowledge/wiki/replay/') ||
+		notePath.startsWith('01_knowledge/wiki/replay-renamed/')
+	);
+}
+
+function contentDifference(left, right) {
+	const firstDifference = (leftRows, rightRows) => {
+		const leftMap = new Map(leftRows);
+		const rightMap = new Map(rightRows);
+		for (const rowPath of [...new Set([...leftMap.keys(), ...rightMap.keys()])]
+			.sort((leftPath, rightPath) => leftPath.localeCompare(rightPath))) {
+			if (JSON.stringify(leftMap.get(rowPath)) !== JSON.stringify(rightMap.get(rowPath))) {
+				return rowPath;
+			}
+		}
+		return null;
+	};
+	return {
+		version_equal: left.version === right.version,
+		notes_equal: JSON.stringify(left.notes) === JSON.stringify(right.notes),
+		first_note_difference: firstDifference(left.notes, right.notes),
+		graph_outgoing_equal:
+			JSON.stringify(left.graph.outgoing) === JSON.stringify(right.graph.outgoing),
+		graph_incoming_equal:
+			JSON.stringify(left.graph.incoming) === JSON.stringify(right.graph.incoming),
+		scopes_by_type_equal:
+			JSON.stringify(left.scopes.by_type) === JSON.stringify(right.scopes.by_type),
+		scopes_by_tag_equal:
+			JSON.stringify(left.scopes.by_tag) === JSON.stringify(right.scopes.by_tag),
+	};
+}
+
+export async function runReplayStress(options) {
+	const fixtureRoot = path.resolve(options.fixtureRoot);
+	const referenceRoot = path.resolve(options.referenceRoot);
+	let fixture = null;
+	let referenceFixture = null;
+	try {
+		[fixture, referenceFixture] = await Promise.all([
+			generateFixture({
+				fixtureRoot,
+				tier: options.tier,
+				seed: options.seed,
+				eventCounts: options.eventCounts,
+			}),
+			generateFixture({
+				fixtureRoot: referenceRoot,
+				tier: options.tier,
+				seed: options.seed,
+				eventCounts: options.eventCounts,
+			}),
+		]);
+		const [fixtureCheck, referenceCheck] = await Promise.all([
+			verifyFixture(fixture),
+			verifyFixture(referenceFixture),
+		]);
+		if (!fixtureCheck.ok || !referenceCheck.ok) {
+			throw new Error('Replay fixture verification failed.');
+		}
+		if (fixture.manifest.manifest_sha256 !== referenceFixture.manifest.manifest_sha256) {
+			throw new Error('Replay reference fixture identity does not match.');
+		}
+
+		const adapterState = await createReadyAdapter(options.adapterBundlePath, fixtureRoot);
+		const initialAdapterSnapshot = await adapterState.adapter.knowledgeSnapshot();
+		const observer = installReplayObserver(adapterState.adapter);
+		const blockerPath = adapterState.fileCatalog.all().at(-1)?.path;
+		if (!blockerPath) {
+			throw new Error('Replay stress requires at least one fixture note.');
+		}
+		const readGate = adapterState.readController.blockNextRead(blockerPath);
+		const rebuildStartedAt = observer.markRebuildStart();
+		const rebuildPromise = adapterState.adapter.rebuild();
+		await readGate.entered;
+		const attempts = await queueReplayAttempts(
+			{ ...adapterState, fixtureRoot },
+			fixture.replayEvents
+		);
+		const pendingBeforeRelease = {
+			pending_path_count: adapterState.adapter.pendingEvents.size,
+			rescan_pending: Boolean(adapterState.adapter.pendingRescanEvent),
+		};
+		readGate.release();
+		const rebuildReport = await rebuildPromise;
+		const totalRebuildReplayNs = elapsedNs(rebuildStartedAt);
+		const replayObservation = observer.result();
+		if (!replayObservation) {
+			throw new Error('Replay observer did not observe the adapter replay boundary.');
+		}
+
+		const referenceAdapterState = await createReadyAdapter(
+			options.adapterBundlePath,
+			referenceRoot
+		);
+		const referenceResult = await applyReferenceReplay({
+			fixtureRoot: referenceRoot,
+			fileCatalog: referenceAdapterState.fileCatalog,
+			adapter: referenceAdapterState.adapter,
+		}, fixture.replayEvents);
+		const finalAdapterSnapshot = await adapterState.adapter.knowledgeSnapshot();
+		const freshAdapterState = await createReadyAdapter(options.adapterBundlePath, fixtureRoot);
+		const freshSnapshot = await freshAdapterState.adapter.knowledgeSnapshot();
+		const adapterDigest = snapshotDigests(finalAdapterSnapshot);
+		const freshDigest = snapshotDigests(freshSnapshot);
+		const referenceDigest = snapshotDigests(referenceResult.snapshot);
+		const queuedAttempts = attempts.filter((attempt) => attempt.status === 'queued');
+		const rejectedAttempts = attempts.filter(
+			(attempt) => attempt.status === 'rejected_precondition'
+		);
+		const queuedSequenceSet = new Set(observer.queueCalls.map((event) => event.sequence));
+		const referenceApplied = referenceResult.trace.filter((event) => event.status === 'applied');
+		const referenceRejected = referenceResult.trace.filter(
+			(event) => event.status === 'rejected_precondition'
+		);
+		const correctness = {
+			fixture_ok: fixtureCheck.ok && referenceCheck.ok,
+			attempt_count: attempts.length,
+			queued_attempt_count: queuedAttempts.length,
+			rejected_attempt_count: rejectedAttempts.length,
+			queue_call_count: observer.queueCalls.length,
+			queue_sequences_unique: queuedSequenceSet.size === observer.queueCalls.length,
+			queue_sequences_contiguous: observer.queueCalls.every(
+				(event, index) => event.sequence === index + 1
+			),
+			reference_applied_count: referenceApplied.length,
+			reference_rejected_count: referenceRejected.length,
+			adapter_content_sha256: adapterDigest.content_sha256,
+			fresh_content_sha256: freshDigest.content_sha256,
+			reference_content_sha256: referenceDigest.content_sha256,
+			content_converged:
+				adapterDigest.content_sha256 === freshDigest.content_sha256 &&
+				adapterDigest.content_sha256 === referenceDigest.content_sha256,
+			adapter_reference_difference: contentDifference(
+				adapterDigest.content,
+				referenceDigest.content
+			),
+			stale_replay_paths: replayPaths(finalAdapterSnapshot),
+			pending_path_count_after: adapterState.adapter.pendingEvents.size,
+			rescan_pending_after: Boolean(adapterState.adapter.pendingRescanEvent),
+			adapter_ready: finalAdapterSnapshot.index_state === 'ready',
+			fresh_ready: freshSnapshot.index_state === 'ready',
+		};
+		const ok =
+			correctness.fixture_ok &&
+			correctness.attempt_count === fixture.replayEvents.events.length &&
+			correctness.queued_attempt_count === 80 &&
+			correctness.rejected_attempt_count === 8 &&
+			correctness.queue_call_count === 80 &&
+			correctness.queue_sequences_unique &&
+			correctness.queue_sequences_contiguous &&
+			correctness.reference_applied_count === 80 &&
+			correctness.reference_rejected_count === 8 &&
+			correctness.content_converged &&
+			correctness.stale_replay_paths.length === 0 &&
+			correctness.pending_path_count_after === 0 &&
+			!correctness.rescan_pending_after &&
+			correctness.adapter_ready &&
+			correctness.fresh_ready;
+		return {
+			schema: 'tracekeeper-index-replay-stress/v1',
+			status: ok ? 'passed' : 'failed',
+			tier: options.tier,
+			fixture_manifest_sha256: fixture.manifest.manifest_sha256,
+			generator_sha256: fixture.manifest.generator_sha256,
+			replay_events_sha256: fixture.manifest.replay_events_sha256,
+			metrics: {
+				...replayObservation,
+				total_rebuild_replay_ns: totalRebuildReplayNs,
+				queued_event_count: observer.queueCalls.length,
+				attempted_event_count: attempts.length,
+			},
+			pending_before_release: pendingBeforeRelease,
+			generation: {
+				adapter_initial: initialAdapterSnapshot.generation,
+				adapter_final: finalAdapterSnapshot.generation,
+				adapter_event_sequence: finalAdapterSnapshot.event_sequence,
+				reference_final: referenceResult.snapshot.generation,
+				reference_event_sequence: referenceResult.snapshot.event_sequence,
+				rebuild_report_generation: rebuildReport.generation,
+				rebuild_report_event_sequence: rebuildReport.event_sequence,
+			},
+			attempts,
+			queue_trace: observer.queueCalls,
+			reference_generation_trace: referenceResult.trace,
+			correctness: { ...correctness, ok },
+			counts: snapshotCounts(finalAdapterSnapshot),
+		};
+	} finally {
+		if (!options.retainFixture) {
+			await Promise.all([
+				cleanupFixture(fixtureRoot),
+				cleanupFixture(referenceRoot),
+			]);
+		}
+	}
 }
 
 function recallAssertions(queryId, payload) {

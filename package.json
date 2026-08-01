@@ -21,6 +21,7 @@
 		"agent:ecosystem:test": "node --test ./scripts/check_agent_ecosystem.test.mjs",
 		"architecture:check": "node ./scripts/check_architecture_boundaries.mjs && node --test ./scripts/check_architecture_boundaries.test.mjs",
 		"benchmark:index": "npm run build --workspace packages/core && npm run build --workspace packages/mcp-runtime && node --expose-gc ./benchmarks/knowledge-index/run.mjs",
+		"benchmark:index:replay": "npm run build --workspace packages/core && npm run build --workspace packages/mcp-runtime && node --expose-gc ./benchmarks/knowledge-index/replay.mjs",
 		"benchmark:index:test": "npm run build --workspace packages/core && npm run build --workspace packages/mcp-runtime && node --test ./benchmarks/knowledge-index/*.test.mjs",
 		"typecheck": "npm run typecheck --workspaces --if-present",
 		"build": "npm run build --workspaces --if-present",
