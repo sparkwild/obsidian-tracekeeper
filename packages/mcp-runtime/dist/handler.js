@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.McpJsonRpcHandler = exports.STREAMABLE_HTTP_TRANSPORT = exports.MCP_SERVER_VERSION = exports.SUPPORTED_MCP_PROTOCOL_VERSIONS = exports.MCP_PROTOCOL_VERSION = void 0;
+const crypto = __importStar(require("node:crypto"));
 const fs = __importStar(require("node:fs"));
 const path = __importStar(require("node:path"));
 const core_1 = require("@tracekeeper/core");
@@ -124,6 +125,9 @@ class McpJsonRpcHandler {
         }
         const params = rawMessage.params ?? {};
         if (!(0, protocol_1.isRecord)(params)) {
+            if (method === 'tools/call') {
+                await (0, tools_1.recordRejectedToolCallAuditEvent)(this.buildToolInvocationContext(state, requestId, `invocation-${crypto.randomUUID()}`), 'tool_call_invalid_params');
+            }
             if (!isNotification) {
                 return this.errorResponse(requestId ?? null, -32602, 'Invalid params.');
             }
@@ -309,20 +313,23 @@ class McpJsonRpcHandler {
             && (state.credentialCapabilities.includes('*') || state.credentialCapabilities.includes(capability)));
     }
     async handleToolsCall(params, state, requestId) {
+        const invocationId = `invocation-${crypto.randomUUID()}`;
+        const invocationContext = this.buildToolInvocationContext(state, requestId, invocationId);
         const name = params.name;
         const argumentsValue = params.arguments ?? {};
         if (typeof name !== 'string' || name.trim() === '') {
-            await (0, tools_1.recordRejectedToolCallAuditEvent)(this.buildToolInvocationContext(state, requestId), 'tool_call_invalid_name');
+            await (0, tools_1.recordRejectedToolCallAuditEvent)(invocationContext, 'tool_call_invalid_name');
             throw new protocol_1.RpcError({ code: -32602, message: '`name` is required for tools/call.' });
         }
         if (!(0, protocol_1.isRecord)(argumentsValue)) {
-            await (0, tools_1.recordRejectedToolCallAuditEvent)(this.buildToolInvocationContext(state, requestId), 'tool_call_invalid_arguments');
+            await (0, tools_1.recordRejectedToolCallAuditEvent)(invocationContext, 'tool_call_invalid_arguments');
             throw new protocol_1.RpcError({ code: -32602, message: '`arguments` must be an object.' });
         }
-        return await (0, tools_1.callTool)(name, argumentsValue, this.buildToolInvocationContext(state, requestId));
+        return await (0, tools_1.callTool)(name, argumentsValue, invocationContext);
     }
-    buildToolInvocationContext(state, requestId) {
+    buildToolInvocationContext(state, requestId, invocationId) {
         return {
+            invocationId,
             requestId: requestId == null ? undefined : String(requestId),
             defaultVaultRoot: this.defaultVaultRoot,
             vaultConfigDir: this.vaultConfigDir,

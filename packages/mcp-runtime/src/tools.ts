@@ -198,6 +198,7 @@ export interface ProposalTransitionPort {
 }
 
 export interface ToolInvocationContext extends ToolContext {
+	invocationId?: string;
 	requestId?: string;
 	principalId?: string;
 	credentialCapabilities?: readonly string[];
@@ -256,6 +257,7 @@ interface ConnectionAuditEventInput {
 }
 
 interface ToolCallAuditEventInput {
+	invocationId?: string;
 	requestId?: string;
 	toolName: string;
 	resultStatus: 'success' | 'failed';
@@ -706,6 +708,7 @@ interface SourceRequestRecord {
 
 interface AuditEventInput {
 	operationId?: string;
+	invocationId?: string;
 	requestId?: string;
 	type?: string;
 	event?: string;
@@ -6149,8 +6152,10 @@ function auditHubFile(vaultRoot: string): {
 
 function buildAuditEventId(input: AuditEventInput, targetPaths: string[]): string {
 	const operationId = input.operationId?.trim() || '';
-	const requestId = input.requestId?.trim()
-		|| (!operationId ? `generated-${crypto.randomUUID()}` : '');
+	const invocationId = operationId ? '' : input.invocationId?.trim() || '';
+	const requestId = operationId || invocationId
+		? ''
+		: input.requestId?.trim() || `generated-${crypto.randomUUID()}`;
 	const metadata = Object.fromEntries(
 		Object.entries(input.metadata || {})
 			.filter(([key]) => !/(?:^|_)(?:timestamp|created_at|updated_at|last_used_at|connected_at)$/.test(key))
@@ -6159,6 +6164,7 @@ function buildAuditEventId(input: AuditEventInput, targetPaths: string[]): strin
 	return buildStableAuditEventId({
 		operationId,
 		requestId,
+		...(invocationId ? { invocationId } : {}),
 		type: input.type || 'tool-call',
 		event: input.event || input.type || 'tool-call',
 		tool: input.tool || '',
@@ -6250,6 +6256,9 @@ function prepareAuditEvent(input: AuditEventInput): PreparedAuditEvent {
 
 	if (operationId) {
 		eventLines.push(`- operation_id: ${auditYamlValue('operation_id', operationId)}`);
+	}
+	if (input.invocationId) {
+		eventLines.push(`- invocation_id: ${auditYamlValue('invocation_id', input.invocationId)}`);
 	}
 	if (input.requestId) {
 		eventLines.push(`- request_id: ${auditYamlValue('request_id', input.requestId)}`);
@@ -6903,12 +6912,15 @@ export function appendRuntimeDiagnosticAuditEvent(
 
 export function recordToolCallAuditEvent(vaultRoot: string, input: ToolCallAuditEventInput): { path: string } {
 	const now = new Date().toISOString();
+	const invocationId = input.invocationId?.trim()
+		|| `invocation-${crypto.randomUUID()}`;
 	return appendAuditEvent(vaultRoot, {
 		type: 'tool-call',
 		event: 'tool-call',
 		action: 'tool-call',
 		actor: input.agentId,
 		timestamp: now,
+		invocationId,
 		requestId: input.requestId,
 		tool: input.toolName,
 		principalId: input.principalId,
@@ -6946,12 +6958,15 @@ async function recordToolCallAuditEventAsync(
 	}
 
 	const now = new Date().toISOString();
+	const invocationId = input.invocationId?.trim()
+		|| `invocation-${crypto.randomUUID()}`;
 	return appendAuditEventAsync(vaultRoot, {
 		type: 'tool-call',
 		event: 'tool-call',
 		action: 'tool-call',
 		actor: input.agentId,
 		timestamp: now,
+		invocationId,
 		requestId: input.requestId || context.requestId,
 		tool: input.toolName,
 		principalId: input.principalId,
@@ -6981,7 +6996,11 @@ async function recordToolCallAuditEventAsync(
 
 export async function recordRejectedToolCallAuditEvent(
 	context: ToolInvocationContext,
-	reason: 'tool_call_invalid_name' | 'tool_call_invalid_arguments' | 'tool_call_unknown'
+	reason:
+		| 'tool_call_invalid_params'
+		| 'tool_call_invalid_name'
+		| 'tool_call_invalid_arguments'
+		| 'tool_call_unknown'
 ): Promise<void> {
 	const vaultRoot = resolveAuditVaultRoot({}, context);
 	if (!vaultRoot) {
@@ -6989,6 +7008,8 @@ export async function recordRejectedToolCallAuditEvent(
 	}
 	try {
 		await recordToolCallAuditEventAsync(vaultRoot, {
+			invocationId: context.invocationId?.trim()
+				|| `invocation-${crypto.randomUUID()}`,
 			requestId: context.requestId,
 			toolName: 'unknown',
 			resultStatus: 'failed',
@@ -7188,6 +7209,8 @@ export async function callTool(
 		);
 	}
 	const args = rawParams;
+	const invocationId = context.invocationId?.trim()
+		|| `invocation-${crypto.randomUUID()}`;
 	const startTime = Date.now();
 	const agentId = context.agentId || 'unknown session id';
 	const sessionId = context.sessionId;
@@ -7237,6 +7260,7 @@ export async function callTool(
 		if (auditVaultRoot) {
 			try {
 				await recordToolCallAuditEventAsync(auditVaultRoot, {
+					invocationId,
 					requestId: context.requestId,
 					toolName,
 					resultStatus: status,

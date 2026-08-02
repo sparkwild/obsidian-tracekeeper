@@ -34,6 +34,7 @@ import {
 import type { RuntimeViewStatus } from '../../main';
 import type { TracekeeperStructureStatus } from '../structure/legacy-migration-controller';
 import {
+	ACTIVITY_TIMELINE_MAX_ITEMS,
 	ACTIVITY_TIMELINE_PAGE_SIZE,
 	ACTIVITY_TIMELINE_PREVIEW_ROWS,
 	AGENT_TASKS_PATH,
@@ -44,6 +45,7 @@ import {
 	MAX_SOURCE_STATUS_ROWS,
 	MAX_TASK_ROWS,
 	type ActivityTimelineItem,
+	type ActivityTimelineRecordWindow,
 	type ActivityTimelineSnapshot,
 	type AgentActivitySnapshot,
 	type AgentConnectionRecord,
@@ -68,6 +70,7 @@ export interface ActivityDataControllerHost {
 	readRecentSourceCaptures(limit: number): Promise<SourceCaptureRecord[]>;
 	readRecentSourceRequests(limit: number): Promise<SourceRequestRecord[]>;
 	readRecentMemoryProposals(limit: number): Promise<MemoryProposalRecord[]>;
+	readActivityTimelineRecords(limit: number): Promise<ActivityTimelineRecordWindow>;
 	getStructureStatus(): TracekeeperStructureStatus;
 	getRuntimeViewStatus(): RuntimeViewStatus;
 	getVaultRoot(): string;
@@ -205,22 +208,19 @@ async loadActivityTimelineSnapshot(
 		pageSize = ACTIVITY_TIMELINE_PAGE_SIZE
 	): Promise<ActivityTimelineSnapshot> {
 		const safePageSize = Math.max(1, Math.floor(pageSize));
-		const [
+		const readLimit = ACTIVITY_TIMELINE_MAX_ITEMS + 1;
+		const [recordWindow, auditEvents] = await Promise.all([
+			this.host.readActivityTimelineRecords(readLimit),
+			this.readRecentAuditEvents(readLimit),
+		]);
+		const {
 			tasks,
 			contextPacks,
 			sourceCaptures,
 			sourceRequests,
 			proposals,
-			auditEvents,
-		] = await Promise.all([
-			this.host.readRecentAgentTasks(Number.MAX_SAFE_INTEGER),
-			this.host.readRecentContextPacks(Number.MAX_SAFE_INTEGER),
-			this.host.readRecentSourceCaptures(Number.MAX_SAFE_INTEGER),
-			this.host.readRecentSourceRequests(Number.MAX_SAFE_INTEGER),
-			this.host.readRecentMemoryProposals(Number.MAX_SAFE_INTEGER),
-			this.readRecentAuditEvents(Number.MAX_SAFE_INTEGER),
-		]);
-		const timelineItems = this.buildActivityTimelineItems({
+		} = recordWindow;
+		const mergedTimelineItems = this.buildActivityTimelineItems({
 			tasks,
 			contextPacks,
 			sourceCaptures,
@@ -228,6 +228,10 @@ async loadActivityTimelineSnapshot(
 			proposals,
 			auditEvents,
 		});
+		const isTruncated = recordWindow.isTruncated
+			|| mergedTimelineItems.length > ACTIVITY_TIMELINE_MAX_ITEMS
+			|| auditEvents.length >= readLimit;
+		const timelineItems = mergedTimelineItems.slice(0, ACTIVITY_TIMELINE_MAX_ITEMS);
 		const totalItems = timelineItems.length;
 		const totalPages = Math.max(1, Math.ceil(totalItems / safePageSize));
 		const safePage = Math.min(Math.max(1, Math.floor(page) || 1), totalPages);
@@ -239,6 +243,7 @@ async loadActivityTimelineSnapshot(
 			pageSize: safePageSize,
 			totalItems,
 			totalPages,
+			isTruncated,
 			updatedAt: new Date().toISOString(),
 		};
 	}

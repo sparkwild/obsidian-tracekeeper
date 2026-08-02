@@ -149,6 +149,53 @@ export class NodeFsVaultRepository implements VaultRepository {
 		}
 	}
 
+	private async ensureParentDirectories(targetPath: string): Promise<void> {
+		const parentPath = path.dirname(targetPath);
+		const relative = path.relative(this.vaultRoot, parentPath);
+		if (!relative || relative === '.') {
+			return;
+		}
+
+		const parts = path.normalize(relative).split(path.sep).filter(Boolean);
+		let cursor = this.vaultRoot;
+		for (const part of parts) {
+			const existingParent = cursor;
+			cursor = path.join(cursor, part);
+			await this.assertNoSymlinkSegments(existingParent);
+
+			let state: import('node:fs').Stats;
+			try {
+				state = await fs.lstat(cursor);
+			} catch (error: unknown) {
+				if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== 'ENOENT') {
+					throw error;
+				}
+
+				try {
+					await fs.mkdir(cursor);
+				} catch (mkdirError: unknown) {
+					if (!(mkdirError instanceof Error) || (mkdirError as NodeJS.ErrnoException).code !== 'EEXIST') {
+						throw mkdirError;
+					}
+				}
+				state = await fs.lstat(cursor);
+			}
+
+			if (state.isSymbolicLink()) {
+				throw new VaultPathError(
+					`Vault path contains symbolic link segment: ${vaultRelativeFromAbsolute(this.vaultRoot, cursor)}`
+				);
+			}
+			if (!state.isDirectory()) {
+				throw new VaultPathError(
+					`Vault path segment is not a directory: ${vaultRelativeFromAbsolute(this.vaultRoot, cursor)}`
+				);
+			}
+
+			await this.assertNoSymlinkSegments(cursor);
+		}
+	}
+
 	private computeVersionFromStats(stats: import('node:fs').Stats): VaultFileVersion {
 		return computeFileVersion(stats.size, stats.mtime.toISOString());
 	}
@@ -375,7 +422,7 @@ export class NodeFsVaultRepository implements VaultRepository {
 
 	async createText(relativePath: VaultPath, content: string): Promise<VaultWriteReceipt> {
 		const absolutePath = this.resolveRelativePath(relativePath);
-		await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+		await this.ensureParentDirectories(absolutePath);
 		await this.writeAtomicText(absolutePath, content, { type: 'mustBeAbsent' });
 		const state = await this.readStats(absolutePath);
 		if (state === null) {

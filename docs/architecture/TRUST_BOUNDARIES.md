@@ -180,6 +180,11 @@ operation. It never overwrites a destination or deletes either copy.
 Archive audit uses the persisted intent start time rather than a retry time;
 restart across a UTC shard boundary therefore cannot append the same operation
 to a second daily shard.
+An expired archive confirmation can resume only when at least one persisted
+in-progress target claim proves the same operation and preview, and every
+existing claim still matches its target, source hash, start time, and binding.
+Missing claims from the same interrupted operation may then be acquired; without
+that durable proof the expired preview remains stale.
 
 Audit shards use stable event identity and Vault-scoped path serialization.
 Same-shard writers cannot replace one another, and exact retries do not append a
@@ -187,6 +192,11 @@ second event. Audit hub and parent-folder creation share the same path-lock
 domain as Runtime repository writes. This coordination is process-local and
 does not prevent direct user edits or writes by another plugin; optimistic
 validation still treats those as external changes.
+Operation effects derive their stable event identity from the operation id.
+Every `tools/call`, including a request rejected before tool execution, instead
+receives a server-generated invocation id; the client JSON-RPC request id is
+retained only as bounded observational evidence and cannot suppress another
+call's audit event when a client reuses it.
 
 Runtime-log cleanup persists a receipt revision and the currently attempted
 path before calling configured Obsidian trash. It revalidates the target again

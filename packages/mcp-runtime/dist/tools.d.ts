@@ -28,6 +28,7 @@ export interface ProposalTransitionPort {
     }): Promise<ProposalTransitionDecision>;
 }
 export interface ToolInvocationContext extends ToolContext {
+    invocationId?: string;
     requestId?: string;
     principalId?: string;
     credentialCapabilities?: readonly string[];
@@ -55,6 +56,7 @@ interface ConnectionAuditEventInput {
     runtimeVersion: string;
 }
 interface ToolCallAuditEventInput {
+    invocationId?: string;
     requestId?: string;
     toolName: string;
     resultStatus: 'success' | 'failed';
@@ -93,7 +95,7 @@ export declare function appendRuntimeDiagnosticAuditEvent(vaultRoot: string, rea
 export declare function recordToolCallAuditEvent(vaultRoot: string, input: ToolCallAuditEventInput): {
     path: string;
 };
-export declare function recordRejectedToolCallAuditEvent(context: ToolInvocationContext, reason: 'tool_call_invalid_name' | 'tool_call_invalid_arguments' | 'tool_call_unknown'): Promise<void>;
+export declare function recordRejectedToolCallAuditEvent(context: ToolInvocationContext, reason: 'tool_call_invalid_params' | 'tool_call_invalid_name' | 'tool_call_invalid_arguments' | 'tool_call_unknown'): Promise<void>;
 export declare function toolDefinitions(capabilities?: readonly string[]): McpToolDefinition[];
 export declare function toolPrompts(): McpPrompt[];
 export declare function callTool(name: string, rawParams: unknown, context?: ToolInvocationContext): Promise<McpStructuredToolResult>;

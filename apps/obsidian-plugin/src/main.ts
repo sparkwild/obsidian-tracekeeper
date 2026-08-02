@@ -575,6 +575,8 @@ export default class TracekeeperPlugin extends Plugin {
 			readRecentSourceCaptures: (limit) => this.activityRecordRepository.readRecentSourceCaptures(limit),
 			readRecentSourceRequests: (limit) => this.activityRecordRepository.readRecentSourceRequests(limit),
 			readRecentMemoryProposals: (limit) => this.activityRecordRepository.readRecentMemoryProposals(limit),
+			readActivityTimelineRecords: (limit) =>
+				this.activityRecordRepository.readActivityTimelineRecords(limit),
 			getStructureStatus: () => this.getStructureStatus(),
 			getRuntimeViewStatus: () => this.getRuntimeViewStatus(),
 			getVaultRoot: () => this.getVaultRoot(),

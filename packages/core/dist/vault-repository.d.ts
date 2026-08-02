@@ -38,6 +38,7 @@ export declare class NodeFsVaultRepository implements VaultRepository {
     private normalizeRelativePath;
     private resolveRelativePath;
     private assertNoSymlinkSegments;
+    private ensureParentDirectories;
     private computeVersionFromStats;
     private sameFileIdentity;
     private readStats;

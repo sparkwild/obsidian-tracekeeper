@@ -13,6 +13,7 @@ const activityOutput = path.join(tempRoot, 'activity-data-controller.cjs');
 const repositoryOutput = path.join(tempRoot, 'activity-record-repository.cjs');
 const auditRepositoryOutput = path.join(tempRoot, 'native-audit-repository.cjs');
 const runtimeLogModelOutput = path.join(tempRoot, 'runtime-log-model.cjs');
+const activityModelOutput = path.join(tempRoot, 'activity-model.cjs');
 const require = createRequire(import.meta.url);
 
 class StubTFile {
@@ -94,6 +95,15 @@ await Promise.all([
 		plugins: [obsidianStub],
 	}),
 	build({
+		entryPoints: ['src/features/activity/activity-model.ts'],
+		outfile: activityModelOutput,
+		bundle: true,
+		platform: 'node',
+		format: 'cjs',
+		logLevel: 'silent',
+		plugins: [obsidianStub],
+	}),
+	build({
 		entryPoints: ['src/features/runtime/runtime-log-model.ts'],
 		outfile: runtimeLogModelOutput,
 		bundle: true,
@@ -108,11 +118,17 @@ const { ReviewQueueController } = require(controllerOutput);
 const { ActivityDataController } = require(activityOutput);
 const { ActivityRecordRepository } = require(repositoryOutput);
 const { ObsidianAuditShardRepository } = require(auditRepositoryOutput);
+const { ACTIVITY_TIMELINE_MAX_ITEMS } = require(activityModelOutput);
 const {
 	RUNTIME_LOG_MAX_EVENTS,
 	runtimeLogTrashBehaviorDescription,
 } = require(runtimeLogModelOutput);
-const { computePayloadHash, hashVaultContent } = require('@tracekeeper/core');
+const {
+	computePayloadHash,
+	hashVaultContent,
+	TRACEKEEPER_AGENT_REQUESTS_DIR,
+	TRACEKEEPER_TASKS_DIR,
+} = require('@tracekeeper/core');
 
 const withBindingHash = (record) => {
 	const rebound = structuredClone(record);
@@ -188,6 +204,7 @@ const createNativeVaultFixture = ({
 		trash: [],
 		delete: [],
 		metadata: [],
+		cachedRead: [],
 		refresh: 0,
 		order: [],
 	};
@@ -266,6 +283,7 @@ const createNativeVaultFixture = ({
 			return records.get(normalized) || folderAt(normalized);
 		},
 		async cachedRead(file) {
+			calls.cachedRead.push(normalizePath(file.path));
 			return records.get(normalizePath(file.path))?.content ?? '';
 		},
 		async read(file) {
@@ -421,6 +439,19 @@ const createNativeVaultFixture = ({
 		app: {
 			vault,
 			fileManager,
+			metadataCache: {
+				getFileCache(file) {
+					const content = records.get(normalizePath(file.path))?.content ?? '';
+					const normalized = content.replace(/\r\n/g, '\n');
+					if (!normalized.startsWith('---\n')) {
+						return {};
+					}
+					const end = normalized.indexOf('\n---\n', 4);
+					return end < 0
+						? {}
+						: { frontmatter: parseKeyValueRows(normalized.slice(4, end).split('\n')) };
+				},
+			},
 		},
 		calls,
 		records,
@@ -705,6 +736,16 @@ const createActivityHost = (fixture) => ({
 		},
 		async readRecentMemoryProposals() {
 			return [];
+		},
+		async readActivityTimelineRecords() {
+			return {
+				tasks: [],
+				contextPacks: [],
+				sourceCaptures: [],
+				sourceRequests: [],
+				proposals: [],
+				isTruncated: false,
+			};
 		},
 		getStructureStatus() {
 			return {};
@@ -1553,9 +1594,11 @@ test('archive rejects a rebound target-claim mutation before recovery', async ()
 	assert.equal(harness.exists(harness.proposalPath), true);
 });
 
-test('archive resumes from a target claim persisted before the operation receipt', async () => {
+test('archive resumes an expired exact preview from a target claim persisted before the operation receipt', async () => {
 	let interruptAfterClaim = true;
+	let now = new Date('2026-07-30T00:00:00.000Z');
 	const harness = createArchiveHarness({
+		nowFactory: () => new Date(now),
 		async afterArchiveTargetClaimWrite(claim) {
 			if (interruptAfterClaim && claim.status === 'in-progress') {
 				interruptAfterClaim = false;
@@ -1578,6 +1621,8 @@ test('archive resumes from a target claim persisted before the operation receipt
 	assert.equal(harness.targetClaims.size, 1);
 	assert.equal([...harness.targetClaims.values()][0].status, 'in-progress');
 	assert.equal(harness.calls.nativeRename.length, 0);
+	now = new Date(Date.parse(preview.expiresAt) + 1);
+	assert.equal(now.getTime() > Date.parse(preview.expiresAt), true);
 
 	const competingPreview =
 		await harness.createController().previewArchiveMemoryProposals([
@@ -1598,6 +1643,124 @@ test('archive resumes from a target claim persisted before the operation receipt
 	assert.equal(harness.calls.nativeRename.length, 1);
 	assert.equal(harness.receipts.size, 1);
 	assert.equal([...harness.targetClaims.values()][0].status, 'completed');
+});
+
+test('archive resumes an expired multi-target preview after only the first claim persisted', async () => {
+	let interruptAfterFirstClaim = true;
+	let now = new Date('2026-07-30T00:00:00.000Z');
+	const secondProposalPath = '00_tracekeeper/inbox/review_queue/second.md';
+	const harness = createArchiveHarness({
+		nowFactory: () => new Date(now),
+		extraFiles: {
+			[secondProposalPath]: proposalMarkdown({
+				proposalId: 'proposal-two',
+				taskId: 'task-two',
+				sessionPath: '00_tracekeeper/work/sessions/session-two.md',
+			}),
+		},
+		async afterArchiveTargetClaimWrite(claim) {
+			if (interruptAfterFirstClaim && claim.status === 'in-progress') {
+				interruptAfterFirstClaim = false;
+				throw new Error('injected interruption after first target claim');
+			}
+		},
+	});
+	const proposals = await harness.records.readRecentMemoryProposals(10);
+	assert.equal(proposals.length, 2);
+	const controller = harness.createController();
+	const preview = await controller.previewArchiveMemoryProposals(proposals);
+	await assert.rejects(
+		controller.commitArchiveMemoryProposals(preview, preview.confirmationToken),
+		/first target claim/
+	);
+	assert.equal(harness.targetClaims.size, 1);
+	assert.equal(harness.calls.nativeRename.length, 0);
+	now = new Date(Date.parse(preview.expiresAt) + 1);
+
+	const receipt = await harness.createController().commitArchiveMemoryProposals(
+		preview,
+		preview.confirmationToken
+	);
+	assert.equal(receipt.status, 'completed');
+	assert.equal(receipt.targets.length, 2);
+	assert.equal(harness.calls.nativeRename.length, 2);
+	assert.equal(harness.targetClaims.size, 2);
+	assert.equal(
+		[...harness.targetClaims.values()].every((claim) => claim.status === 'completed'),
+		true
+	);
+});
+
+test('archive rejects expired multi-target recovery when a missing claim becomes competitively owned', async () => {
+	let interruptAfterFirstClaim = true;
+	let now = new Date('2026-07-30T00:00:00.000Z');
+	const harness = createArchiveHarness({
+		nowFactory: () => new Date(now),
+		extraFiles: {
+			'00_tracekeeper/inbox/review_queue/second.md': proposalMarkdown({
+				proposalId: 'proposal-two',
+				taskId: 'task-two',
+				sessionPath: '00_tracekeeper/work/sessions/session-two.md',
+			}),
+		},
+		async afterArchiveTargetClaimWrite(claim) {
+			if (interruptAfterFirstClaim && claim.status === 'in-progress') {
+				interruptAfterFirstClaim = false;
+				throw new Error('injected interruption after first target claim');
+			}
+		},
+	});
+	const proposals = await harness.records.readRecentMemoryProposals(10);
+	const controller = harness.createController();
+	const preview = await controller.previewArchiveMemoryProposals(proposals);
+	await assert.rejects(
+		controller.commitArchiveMemoryProposals(preview, preview.confirmationToken),
+		/first target claim/
+	);
+	const persistedClaim = [...harness.targetClaims.values()][0];
+	const missingItem = preview.items.find((item) => {
+		const targetHash = computePayloadHash({
+			schemaVersion: 1,
+			proposalId: item.proposalId,
+			oldPath: item.sourcePath,
+			newPath: item.destinationPath,
+		});
+		return targetHash !== persistedClaim.targetHash;
+	});
+	assert.ok(missingItem);
+	const competingTargetHash = computePayloadHash({
+		schemaVersion: 1,
+		proposalId: missingItem.proposalId,
+		oldPath: missingItem.sourcePath,
+		newPath: missingItem.destinationPath,
+	});
+	const competingClaim = withBindingHash({
+		schemaVersion: 1,
+		revision: 1,
+		bindingHash: '',
+		targetHash: competingTargetHash,
+		operationId: 'archive-competing-operation',
+		previewHash: 'b'.repeat(64),
+		status: 'in-progress',
+		proposalId: missingItem.proposalId,
+		oldPath: missingItem.sourcePath,
+		newPath: missingItem.destinationPath,
+		sourceHash: missingItem.sourceHash,
+		startedAt: persistedClaim.startedAt,
+		completedAt: null,
+	});
+	harness.targetClaims.set(competingTargetHash, competingClaim);
+	now = new Date(Date.parse(preview.expiresAt) + 1);
+
+	await assert.rejects(
+		harness.createController().commitArchiveMemoryProposals(
+			preview,
+			preview.confirmationToken
+		),
+		/owned|claim|operation/i
+	);
+	assert.equal(harness.calls.nativeRename.length, 0);
+	assert.equal(harness.exists(harness.proposalPath), true);
 });
 
 test('archive restart rolls forward after a managed-reference relink failure', async () => {
@@ -1925,6 +2088,132 @@ test('runtime log reads one bounded recent window before paging', async () => {
 	assert.equal(snapshot.totalItems, RUNTIME_LOG_MAX_EVENTS);
 	assert.equal(snapshot.items.length, 20);
 	assert.equal(snapshot.items[0].title.includes(`bounded.event.${RUNTIME_LOG_MAX_EVENTS + 1}`), true);
+});
+
+test('activity repository selects bounded records by logical metadata time before reading bodies', async () => {
+	const logicalOldPath = `${TRACEKEEPER_TASKS_DIR}/mtime-newest.md`;
+	const logicalMiddlePath = `${TRACEKEEPER_TASKS_DIR}/logical-middle.md`;
+	const logicalNewestPath = `${TRACEKEEPER_TASKS_DIR}/logical-newest.md`;
+	const validRequestPath = `${TRACEKEEPER_AGENT_REQUESTS_DIR}/valid.md`;
+	const fixture = createNativeVaultFixture({
+		files: {
+			[logicalOldPath]: {
+				mtime: 300,
+				content: '---\ntype: agent-task\ntask_id: old\nstarted_at: 2024-01-01T00:00:00.000Z\n---\nOld\n',
+			},
+			[logicalMiddlePath]: {
+				mtime: 200,
+				content: '---\ntype: agent-task\ntask_id: middle\nstarted_at: 2025-01-01T00:00:00.000Z\n---\nMiddle\n',
+			},
+			[logicalNewestPath]: {
+				mtime: 100,
+				content: '---\ntype: agent-task\ntask_id: newest\nstarted_at: 2999-01-01T00:00:00.000Z\n---\nNewest\n',
+			},
+			[`${TRACEKEEPER_AGENT_REQUESTS_DIR}/invalid.md`]: {
+				mtime: 300,
+				content: '---\ntype: unrelated\ncreated: 2999-01-02T00:00:00.000Z\n---\nInvalid\n',
+			},
+			[validRequestPath]: {
+				mtime: 100,
+				content: '---\ntype: agent-request\nsource: bounded-source\ncreated: 2999-01-01T00:00:00.000Z\n---\nValid\n',
+			},
+		},
+	});
+	const repository = new ActivityRecordRepository(fixture.app);
+	const window = await repository.readActivityTimelineRecords(2);
+	assert.deepEqual(
+		window.tasks.map((task) => task.path),
+		[logicalNewestPath, logicalMiddlePath]
+	);
+	assert.deepEqual(
+		window.sourceRequests.map((request) => request.path),
+		[validRequestPath]
+	);
+	assert.equal(window.isTruncated, true);
+	assert.equal(fixture.calls.cachedRead.includes(logicalOldPath), false);
+});
+
+test('activity repository exposes an incomplete bounded window when metadata cache is unavailable or stale', async () => {
+	const noCacheFixture = createNativeVaultFixture({
+		files: Object.fromEntries(
+			[1, 2, 3].map((index) => [
+				`${TRACEKEEPER_TASKS_DIR}/task-${index}.md`,
+				{
+					mtime: index,
+					content: `---\ntype: agent-task\ntask_id: task-${index}\nstarted_at: 2999-01-0${4 - index}T00:00:00.000Z\n---\nTask\n`,
+				},
+			])
+		),
+	});
+	noCacheFixture.app.metadataCache.getFileCache = () => null;
+	const noCacheWindow = await new ActivityRecordRepository(
+		noCacheFixture.app
+	).readActivityTimelineRecords(2);
+	assert.equal(noCacheWindow.tasks.length, 2);
+	assert.equal(noCacheWindow.isTruncated, true);
+	assert.equal(noCacheFixture.calls.cachedRead.length, 2);
+
+	const staleCacheFixture = createNativeVaultFixture({
+		files: {
+			[`${TRACEKEEPER_AGENT_REQUESTS_DIR}/actual-request.md`]:
+				'---\ntype: agent-request\nsource: actual-source\ncreated: 2999-01-01T00:00:00.000Z\n---\nRequest\n',
+		},
+	});
+	staleCacheFixture.app.metadataCache.getFileCache = () => ({
+		frontmatter: { type: 'unrelated' },
+	});
+	const staleCacheRepository = new ActivityRecordRepository(staleCacheFixture.app);
+	const sharedRequests = await staleCacheRepository.readRecentSourceRequests(2);
+	assert.deepEqual(
+		sharedRequests.map((request) => request.source),
+		['actual-source']
+	);
+	const staleCacheWindow = await staleCacheRepository.readActivityTimelineRecords(2);
+	assert.deepEqual(staleCacheWindow.sourceRequests, []);
+	assert.equal(staleCacheWindow.isTruncated, true);
+});
+
+test('activity timeline reads and merges one bounded recent window before paging', async () => {
+	const harness = createActivityHarness();
+	const readLimits = {};
+	const emptyReader = (name) => async (limit) => {
+		readLimits[name] = limit;
+		return [];
+	};
+	harness.host.readActivityTimelineRecords = async (limit) => {
+		readLimits.records = limit;
+		return {
+			tasks: Array.from({ length: limit }, (_, index) => ({
+				path: `00_tracekeeper/work/tasks/task-${index}.md`,
+				taskId: `task-${index}`,
+				agent: 'test-agent',
+				status: 'completed',
+				objective: `objective-${index}`,
+				snippet: '',
+				sortTimestamp: index,
+			})),
+			contextPacks: [],
+			sourceCaptures: [],
+			sourceRequests: [],
+			proposals: [],
+			isTruncated: true,
+		};
+	};
+	const controller = harness.createController();
+	controller.readRecentAuditEvents = emptyReader('auditEvents');
+
+	const snapshot = await controller.loadActivityTimelineSnapshot(1, 20);
+	assert.deepEqual(
+		readLimits,
+		{
+			records: ACTIVITY_TIMELINE_MAX_ITEMS + 1,
+			auditEvents: ACTIVITY_TIMELINE_MAX_ITEMS + 1,
+		}
+	);
+	assert.equal(snapshot.isTruncated, true);
+	assert.equal(snapshot.totalItems, ACTIVITY_TIMELINE_MAX_ITEMS);
+	assert.equal(snapshot.items.length, 20);
+	assert.equal(snapshot.items[0].title, `task-${ACTIVITY_TIMELINE_MAX_ITEMS}`);
 });
 
 test('native audit repository serializes bounded shards and suppresses exact retries', async () => {

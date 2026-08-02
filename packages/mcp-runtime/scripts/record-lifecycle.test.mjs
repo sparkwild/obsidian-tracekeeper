@@ -474,6 +474,105 @@ test('concurrent distinct and repeated audit events use one idempotent UTC shard
 	}
 });
 
+test('reused JSON-RPC ids remain observations while every tools/call keeps a unique invocation audit', async () => {
+	const fixture = createFixture();
+	try {
+		await withMutableClock('2026-07-30T12:00:00.000Z', async () => {
+			const handler = new McpJsonRpcHandler({
+				defaultVaultRoot: fixture.vaultRoot,
+				vaultRepository: fixture.repository,
+				runtimeVersion: 'test',
+				transport: 'test',
+			});
+			const connectionState = (sessionId) => ({
+				sessionId,
+				principalId: 'record-lifecycle-principal',
+				credentialCapabilities: ['*'],
+				agentId: 'record-lifecycle-rpc-client',
+				clientName: 'record-lifecycle-rpc-client',
+				clientVersion: '1',
+				observedClientType: 'custom',
+				initialized: true,
+				protocolVersion: '2025-06-18',
+			});
+			const firstSession = connectionState('record-lifecycle-rpc-session-one');
+			const secondSession = connectionState('record-lifecycle-rpc-session-two');
+			const calls = [
+				[firstSession, 1],
+				[firstSession, 1],
+				[firstSession, '1'],
+				[secondSession, 1],
+				[secondSession, '1'],
+			];
+
+			for (const [state, id] of calls) {
+				const response = await handler.handleMessage({
+					jsonrpc: '2.0',
+					id,
+					method: 'tools/call',
+					params: {
+						name: 'tracekeeper.status',
+						arguments: {},
+					},
+				}, state);
+				assert.equal(response?.id, id);
+				assert.equal(response?.error, undefined);
+			}
+			const rejectedCalls = [
+				{
+					state: firstSession,
+					id: 1,
+					params: { name: '', arguments: {} },
+				},
+				{
+					state: secondSession,
+					id: '1',
+					params: { name: 'tracekeeper.status', arguments: [] },
+				},
+				{
+					state: firstSession,
+					id: 1,
+					params: [],
+				},
+			];
+			for (const { state, id, params } of rejectedCalls) {
+				const response = await handler.handleMessage({
+					jsonrpc: '2.0',
+					id,
+					method: 'tools/call',
+					params,
+				}, state);
+				assert.equal(response?.id, id);
+				assert.equal(response?.error?.code, -32602);
+			}
+
+			const audit = fixture.read(
+				'00_tracekeeper/control/audit/2026/2026-07-30.md'
+			);
+			const expectedCallCount = calls.length + rejectedCalls.length;
+			const eventIds = [...audit.matchAll(/^- audit_event_id:\s*(.+)$/gm)]
+				.map((match) => match[1]);
+			const invocationIds = [...audit.matchAll(/^- invocation_id:\s*(.+)$/gm)]
+				.map((match) => match[1]);
+			assert.equal(eventIds.length, expectedCallCount);
+			assert.equal(new Set(eventIds).size, expectedCallCount);
+			assert.equal(invocationIds.length, expectedCallCount);
+			assert.equal(new Set(invocationIds).size, expectedCallCount);
+			assert.equal(
+				[...audit.matchAll(/^- request_id: "1"$/gm)].length,
+				expectedCallCount
+			);
+			assert.equal(
+				[...audit.matchAll(/^- result_status: "failed"$/gm)].length,
+				rejectedCalls.length
+			);
+			assert.match(audit, /- diagnostic_reason: "tool_call_invalid_params"/);
+		});
+	} finally {
+		fixture.cleanup();
+	}
+});
+
 test('audit readers merge legacy and shards once with current source paths', async () => {
 	const fixture = createFixture();
 	try {

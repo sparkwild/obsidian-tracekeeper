@@ -4329,14 +4329,17 @@ function auditHubFile(vaultRoot) {
 }
 function buildAuditEventId(input, targetPaths) {
     const operationId = input.operationId?.trim() || '';
-    const requestId = input.requestId?.trim()
-        || (!operationId ? `generated-${crypto.randomUUID()}` : '');
+    const invocationId = operationId ? '' : input.invocationId?.trim() || '';
+    const requestId = operationId || invocationId
+        ? ''
+        : input.requestId?.trim() || `generated-${crypto.randomUUID()}`;
     const metadata = Object.fromEntries(Object.entries(input.metadata || {})
         .filter(([key]) => !/(?:^|_)(?:timestamp|created_at|updated_at|last_used_at|connected_at)$/.test(key))
         .sort(([left], [right]) => left.localeCompare(right)));
     return (0, core_1.buildStableAuditEventId)({
         operationId,
         requestId,
+        ...(invocationId ? { invocationId } : {}),
         type: input.type || 'tool-call',
         event: input.event || input.type || 'tool-call',
         tool: input.tool || '',
@@ -4411,6 +4414,9 @@ function prepareAuditEvent(input) {
     ];
     if (operationId) {
         eventLines.push(`- operation_id: ${auditYamlValue('operation_id', operationId)}`);
+    }
+    if (input.invocationId) {
+        eventLines.push(`- invocation_id: ${auditYamlValue('invocation_id', input.invocationId)}`);
     }
     if (input.requestId) {
         eventLines.push(`- request_id: ${auditYamlValue('request_id', input.requestId)}`);
@@ -4979,12 +4985,15 @@ function appendRuntimeDiagnosticAuditEvent(vaultRoot, reason) {
 }
 function recordToolCallAuditEvent(vaultRoot, input) {
     const now = new Date().toISOString();
+    const invocationId = input.invocationId?.trim()
+        || `invocation-${crypto.randomUUID()}`;
     return appendAuditEvent(vaultRoot, {
         type: 'tool-call',
         event: 'tool-call',
         action: 'tool-call',
         actor: input.agentId,
         timestamp: now,
+        invocationId,
         requestId: input.requestId,
         tool: input.toolName,
         principalId: input.principalId,
@@ -5016,12 +5025,15 @@ async function recordToolCallAuditEventAsync(vaultRoot, input, context) {
         return recordToolCallAuditEvent(vaultRoot, input);
     }
     const now = new Date().toISOString();
+    const invocationId = input.invocationId?.trim()
+        || `invocation-${crypto.randomUUID()}`;
     return appendAuditEventAsync(vaultRoot, {
         type: 'tool-call',
         event: 'tool-call',
         action: 'tool-call',
         actor: input.agentId,
         timestamp: now,
+        invocationId,
         requestId: input.requestId || context.requestId,
         tool: input.toolName,
         principalId: input.principalId,
@@ -5055,6 +5067,8 @@ async function recordRejectedToolCallAuditEvent(context, reason) {
     }
     try {
         await recordToolCallAuditEventAsync(vaultRoot, {
+            invocationId: context.invocationId?.trim()
+                || `invocation-${crypto.randomUUID()}`,
             requestId: context.requestId,
             toolName: 'unknown',
             resultStatus: 'failed',
@@ -5237,6 +5251,8 @@ async function callTool(name, rawParams, context = {}) {
         return validateToolResult(requestName, decorateToolResult(requestName, toolError('Tool arguments must be an object.'), context));
     }
     const args = rawParams;
+    const invocationId = context.invocationId?.trim()
+        || `invocation-${crypto.randomUUID()}`;
     const startTime = Date.now();
     const agentId = context.agentId || 'unknown session id';
     const sessionId = context.sessionId;
@@ -5283,6 +5299,7 @@ async function callTool(name, rawParams, context = {}) {
         if (auditVaultRoot) {
             try {
                 await recordToolCallAuditEventAsync(auditVaultRoot, {
+                    invocationId,
                     requestId: context.requestId,
                     toolName,
                     resultStatus: status,

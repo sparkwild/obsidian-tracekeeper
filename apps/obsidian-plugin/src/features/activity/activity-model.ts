@@ -16,6 +16,8 @@ export const ACTIVITY_TIMELINE_PREVIEW_ROWS = 5;
 
 export const ACTIVITY_TIMELINE_PAGE_SIZE = 10;
 
+export const ACTIVITY_TIMELINE_MAX_ITEMS = 2000;
+
 export const MAX_ACTIVITY_CONTEXT_PACK_ROWS = 5;
 
 export const MAX_ACTIVITY_SOURCE_CAPTURE_ROWS = 5;
@@ -164,7 +166,17 @@ export interface ActivityTimelineSnapshot {
 	pageSize: number;
 	totalItems: number;
 	totalPages: number;
+	isTruncated: boolean;
 	updatedAt: string;
+}
+
+export interface ActivityTimelineRecordWindow {
+	tasks: AgentTaskRecord[];
+	contextPacks: ContextPackRecord[];
+	sourceCaptures: SourceCaptureRecord[];
+	sourceRequests: SourceRequestRecord[];
+	proposals: MemoryProposalRecord[];
+	isTruncated: boolean;
 }
 
 export interface AgentActivitySnapshot {

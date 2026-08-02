@@ -3,6 +3,7 @@ export type AuditEventSourceKind = 'legacy' | 'shard';
 export interface StableAuditEventIdentity {
     operationId?: string;
     requestId?: string;
+    invocationId?: string;
     timestamp?: string;
     [key: string]: unknown;
 }

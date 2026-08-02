@@ -16,6 +16,7 @@ import { compareProposalRecords, parseMemoryProposalRecord, type MemoryProposalR
 import { REVIEW_QUEUE_PATH } from '../review/review-queue-model';
 import {
 	AGENT_TASKS_PATH,
+	type ActivityTimelineRecordWindow,
 	type AgentTaskRecord,
 	type ContextPackRecord,
 	type SourceCaptureRecord,
@@ -36,6 +37,11 @@ const SOURCES_PATH = KNOWLEDGE_SOURCES_DIR;
 interface MemoryProposalFileSnapshot {
 	record: MemoryProposalRecord;
 	explicitProposalId: string;
+}
+
+interface RecentMarkdownSelection {
+	timestampKeys: readonly string[];
+	accepts?: (frontmatter: Readonly<Record<string, unknown>>) => boolean;
 }
 
 export type MemoryProposalHistoryResolution =
@@ -122,13 +128,33 @@ const replaceManagedProposalReferenceFields = (
 export class ActivityRecordRepository {
 	constructor(private readonly app: App) {}
 
-async readRecentSourceRequests(limit: number): Promise<SourceRequestRecord[]> {
+	async readRecentSourceRequests(limit: number): Promise<SourceRequestRecord[]> {
+		return this.readSourceRequests(limit);
+	}
+
+	private async readRecentSourceRequestsForTimeline(
+		limit: number
+	): Promise<SourceRequestRecord[]> {
+		return this.readSourceRequests(limit, {
+			timestampKeys: ['created'],
+			accepts: (frontmatter) => {
+				const type = this.cachedFirstString(frontmatter, ['type']);
+				return type.toLowerCase().includes('agent-request')
+					&& Boolean(this.cachedFirstString(frontmatter, ['source']));
+			},
+		});
+	}
+
+	private async readSourceRequests(
+		limit: number,
+		selection?: RecentMarkdownSelection
+	): Promise<SourceRequestRecord[]> {
 		const folder = this.app.vault.getAbstractFileByPath(SOURCE_REQUESTS_PATH);
 		if (!(folder instanceof TFolder)) {
 			return [];
 		}
 
-		const files = this.collectRecentMarkdownFiles(folder, limit);
+		const files = this.collectRecentMarkdownFiles(folder, limit, selection);
 		const records = await Promise.all(files.map((file) => this.readSourceRequestFile(file)));
 		return records
 			.filter((record): record is SourceRequestRecord => Boolean(record))
@@ -136,7 +162,7 @@ async readRecentSourceRequests(limit: number): Promise<SourceRequestRecord[]> {
 			.slice(0, limit);
 	}
 
-async readSourceRequestFile(file: TFile): Promise<SourceRequestRecord | null> {
+	async readSourceRequestFile(file: TFile): Promise<SourceRequestRecord | null> {
 		let content = '';
 		try {
 			content = await this.app.vault.cachedRead(file);
@@ -177,13 +203,28 @@ async readSourceRequestFile(file: TFile): Promise<SourceRequestRecord | null> {
 		};
 	}
 
-async readRecentAgentTasks(limit: number): Promise<AgentTaskRecord[]> {
+	async readRecentAgentTasks(limit: number): Promise<AgentTaskRecord[]> {
+		return this.readAgentTasks(limit);
+	}
+
+	private async readRecentAgentTasksForTimeline(
+		limit: number
+	): Promise<AgentTaskRecord[]> {
+		return this.readAgentTasks(limit, {
+			timestampKeys: ['started_at', 'startedAt', 'finished_at', 'finishedAt'],
+		});
+	}
+
+	private async readAgentTasks(
+		limit: number,
+		selection?: RecentMarkdownSelection
+	): Promise<AgentTaskRecord[]> {
 		const folder = this.app.vault.getAbstractFileByPath(AGENT_TASKS_PATH);
 		if (!(folder instanceof TFolder)) {
 			return [];
 		}
 
-		const files = this.collectRecentMarkdownFiles(folder, limit);
+		const files = this.collectRecentMarkdownFiles(folder, limit, selection);
 		const records = await Promise.all(
 			files.map((file) => this.readAgentTaskFile(file))
 		);
@@ -193,13 +234,28 @@ async readRecentAgentTasks(limit: number): Promise<AgentTaskRecord[]> {
 			.slice(0, limit);
 	}
 
-async readRecentContextPacks(limit: number): Promise<ContextPackRecord[]> {
+	async readRecentContextPacks(limit: number): Promise<ContextPackRecord[]> {
+		return this.readContextPacks(limit);
+	}
+
+	private async readRecentContextPacksForTimeline(
+		limit: number
+	): Promise<ContextPackRecord[]> {
+		return this.readContextPacks(limit, {
+			timestampKeys: ['created_at', 'createdAt', 'created'],
+		});
+	}
+
+	private async readContextPacks(
+		limit: number,
+		selection?: RecentMarkdownSelection
+	): Promise<ContextPackRecord[]> {
 		const folder = this.app.vault.getAbstractFileByPath(CONTEXT_PACKS_PATH);
 		if (!(folder instanceof TFolder)) {
 			return [];
 		}
 
-		const files = this.collectRecentMarkdownFiles(folder, limit);
+		const files = this.collectRecentMarkdownFiles(folder, limit, selection);
 		const records = await Promise.all(files.map((file) => this.readContextPackFile(file)));
 		return records
 			.filter((record): record is ContextPackRecord => Boolean(record))
@@ -207,7 +263,7 @@ async readRecentContextPacks(limit: number): Promise<ContextPackRecord[]> {
 			.slice(0, limit);
 	}
 
-async readContextPackFile(file: TFile): Promise<ContextPackRecord | null> {
+	async readContextPackFile(file: TFile): Promise<ContextPackRecord | null> {
 		let content = '';
 		try {
 			content = await this.app.vault.cachedRead(file);
@@ -231,13 +287,33 @@ async readContextPackFile(file: TFile): Promise<ContextPackRecord | null> {
 		};
 	}
 
-async readRecentSourceCaptures(limit: number): Promise<SourceCaptureRecord[]> {
+	async readRecentSourceCaptures(limit: number): Promise<SourceCaptureRecord[]> {
+		return this.readSourceCaptures(limit);
+	}
+
+	private async readRecentSourceCapturesForTimeline(
+		limit: number
+	): Promise<SourceCaptureRecord[]> {
+		return this.readSourceCaptures(limit, {
+			timestampKeys: ['created_at', 'createdAt', 'created'],
+			accepts: (frontmatter) => {
+				const type = this.cachedFirstString(frontmatter, ['type']);
+				const source = this.cachedFirstString(frontmatter, ['source']);
+				return Boolean(source) || type.toLowerCase().includes('source');
+			},
+		});
+	}
+
+	private async readSourceCaptures(
+		limit: number,
+		selection?: RecentMarkdownSelection
+	): Promise<SourceCaptureRecord[]> {
 		const folder = this.app.vault.getAbstractFileByPath(SOURCES_PATH);
 		if (!(folder instanceof TFolder)) {
 			return [];
 		}
 
-		const files = this.collectRecentMarkdownFiles(folder, limit);
+		const files = this.collectRecentMarkdownFiles(folder, limit, selection);
 		const records = await Promise.all(files.map((file) => this.readSourceCaptureFile(file)));
 		return records
 			.filter((record): record is SourceCaptureRecord => Boolean(record))
@@ -245,7 +321,7 @@ async readRecentSourceCaptures(limit: number): Promise<SourceCaptureRecord[]> {
 			.slice(0, limit);
 	}
 
-async readSourceCaptureFile(file: TFile): Promise<SourceCaptureRecord | null> {
+	async readSourceCaptureFile(file: TFile): Promise<SourceCaptureRecord | null> {
 		let content = '';
 		try {
 			content = await this.app.vault.cachedRead(file);
@@ -283,7 +359,7 @@ async readSourceCaptureFile(file: TFile): Promise<SourceCaptureRecord | null> {
 		};
 	}
 
-async readRecentMemoryProposals(limit: number): Promise<MemoryProposalRecord[]> {
+	async readRecentMemoryProposals(limit: number): Promise<MemoryProposalRecord[]> {
 		const folder = this.app.vault.getAbstractFileByPath(REVIEW_QUEUE_PATH);
 		if (!(folder instanceof TFolder)) {
 			return [];
@@ -295,6 +371,69 @@ async readRecentMemoryProposals(limit: number): Promise<MemoryProposalRecord[]> 
 			.filter((record): record is MemoryProposalRecord => Boolean(record))
 			.sort((a, b) => compareProposalRecords(a, b))
 			.slice(0, limit);
+	}
+
+	private async readRecentMemoryProposalsForTimeline(
+		limit: number
+	): Promise<MemoryProposalRecord[]> {
+		const folder = this.app.vault.getAbstractFileByPath(REVIEW_QUEUE_PATH);
+		if (!(folder instanceof TFolder)) {
+			return [];
+		}
+
+		const files = this.collectRecentMarkdownFiles(folder, limit, {
+			timestampKeys: ['created'],
+			accepts: (frontmatter) => {
+				const type = this.cachedFirstString(frontmatter, ['type'])
+					.toLowerCase()
+					.replace(/_/g, '-');
+				return type.includes('memory-proposal')
+					|| type.includes('legacy-migration-review')
+					|| Boolean(this.cachedFirstString(frontmatter, ['proposal_kind', 'proposalKind']));
+			},
+		});
+		const records = await Promise.all(files.map((file) => this.readMemoryProposalFile(file)));
+		return records
+			.filter((record): record is MemoryProposalRecord => Boolean(record))
+			.sort((left, right) =>
+				right.sortTimestamp - left.sortTimestamp
+				|| left.path.localeCompare(right.path)
+			)
+			.slice(0, limit);
+	}
+
+	async readActivityTimelineRecords(limit: number): Promise<ActivityTimelineRecordWindow> {
+		const [
+			tasks,
+			contextPacks,
+			sourceCaptures,
+			sourceRequests,
+			proposals,
+		] = await Promise.all([
+			this.readRecentAgentTasksForTimeline(limit),
+			this.readRecentContextPacksForTimeline(limit),
+			this.readRecentSourceCapturesForTimeline(limit),
+			this.readRecentSourceRequestsForTimeline(limit),
+			this.readRecentMemoryProposalsForTimeline(limit),
+		]);
+		const representedCounts = [
+			[AGENT_TASKS_PATH, tasks.length],
+			[CONTEXT_PACKS_PATH, contextPacks.length],
+			[SOURCES_PATH, sourceCaptures.length],
+			[SOURCE_REQUESTS_PATH, sourceRequests.length],
+			[REVIEW_QUEUE_PATH, proposals.length],
+		] as const;
+		const isTruncated = representedCounts.some(([folderPath, represented]) =>
+			this.countMarkdownFiles(folderPath) > represented
+		);
+		return {
+			tasks,
+			contextPacks,
+			sourceCaptures,
+			sourceRequests,
+			proposals,
+			isTruncated,
+		};
 	}
 
 async readRecentProposalHistory(limit: number): Promise<MemoryProposalRecord[]> {
@@ -572,9 +711,73 @@ collectMarkdownFiles(folder: TFolder): TFile[] {
 		return files;
 	}
 
-collectRecentMarkdownFiles(folder: TFolder, limit: number): TFile[] {
+private countMarkdownFiles(folderPath: string): number {
+		const folder = this.app.vault.getAbstractFileByPath(folderPath);
+		return folder instanceof TFolder ? this.collectMarkdownFiles(folder).length : 0;
+	}
+
+private cachedFirstString(
+		frontmatter: Readonly<Record<string, unknown>>,
+		keys: readonly string[]
+	): string {
+		for (const key of keys) {
+			const value = frontmatter[key];
+			if (typeof value === 'string' && value.trim()) {
+				return value.trim();
+			}
+			if (typeof value === 'number' || typeof value === 'boolean') {
+				return String(value);
+			}
+			if (Array.isArray(value)) {
+				const first = value.find((entry) =>
+					typeof entry === 'string' && entry.trim()
+				);
+				if (typeof first === 'string') {
+					return first.trim();
+				}
+			}
+		}
+		return '';
+	}
+
+private cachedFrontmatter(file: TFile): Readonly<Record<string, unknown>> | null {
+		const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+		return frontmatter && typeof frontmatter === 'object' && !Array.isArray(frontmatter)
+			? frontmatter
+			: null;
+	}
+
+collectRecentMarkdownFiles(
+		folder: TFolder,
+		limit: number,
+		selection?: RecentMarkdownSelection
+	): TFile[] {
 		const files = this.collectMarkdownFiles(folder)
-			.sort((left, right) => (right.stat?.mtime || 0) - (left.stat?.mtime || 0));
+			.map((file) => {
+				const frontmatter = selection ? this.cachedFrontmatter(file) : null;
+				return {
+					file,
+					frontmatter,
+					sortTimestamp: selection
+						? parseTimestamp(
+							frontmatter
+								? this.cachedFirstString(frontmatter, selection.timestampKeys)
+								: '',
+							file.stat?.mtime
+						)
+						: file.stat?.mtime || 0,
+				};
+			})
+			.filter(({ frontmatter }) =>
+				!selection?.accepts
+				|| frontmatter === null
+				|| selection.accepts(frontmatter)
+			)
+			.sort((left, right) =>
+				right.sortTimestamp - left.sortTimestamp
+				|| left.file.path.localeCompare(right.file.path)
+			)
+			.map(({ file }) => file);
 		if (!Number.isFinite(limit) || limit >= files.length) {
 			return files;
 		}

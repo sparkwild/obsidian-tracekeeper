@@ -267,6 +267,7 @@ async function runCharacterizationRows(suite, rows) {
 async function run() {
 	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-core-test-'));
 	let symlinkSupported = false;
+	let directorySymlinkSupported = false;
 
 	try {
 		const vaultRoot = createFixture(tempRoot);
@@ -2339,6 +2340,21 @@ async function run() {
 				repositoryRead?.modifiedAt ?? ''
 			)
 		);
+		const nestedRepositoryNote = path.join(
+			repoScope,
+			'missing-parent',
+			'missing-child',
+			'note.md'
+		);
+		assert.equal(
+			fs.existsSync(path.join(vaultRoot, repoScope, 'missing-parent')),
+			false
+		);
+		await repo.createText(nestedRepositoryNote, '# Nested Repository Note\n');
+		assert.equal(
+			(await repo.readText(nestedRepositoryNote))?.content,
+			'# Nested Repository Note\n'
+		);
 
 		await assert.rejects(
 			() => repo.createText(repositoryRootNote, '# Duplicate Repository Note\n'),
@@ -2371,6 +2387,31 @@ async function run() {
 			);
 		}
 
+		const outsideDirectory = path.join(tempRoot, 'outside-directory');
+		const linkedParent = path.join(vaultRoot, repoScope, 'linked-parent');
+		fs.mkdirSync(outsideDirectory, { recursive: true });
+		try {
+			fs.symlinkSync(
+				outsideDirectory,
+				linkedParent,
+				process.platform === 'win32' ? 'junction' : 'dir'
+			);
+			directorySymlinkSupported = true;
+		} catch {
+			results.skipped.push('directory-symlink');
+		}
+
+		if (directorySymlinkSupported) {
+			await assert.rejects(
+				() => repo.createText(
+					`${repoScope}/linked-parent/created/note.md`,
+					'# Must Stay Inside Vault\n'
+				),
+				(error) => error instanceof safety.VaultPathError
+			);
+			assert.equal(fs.existsSync(path.join(outsideDirectory, 'created')), false);
+		}
+
 		const scopedNotes = await repo.listMarkdown(repoScope);
 		assert.ok(scopedNotes.some((note) => note.path === repositoryRootNote));
 
@@ -2380,6 +2421,7 @@ async function run() {
 			vaultRoot,
 			scannedNotes: scanBeforeSymlink.notes.length,
 			symlinkSupported,
+			directorySymlinkSupported,
 			skipped: results.skipped,
 		})}\n`);
 
@@ -3289,6 +3331,48 @@ async function run() {
 				assert.notEqual(
 					lifecycle.buildStableAuditEventId(event),
 					lifecycle.buildStableAuditEventId({ ...event, operationId: 'operation-two' })
+				);
+				const requestEvent = {
+					requestId: 'request-one',
+					type: 'native-audit-event',
+					event: 'native-audit-event',
+					action: 'native-audit-event',
+				};
+				assert.equal(
+					lifecycle.buildStableAuditEventId(requestEvent),
+					lifecycle.buildStableAuditEventId({
+						...requestEvent,
+						timestamp: '2026-07-31T00:00:00.000Z',
+					})
+				);
+				assert.notEqual(
+					lifecycle.buildStableAuditEventId(requestEvent),
+					lifecycle.buildStableAuditEventId({
+						...requestEvent,
+						requestId: 'request-two',
+					})
+				);
+				const invocationEvent = {
+					invocationId: 'invocation-one',
+					type: 'tool-call',
+					event: 'tool-call',
+					tool: 'tracekeeper.status',
+					status: 'success',
+					targetPaths: [],
+				};
+				assert.equal(
+					lifecycle.buildStableAuditEventId(invocationEvent),
+					lifecycle.buildStableAuditEventId({
+						...invocationEvent,
+						timestamp: '2026-07-31T00:00:00.000Z',
+					})
+				);
+				assert.notEqual(
+					lifecycle.buildStableAuditEventId(invocationEvent),
+					lifecycle.buildStableAuditEventId({
+						...invocationEvent,
+						invocationId: 'invocation-two',
+					})
 				);
 			}],
 			['audit-merge-deduplicates-legacy-and-shards', async () => {

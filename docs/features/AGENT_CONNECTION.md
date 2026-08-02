@@ -214,3 +214,11 @@ The Activity surface labels its bounded audit preview as recent events. It answe
 what happened through a small chronological preview and links to the complete
 Runtime log for pagination and diagnosis. Agent activity separately answers which
 client-facing identities were recently observed.
+
+The combined Activity timeline keeps a finite window of at most 2,000 records.
+Each record category selects one additional candidate through Obsidian metadata
+before reading bodies, so rendering never requires an unbounded content parse.
+When the limit, missing or stale metadata, filtering, or a read failure prevents
+the repository from proving that every controlled record is represented, the
+timeline snapshot reports itself as truncated instead of claiming complete
+history.

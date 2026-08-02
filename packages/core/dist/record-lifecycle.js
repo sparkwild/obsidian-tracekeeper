@@ -23,8 +23,9 @@ function auditShardPath(timestamp) {
 function buildStableAuditEventId(event) {
     const { timestamp: _timestamp, auditEventId: _auditEventId, audit_event_id: _auditEventIdSnake, createdAt: _createdAt, created_at: _createdAtSnake, updatedAt: _updatedAt, updated_at: _updatedAtSnake, ...identity } = event;
     if (typeof identity.operationId !== 'string'
-        && typeof identity.requestId !== 'string') {
-        throw new Error('Audit event identity requires an operation or request id.');
+        && typeof identity.requestId !== 'string'
+        && typeof identity.invocationId !== 'string') {
+        throw new Error('Audit event identity requires an operation, request, or invocation id.');
     }
     return `audit-${(0, operation_journal_1.computePayloadHash)({
         schemaVersion: 1,

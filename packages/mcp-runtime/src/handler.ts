@@ -1,3 +1,4 @@
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -188,6 +189,16 @@ export class McpJsonRpcHandler {
 
 		const params = rawMessage.params ?? {};
 		if (!isRecord(params)) {
+			if (method === 'tools/call') {
+				await recordRejectedToolCallAuditEvent(
+					this.buildToolInvocationContext(
+						state,
+						requestId,
+						`invocation-${crypto.randomUUID()}`
+					),
+					'tool_call_invalid_params'
+				);
+			}
 			if (!isNotification) {
 				return this.errorResponse(requestId ?? null, -32602, 'Invalid params.');
 			}
@@ -410,30 +421,38 @@ export class McpJsonRpcHandler {
 		state: McpConnectionState,
 		requestId?: JsonRpcId
 	): Promise<unknown> {
+		const invocationId = `invocation-${crypto.randomUUID()}`;
+		const invocationContext = this.buildToolInvocationContext(
+			state,
+			requestId,
+			invocationId
+		);
 		const name = params.name;
 		const argumentsValue = params.arguments ?? {};
 		if (typeof name !== 'string' || name.trim() === '') {
 			await recordRejectedToolCallAuditEvent(
-				this.buildToolInvocationContext(state, requestId),
+				invocationContext,
 				'tool_call_invalid_name'
 			);
 			throw new RpcError({ code: -32602, message: '`name` is required for tools/call.' });
 		}
 		if (!isRecord(argumentsValue)) {
 			await recordRejectedToolCallAuditEvent(
-				this.buildToolInvocationContext(state, requestId),
+				invocationContext,
 				'tool_call_invalid_arguments'
 			);
 			throw new RpcError({ code: -32602, message: '`arguments` must be an object.' });
 		}
-		return await callTool(name, argumentsValue, this.buildToolInvocationContext(state, requestId));
+		return await callTool(name, argumentsValue, invocationContext);
 	}
 
 	private buildToolInvocationContext(
 		state: McpConnectionState,
-		requestId?: JsonRpcId
+		requestId?: JsonRpcId,
+		invocationId?: string
 	): ToolInvocationContext {
 		return {
+			invocationId,
 			requestId: requestId == null ? undefined : String(requestId),
 			defaultVaultRoot: this.defaultVaultRoot,
 			vaultConfigDir: this.vaultConfigDir,

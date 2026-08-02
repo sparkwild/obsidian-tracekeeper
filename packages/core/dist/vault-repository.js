@@ -83,6 +83,45 @@ class NodeFsVaultRepository {
             }
         }
     }
+    async ensureParentDirectories(targetPath) {
+        const parentPath = node_path_1.default.dirname(targetPath);
+        const relative = node_path_1.default.relative(this.vaultRoot, parentPath);
+        if (!relative || relative === '.') {
+            return;
+        }
+        const parts = node_path_1.default.normalize(relative).split(node_path_1.default.sep).filter(Boolean);
+        let cursor = this.vaultRoot;
+        for (const part of parts) {
+            const existingParent = cursor;
+            cursor = node_path_1.default.join(cursor, part);
+            await this.assertNoSymlinkSegments(existingParent);
+            let state;
+            try {
+                state = await promises_1.default.lstat(cursor);
+            }
+            catch (error) {
+                if (!(error instanceof Error) || error.code !== 'ENOENT') {
+                    throw error;
+                }
+                try {
+                    await promises_1.default.mkdir(cursor);
+                }
+                catch (mkdirError) {
+                    if (!(mkdirError instanceof Error) || mkdirError.code !== 'EEXIST') {
+                        throw mkdirError;
+                    }
+                }
+                state = await promises_1.default.lstat(cursor);
+            }
+            if (state.isSymbolicLink()) {
+                throw new safety_1.VaultPathError(`Vault path contains symbolic link segment: ${vaultRelativeFromAbsolute(this.vaultRoot, cursor)}`);
+            }
+            if (!state.isDirectory()) {
+                throw new safety_1.VaultPathError(`Vault path segment is not a directory: ${vaultRelativeFromAbsolute(this.vaultRoot, cursor)}`);
+            }
+            await this.assertNoSymlinkSegments(cursor);
+        }
+    }
     computeVersionFromStats(stats) {
         return (0, knowledge_index_1.computeFileVersion)(stats.size, stats.mtime.toISOString());
     }
@@ -275,7 +314,7 @@ class NodeFsVaultRepository {
     }
     async createText(relativePath, content) {
         const absolutePath = this.resolveRelativePath(relativePath);
-        await promises_1.default.mkdir(node_path_1.default.dirname(absolutePath), { recursive: true });
+        await this.ensureParentDirectories(absolutePath);
         await this.writeAtomicText(absolutePath, content, { type: 'mustBeAbsent' });
         const state = await this.readStats(absolutePath);
         if (state === null) {

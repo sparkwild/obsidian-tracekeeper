@@ -735,7 +735,13 @@ async applyApprovedWriteback(
 		}
 		this.assertArchivePreviewBounds(preview);
 		if (!operationReceipt && this.nowFactory().getTime() > Date.parse(preview.expiresAt)) {
-			throw new Error('Archive preview is stale or expired.');
+			const hasRecoveryClaim = await this.hasMatchingArchiveTargetClaim(
+				preview,
+				recoveryPreviewHash
+			);
+			if (!hasRecoveryClaim) {
+				throw new Error('Archive preview is stale or expired.');
+			}
 		}
 		let targetClaims: ArchiveMemoryProposalTargetClaim[] | null = null;
 		if (operationReceipt) {
@@ -914,6 +920,52 @@ async applyApprovedWriteback(
 		);
 		await this.completeArchiveTargetClaims(targetClaims, completedAt);
 		return receipt;
+	}
+
+	private async hasMatchingArchiveTargetClaim(
+		preview: ArchiveMemoryProposalPreview,
+		previewHash: string
+	): Promise<boolean> {
+		const targets = preview.items.map((item) => ({
+			item,
+			targetHash: this.archiveTargetHash(item),
+		}));
+		const current = await Promise.all(
+			targets.map(async ({ targetHash }) =>
+				this.parseArchiveTargetClaim(
+					await this.host.readArchiveTargetClaim(targetHash)
+				)
+			)
+		);
+		const existingClaims = current.filter(
+			(claim): claim is ArchiveMemoryProposalTargetClaim => claim !== null
+		);
+		if (existingClaims.length === 0) {
+			return false;
+		}
+		const startedAtValues = [...new Set(existingClaims.map((claim) => claim.startedAt))];
+		if (startedAtValues.length !== 1) {
+			throw new Error('Archive target claims have inconsistent start times.');
+		}
+		const startedAt = startedAtValues[0];
+		for (let index = 0; index < targets.length; index += 1) {
+			const claim = current[index];
+			if (!claim) {
+				continue;
+			}
+			this.assertArchiveTargetClaimMatches(
+				claim,
+				targets[index].item,
+				targets[index].targetHash,
+				preview.operationId,
+				previewHash,
+				startedAt
+			);
+			if (claim.status !== 'in-progress') {
+				throw new Error('Archive target claim status conflicts with recovery.');
+			}
+		}
+		return true;
 	}
 
 	private async acquireArchiveTargetClaims(

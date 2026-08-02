@@ -15,6 +15,7 @@ export type AuditEventSourceKind = 'legacy' | 'shard';
 export interface StableAuditEventIdentity {
 	operationId?: string;
 	requestId?: string;
+	invocationId?: string;
 	timestamp?: string;
 	[key: string]: unknown;
 }
@@ -163,8 +164,9 @@ export function buildStableAuditEventId(
 	if (
 		typeof identity.operationId !== 'string'
 		&& typeof identity.requestId !== 'string'
+		&& typeof identity.invocationId !== 'string'
 	) {
-		throw new Error('Audit event identity requires an operation or request id.');
+		throw new Error('Audit event identity requires an operation, request, or invocation id.');
 	}
 	return `audit-${computePayloadHash({
 		schemaVersion: 1,
