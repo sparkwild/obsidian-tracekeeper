@@ -651,7 +651,7 @@ export default class TracekeeperPlugin extends Plugin {
 		);
 		await this.replaceLegacyAgentConnectionLeaves();
 
-		this.addRibbonIcon('brain-circuit', ui(`打开${PLUGIN_DISPLAY_NAME_ZH}面板`, `Open ${PLUGIN_DISPLAY_NAME_EN} panel`), () => {
+		this.addRibbonIcon('orbit', ui(`打开${PLUGIN_DISPLAY_NAME_ZH}面板`, `Open ${PLUGIN_DISPLAY_NAME_EN} panel`), () => {
 			void this.openPluginView(TRACEKEEPER_ACTIVITY_VIEW);
 		});
 
