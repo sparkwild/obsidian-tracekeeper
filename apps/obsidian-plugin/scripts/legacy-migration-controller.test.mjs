@@ -75,7 +75,7 @@ function extractLinks(content, sourcePath) {
 			const { pathPart, subpath } = splitLinkTarget(targetWithSubpath);
 			links.push({
 				kind: embed ? 'embed' : 'wikilink',
-				raw,
+				raw: match[0],
 				alias,
 				subpath,
 				resolvedPath: resolveRelativePath(sourcePath, pathPart || sourcePath),
@@ -87,7 +87,7 @@ function extractLinks(content, sourcePath) {
 		const { pathPart, subpath } = splitLinkTarget(target);
 		links.push({
 			kind: 'markdown',
-			raw: target,
+			raw: match[0],
 			alias: label,
 			subpath,
 			resolvedPath: resolveRelativePath(sourcePath, pathPart || sourcePath),
@@ -124,6 +124,7 @@ function createVaultFixture(options = {}) {
 		linkCapabilityStatus: options.linkCapabilityStatus ?? 'required',
 		metadataDelayGenerations: options.metadataDelayGenerations ?? 0,
 		metadataWaitTimeoutMs: options.metadataWaitTimeoutMs ?? 100,
+		nativePathDerivedEmbedDisplay: options.nativePathDerivedEmbedDisplay ?? false,
 		trashFailures: new Set(options.trashFailures ?? []),
 	};
 
@@ -149,6 +150,7 @@ function createVaultFixture(options = {}) {
 
 	const pendingSnapshotWaiters = [];
 	let knowledgeGeneration = 1;
+	let indexCreatedAt = new Date(Date.now() - 60_000).toISOString();
 	let snapshotCount = 0;
 	let metadataDelayRemaining = 0;
 
@@ -472,14 +474,20 @@ function createVaultFixture(options = {}) {
 			for (const [index, fixtureEdge] of entry.outgoing.entries()) {
 				const resolvedPath = resolveFixtureLink(entry.path, fixtureEdge.resolvedPath);
 				const subpath = fixtureEdge.subpath.replace(/^#/, '');
+				const pathDerivedDisplay = settings.nativePathDerivedEmbedDisplay
+					&& fixtureEdge.kind === 'embed'
+					&& !fixtureEdge.alias
+					&& resolvedPath
+					? `${resolvedPath.replace(/\.md$/i, '')}${subpath ? ` > ${subpath}` : ''}`
+					: undefined;
 				const normalizedEdge = {
 					kind: fixtureEdge.kind === 'embed' ? 'embed' : 'link',
 					source: 'body',
 					raw: fixtureEdge.raw,
 					target: fixtureEdge.resolvedPath,
 					linkPath: fixtureEdge.resolvedPath,
-					displayText: fixtureEdge.alias || undefined,
-					alias: fixtureEdge.alias || undefined,
+					displayText: fixtureEdge.alias || pathDerivedDisplay,
+					alias: fixtureEdge.alias || pathDerivedDisplay,
 					heading: subpath || undefined,
 					subpath: subpath || undefined,
 					subpathKind: subpath
@@ -518,7 +526,7 @@ function createVaultFixture(options = {}) {
 		}
 		return {
 			version: '1.0',
-			createdAt: new Date().toISOString(),
+			createdAt: indexCreatedAt,
 			generation: knowledgeGeneration,
 			event_sequence: knowledgeGeneration,
 			index_state: 'ready',
@@ -849,6 +857,10 @@ function createVaultFixture(options = {}) {
 			return file;
 		},
 		removeEntry,
+		restartKnowledgeIndex() {
+			knowledgeGeneration = 1;
+			indexCreatedAt = new Date(Date.now() + 1_000).toISOString();
+		},
 		futurePlanFrom(rawPlan) {
 			const normalizedItems = rawPlan.items.map((item) => {
 				const targetFile = files.get(normalizePath(item.newPath));
@@ -1125,6 +1137,16 @@ try {
 				/preflight/i
 			);
 			assert.equal(disabled.events.renameFile, renameCountAfterProbe);
+			const modalSource = fs.readFileSync(
+				path.join(
+					path.dirname(fileURLToPath(import.meta.url)),
+					'../src/features/structure/initialize-memory-structure-modal.ts'
+				),
+				'utf8'
+			);
+			assert.match(modalSource, /Choose “Do not update”/);
+			assert.match(modalSource, /does not authorize moving any legacy file/);
+			assert.doesNotMatch(modalSource, /getConfig\s*(?:\?\.|\()/u);
 		}],
 		['preflight-does-not-adopt-or-trash-a-preexisting-probe-path', async () => {
 			const fixture = createSourceMutationFixture();
@@ -1273,6 +1295,33 @@ try {
 			const journal = fixture.readText(result.journalPath);
 			assert.doesNotMatch(journal, /Inside wikilink/);
 			assert.doesNotMatch(journal, /Stable block target/);
+		}],
+		['path-derived-embed-display-converges-without-weakening-alias-checks', async () => {
+			const fixture = createVaultFixture({
+				cleanMigration: true,
+				nativePathDerivedEmbedDisplay: true,
+			});
+			const controller = createController(bundle, fixture);
+			const rawPlan = await controller.buildLegacyStructurePlan(
+				'legacy-migration-3-path-derived-display'
+			);
+			const plan = await controller.runLegacyLinkPreflight(rawPlan);
+
+			const result = await controller.migrateLegacyStructure({
+				basePlan: {
+					foldersToCreate: [],
+					filesToCreate: [],
+					missingAuditLog: false,
+				},
+				legacyPlan: plan,
+				state: 'legacy_detected',
+			});
+
+			assert.equal(result.verifiedCount, 3, fixture.readText(result.journalPath));
+			assert.match(
+				fixture.readText('01_knowledge/wiki/concepts/topic.md'),
+				/\[\[.*\|Topic alias\]\]/
+			);
 		}],
 		['markdown-and-binary-items-use-fresh-read-process-and-preserve-bytes', async () => {
 			const fixture = createVaultFixture({ cleanMigration: true });
@@ -1765,6 +1814,14 @@ try {
 				/result: blocked/
 			);
 			blockVerification = false;
+			const blockedJournal = JSON.parse(
+				verificationFixture.readText(verificationBlocked.journalPath)
+			);
+			verificationFixture.restartKnowledgeIndex();
+			assert.ok(
+				verificationFixture.loadKnowledgeSnapshot().generation
+					<= blockedJournal.metadataGeneration
+			);
 			const verificationRestart = createController(bundle, verificationFixture);
 			const verificationRecovery = await verificationRestart.buildLegacyStructurePlan(
 				'legacy-migration-7-verification'

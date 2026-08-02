@@ -985,15 +985,53 @@ export class LegacyMigrationController {
 	}
 
 	private edgeShapeHash(edge: NormalizedVaultEdge): string {
+		const hasPathDerivedEmbedDisplay = this.isUnaliasedWikiEmbed(edge);
 		return hashVaultContent(canonicalJson({
 			kind: edge.kind,
 			source: edge.source,
-			alias: edge.alias ?? '',
-			displayText: edge.displayText ?? '',
+			alias: hasPathDerivedEmbedDisplay ? '' : edge.alias ?? '',
+			displayText: hasPathDerivedEmbedDisplay ? '' : edge.displayText ?? '',
 			subpath: edge.subpath ?? '',
 			subpathKind: edge.subpathKind ?? '',
 			referenceLabel: edge.referenceLabel ?? '',
 		}));
+	}
+
+	private legacyPathDerivedEmbedShapeHash(
+		edge: NormalizedVaultEdge,
+		legacyTargetPath: string
+	): string | null {
+		if (!this.isUnaliasedWikiEmbed(edge) || !legacyTargetPath) {
+			return null;
+		}
+		const legacyTarget = legacyTargetPath.replace(/\.md$/iu, '');
+		const displayText = edge.subpath
+			? `${legacyTarget} > ${edge.subpath}`
+			: legacyTarget;
+		return hashVaultContent(canonicalJson({
+			kind: edge.kind,
+			source: edge.source,
+			alias: displayText,
+			displayText,
+			subpath: edge.subpath ?? '',
+			subpathKind: edge.subpathKind ?? '',
+			referenceLabel: edge.referenceLabel ?? '',
+		}));
+	}
+
+	private isUnaliasedWikiEmbed(edge: NormalizedVaultEdge): boolean {
+		return edge.kind === 'embed'
+			&& /^!\[\[[^|\n]+\]\]$/u.test(edge.raw.trim());
+	}
+
+	private edgeMatchesJournalShape(
+		edge: NormalizedVaultEdge,
+		expectedShapeHash: string,
+		legacyTargetPath: string
+	): boolean {
+		return this.edgeShapeHash(edge) === expectedShapeHash
+			|| this.legacyPathDerivedEmbedShapeHash(edge, legacyTargetPath)
+				=== expectedShapeHash;
 	}
 
 	private semanticMarkdownHash(content: string): string {
@@ -1571,10 +1609,17 @@ export class LegacyMigrationController {
 				const snapshot = await this.host.loadKnowledgeSnapshot();
 				const needsMetadataAdvance =
 					item.isMarkdown || item.inboundEdges.length > 0;
+				const snapshotCreatedAt = Date.parse(snapshot.createdAt);
+				const journalCreatedAt = Date.parse(journal.createdAt);
+				const indexRestartedAfterJournal =
+					Number.isFinite(snapshotCreatedAt)
+					&& Number.isFinite(journalCreatedAt)
+					&& snapshotCreatedAt > journalCreatedAt;
 				if (
 					snapshot.index_state !== 'ready'
 					|| (
 						needsMetadataAdvance
+						&& !indexRestartedAfterJournal
 						&& snapshot.generation <= journal.metadataGeneration
 					)
 				) {
@@ -1598,11 +1643,9 @@ export class LegacyMigrationController {
 		journal: LegacyMigrationJournal,
 		item: LegacyMigrationJournalItem
 	): void {
-		const current = this.groupEdgeEvidence(
-			snapshot.graph.edges.filter((edge) =>
-				edge.resolution.status === 'resolved'
+		const current = snapshot.graph.edges.filter((edge) =>
+			edge.resolution.status === 'resolved'
 				&& edge.resolution.path === item.newPath
-			)
 		);
 		for (const expected of item.inboundEdges) {
 			const sourceItem = journal.items.find(
@@ -1618,11 +1661,15 @@ export class LegacyMigrationController {
 			const actualCount = current
 				.filter((edge) =>
 					edge.sourcePath === expectedSource
-					&& edge.shapeHash === expected.shapeHash
-					&& edge.subpath === expected.subpath
-					&& edge.subpathKind === expected.subpathKind
+						&& (edge.subpath ?? '') === expected.subpath
+						&& (edge.subpathKind ?? '') === expected.subpathKind
+						&& this.edgeMatchesJournalShape(
+							edge,
+							expected.shapeHash,
+							expected.targetPath
+						)
 				)
-				.reduce((total, edge) => total + edge.count, 0);
+				.length;
 			if (actualCount < expected.count) {
 				throw new Error(
 					`A resolved inbound relation did not converge: ${expected.sourcePath}.`
@@ -1637,9 +1684,7 @@ export class LegacyMigrationController {
 		item: LegacyMigrationJournalItem
 	): void {
 		const sourcePath = this.currentJournalPath(journal, item.oldPath);
-		const current = this.groupEdgeEvidence(
-			snapshot.notes.get(sourcePath)?.edges ?? []
-		);
+		const current = snapshot.notes.get(sourcePath)?.edges ?? [];
 		for (const expected of item.outgoingEdges) {
 			const targetItem = journal.items.find(
 				(candidate) => candidate.oldPath === expected.targetPath
@@ -1653,12 +1698,20 @@ export class LegacyMigrationController {
 			const actualCount = current
 				.filter((edge) =>
 					edge.sourcePath === sourcePath
-					&& edge.targetPath === expectedTarget
-					&& edge.shapeHash === expected.shapeHash
-					&& edge.subpath === expected.subpath
-					&& edge.subpathKind === expected.subpathKind
+						&& (
+							edge.resolution.status === 'resolved'
+								? edge.resolution.path
+								: ''
+						) === expectedTarget
+						&& (edge.subpath ?? '') === expected.subpath
+						&& (edge.subpathKind ?? '') === expected.subpathKind
+						&& this.edgeMatchesJournalShape(
+							edge,
+							expected.shapeHash,
+							expected.targetPath
+						)
 				)
-				.reduce((total, edge) => total + edge.count, 0);
+				.length;
 			if (actualCount < expected.count) {
 				throw new Error(
 					`A source relation changed after preview: ${item.oldPath}.`

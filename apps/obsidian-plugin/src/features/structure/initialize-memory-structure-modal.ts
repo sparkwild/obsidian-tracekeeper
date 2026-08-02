@@ -194,6 +194,13 @@ export class InitializeMemoryStructureModal extends Modal {
 			plan.linkCapability.status === 'required'
 			|| plan.linkCapability.status === 'blocked'
 		) {
+			detail.createEl('p', {
+				text: ui(
+					'Obsidian 可能会询问是否更新链接；预检会等待你的选择。选择“不做更新”可验证关闭自动更新时的阻断行为。此探针不会授权移动任何旧目录文件。',
+					'Obsidian may ask whether to update links, and the preflight waits for that choice. Choose “Do not update” to verify the blocked behavior when automatic updates are disabled. The probe does not authorize moving any legacy file.'
+				),
+				cls: 'tracekeeper-view__description',
+			});
 			const preflight = actions.createEl('button', {
 				text: ui('运行链接安全预检', 'Run link safety preflight'),
 				cls: 'mod-cta',
