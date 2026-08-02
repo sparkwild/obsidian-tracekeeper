@@ -105,32 +105,68 @@ developer-specific paths and credential-like examples.
 
 Static Agent-initiative characterization runs in normal verification. Real Agent
 A/B evaluation uses temporary Vaults, loopback MCP, model quota, and local
-redacted artifacts; it is opt-in and requires explicit authorization. Benchmark
-and evaluation provenance fingerprints include tracked changes plus every
-untracked path and its bytes. Conflicting closeout reports invalidate a Trace
-instead of allowing the final report to overwrite earlier evidence.
+redacted artifacts; it is opt-in, requires explicit authorization, and is not a
+Community Plugin release gate. Benchmark and evaluation provenance fingerprints
+include tracked changes plus every untracked path and its bytes. Conflicting
+closeout reports invalidate a Trace instead of allowing the final report to
+overwrite earlier evidence.
 
 Rendered Obsidian UI changes require relevant desktop verification in addition
 to pure feature and ViewModel tests.
 
-Changes to native Vault lifecycles require an isolated real-plugin matrix before
-release qualification:
+Changes to native Vault lifecycles require an isolated real-plugin acceptance
+row before release qualification. Build one change-impact map first, then select
+only the applicable rows:
 
 1. run `npm run verify`, `npm run community:check`, and `git diff --check` on
    the same candidate source;
 2. package the plugin and install only into disposable temporary Vaults;
-3. exercise the manifest's minimum Obsidian version and the current stable
-   desktop version;
-4. verify a fresh install and an upgrade from the previous published package,
-   preserving existing settings, records, proposal identity, and audit history;
-5. cover both Obsidian link formats and automatic-link-update modes where move
-   semantics matter, plus native metadata convergence, `Vault.process()`, and
-   configured `FileManager.trashFile()` behavior;
-6. inspect light and dark themes, keyboard order, safe initial focus, live
-   announcements, Chinese and English copy, partial failure, restart, and
-   recovery instructions;
-7. record the exact app versions, fixture paths, packaged artifact hashes,
-   results, and unresolved limitations outside `docs/`.
+3. always exercise current-stable desktop behavior for the changed native
+   surface; select the manifest minimum version when a compatibility-sensitive
+   API, native behavior, or `minAppVersion` changes, or when no equivalent
+   retained evidence covers that surface;
+4. select the previous-package upgrade row when durable settings, records,
+   credentials, Vault layout, migration, or recovery behavior changes;
+5. cover both Obsidian link formats and automatic-link-update modes only where
+   move semantics matter, plus the native APIs touched by the change;
+6. inspect light/dark themes, keyboard order, safe initial focus, live
+   announcements, localized copy, partial failure, restart, and recovery only
+   for changed rendered surfaces;
+7. select another desktop OS only for platform-specific code, filesystem or
+   packaging behavior, or an explicit new support claim;
+8. record exact app versions, fixture paths, packaged artifact hashes, results,
+   evidence reused from an owning workstream, and unresolved limitations
+   outside `docs/`.
+
+One real-Obsidian run may satisfy several workstreams when it exercises the same
+version, package, fixture, and behavior. Record that shared ownership once; do
+not schedule a duplicate matrix in each workstream.
+
+Current-stable native MetadataCache and event-convergence acceptance is a
+behavioral row. Use one serial, bounded direct-control pass in a disposable
+temporary Vault:
+
+1. record the exact Vault path, Obsidian version, packaged plugin version, and
+   stopped Runtime state before mutation;
+2. through the visible Obsidian UI, create two uniquely named notes, modify the
+   source, rename the linked target, move the target to the configured trash,
+   run one explicit index rebuild, and restart Obsidian once;
+3. after each mutation, use only short read-only observations to verify index
+   readiness, path presence or absence, content/hash change, and native link
+   resolution; and
+4. retain the bounded result outside `docs/`, including the automatic-link-
+   update mode and any behavior that the row did not exercise.
+
+Do not generate a bulk corpus, repeat the lifecycle, or broaden the matrix for
+this row. One failed attempt permits only the bounded diagnostic retry defined
+by the change-impact plan.
+
+An external controller timeout does not cancel an unresolved Promise already
+running inside Obsidian. Never start cleanup, retry, or another action while an
+earlier action may still be active. If completion is uncertain, stop new input,
+restart Obsidian completely, inspect the disposable Vault, and only then decide
+whether the single bounded retry is justified. Evidence from overlapping actions
+is invalid and must not be classified as a plugin failure.
 
 Use the deterministic upgrade tool before the real-plugin upgrade row:
 
@@ -161,9 +197,10 @@ requires the isolated real-Obsidian upgrade row.
 
 Stubbed fixtures remain required for deterministic conflict and interruption
 coverage, but they cannot substitute for the real-plugin matrix. Never point
-this qualification at a real user Vault. A partial or unavailable version,
-upgrade, accessibility, or security row blocks release readiness rather than
-being inferred from another row.
+this qualification at a real user Vault. A partial or unavailable selected
+version, upgrade, accessibility, or security row blocks release readiness;
+unselected rows are recorded as `not_selected`, not left pending or inferred
+from another row.
 
 For a legacy-structure migration candidate, the matrix also records pre/post
 file hashes and resolved-edge counts, both link formats, automatic-link-update
@@ -172,6 +209,46 @@ migration and cleanup confirmations. Qualification fails on a copied
 duplicate, overwritten target, permanently deleted file, newly unresolved
 relation, unowned probe cleanup, or migration report that disagrees with its
 journal.
+
+## Evidence Ownership And Cost Control
+
+Release qualification consumes evidence; it does not duplicate every owning
+workstream's suite. Classify evidence before scheduling it:
+
+- fast continuous gates cover static checks, focused deterministic tests,
+  builds, package structure, and documentation consistency while code changes;
+- product acceptance covers changed behavior in disposable Vaults before the
+  final candidate is frozen;
+- candidate-bound gates cover the clean commit, exact package bytes, install,
+  selected upgrade, staged hashes, and publication identity once the version is
+  stable;
+- subsystem evidence binds the relevant source, configuration, fixture,
+  environment, dependency, and toolchain inputs and may be reused when a
+  complete impact review records equivalence.
+
+A different commit SHA alone does not invalidate unchanged subsystem evidence.
+It does invalidate candidate-bound package and publication evidence affected by
+the new bytes.
+
+Expensive or expansive assurance is change-triggered:
+
+- run a formal 20k index benchmark only when the normalized index, scanner,
+  production adapter, Recall path, benchmark method, or a scale-relevant
+  dependency/configuration/toolchain input changes;
+- run replay stress only when event ordering, queueing, recovery, replay, or
+  convergence logic changes;
+- run extra client or desktop-platform rows only for a matching integration or
+  platform-specific delta;
+- keep real-model evaluation independently authorized with a default release
+  quota of zero;
+- keep full/deep repository security scans independently authorized. Normal
+  release review is proportional and focused on changed trust boundaries.
+
+Before an expensive row starts, its owner records the trigger, evidence it will
+decide, expected duration or quota, fixture/provenance identity, and stop
+condition. One bounded diagnostic retry is allowed only after identifying an
+infrastructure or fixture cause. A broader matrix, longer rerun, second retry,
+model call, or untriggered 20k/full-scan row requires fresh authorization.
 
 ## Pull Requests
 
@@ -222,6 +299,14 @@ immediately before release creation, closing the build-to-publication mutation
 window. Published release assets are immutable; the workflow refuses to replace
 an existing version.
 
+For a plugin already listed in Obsidian Community Plugins, publishing a matching
+GitHub Release with the required assets is the normal update distribution path;
+it is not a new registry-submission workflow for every version. Tracekeeper's
+staging hashes, attestations, and install smoke remain stricter internal release
+policy. Community availability and the displayed Scorecard are post-publication
+distribution observations, not reasons to repeat pre-publication product or
+performance qualification.
+
 Release requirements:
 
 1. Keep versions aligned across root and plugin manifests, workspace packages,
@@ -261,13 +346,15 @@ Before submission or update, confirm:
 - release assets and attestations are present;
 - installation, reload, Runtime startup, client connection, and safe Recall were
   tested;
-- the minimum-version/current-stable temporary-Vault matrix and previous-package
-  upgrade matrix passed for every changed native Vault lifecycle;
+- the current-stable temporary-Vault row passed for each changed native Vault
+  lifecycle, and any minimum-version or previous-package upgrade row selected
+  by the change-impact map passed;
 - archive/history and audit/cleanup checks found no lost or duplicate proposal,
   association, or audit identity, and every partial or outcome-unknown result
   remained recoverable;
 - affected dialogs passed theme, keyboard, focus, live-announcement, localized
-  copy, and explicit-recovery review;
+  copy, and explicit-recovery review without multiplying unrelated platform,
+  version, or client combinations;
 - privacy, capability, and Knowledge Change Review descriptions match executable
   behavior;
 - no developer-specific path or credential remains and local installation can be

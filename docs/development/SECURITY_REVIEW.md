@@ -148,6 +148,13 @@ against a live listener, perform port or network scanning, or use high-scale
 fuzzing as a release gate. A full-repository cyber-security scan is not a
 default release requirement for the current local-only product boundary.
 
+Focused security evidence belongs to the trust boundary it reviewed. A later
+commit SHA does not by itself require another scan when a complete diff shows no
+change to that boundary, its relevant dependencies/configuration, or its test
+method. Record the prior evidence identity, inspected delta, and equivalence
+conclusion. Run a new full/deep scan only after an explicit scope trigger and
+separate authorization; do not use it as a generic final-candidate checksum.
+
 The small amount of real network evidence required for bind lifecycle and
 client interoperability is deterministic product QA. A normal CI runner or a
 human operator runs fixed loopback fixtures and real supported-client flows in
