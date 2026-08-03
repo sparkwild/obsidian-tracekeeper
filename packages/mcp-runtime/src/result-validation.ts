@@ -58,6 +58,11 @@ function validateNode(value: unknown, schema: unknown, path: string, errors: str
 		});
 		const matchingBranches = branchErrors.filter((candidateErrors) => candidateErrors.length === 0).length;
 		if (matchingBranches !== 1) {
+			for (const [branchIndex, candidateErrors] of branchErrors.entries()) {
+				for (const branchError of candidateErrors.slice(0, 3)) {
+					errors.push(`${path} oneOf[${branchIndex}]: ${branchError}`);
+				}
+			}
 			errors.push(`${path} must match exactly one schema branch`);
 		}
 	}

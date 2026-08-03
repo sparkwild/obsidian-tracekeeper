@@ -248,16 +248,36 @@ for (const contract of [captureSourceContract, proposeMemoryContract]) {
 	assert.equal(typeof contract.inputSchema.properties.idempotency_key?.description, 'string', `${contract.name} should describe idempotency_key`);
 }
 
-for (const contract of toolContracts) {
-	if (
-		contract.name === 'tracekeeper.start_task'
-		|| contract.name === 'tracekeeper.recall'
-		|| contract.name === 'tracekeeper.project_memory'
-		|| contract.name === 'tracekeeper.finish_task'
-	) {
-		continue;
+for (const publicName of PUBLIC_TOOL_NAME_ORDER) {
+	const contract = getContractByName(publicName);
+	assert(contract, `public contract should exist for ${publicName}`);
+	assert.notDeepStrictEqual(
+		contract.outputSchema,
+		GENERIC_TOOL_OUTPUT_SCHEMA,
+		`${publicName} must not use the compatibility generic output schema`,
+	);
+	const branches = Array.isArray(contract.outputSchema.oneOf)
+		? contract.outputSchema.oneOf
+		: [contract.outputSchema];
+	for (const branch of branches) {
+		if (branch && typeof branch === 'object' && branch.additionalProperties !== undefined) {
+			assert.equal(
+				branch.additionalProperties,
+				false,
+				`${publicName} output branches must close the top-level field set`,
+			);
+		}
 	}
-	assert.deepStrictEqual(contract.outputSchema, GENERIC_TOOL_OUTPUT_SCHEMA, `${contract.name} non-core tool should use generic output schema`);
+}
+
+for (const contract of toolContracts) {
+	if (!isPublicTool(contract.name)) {
+		assert.deepStrictEqual(
+			contract.outputSchema,
+			GENERIC_TOOL_OUTPUT_SCHEMA,
+			`${contract.name} compatibility/internal tool should retain the generic output schema`,
+		);
+	}
 }
 
 const projectMemoryCatalogSchema = PROJECT_MEMORY_OUTPUT_SCHEMA.oneOf[0];

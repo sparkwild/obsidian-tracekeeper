@@ -1,8 +1,17 @@
 import {
+	APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA,
+	BUILD_CONTEXT_PACK_OUTPUT_SCHEMA,
+	CAPTURE_SOURCE_OUTPUT_SCHEMA,
 	GENERIC_TOOL_OUTPUT_SCHEMA,
 	FINISH_TASK_OUTPUT_SCHEMA,
+	LINT_OUTPUT_SCHEMA,
+	PROPOSE_MEMORY_OUTPUT_SCHEMA,
 	PROJECT_MEMORY_OUTPUT_SCHEMA,
 	RECALL_OUTPUT_SCHEMA,
+	READ_NOTE_OUTPUT_SCHEMA,
+	REVIEW_QUEUE_OUTPUT_SCHEMA,
+	SOURCE_REQUEST_OUTPUT_SCHEMA,
+	STATUS_OUTPUT_SCHEMA,
 	START_TASK_OUTPUT_SCHEMA,
 } from './result-schemas';
 
@@ -197,7 +206,7 @@ export const toolContracts = [
 		description:
 			'[read-only] Quick vault and service summary. Does not read full note content or write files.',
 		inputSchema: withToolInput({}),
-		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		...withResultSchema(STATUS_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.graph_health',
@@ -404,7 +413,7 @@ export const toolContracts = [
 				description: 'Optional recall correlation id returned by tracekeeper.recall.',
 			},
 		}, ['path']),
-		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		...withResultSchema(READ_NOTE_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.review_queue',
@@ -432,7 +441,7 @@ export const toolContracts = [
 			max_items: { type: 'integer', description: 'Maximum number of entries to return.' },
 			limit: { type: 'integer', description: 'Alias of max_items.' },
 		}),
-		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		...withResultSchema(REVIEW_QUEUE_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.list_review_queue',
@@ -555,7 +564,7 @@ export const toolContracts = [
 			status: { type: 'string', description: 'Optional status filter when listing, defaults to pending.' },
 			source_kind: { type: 'string', description: 'Optional source kind filter when listing.' },
 		}),
-		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		...withResultSchema(SOURCE_REQUEST_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.analyze_source_request',
@@ -610,7 +619,7 @@ export const toolContracts = [
 					'Opaque confirmation token returned by the dry-run preview. Required when applying that preview and expires at the time reported with the preview.',
 			},
 		}),
-		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		...withResultSchema(APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.build_context_pack',
@@ -640,7 +649,7 @@ export const toolContracts = [
 			filename: { type: 'string', description: 'Optional file stem.' },
 			title: { type: 'string', description: 'Optional note title when writing markdown artifact.' },
 		}, ['query']),
-		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		...withResultSchema(BUILD_CONTEXT_PACK_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.lint',
@@ -663,7 +672,7 @@ export const toolContracts = [
 				description: 'Graph checking mode. Defaults to the server graphProfile setting.',
 			},
 		}),
-		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		...withResultSchema(LINT_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.finish_task',
@@ -865,7 +874,7 @@ export const toolContracts = [
 			},
 			['source', 'mode'],
 		),
-		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		...withResultSchema(CAPTURE_SOURCE_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.propose_memory',
@@ -915,7 +924,7 @@ export const toolContracts = [
 			},
 			['proposal_kind', 'content'],
 		),
-		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		...withResultSchema(PROPOSE_MEMORY_OUTPUT_SCHEMA),
 	},
 ] as const satisfies readonly ToolContract<TracekeeperToolName>[];
 

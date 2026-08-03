@@ -107,7 +107,7 @@ exports.toolContracts = [
         useCase: 'status',
         description: '[read-only] Quick vault and service summary. Does not read full note content or write files.',
         inputSchema: withToolInput({}),
-        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
+        ...withResultSchema(result_schemas_1.STATUS_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.graph_health',
@@ -302,7 +302,7 @@ exports.toolContracts = [
                 description: 'Optional recall correlation id returned by tracekeeper.recall.',
             },
         }, ['path']),
-        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
+        ...withResultSchema(result_schemas_1.READ_NOTE_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.review_queue',
@@ -329,7 +329,7 @@ exports.toolContracts = [
             max_items: { type: 'integer', description: 'Maximum number of entries to return.' },
             limit: { type: 'integer', description: 'Alias of max_items.' },
         }),
-        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
+        ...withResultSchema(result_schemas_1.REVIEW_QUEUE_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.list_review_queue',
@@ -448,7 +448,7 @@ exports.toolContracts = [
             status: { type: 'string', description: 'Optional status filter when listing, defaults to pending.' },
             source_kind: { type: 'string', description: 'Optional source kind filter when listing.' },
         }),
-        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
+        ...withResultSchema(result_schemas_1.SOURCE_REQUEST_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.analyze_source_request',
@@ -500,7 +500,7 @@ exports.toolContracts = [
                 description: 'Opaque confirmation token returned by the dry-run preview. Required when applying that preview and expires at the time reported with the preview.',
             },
         }),
-        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
+        ...withResultSchema(result_schemas_1.APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.build_context_pack',
@@ -529,7 +529,7 @@ exports.toolContracts = [
             filename: { type: 'string', description: 'Optional file stem.' },
             title: { type: 'string', description: 'Optional note title when writing markdown artifact.' },
         }, ['query']),
-        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
+        ...withResultSchema(result_schemas_1.BUILD_CONTEXT_PACK_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.lint',
@@ -551,7 +551,7 @@ exports.toolContracts = [
                 description: 'Graph checking mode. Defaults to the server graphProfile setting.',
             },
         }),
-        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
+        ...withResultSchema(result_schemas_1.LINT_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.finish_task',
@@ -744,7 +744,7 @@ exports.toolContracts = [
                 description: 'Optional stable retry key. Reusing it with different source content is rejected.',
             },
         }, ['source', 'mode']),
-        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
+        ...withResultSchema(result_schemas_1.CAPTURE_SOURCE_OUTPUT_SCHEMA),
     },
     {
         name: 'tracekeeper.propose_memory',
@@ -790,7 +790,7 @@ exports.toolContracts = [
                 description: 'Optional stable retry key. Reusing it with different proposal content is rejected.',
             },
         }, ['proposal_kind', 'content']),
-        ...withResultSchema(result_schemas_1.GENERIC_TOOL_OUTPUT_SCHEMA),
+        ...withResultSchema(result_schemas_1.PROPOSE_MEMORY_OUTPUT_SCHEMA),
     },
 ];
 const contractMap = new Map();

@@ -200,7 +200,12 @@ The manifest proves content identity only. It does not prove installation, clien
 ## Contract Synchronization
 
 - This document owns normative explanations.
-- Structured MCP schemas own executable tool-result fields.
+- Structured MCP schemas own executable tool-result fields. Public success and
+  failure envelopes use closed top-level field sets; deliberately dynamic
+  evidence, metadata, and diagnostic leaves remain explicitly controlled
+  extension points. The Runtime validates the same structured result that is
+  exposed through MCP discovery and keeps the compact JSON text fallback in
+  parity with it.
 - `skills/tracekeeper/manifest.json` owns Skill bundle and artifact version identity.
 - `scripts/check_agent_ecosystem.mjs` verifies contract, source bundle, generated artifact, and current distribution target alignment.
 - A behavior change is incomplete until the contract, Skill sources, generated artifact, and checker fixtures agree.

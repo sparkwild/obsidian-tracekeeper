@@ -1316,7 +1316,18 @@ function validateToolResult(
 	}
 	const payload = isRecord(result.structuredContent) ? result.structuredContent : {};
 	const recoveryMetadata: Record<string, unknown> = {};
-	for (const key of ['operation_id', 'idempotency_key', 'task_id', 'path', 'task_path', 'audit_path', 'proposal_path']) {
+	for (const key of [
+		'operation_id',
+		'idempotency_key',
+		'task_id',
+		'task_path',
+		'path',
+		'audit_path',
+		'proposal_id',
+		'proposal_path',
+		'target_note',
+		'request_path',
+	]) {
 		const value = payload[key];
 		if (typeof value === 'string' && value.trim()) {
 			recoveryMetadata[key] = value;

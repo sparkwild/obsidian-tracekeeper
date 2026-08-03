@@ -88,8 +88,11 @@ modes and Agent habits. The Runtime never trusts the Skill for authorization.
 
 Public tools come from one contract registry. Discovery uses deterministic order
 and the fixed `local-user` capability set; dispatch performs the same capability
-check. The service Bearer gates local access but does not establish client
-identity. MCP `clientInfo` and Session identifiers are retained only as
+check. The registry publishes the output schemas used by both discovery and
+Runtime result validation: public top-level success/failure fields are closed,
+while evidence, metadata, and diagnostics are extensible only where their
+schema says so. The service Bearer gates local access but does not establish
+client identity. MCP `clientInfo` and Session identifiers are retained only as
 untrusted observation evidence and never change authorization. Results provide
 validated structured content plus equivalent compact JSON text. Structured
 actions carry stable identities, timing, reason codes, required capabilities,

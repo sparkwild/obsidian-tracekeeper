@@ -62,6 +62,55 @@ const PROJECT_IDENTITY_OUTPUT_SCHEMA: JsonSchema2020 = {
 
 export const START_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 	type: 'object',
+	required: [
+		'schema_version',
+		'ok',
+		'tool',
+		'read_only',
+		'operation_id',
+		'idempotency_key',
+		'task_id',
+		'path',
+		'audit_path',
+		'vault_root',
+		'workflow',
+		'recommended_recall',
+		'next_actions',
+	],
+	properties: {
+		schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+		ok: { const: true, type: 'boolean' },
+		tool: { const: 'tracekeeper.start_task', type: 'string' },
+		read_only: { const: false, type: 'boolean' },
+		operation_id: { type: 'string', minLength: 1 },
+		idempotency_key: { type: 'string', minLength: 1 },
+		task_id: { type: 'string', minLength: 1 },
+		path: { type: 'string', minLength: 1 },
+		audit_path: { type: 'string', minLength: 1 },
+		client: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+		project_hint: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+		project_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+		repo_path: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+		vault_root: { type: 'string', minLength: 1 },
+		scanned_at: { type: 'string', minLength: 1 },
+		index_state: { type: 'string', minLength: 1 },
+		snapshot_generation: { oneOf: [{ type: 'integer', minimum: 0 }, { type: 'null' }] },
+		snapshot_warning: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+		content_language: { type: 'string', minLength: 1 },
+		content_language_source: { type: 'string', minLength: 1 },
+		project_identity: PROJECT_IDENTITY_OUTPUT_SCHEMA,
+		workflow: { type: 'object', additionalProperties: true },
+		context_pack_summary: { type: 'object', additionalProperties: true },
+		related_projects: { type: 'array', items: { type: 'object', additionalProperties: true } },
+		recent_sessions: { type: 'array', items: { type: 'object', additionalProperties: true } },
+		user_preferences: { type: 'object', additionalProperties: true },
+		recommended_next_tool: { type: 'string', minLength: 1 },
+		recommended_recall: { oneOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] },
+		closeout_contract: { type: 'object', additionalProperties: true },
+		next_actions: { type: 'array', items: AGENT_ACTION_SCHEMA },
+		next_actions_for_agent: { type: 'array', items: { type: 'string' } },
+		memory_closeout_summary: { type: 'string' },
+	},
 	allOf: [
 		COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA,
 		{
@@ -114,11 +163,49 @@ export const START_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 			},
 		},
 	],
-	additionalProperties: true,
+	additionalProperties: false,
 };
 
 export const RECALL_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 	type: 'object',
+	required: [
+		'schema_version',
+		'ok',
+		'tool',
+		'read_only',
+		'vault_root',
+		'recall',
+		'matches',
+		'next_actions',
+	],
+	properties: {
+		schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+		ok: { const: true, type: 'boolean' },
+		tool: { const: 'tracekeeper.recall', type: 'string' },
+		read_only: { const: true, type: 'boolean' },
+		vault_root: { type: 'string', minLength: 1 },
+		query: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+		max_items: { type: 'integer', minimum: 0 },
+		matched_count: { type: 'integer', minimum: 0 },
+		total_matches: { type: 'integer', minimum: 0 },
+		uncertain: { type: 'boolean' },
+		scope_mode: { type: 'string', enum: ['global', 'project', 'project_history'] },
+		scope: { type: 'object', additionalProperties: true },
+		project_identity: PROJECT_IDENTITY_OUTPUT_SCHEMA,
+		candidates: { type: 'array', items: { type: 'string' } },
+		candidate_notes: { type: 'array', items: { type: 'object', additionalProperties: true } },
+		scope_evidence: { type: 'array', items: { type: 'object', additionalProperties: true } },
+		index_state: { type: 'string', minLength: 1 },
+		snapshot_generation: { oneOf: [{ type: 'integer', minimum: 0 }, { type: 'null' }] },
+		snapshot_warning: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+		recall: { type: 'object', additionalProperties: true },
+		matches: { type: 'array', items: { type: 'object', additionalProperties: true } },
+		entries: { type: 'array', items: { type: 'object', additionalProperties: true } },
+		next_actions: { type: 'array', items: AGENT_ACTION_SCHEMA },
+		next_actions_for_agent: { type: 'array', items: { type: 'string' } },
+		recommended_actions: { type: 'array', items: { type: 'string' } },
+		remembered_scope: { type: 'string' },
+	},
 	allOf: [
 		COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA,
 		{
@@ -225,11 +312,70 @@ export const RECALL_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 			},
 		},
 	],
-	additionalProperties: true,
+	additionalProperties: false,
 };
 
 export const FINISH_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 	type: 'object',
+	required: [
+		'schema_version',
+		'ok',
+		'tool',
+		'read_only',
+		'operation_id',
+		'idempotency_key',
+		'task_id',
+		'task_path',
+		'path',
+		'audit_path',
+		'workflow',
+		'memory',
+		'memory_closeout_state',
+		'next_actions',
+	],
+	properties: {
+		schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+		ok: { const: true, type: 'boolean' },
+		tool: { const: 'tracekeeper.finish_task', type: 'string' },
+		read_only: { const: false, type: 'boolean' },
+		operation_id: { type: 'string', minLength: 1 },
+		idempotency_key: { type: 'string', minLength: 1 },
+		task_id: { type: 'string', minLength: 1 },
+		task_path: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+		path: { type: 'string', minLength: 1 },
+		audit_path: { type: 'string', minLength: 1 },
+		review_proposal_mode: { type: 'string', enum: ['off', 'suggest', 'review_queue', 'auto_propose'] },
+		content_language: { type: 'string', minLength: 1 },
+		content_language_source: { type: 'string', minLength: 1 },
+		outcome_count: { type: 'integer', minimum: 0 },
+		next_action_count: { type: 'integer', minimum: 0 },
+		proposal_count: { type: 'integer', minimum: 0 },
+		suggestion_count: { type: 'integer', minimum: 0 },
+		auto_applied_count: { type: 'integer', minimum: 0 },
+		memory_closeout_status: { type: 'string', enum: ['auto_saved', 'queued', 'mixed', 'empty', 'ignored'] },
+		memory_closeout_state: { type: 'string', enum: ['no_candidates', 'disabled', 'suggested', 'queued_for_review', 'partially_auto_saved', 'auto_saved', 'requires_wiki_bridge', 'conflict'] },
+		memory_closeout_summary: { type: 'string' },
+		memory_scope: { type: 'string', enum: ['global', 'project'] },
+		project_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+		repo_path: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+		project_hint: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+		project_identity: PROJECT_IDENTITY_OUTPUT_SCHEMA,
+		related_wiki: { type: 'array', items: { type: 'string' } },
+		related_sources: { type: 'array', items: { type: 'string' } },
+		architecture_status: { type: 'string', enum: ['healthy', 'needs_attention'] },
+		missing_graph_bridges: { type: 'array', items: { type: 'string' } },
+		missing_wiki_bridge: { type: 'boolean' },
+		missing_related_sources: { type: 'array', items: { type: 'string' } },
+		workflow: { type: 'object', additionalProperties: true },
+		memory: { type: 'object', additionalProperties: true },
+		closeout_contract: { type: 'object', additionalProperties: true },
+		proposals: { type: 'array', items: { type: 'object', additionalProperties: true } },
+		suggested_memory_updates: { type: 'array', items: { type: 'object', additionalProperties: true } },
+		auto_applied_memory_updates: { type: 'array', items: { type: 'object', additionalProperties: true } },
+		next_actions: { type: 'array', items: AGENT_ACTION_SCHEMA },
+		next_actions_for_agent: { type: 'array', items: { type: 'string' } },
+		recommended_memory_actions: { type: 'array', items: { type: 'string' } },
+	},
 	allOf: [
 		COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA,
 		{
@@ -315,7 +461,7 @@ export const FINISH_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 			},
 		},
 	],
-	additionalProperties: true,
+	additionalProperties: false,
 };
 
 const PROJECT_MEMORY_CATALOG_ENTRY_OUTPUT_SCHEMA = {
@@ -443,24 +589,561 @@ export const PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 	additionalProperties: false,
 };
 
+const STRING_ARRAY_SCHEMA = { type: 'array', items: { type: 'string' } };
+const OPEN_OBJECT_SCHEMA = { type: 'object', additionalProperties: true };
+const NULLABLE_STRING_SCHEMA = { oneOf: [{ type: 'string' }, { type: 'null' }] };
+const SCAN_PROVENANCE_PROPERTIES = {
+	index_state: { type: 'string', minLength: 1 },
+	snapshot_generation: { oneOf: [{ type: 'integer', minimum: 0 }, { type: 'null' }] },
+	snapshot_warning: NULLABLE_STRING_SCHEMA,
+};
+
+const ERROR_DETAIL_SCHEMA = {
+	type: 'object',
+	required: ['code', 'message', 'retryable', 'recovery_actions'],
+	properties: {
+		code: {
+			type: 'string',
+			enum: [
+				'PERMISSION_DENIED',
+				'STALE_CURSOR',
+				'INVALID_CURSOR',
+				'FINISH_ALREADY_COMPLETED',
+				'IDEMPOTENCY_CONFLICT',
+				'TOOL_UNAVAILABLE',
+				'INVALID_REQUEST',
+				'INTERNAL_CONTRACT_ERROR',
+			],
+		},
+		message: { type: 'string' },
+		retryable: { type: 'boolean' },
+		recovery_actions: { type: 'array', items: AGENT_ACTION_SCHEMA },
+		diagnostics: STRING_ARRAY_SCHEMA,
+	},
+	additionalProperties: false,
+};
+
+export const PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	required: ['schema_version', 'ok', 'tool', 'error', 'error_detail'],
+	properties: {
+		schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+		ok: { const: false, type: 'boolean' },
+		tool: { type: 'string', minLength: 1 },
+		error: { type: 'string' },
+		error_detail: ERROR_DETAIL_SCHEMA,
+		execution_status: { type: 'string', enum: ['failed', 'succeeded'] },
+		contract_status: { const: 'invalid', type: 'string' },
+		operation_id: { type: 'string', minLength: 1 },
+		idempotency_key: { type: 'string', minLength: 1 },
+		task_id: { type: 'string', minLength: 1 },
+		task_path: { type: 'string', minLength: 1 },
+		path: { type: 'string', minLength: 1 },
+		audit_path: { type: 'string', minLength: 1 },
+		proposal_id: { type: 'string', minLength: 1 },
+		proposal_path: { type: 'string', minLength: 1 },
+		target_note: { type: 'string', minLength: 1 },
+		request_path: { type: 'string', minLength: 1 },
+	},
+	description: 'Closed public failure envelope with typed recovery details.',
+	additionalProperties: false,
+};
+
+export const STATUS_OUTPUT_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	oneOf: [
+		{
+			type: 'object',
+			required: [
+				'schema_version', 'ok', 'tool', 'read_only', 'vault_root', 'scanned_at',
+				'index_state', 'snapshot_generation', 'snapshot_warning', 'content_language',
+				'content_language_source', 'counts', 'scan_errors',
+			],
+			properties: {
+				schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+				ok: { const: true, type: 'boolean' },
+				tool: { const: 'tracekeeper.status', type: 'string' },
+				read_only: { const: true, type: 'boolean' },
+				vault_root: { type: 'string', minLength: 1 },
+				scanned_at: { type: 'string', minLength: 1 },
+				...SCAN_PROVENANCE_PROPERTIES,
+				content_language: { type: 'string', minLength: 1 },
+				content_language_source: { type: 'string', minLength: 1 },
+				counts: OPEN_OBJECT_SCHEMA,
+				scan_errors: { type: 'array', items: OPEN_OBJECT_SCHEMA },
+			},
+			additionalProperties: false,
+		},
+		PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
+	],
+};
+
+export const LINT_OUTPUT_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	oneOf: [
+		{
+			type: 'object',
+			required: [
+				'schema_version', 'ok', 'tool', 'read_only', 'profile', 'graph_profile_disabled',
+				'profile_issues', 'vault_root', 'scanned_at', 'index_state', 'snapshot_generation',
+				'snapshot_warning', 'issue_count', 'issues', 'graph_summary', 'graph_health',
+				'legacy_structure', 'fix_plan_summary',
+			],
+			properties: {
+				schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+				ok: { const: true, type: 'boolean' },
+				tool: { const: 'tracekeeper.lint', type: 'string' },
+				read_only: { const: true, type: 'boolean' },
+				profile: { type: 'string', enum: ['off', 'advisory', 'strict'] },
+				graph_profile_disabled: { type: 'boolean' },
+				profile_issues: { type: 'array', items: OPEN_OBJECT_SCHEMA },
+				vault_root: { type: 'string', minLength: 1 },
+				scanned_at: { type: 'string', minLength: 1 },
+				...SCAN_PROVENANCE_PROPERTIES,
+				issue_count: { type: 'integer', minimum: 0 },
+				issues: { type: 'array', items: OPEN_OBJECT_SCHEMA },
+				graph_summary: { oneOf: [OPEN_OBJECT_SCHEMA, { type: 'null' }] },
+				graph_health: { oneOf: [OPEN_OBJECT_SCHEMA, { type: 'null' }] },
+				legacy_structure: OPEN_OBJECT_SCHEMA,
+				fix_plan_summary: STRING_ARRAY_SCHEMA,
+			},
+			additionalProperties: false,
+		},
+		PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
+	],
+};
+
+export const READ_NOTE_OUTPUT_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	oneOf: [
+		{
+			type: 'object',
+			required: [
+				'schema_version', 'ok', 'tool', 'read_only', 'vault_root', 'path', 'title',
+				'mime_type', 'recall_id', 'content_origin', 'instruction_trust', 'content',
+				'excerpt', 'relation_evidence',
+			],
+			properties: {
+				schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+				ok: { const: true, type: 'boolean' },
+				tool: { const: 'tracekeeper.read_note', type: 'string' },
+				read_only: { const: true, type: 'boolean' },
+				vault_root: { type: 'string', minLength: 1 },
+				path: { type: 'string', minLength: 1 },
+				title: { type: 'string' },
+				mime_type: { type: 'string', minLength: 1 },
+				recall_id: NULLABLE_STRING_SCHEMA,
+				content_origin: { type: 'string', enum: ['captured_source', 'tracekeeper_generated', 'vault_note'] },
+				instruction_trust: { const: 'data_only', type: 'string' },
+				content: { type: 'string' },
+				excerpt: { type: 'string' },
+				relation_evidence: OPEN_OBJECT_SCHEMA,
+			},
+			additionalProperties: false,
+		},
+		PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
+	],
+};
+
+const CONTEXT_PACK_OUTPUT_SCHEMA = {
+	type: 'object',
+	required: [
+		'query', 'generatedAt', 'relevantNotes', 'sourceCandidates', 'evidenceCandidates',
+		'gaps', 'staleWarnings', 'suggestedWritebackTargets', 'scanErrors',
+	],
+	properties: {
+		query: { type: 'string' },
+		generatedAt: { type: 'string', minLength: 1 },
+		relevantNotes: { type: 'array', items: OPEN_OBJECT_SCHEMA },
+		sourceCandidates: { type: 'array', items: OPEN_OBJECT_SCHEMA },
+		evidenceCandidates: { type: 'array', items: OPEN_OBJECT_SCHEMA },
+		gaps: STRING_ARRAY_SCHEMA,
+		staleWarnings: STRING_ARRAY_SCHEMA,
+		suggestedWritebackTargets: STRING_ARRAY_SCHEMA,
+		scanErrors: { type: 'array', items: OPEN_OBJECT_SCHEMA },
+	},
+	additionalProperties: false,
+};
+
+const CONTEXT_PACK_COMMON_PROPERTIES = {
+	schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+	ok: { const: true, type: 'boolean' },
+	tool: { const: 'tracekeeper.build_context_pack', type: 'string' },
+	read_only: { type: 'boolean' },
+	vault_root: { type: 'string', minLength: 1 },
+	task_id: NULLABLE_STRING_SCHEMA,
+	project_hint: NULLABLE_STRING_SCHEMA,
+	project_id: NULLABLE_STRING_SCHEMA,
+	repo_path: NULLABLE_STRING_SCHEMA,
+	project_identity: PROJECT_IDENTITY_OUTPUT_SCHEMA,
+	query: { type: 'string' },
+	...SCAN_PROVENANCE_PROPERTIES,
+	context_pack: CONTEXT_PACK_OUTPUT_SCHEMA,
+};
+
+export const BUILD_CONTEXT_PACK_OUTPUT_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	oneOf: [
+		{
+			type: 'object',
+			required: [
+				'schema_version', 'ok', 'tool', 'read_only', 'vault_root', 'task_id', 'project_hint',
+				'project_id', 'repo_path', 'project_identity', 'query', 'index_state',
+				'snapshot_generation', 'snapshot_warning', 'context_pack',
+			],
+			properties: {
+				...CONTEXT_PACK_COMMON_PROPERTIES,
+				read_only: { const: true, type: 'boolean' },
+			},
+			additionalProperties: false,
+		},
+		{
+			type: 'object',
+			required: [
+				'schema_version', 'ok', 'tool', 'read_only', 'vault_root', 'task_id', 'project_hint',
+				'project_id', 'repo_path', 'project_identity', 'query', 'index_state',
+				'snapshot_generation', 'snapshot_warning', 'context_pack', 'artifact',
+			],
+			properties: {
+				...CONTEXT_PACK_COMMON_PROPERTIES,
+				read_only: { const: false, type: 'boolean' },
+				artifact: {
+					type: 'object',
+					required: ['path', 'audit_path'],
+					properties: { path: { type: 'string', minLength: 1 }, audit_path: { type: 'string', minLength: 1 } },
+					additionalProperties: false,
+				},
+			},
+			additionalProperties: false,
+		},
+		PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
+	],
+};
+
+const REVIEW_PENDING_ENTRY_SCHEMA = {
+	type: 'object',
+	required: ['path', 'title', 'modifiedAt', 'status', 'proposal_kind', 'risk_level'],
+	properties: {
+		path: { type: 'string', minLength: 1 },
+		title: { type: 'string' },
+		modifiedAt: { type: 'string', minLength: 1 },
+		status: { type: 'string' },
+		proposal_kind: NULLABLE_STRING_SCHEMA,
+		risk_level: NULLABLE_STRING_SCHEMA,
+	},
+	additionalProperties: false,
+};
+
+const REVIEW_APPROVED_ENTRY_SCHEMA = {
+	type: 'object',
+	required: [
+		'proposal_id', 'proposal_path', 'proposal_kind', 'target_note', 'risk_level',
+		'task_id', 'ready_to_apply', 'blocker',
+	],
+	properties: {
+		proposal_id: { type: 'string', minLength: 1 },
+		proposal_path: { type: 'string', minLength: 1 },
+		proposal_kind: { type: 'string' },
+		target_note: NULLABLE_STRING_SCHEMA,
+		risk_level: { type: 'string' },
+		task_id: NULLABLE_STRING_SCHEMA,
+		ready_to_apply: { type: 'boolean' },
+		blocker: NULLABLE_STRING_SCHEMA,
+	},
+	additionalProperties: false,
+};
+
+export const REVIEW_QUEUE_OUTPUT_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	oneOf: [
+		{
+			type: 'object',
+			required: ['schema_version', 'ok', 'tool', 'action', 'read_only', 'vault_root', 'count', 'entries'],
+			properties: {
+				schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+				ok: { const: true, type: 'boolean' },
+				tool: { const: 'tracekeeper.review_queue', type: 'string' },
+				action: { const: 'list_pending', type: 'string' },
+				read_only: { const: true, type: 'boolean' },
+				vault_root: { type: 'string', minLength: 1 },
+				count: { type: 'integer', minimum: 0 },
+				entries: { type: 'array', items: REVIEW_PENDING_ENTRY_SCHEMA },
+			},
+			additionalProperties: false,
+		},
+		{
+			type: 'object',
+			required: ['schema_version', 'ok', 'tool', 'action', 'read_only', 'vault_root', 'count', 'entries'],
+			properties: {
+				schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+				ok: { const: true, type: 'boolean' },
+				tool: { const: 'tracekeeper.review_queue', type: 'string' },
+				action: { const: 'list_approved', type: 'string' },
+				read_only: { const: true, type: 'boolean' },
+				vault_root: { type: 'string', minLength: 1 },
+				count: { type: 'integer', minimum: 0 },
+				entries: { type: 'array', items: REVIEW_APPROVED_ENTRY_SCHEMA },
+			},
+			additionalProperties: false,
+		},
+		PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
+	],
+};
+
+export const APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	oneOf: [
+		{
+			type: 'object',
+			required: [
+				'schema_version', 'ok', 'tool', 'read_only', 'dry_run', 'permission_level',
+				'proposal_id', 'proposal_path', 'target_note', 'touched_notes', 'writeback_preview',
+				'confirmation_token', 'confirmation_expires_at',
+			],
+			properties: {
+				schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+				ok: { const: true, type: 'boolean' },
+				tool: { const: 'tracekeeper.apply_approved_writeback', type: 'string' },
+				read_only: { const: true, type: 'boolean' },
+				dry_run: { const: true, type: 'boolean' },
+				permission_level: { const: 'review-gated apply', type: 'string' },
+				proposal_id: { type: 'string', minLength: 1 },
+				proposal_path: { type: 'string', minLength: 1 },
+				target_note: { type: 'string', minLength: 1 },
+				touched_notes: STRING_ARRAY_SCHEMA,
+				writeback_preview: { type: 'string', minLength: 1 },
+				confirmation_token: { type: 'string', minLength: 1 },
+				confirmation_expires_at: { type: 'string', minLength: 1 },
+			},
+			additionalProperties: false,
+		},
+		{
+			type: 'object',
+			required: [
+				'schema_version', 'ok', 'tool', 'read_only', 'permission_level', 'status',
+				'operation_id', 'proposal_id', 'proposal_path', 'target_note', 'touched_notes', 'audit_path',
+			],
+			properties: {
+				schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+				ok: { const: true, type: 'boolean' },
+				tool: { const: 'tracekeeper.apply_approved_writeback', type: 'string' },
+				read_only: { const: false, type: 'boolean' },
+				permission_level: { const: 'review-gated apply', type: 'string' },
+				status: { const: 'applied', type: 'string' },
+				operation_id: { type: 'string', minLength: 1 },
+				proposal_id: { type: 'string', minLength: 1 },
+				proposal_path: { type: 'string', minLength: 1 },
+				target_note: { type: 'string', minLength: 1 },
+				touched_notes: STRING_ARRAY_SCHEMA,
+				audit_path: { type: 'string', minLength: 1 },
+			},
+			additionalProperties: false,
+		},
+		PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
+	],
+};
+
+const SOURCE_REQUEST_LIST_ENTRY_SCHEMA = {
+	type: 'object',
+	required: ['path', 'source', 'sourceKind', 'purpose', 'relatedProject', 'analysisMode', 'status', 'modifiedAt'],
+	properties: {
+		path: { type: 'string', minLength: 1 },
+		source: { type: 'string' },
+		sourceKind: { type: 'string' },
+		purpose: { type: 'string' },
+		relatedProject: { type: 'string' },
+		analysisMode: { type: 'string' },
+		status: { type: 'string' },
+		modifiedAt: { type: 'string', minLength: 1 },
+	},
+	additionalProperties: false,
+};
+
+const SOURCE_ANALYSIS_PROPOSAL_SCHEMA = {
+	type: 'object',
+	required: ['proposal_id', 'path', 'proposal_link_target'],
+	properties: {
+		proposal_id: { type: 'string', minLength: 1 },
+		path: { type: 'string', minLength: 1 },
+		proposal_link_target: { type: 'string', minLength: 1 },
+	},
+	additionalProperties: false,
+};
+
+export const SOURCE_REQUEST_OUTPUT_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	oneOf: [
+		{
+			type: 'object',
+			required: ['schema_version', 'ok', 'tool', 'action', 'read_only', 'vault_root', 'count', 'filter', 'entries'],
+			properties: {
+				schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+				ok: { const: true, type: 'boolean' },
+				tool: { const: 'tracekeeper.source_request', type: 'string' },
+				action: { const: 'list', type: 'string' },
+				read_only: { const: true, type: 'boolean' },
+				vault_root: { type: 'string', minLength: 1 },
+				count: { type: 'integer', minimum: 0 },
+				filter: {
+					type: 'object',
+					required: ['status', 'source_kind'],
+					properties: { status: { type: 'string' }, source_kind: { type: 'string' } },
+					additionalProperties: false,
+				},
+				entries: { type: 'array', items: SOURCE_REQUEST_LIST_ENTRY_SCHEMA },
+			},
+			additionalProperties: false,
+		},
+		{
+			type: 'object',
+			required: [
+				'schema_version', 'ok', 'tool', 'action', 'read_only', 'status', 'vault_root', 'request_path',
+				'mode', 'source_note', 'report', 'proposals', 'audit_path', 'summary', 'warnings',
+			],
+			properties: {
+				schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+				ok: { const: true, type: 'boolean' },
+				tool: { const: 'tracekeeper.source_request', type: 'string' },
+				action: { const: 'analyze', type: 'string' },
+				read_only: { const: false, type: 'boolean' },
+				status: { type: 'string' },
+				vault_root: { type: 'string', minLength: 1 },
+				request_path: { type: 'string', minLength: 1 },
+				mode: { type: 'string', enum: ['external_reference', 'extracted_snapshot', 'local_copy'] },
+				source_note: {
+					type: 'object',
+					required: ['path', 'audit_path'],
+					properties: { path: { type: 'string', minLength: 1 }, audit_path: { type: 'string', minLength: 1 } },
+					additionalProperties: false,
+				},
+				report: {
+					type: 'object',
+					required: ['path', 'audit_path'],
+					properties: { path: { type: 'string', minLength: 1 }, audit_path: { type: 'string', minLength: 1 } },
+					additionalProperties: false,
+				},
+				proposals: { type: 'array', items: SOURCE_ANALYSIS_PROPOSAL_SCHEMA },
+				audit_path: { type: 'string', minLength: 1 },
+				summary: { type: 'string' },
+				warnings: STRING_ARRAY_SCHEMA,
+			},
+			additionalProperties: false,
+		},
+		PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
+	],
+};
+
+export const CAPTURE_SOURCE_OUTPUT_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	oneOf: [
+		{
+			type: 'object',
+			required: ['schema_version', 'ok', 'tool', 'operation_id', 'idempotency_key', 'status', 'path', 'audit_path', 'warnings', 'metadata'],
+			properties: {
+				schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+				ok: { const: true, type: 'boolean' },
+				tool: { const: 'tracekeeper.capture_source', type: 'string' },
+				operation_id: { type: 'string', minLength: 1 },
+				idempotency_key: { type: 'string', minLength: 1 },
+				status: { type: 'string' },
+				path: { type: 'string', minLength: 1 },
+				audit_path: { type: 'string', minLength: 1 },
+				warnings: STRING_ARRAY_SCHEMA,
+				metadata: {
+					type: 'object',
+					required: ['source', 'mode'],
+					properties: {
+						source: { type: 'string', minLength: 1 },
+						mode: { type: 'string', enum: ['external_reference', 'extracted_snapshot', 'local_copy'] },
+					},
+					additionalProperties: false,
+				},
+			},
+			additionalProperties: false,
+		},
+		PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
+	],
+};
+
+const PROPOSE_MEMORY_COMMON_PROPERTIES = {
+	schema_version: { const: SCHEMA_VERSION, type: 'integer' },
+	ok: { const: true, type: 'boolean' },
+	tool: { const: 'tracekeeper.propose_memory', type: 'string' },
+	operation_id: { type: 'string', minLength: 1 },
+	idempotency_key: { type: 'string', minLength: 1 },
+	status: { type: 'string' },
+	path: { type: 'string', minLength: 1 },
+	audit_path: { type: 'string', minLength: 1 },
+	warnings: STRING_ARRAY_SCHEMA,
+	auto_applied: { type: 'boolean' },
+	duplicate: { type: 'boolean' },
+	memory_rule: { type: 'string', enum: ['review_queue', 'auto_write', 'disabled'] },
+	memory_scope: { type: 'string', enum: ['global', 'project'] },
+	project_hint: NULLABLE_STRING_SCHEMA,
+	related_wiki: STRING_ARRAY_SCHEMA,
+	related_sources: STRING_ARRAY_SCHEMA,
+	missing_related_sources: STRING_ARRAY_SCHEMA,
+	architecture_status: { type: 'string', enum: ['healthy', 'needs_attention'] },
+	missing_graph_bridges: STRING_ARRAY_SCHEMA,
+	missing_wiki_bridge: { type: 'boolean' },
+	project_id: NULLABLE_STRING_SCHEMA,
+	project_hub: NULLABLE_STRING_SCHEMA,
+	agent_type: { type: 'string', minLength: 1 },
+	operation_hash: { type: 'string', minLength: 1 },
+	target_note: { type: 'string', minLength: 1 },
+	proposal_id: NULLABLE_STRING_SCHEMA,
+	proposal_path: NULLABLE_STRING_SCHEMA,
+	proposal_link_target: { type: 'string', minLength: 1 },
+};
+
+export const PROPOSE_MEMORY_OUTPUT_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	oneOf: [
+		{
+			type: 'object',
+			required: [
+				'schema_version', 'ok', 'tool', 'operation_id', 'idempotency_key', 'status', 'path',
+				'audit_path', 'warnings', 'auto_applied', 'duplicate', 'memory_rule', 'memory_scope',
+				'project_hint', 'related_wiki', 'related_sources', 'missing_related_sources',
+				'architecture_status', 'missing_graph_bridges', 'missing_wiki_bridge', 'proposal_id', 'proposal_path',
+			],
+			properties: { ...PROPOSE_MEMORY_COMMON_PROPERTIES, auto_applied: { const: true, type: 'boolean' }, proposal_id: { const: null, type: 'null' }, proposal_path: { const: null, type: 'null' } },
+			additionalProperties: false,
+		},
+		{
+			type: 'object',
+			required: [
+				'schema_version', 'ok', 'tool', 'operation_id', 'idempotency_key', 'status', 'path',
+				'audit_path', 'warnings', 'auto_applied', 'duplicate', 'proposal_id', 'proposal_path',
+				'proposal_link_target', 'memory_rule', 'memory_scope', 'project_hint', 'related_wiki',
+				'related_sources', 'missing_related_sources', 'architecture_status', 'missing_graph_bridges',
+				'missing_wiki_bridge',
+			],
+			properties: { ...PROPOSE_MEMORY_COMMON_PROPERTIES, auto_applied: { const: false, type: 'boolean' }, proposal_id: { type: 'string', minLength: 1 }, proposal_path: { type: 'string', minLength: 1 } },
+			additionalProperties: false,
+		},
+		PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
+	],
+};
+
 export const START_TASK_OUTPUT_SCHEMA: JsonSchema2020 = {
 	type: 'object',
-	oneOf: [START_TASK_SUCCESS_OUTPUT_SCHEMA, COMMON_TOOL_FAILURE_OUTPUT_SCHEMA],
+	oneOf: [START_TASK_SUCCESS_OUTPUT_SCHEMA, PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA],
 };
 
 export const RECALL_OUTPUT_SCHEMA: JsonSchema2020 = {
 	type: 'object',
-	oneOf: [RECALL_SUCCESS_OUTPUT_SCHEMA, COMMON_TOOL_FAILURE_OUTPUT_SCHEMA],
+	oneOf: [RECALL_SUCCESS_OUTPUT_SCHEMA, PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA],
 };
 
 export const PROJECT_MEMORY_OUTPUT_SCHEMA: JsonSchema2020 = {
 	type: 'object',
-	oneOf: [PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA, COMMON_TOOL_FAILURE_OUTPUT_SCHEMA],
+	oneOf: [PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA, PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA],
 };
 
 export const FINISH_TASK_OUTPUT_SCHEMA: JsonSchema2020 = {
 	type: 'object',
-	oneOf: [FINISH_TASK_SUCCESS_OUTPUT_SCHEMA, COMMON_TOOL_FAILURE_OUTPUT_SCHEMA],
+	oneOf: [FINISH_TASK_SUCCESS_OUTPUT_SCHEMA, PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA],
 };
 
 export const GENERIC_TOOL_OUTPUT_SCHEMA: JsonSchema2020 = {
