@@ -137,3 +137,118 @@ test('rejects runtime tool argument access to Vault root', () => {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test('accepts Runtime application imports from Core', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'packages/mcp-runtime/src/application/owner.ts', "import { parseMarkdown } from '@tracekeeper/core';\nvoid parseMarkdown;\n");
+		write(root, 'packages/core/src/index.ts', 'export const parseMarkdown = () => undefined;\n');
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, true);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('rejects Runtime application imports from the Runtime edge', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'packages/mcp-runtime/src/application/owner.ts', "import { callTool } from '../tools';\nvoid callTool;\n");
+		write(root, 'packages/mcp-runtime/src/tools.ts', 'export const callTool = () => undefined;\n');
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, false);
+		assert.ok(result.errors.some((error) => /application-to-runtime-edge import/.test(error)));
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('rejects Runtime application imports from infrastructure adapters', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'packages/mcp-runtime/src/application/owner.ts', "import { adapter } from '../infrastructure/vault-record-adapter';\nvoid adapter;\n");
+		write(root, 'packages/mcp-runtime/src/infrastructure/vault-record-adapter.ts', 'export const adapter = true;\n');
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, false);
+		assert.ok(result.errors.some((error) => /application-to-runtime-infrastructure import/.test(error)));
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('rejects Runtime application filesystem and transport imports', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'packages/mcp-runtime/src/application/owner.ts', [
+			"import fs from 'node:fs';",
+			"import path from 'node:path';",
+			'void fs; void path;',
+			'',
+		].join('\n'));
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, false);
+		assert.ok(result.errors.some((error) => /forbidden module node:fs/.test(error)));
+		assert.ok(result.errors.some((error) => /forbidden module node:path/.test(error)));
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('rejects Runtime application imports from another application owner', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'packages/mcp-runtime/src/application/owner.ts', "import { other } from './other-owner';\nvoid other;\n");
+		write(root, 'packages/mcp-runtime/src/application/other-owner.ts', 'export const other = true;\n');
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, false);
+		assert.ok(result.errors.some((error) => /application-to-application import/.test(error)));
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('accepts the Runtime edge owner composition after stateful extraction', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'packages/mcp-runtime/src/application/owner.ts', 'export {};\n');
+		write(root, 'packages/mcp-runtime/src/tools.ts', [
+			'new CaptureSourceApplicationService();',
+			'new SourceRequestApplicationService();',
+			'new ProposeMemoryApplicationService();',
+			'new FinishTaskApplicationService();',
+			'new DistillSessionApplicationService();',
+			'new RuntimeRecoveryController();',
+			'new AuditRecentApplicationService();',
+			'new VaultRecordAdapter();',
+			'',
+		].join('\n'));
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, true);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('rejects migrated audit declarations from the Runtime edge', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'packages/mcp-runtime/src/application/owner.ts', 'export {};\n');
+		write(root, 'packages/mcp-runtime/src/tools.ts', [
+			'new CaptureSourceApplicationService();',
+			'new SourceRequestApplicationService();',
+			'new ProposeMemoryApplicationService();',
+			'new FinishTaskApplicationService();',
+			'new DistillSessionApplicationService();',
+			'new RuntimeRecoveryController();',
+			'new AuditRecentApplicationService();',
+			'new VaultRecordAdapter();',
+			'function parseAuditSections() {}',
+			'',
+		].join('\n'));
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, false);
+		assert.ok(result.errors.some((error) => /migrated declaration remains.*parseAuditSections/.test(error)));
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});

@@ -34,6 +34,15 @@ const FORBIDDEN_PLUGIN_TRANSPORT_MODULES = [
 	/^undici(?:\/|$)/u,
 	/^ws(?:\/|$)/u,
 ];
+const FORBIDDEN_RUNTIME_APPLICATION_MODULES = [
+	/^@tracekeeper\/mcp-runtime(?:\/|$)/u,
+	/^(?:node:)?fs$/u,
+	/^(?:node:)?path$/u,
+	/^(?:node:)?http$/u,
+	/^(?:node:)?https$/u,
+	/^(?:node:)?net$/u,
+	/^(?:node:)?tls$/u,
+];
 
 function collectSourceFiles(root, relativeDirectory, output) {
 	const absoluteDirectory = path.resolve(root, relativeDirectory);
@@ -152,6 +161,92 @@ function forbiddenVaultRootOverrideReasons(relativeFile, sourceFile) {
 	return [...reasons].sort();
 }
 
+function forbiddenRuntimeApplicationReasons(relativeFile, sourceFile) {
+	const normalizedRelativeFile = relativeFile.split(path.sep).join('/');
+	if (!normalizedRelativeFile.startsWith('packages/mcp-runtime/src/application/')) {
+		return [];
+	}
+	const reasons = new Set();
+	for (const specifier of moduleSpecifiers(sourceFile)) {
+		if (FORBIDDEN_RUNTIME_APPLICATION_MODULES.some((pattern) => pattern.test(specifier))) {
+			reasons.add(`forbidden module ${specifier}`);
+		}
+		if (specifier.startsWith('.')) {
+			const resolvedRelative = path.relative(
+				process.cwd(),
+				path.resolve(path.dirname(path.resolve(process.cwd(), relativeFile)), specifier)
+			).split(path.sep).join('/');
+			const resolvedModule = resolvedRelative.replace(/\.(?:ts|mjs|js)$/u, '');
+			if (
+				resolvedRelative.startsWith('packages/mcp-runtime/src/application/')
+				&& resolvedRelative !== normalizedRelativeFile
+			) {
+				reasons.add(`application-to-application import ${specifier}`);
+			}
+			if (
+				resolvedModule === 'packages/mcp-runtime/src/tools'
+				|| resolvedModule === 'packages/mcp-runtime/src/handler'
+				|| resolvedModule === 'packages/mcp-runtime/src/http-runtime'
+				|| resolvedModule === 'packages/mcp-runtime/src/local-oauth'
+				|| resolvedModule === 'packages/mcp-runtime/src/protocol'
+			) {
+				reasons.add(`application-to-runtime-edge import ${specifier}`);
+			}
+			if (resolvedModule.startsWith('packages/mcp-runtime/src/infrastructure/')) {
+				reasons.add(`application-to-runtime-infrastructure import ${specifier}`);
+			}
+		}
+	}
+	return [...reasons].sort();
+}
+
+function runtimeOwnershipReasons(root, relativeFile, content) {
+	const normalizedRelativeFile = relativeFile.split(path.sep).join('/');
+	if (normalizedRelativeFile !== 'packages/mcp-runtime/src/tools.ts') {
+		return [];
+	}
+	const applicationDirectory = path.resolve(root, 'packages/mcp-runtime/src/application');
+	if (!fs.existsSync(applicationDirectory)) {
+		return [];
+	}
+
+	const reasons = new Set();
+	const requiredOwnerMarkers = [
+		'new CaptureSourceApplicationService',
+		'new SourceRequestApplicationService',
+		'new ProposeMemoryApplicationService',
+		'new FinishTaskApplicationService',
+		'new DistillSessionApplicationService',
+		'new RuntimeRecoveryController',
+		'new AuditRecentApplicationService',
+		'new VaultRecordAdapter',
+	];
+	for (const marker of requiredOwnerMarkers) {
+		if (!content.includes(marker)) {
+			reasons.add(`missing owner composition ${marker}`);
+		}
+	}
+
+	const forbiddenMigratedDeclarations = [
+		'parseAuditSections',
+		'directAuditShardPaths',
+		'prepareAuditEvent',
+		'appendPreparedAuditEvent',
+		'withRepositoryAuditLock',
+		'boundedAuditValue',
+		'auditShardFile',
+		'auditHubFile',
+		'recoveryRequestForRecord',
+	];
+	for (const symbol of forbiddenMigratedDeclarations) {
+		const declaration = new RegExp(`(?:function|const|class)\\s+${symbol}\\b`, 'u');
+		if (declaration.test(content)) {
+			reasons.add(`migrated declaration remains in tools.ts: ${symbol}`);
+		}
+	}
+	return [...reasons].sort();
+}
+
 function parseSource(relativeFile, content) {
 	return ts.createSourceFile(
 		relativeFile,
@@ -192,6 +287,12 @@ export function checkArchitectureBoundaries(root = process.cwd()) {
 		}
 		for (const reason of forbiddenVaultRootOverrideReasons(relativeFile, sourceFile)) {
 			errors.push(`${relativeFile}: MCP tools must not accept a caller-selected Vault root (${reason})`);
+		}
+		for (const reason of forbiddenRuntimeApplicationReasons(relativeFile, sourceFile)) {
+			errors.push(`${relativeFile}: Runtime application boundary violation (${reason})`);
+		}
+		for (const reason of runtimeOwnershipReasons(root, relativeFile, content)) {
+			errors.push(`${relativeFile}: Runtime ownership boundary violation (${reason})`);
 		}
 	}
 

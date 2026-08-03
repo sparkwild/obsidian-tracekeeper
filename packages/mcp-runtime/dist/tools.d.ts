@@ -1,6 +1,9 @@
 import { type OperationFailureInjection, type ProposalTransitionCommand, type ProposalTransitionDecision, type ScanResult, type VaultRepository } from '@tracekeeper/core';
 import { type McpPrompt, type McpStructuredToolResult, type McpToolDefinition } from './protocol';
+import { type OperationRecoveryReport } from './application/recovery';
 import { type ObservedClientType } from './observed-client';
+export { readMergedAuditSections } from './infrastructure/audit-persistence';
+export type { AuditRecentSection } from './infrastructure/audit-persistence';
 export declare const LOCAL_TRUST_PRINCIPAL_ID = "local-user";
 export declare const LOCAL_TRUST_CAPABILITIES: readonly ["vault.read", "workflow.manage", "vault.write", "memory.propose"];
 interface MemoryRulesContext {
@@ -75,17 +78,6 @@ interface ToolCallAuditEventInput {
     resultSummary: string;
     workflowMetadata?: Record<string, unknown>;
 }
-export interface AuditRecentSection {
-    heading: string;
-    body: string[];
-    at_line: number;
-    audit_event_id: string;
-    timestamp: string;
-    source_path: string;
-    source_kind: 'legacy' | 'shard';
-    action: string;
-}
-export declare function readMergedAuditSections(vaultRoot: string, context: Pick<ToolContext, 'vaultConfigDir' | 'vaultRepository'>): Promise<AuditRecentSection[]>;
 export declare function appendConnectionAuditEvent(vaultRoot: string, input: ConnectionAuditEventInput): {
     path: string;
 };
@@ -99,13 +91,5 @@ export declare function recordRejectedToolCallAuditEvent(context: ToolInvocation
 export declare function toolDefinitions(capabilities?: readonly string[]): McpToolDefinition[];
 export declare function toolPrompts(): McpPrompt[];
 export declare function callTool(name: string, rawParams: unknown, context?: ToolInvocationContext): Promise<McpStructuredToolResult>;
-export interface OperationRecoveryReport {
-    recovered: string[];
-    failed: Array<{
-        operation_id: string;
-        error: string;
-    }>;
-    skipped: string[];
-}
+export type { OperationRecoveryReport };
 export declare function recoverPendingOperations(vaultRoot: string, context?: ToolInvocationContext): Promise<OperationRecoveryReport>;
-export {};

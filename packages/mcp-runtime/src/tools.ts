@@ -12,11 +12,9 @@ import {
 	type GraphProfile,
 	normalizeGraphProfile,
 	type SourceAnalysisResult,
-	type SourceProposalDraft,
 	buildContextPack,
 	buildContextPackFromScan,
 	TRACEKEEPER_ROOT,
-	TRACEKEEPER_AUDIT_DIR,
 	TRACEKEEPER_AUDIT_LOG_PATH,
 	TRACEKEEPER_AGENT_REQUESTS_DIR,
 	TRACEKEEPER_CONTEXT_PACKS_DIR,
@@ -43,10 +41,7 @@ import {
 	computeProposalRevision,
 	computePayloadHash,
 	buildStableProposalId,
-	auditShardPath,
-	buildStableAuditEventId,
 	isAllowedProposalTargetPath,
-	mergeAuditEvents,
 	proposalHistoryLocation,
 	proposalTransitionReceiptFromFrontmatter,
 	resolveProposalHistoryById,
@@ -121,9 +116,53 @@ import {
 	type RecallRelationEvidenceItem,
 } from './application/recall';
 import {
+	CaptureSourceApplicationService,
+	type CaptureSourceNote,
+	type CaptureSourceRawRequest,
+	type CaptureSourceWriteInput,
+} from './application/capture-source';
+import {
+	SourceRequestApplicationService,
+	type SourceRequestRecord,
+	type SourceRequestWriteInput,
+} from './application/source-request';
+import {
+	ProposeMemoryApplicationService,
+	type ProposeMemoryImmutableWriteInput,
+	type ProposeMemoryProjectIdentity,
+	type ProposeMemoryRawRequest,
+	type ProposeMemoryWriteInput,
+} from './application/propose-memory';
+import {
+	DistillSessionApplicationService,
+	FinishTaskApplicationService,
+	type DistillSessionRawRequest,
+	type FinishTaskRunnerStep,
+} from './application/finish-task';
+import {
+	AuditRecentApplicationService,
+} from './application/audit';
+import {
+	appendAuditEvent,
+	appendAuditEventAsync,
+	collectAuditTargetsFromResult,
+	projectArgumentsForAudit,
+	readMergedAuditSections,
+	summarizeForAudit,
+	type AuditEventInput,
+} from './infrastructure/audit-persistence';
+import { VaultRecordAdapter } from './infrastructure/vault-record-adapter';
+import {
+	RuntimeRecoveryController,
+	type OperationRecoveryReport,
+} from './application/recovery';
+import {
 	normalizeObservedClientType,
 	type ObservedClientType,
 } from './observed-client';
+
+export { readMergedAuditSections } from './infrastructure/audit-persistence';
+export type { AuditRecentSection } from './infrastructure/audit-persistence';
 
 export const LOCAL_TRUST_PRINCIPAL_ID = 'local-user';
 export const LOCAL_TRUST_CAPABILITIES = [
@@ -135,14 +174,8 @@ export const LOCAL_TRUST_CAPABILITIES = [
 
 const REVIEW_QUEUE_PREFIX = TRACEKEEPER_REVIEW_QUEUE_DIR;
 const AUDIT_LOG_PATH = TRACEKEEPER_AUDIT_LOG_PATH;
-const AUDIT_DIR = TRACEKEEPER_AUDIT_DIR;
-const AUDIT_HUB_PATH = `${TRACEKEEPER_AUDIT_DIR}/index.md`;
-const AUDIT_SCHEMA_VERSION = 3;
 const MAX_LIST_QUEUE_ITEMS = 20;
 const MAX_AUDIT_ITEMS = 20;
-const MAX_AUDIT_SCALAR_LENGTH = 240;
-const MAX_AUDIT_ARRAY_ITEMS = 12;
-const MAX_AUDIT_METADATA_FIELDS = 32;
 const MAX_APPROVED_WRITEBACKS = 20;
 const MAX_PROJECT_TOOL_ITEMS = 20;
 const CONTEXT_PACK_DIR = TRACEKEEPER_CONTEXT_PACKS_DIR;
@@ -290,19 +323,6 @@ const REVIEW_GATED_TOOL_NAMES = new Set<string>(
 const LOW_RISK_TOOL_NAMES = new Set<string>(
 	TRACEKEEPER_TOOL_CONTRACTS.filter((contract) => contract.risk === 'low-risk-write').map((contract) => contract.name)
 );
-
-const SENSITIVE_KEY_PATTERNS = [
-	/token/i,
-	/secret/i,
-	/api[_-]?key/i,
-	/password/i,
-	/cookie/i,
-	/authorization/i,
-	/access[_-]?token/i,
-	/refresh[_-]?token/i,
-];
-
-const MAX_ARGS_SUMMARY_LENGTH = 512;
 
 type ToolName = TracekeeperToolName;
 
@@ -689,68 +709,6 @@ interface AnalyzeSourceRequestArgs extends ToolArgs {
 
 interface SourceRequestArgs extends ListSourceRequestsArgs, AnalyzeSourceRequestArgs {
 	action?: unknown;
-}
-
-interface SourceRequestRecord {
-	type: string;
-	path: string;
-	source: string;
-	sourceKind: string;
-	purpose: string;
-	relatedProject: string;
-	analysisMode: string;
-	status: string;
-	taskId: string;
-	created: string;
-	content: string;
-	filename: string;
-}
-
-interface AuditEventInput {
-	operationId?: string;
-	invocationId?: string;
-	requestId?: string;
-	type?: string;
-	event?: string;
-	tool?: string;
-	action?: string;
-	actor?: string;
-	timestamp?: string;
-	targetPath?: string;
-	targetPaths?: string[];
-	resultStatus?: 'written' | 'skipped' | 'failed' | 'success';
-	status?: 'written' | 'skipped' | 'failed' | 'success';
-	agentId?: string;
-	principalId?: string;
-	sessionId?: string;
-	clientName?: string | null;
-	taskId?: string | null;
-	warnings?: string[];
-	durationMs?: number;
-	riskLevel?: string;
-	transport?: string;
-	runtimeVersion?: string;
-	argsSummary?: string;
-	metadata?: Record<string, unknown>;
-}
-
-interface AuditEventOutput {
-	path: string;
-}
-
-type ToolResultPayload = Record<string, unknown>;
-
-function getRecordValue(record: unknown, key: string): unknown {
-	return isRecord(record) ? record[key] : undefined;
-}
-
-function addTrimmedTarget(targets: Set<string>, value: unknown): void {
-	if (typeof value === 'string') {
-		const trimmed = value.trim();
-		if (trimmed) {
-			targets.add(trimmed);
-		}
-	}
 }
 
 interface MemoryProposalDocument {
@@ -2994,6 +2952,11 @@ function buildMarkdownNote(frontmatter: Record<string, unknown>, body: string): 
 	return `${front}\n\n${body.trim()}\n`;
 }
 
+const vaultRecordAdapter = new VaultRecordAdapter({
+	auditLogPath: AUDIT_LOG_PATH,
+	buildMarkdownNote,
+});
+
 function scanSensitiveText(value: string): SensitiveTextScan {
 	const patterns: Array<{ pattern: RegExp; reason: string }> = [
 		{ pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/, reason: 'private key block' },
@@ -4310,39 +4273,6 @@ function assertAllowedWritebackTarget(relativePath: string): void {
 	}
 }
 
-function extractSelectionText(sourceBody: string): string {
-	const marker = '## Selected Text';
-	const markerIndex = sourceBody.indexOf(marker);
-	if (markerIndex >= 0) {
-		const selected = sourceBody.slice(markerIndex + marker.length).trim();
-		return selected
-			.split('\n')
-			.map((line) => line.replace(/^>\s?/, ''))
-			.join('\n')
-			.trim();
-	}
-
-	const bodyLines = sourceBody.split('\n');
-	const contentLines: string[] = [];
-	let started = false;
-	for (const line of bodyLines) {
-		if (!started) {
-			if (line.startsWith('- ')) {
-				continue;
-			}
-			if (line.startsWith('#')) {
-				continue;
-			}
-			if (line.trim() === '') {
-				continue;
-			}
-			started = true;
-		}
-		contentLines.push(line);
-	}
-	return contentLines.join('\n').trim();
-}
-
 function resolveRequestStatusPath(vaultRoot: string, requestPath: string, context: ToolContext): string {
 	const options = pathSafetyOptions(context);
 	const normalized = normalizeNotePath(requestPath, options);
@@ -4490,218 +4420,6 @@ function buildUserPreferences(scan: ScanResult) {
 	};
 }
 
-interface ParsedAuditSection {
-	[key: string]: unknown;
-	heading: string;
-	body: string[];
-	atLine: number;
-	auditEventId?: string;
-	timestamp: string;
-	sourcePath: string;
-	sourceKind: 'legacy' | 'shard';
-	action: string;
-}
-
-export interface AuditRecentSection {
-	heading: string;
-	body: string[];
-	at_line: number;
-	audit_event_id: string;
-	timestamp: string;
-	source_path: string;
-	source_kind: 'legacy' | 'shard';
-	action: string;
-}
-
-function auditSectionField(body: readonly string[], key: string): string {
-	const pattern = new RegExp(`^\\s*-?\\s*${key}:\\s*(.*)$`);
-	for (const line of body) {
-		const match = line.match(pattern);
-		if (match) {
-			return stripYamlQuotes(match[1]?.trim() || '');
-		}
-	}
-	return '';
-}
-
-function parseAuditSections(
-	content: string,
-	sourcePath: string,
-	sourceKind: 'legacy' | 'shard'
-): ParsedAuditSection[] {
-	const lines = content.split('\n');
-	const sections: ParsedAuditSection[] = [];
-	let currentHeading = '';
-	let currentBody: string[] = [];
-	let currentLine = 0;
-	let started = false;
-
-	const appendCurrent = (): void => {
-		const timestamp = auditSectionField(currentBody, 'timestamp')
-			|| currentHeading.match(/\d{4}-\d{2}-\d{2}T[^\s]+/)?.[0]
-			|| '';
-		sections.push({
-			heading: currentHeading,
-			body: currentBody,
-			atLine: currentLine,
-			auditEventId: auditSectionField(currentBody, 'audit_event_id') || undefined,
-			timestamp,
-			sourcePath,
-			sourceKind,
-			action: auditSectionField(currentBody, 'action'),
-		});
-	};
-
-	for (let index = 0; index < lines.length; index += 1) {
-		const line = lines[index] ?? '';
-		const match = line.match(/^#{2,6}\s+(.+)$/);
-		if (match) {
-			if (started) {
-				appendCurrent();
-			}
-			started = true;
-			currentHeading = match[1]?.trim() ?? 'section';
-			currentBody = [];
-			currentLine = index + 1;
-			continue;
-		}
-		if (!started) {
-			continue;
-		}
-		currentBody.push(line);
-	}
-
-	if (started) {
-		appendCurrent();
-	}
-
-	return sections;
-}
-
-const isAuditShardRecordPath = (relativePath: string): boolean =>
-	new RegExp(
-		`^${AUDIT_DIR.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\d{4}/\\d{4}-\\d{2}-\\d{2}\\.md$`
-	).test(relativePath);
-
-function directAuditShardPaths(vaultRoot: string): string[] {
-	const normalizedDirectory = normalizeNotePath(AUDIT_DIR);
-	const absoluteDirectory = path.resolve(vaultRoot, normalizedDirectory);
-	relativeFromAbsolute(vaultRoot, absoluteDirectory);
-	assertNoSymlinkSegments(vaultRoot, absoluteDirectory);
-	if (!fs.existsSync(absoluteDirectory)) {
-		return [];
-	}
-	const rootState = fs.lstatSync(absoluteDirectory);
-	if (!rootState.isDirectory()) {
-		throw new VaultPathError('Audit shard path is not a directory.');
-	}
-	const paths: string[] = [];
-	const visit = (directory: string): void => {
-		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-			const absolute = path.join(directory, entry.name);
-			if (entry.isSymbolicLink()) {
-				throw new VaultPathError('Audit shard path contains a symbolic link.');
-			}
-			if (entry.isDirectory()) {
-				visit(absolute);
-				continue;
-			}
-			if (!entry.isFile()) {
-				continue;
-			}
-			const relative = relativeFromAbsolute(vaultRoot, absolute);
-			if (isAuditShardRecordPath(relative)) {
-				paths.push(relative);
-			}
-		}
-	};
-	visit(absoluteDirectory);
-	return paths.sort();
-}
-
-export async function readMergedAuditSections(
-	vaultRoot: string,
-	context: Pick<ToolContext, 'vaultConfigDir' | 'vaultRepository'>
-): Promise<AuditRecentSection[]> {
-	const documents: Array<{
-		path: string;
-		content: string;
-		sourceKind: 'legacy' | 'shard';
-	}> = [];
-	if (context.vaultRepository) {
-		const legacy = await context.vaultRepository.readText(AUDIT_LOG_PATH);
-		if (legacy) {
-			documents.push({
-				path: legacy.path,
-				content: legacy.content,
-				sourceKind: 'legacy',
-			});
-		}
-		const metadata = await context.vaultRepository.listMarkdown(AUDIT_DIR);
-		for (const item of [...metadata].sort((left, right) => left.path.localeCompare(right.path))) {
-			if (!isAuditShardRecordPath(item.path)) {
-				continue;
-			}
-			const file = await context.vaultRepository.readText(item.path);
-			if (file) {
-				documents.push({
-					path: file.path,
-					content: file.content,
-					sourceKind: 'shard',
-				});
-			}
-		}
-	} else {
-		try {
-			const absoluteLegacy = resolveSafeNotePath(
-				vaultRoot,
-				AUDIT_LOG_PATH,
-				pathSafetyOptions(context)
-			);
-			documents.push({
-				path: relativeFromAbsolute(vaultRoot, absoluteLegacy),
-				content: fs.readFileSync(absoluteLegacy, 'utf8'),
-				sourceKind: 'legacy',
-			});
-		} catch (error) {
-			if (!(error instanceof ToolInputError || error instanceof VaultPathError)) {
-				throw error;
-			}
-		}
-		for (const shardPath of directAuditShardPaths(vaultRoot)) {
-			const absolute = path.resolve(vaultRoot, shardPath);
-			assertNoSymlinkSegments(vaultRoot, absolute);
-			documents.push({
-				path: shardPath,
-				content: fs.readFileSync(absolute, 'utf8'),
-				sourceKind: 'shard',
-			});
-		}
-	}
-
-	const merged = mergeAuditEvents(
-		documents.flatMap((document) =>
-			parseAuditSections(
-				document.content,
-				document.path,
-				document.sourceKind
-			)
-		)
-	);
-	return merged.map((section) => ({
-		heading: section.heading,
-		body: section.body.filter(
-			(line) => !/^\s*-?\s*audit_event_id:\s*/.test(line)
-		),
-		at_line: section.atLine,
-		audit_event_id: section.auditEventId || '',
-		timestamp: section.timestamp,
-		source_path: section.sourcePath,
-		source_kind: section.sourceKind,
-		action: section.action,
-	}));
-}
-
 function isPendingProposal(note: ScannedNote) {
 	const status = readProposalApprovalStatus(note.frontmatter);
 	if (!['pending', 'todo', 'open', 'review'].some((token) => status.includes(token))) {
@@ -4808,35 +4526,19 @@ function buildAndWriteNote(
 	context: ToolContext,
 	metadata: Record<string, unknown> = {},
 	operationId = ''
-): { path: string; audit_path: string; status: string; warnings: string[] } {
-	const options = pathSafetyOptions(context);
-	const safeLeaf = normalizeNotePath(filename, options);
-	const normalized = safeLeaf.endsWith('.md') ? safeLeaf : `${safeLeaf}.md`;
-	const targetPath = `${allowedDir}/${normalized}`;
-	const resolved = resolveSafeWritableNotePath(vaultRoot, targetPath, allowedDir, options);
-	fs.mkdirSync(path.dirname(resolved.absolutePath), { recursive: true });
-	if (fs.existsSync(resolved.absolutePath)) {
-		throw new ToolInputError(`Target already exists: ${resolved.relativePath}`);
-	}
-
-	const markdown = buildMarkdownNote(frontmatter, body);
-	fs.writeFileSync(resolved.absolutePath, markdown, 'utf8');
-
-	const audit = appendAuditEvent(vaultRoot, {
-		operationId,
-		tool: toolName,
-		targetPath: resolved.relativePath,
-		status: 'written',
+): ReturnType<VaultRecordAdapter['buildAndWriteNote']> {
+	return vaultRecordAdapter.buildAndWriteNote(
+		vaultRoot,
+		toolName,
+		allowedDir,
+		filename,
+		frontmatter,
+		body,
 		taskId,
+		context,
 		metadata,
-	});
-
-	return {
-		path: resolved.relativePath,
-		audit_path: audit.path,
-		status: 'written',
-	warnings: [],
-	};
+		operationId
+	);
 }
 
 async function buildAndWriteNoteAsync(
@@ -4850,52 +4552,19 @@ async function buildAndWriteNoteAsync(
 	context: ToolContext,
 	metadata: Record<string, unknown> = {},
 	operationId = ''
-): Promise<{ path: string; audit_path: string; status: string; warnings: string[] }> {
-	const options = pathSafetyOptions(context);
-	const safeLeaf = normalizeNotePath(filename, options);
-	const normalized = safeLeaf.endsWith('.md') ? safeLeaf : `${safeLeaf}.md`;
-	const targetPath = `${allowedDir}/${normalized}`;
-	const markdown = buildMarkdownNote(frontmatter, body);
-
-	if (!context.vaultRepository) {
-		return buildAndWriteNote(
-			vaultRoot,
-			toolName,
-			allowedDir,
-			filename,
-			frontmatter,
-			body,
-			taskId,
-			context,
-			metadata,
-			operationId
-		);
-	}
-
-	try {
-		await context.vaultRepository.createText(targetPath, markdown);
-	} catch (error) {
-		if (error instanceof Error && error.message.includes('Target already exists')) {
-			throw new ToolInputError(`Target already exists: ${targetPath}`);
-		}
-		throw error;
-	}
-
-	const audit = await appendAuditEventAsync(vaultRoot, {
-		operationId,
-		tool: toolName,
-		targetPath,
-		status: 'written',
+): Promise<ReturnType<VaultRecordAdapter['buildAndWriteNote']>> {
+	return vaultRecordAdapter.buildAndWriteNoteAsync(
+		vaultRoot,
+		toolName,
+		allowedDir,
+		filename,
+		frontmatter,
+		body,
 		taskId,
+		context,
 		metadata,
-	}, context);
-
-	return {
-		path: targetPath,
-		audit_path: audit.path,
-		status: 'written',
-		warnings: [],
-	};
+		operationId
+	);
 }
 
 function findOperationOwnedNote(
@@ -4905,24 +4574,15 @@ function findOperationOwnedNote(
 	operationField: string,
 	operationId: string,
 	context: ToolContext
-): { path: string; audit_path: string; status: string; warnings: string[] } | null {
-	const safeLeaf = normalizeNotePath(filename, pathSafetyOptions(context));
-	const normalized = safeLeaf.endsWith('.md') ? safeLeaf : `${safeLeaf}.md`;
-	const relativePath = `${allowedDir}/${normalized}`;
-	const absolutePath = path.resolve(vaultRoot, relativePath);
-	relativeFromAbsolute(vaultRoot, absolutePath);
-	assertNoSymlinkSegments(vaultRoot, absolutePath);
-	if (!fs.existsSync(absolutePath)) {
-		return null;
-	}
-	const parsed = parseMarkdown(fs.readFileSync(absolutePath, 'utf8'));
-	const existingOperationId = stripYamlQuotes(
-		readFrontmatterString(parsed.frontmatter.fields, [operationField])
+): ReturnType<VaultRecordAdapter['findOperationOwnedNote']> {
+	return vaultRecordAdapter.findOperationOwnedNote(
+		vaultRoot,
+		allowedDir,
+		filename,
+		operationField,
+		operationId,
+		context
 	);
-	if (existingOperationId !== operationId) {
-		throw new OperationConflictError(`Note path is already owned by another operation: ${relativePath}`);
-	}
-	return { path: relativePath, audit_path: AUDIT_LOG_PATH, status: 'skipped', warnings: [] };
 }
 
 interface AutoMemoryWriteInput {
@@ -5385,41 +5045,15 @@ async function findOperationOwnedNoteAsync(
 	operationField: string,
 	operationId: string,
 	context: ToolContext
-): Promise<{ path: string; audit_path: string; status: string; warnings: string[] } | null> {
-	const safeLeaf = normalizeNotePath(filename, pathSafetyOptions(context));
-	const normalized = safeLeaf.endsWith('.md') ? safeLeaf : `${safeLeaf}.md`;
-	const relativePath = `${allowedDir}/${normalized}`;
-	const options = pathSafetyOptions(context);
-
-	if (context.vaultRepository) {
-		const repositoryFile = await context.vaultRepository.readText(relativePath);
-		if (!repositoryFile) {
-			return null;
-		}
-		const parsed = parseMarkdown(repositoryFile.content);
-		const existingOperationId = stripYamlQuotes(
-			readFrontmatterString(parsed.frontmatter.fields, [operationField])
-		);
-		if (existingOperationId !== operationId) {
-			throw new OperationConflictError(`Note path is already owned by another operation: ${relativePath}`);
-		}
-		return { path: relativePath, audit_path: AUDIT_LOG_PATH, status: 'skipped', warnings: [] };
-	}
-
-	const absolutePath = path.resolve(vaultRoot, relativePath);
-	relativeFromAbsolute(vaultRoot, absolutePath);
-	assertNoSymlinkSegments(vaultRoot, absolutePath);
-	if (!fs.existsSync(absolutePath)) {
-		return null;
-	}
-	const parsed = parseMarkdown(fs.readFileSync(absolutePath, 'utf8'));
-	const existingOperationId = stripYamlQuotes(
-		readFrontmatterString(parsed.frontmatter.fields, [operationField])
+): ReturnType<VaultRecordAdapter['findOperationOwnedNoteAsync']> {
+	return vaultRecordAdapter.findOperationOwnedNoteAsync(
+		vaultRoot,
+		allowedDir,
+		filename,
+		operationField,
+		operationId,
+		context
 	);
-	if (existingOperationId !== operationId) {
-		throw new OperationConflictError(`Note path is already owned by another operation: ${relativePath}`);
-	}
-	return { path: relativePath, audit_path: AUDIT_LOG_PATH, status: 'skipped', warnings: [] };
 }
 
 function buildTaskNotePath(taskId: string): string {
@@ -6130,663 +5764,6 @@ async function createAgentTaskRecord(
 	);
 }
 
-interface PreparedAuditEvent {
-	timestamp: string;
-	shardPath: string;
-	auditEventId: string;
-	entry: string;
-}
-
-function auditShardFile(vaultRoot: string, timestamp: string): {
-	absolute: string;
-	relative: string;
-} {
-	const safeAuditPath = normalizeNotePath(auditShardPath(timestamp));
-	const absolute = path.resolve(vaultRoot, safeAuditPath);
-	const relative = path.relative(vaultRoot, absolute).replace(/\\/g, '/');
-	if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
-		throw new ToolInputError('Audit shard path must be inside vault.');
-	}
-	assertNoSymlinkSegments(vaultRoot, absolute);
-	fs.mkdirSync(path.dirname(absolute), { recursive: true });
-	return { absolute, relative };
-}
-
-function auditHubFile(vaultRoot: string): {
-	absolute: string;
-	relative: string;
-} {
-	const relative = normalizeNotePath(AUDIT_HUB_PATH);
-	const absolute = path.resolve(vaultRoot, relative);
-	relativeFromAbsolute(vaultRoot, absolute);
-	assertNoSymlinkSegments(vaultRoot, absolute);
-	fs.mkdirSync(path.dirname(absolute), { recursive: true });
-	return { absolute, relative };
-}
-
-function buildAuditEventId(input: AuditEventInput, targetPaths: string[]): string {
-	const operationId = input.operationId?.trim() || '';
-	const invocationId = operationId ? '' : input.invocationId?.trim() || '';
-	const requestId = operationId || invocationId
-		? ''
-		: input.requestId?.trim() || `generated-${crypto.randomUUID()}`;
-	const metadata = Object.fromEntries(
-		Object.entries(input.metadata || {})
-			.filter(([key]) => !/(?:^|_)(?:timestamp|created_at|updated_at|last_used_at|connected_at)$/.test(key))
-			.sort(([left], [right]) => left.localeCompare(right))
-	);
-	return buildStableAuditEventId({
-		operationId,
-		requestId,
-		...(invocationId ? { invocationId } : {}),
-		type: input.type || 'tool-call',
-		event: input.event || input.type || 'tool-call',
-		tool: input.tool || '',
-		action: input.action || '',
-		status: input.status || '',
-		resultStatus: input.resultStatus || '',
-		taskId: input.taskId || '',
-		targetPaths,
-		metadata,
-	});
-}
-
-function boundedAuditValue(
-	value: unknown,
-	key: string,
-	depth = 0
-): unknown {
-	if (isSensitiveKey(key)) {
-		return '[redacted]';
-	}
-	if (value === null || value === undefined) {
-		return null;
-	}
-	if (typeof value === 'string') {
-		const normalized = value.replace(/[\r\n]+/g, ' ').trim();
-		if (
-			!scanSensitiveText(normalized).ok
-			|| path.isAbsolute(normalized)
-			|| /(?:^|["'\s])\/(?:Users|home|private|tmp|var)\//.test(normalized)
-		) {
-			return '[redacted]';
-		}
-		return normalized.length <= MAX_AUDIT_SCALAR_LENGTH
-			? normalized
-			: `${normalized.slice(0, MAX_AUDIT_SCALAR_LENGTH - 1)}…`;
-	}
-	if (typeof value === 'number' || typeof value === 'boolean') {
-		return value;
-	}
-	if (Array.isArray(value)) {
-		return value
-			.slice(0, MAX_AUDIT_ARRAY_ITEMS)
-			.map((item) => boundedAuditValue(item, key, depth + 1));
-	}
-	if (isRecord(value) && depth < 2) {
-		const bounded: Record<string, unknown> = {};
-		for (const [nestedKey, nestedValue] of Object.entries(value)
-			.sort(([left], [right]) => left.localeCompare(right))
-			.slice(0, MAX_AUDIT_METADATA_FIELDS)) {
-			bounded[nestedKey] = boundedAuditValue(
-				nestedValue,
-				nestedKey,
-				depth + 1
-			);
-		}
-		return bounded;
-	}
-	return '[bounded]';
-}
-
-function auditYamlValue(key: string, value: unknown): string {
-	const bounded = boundedAuditValue(value, key);
-	if (
-		key === 'action'
-		&& typeof bounded === 'string'
-		&& /^[A-Za-z0-9._-]+$/.test(bounded)
-	) {
-		return bounded;
-	}
-	return sanitizeYamlValue(bounded);
-}
-
-function prepareAuditEvent(input: AuditEventInput): PreparedAuditEvent {
-	const eventName = input.type || 'tool-call';
-	const eventType = input.event || eventName;
-	const toolName = input.tool || '';
-	const timestamp = input.timestamp || new Date().toISOString();
-	const targetPaths = normalizeAuditTargets(input.targetPath ? [input.targetPath] : input.targetPaths || []);
-	const operationId = input.operationId?.trim() || '';
-	const auditEventId = buildAuditEventId(input, targetPaths);
-
-	const eventLines = [
-		`## ${timestamp} ${eventName}`,
-		`- type: ${auditYamlValue('type', eventName)}`,
-		`- event: ${auditYamlValue('event', eventType)}`,
-		`- timestamp: ${auditYamlValue('timestamp', timestamp)}`,
-		`- audit_event_id: ${auditYamlValue('audit_event_id', auditEventId)}`,
-	];
-
-	if (operationId) {
-		eventLines.push(`- operation_id: ${auditYamlValue('operation_id', operationId)}`);
-	}
-	if (input.invocationId) {
-		eventLines.push(`- invocation_id: ${auditYamlValue('invocation_id', input.invocationId)}`);
-	}
-	if (input.requestId) {
-		eventLines.push(`- request_id: ${auditYamlValue('request_id', input.requestId)}`);
-	}
-	if (input.agentId) {
-		eventLines.push(`- agent_id: ${auditYamlValue('agent_id', input.agentId)}`);
-	}
-	if (input.principalId) {
-		eventLines.push(`- principal_id: ${auditYamlValue('principal_id', input.principalId)}`);
-	}
-	if (input.sessionId) {
-		eventLines.push(`- session_id: ${auditYamlValue('session_id', input.sessionId)}`);
-	}
-	if (input.clientName !== undefined) {
-		eventLines.push(`- client_name: ${auditYamlValue('client_name', input.clientName || null)}`);
-	}
-	if (input.actor) {
-		eventLines.push(`- actor: ${auditYamlValue('actor', input.actor)}`);
-	}
-	if (input.action) {
-		eventLines.push(`- action: ${auditYamlValue('action', input.action)}`);
-	}
-	if (toolName) {
-		eventLines.push(`- tool_name: ${auditYamlValue('tool_name', toolName)}`);
-	}
-	if (input.resultStatus) {
-		eventLines.push(`- result_status: ${auditYamlValue('result_status', input.resultStatus)}`);
-	}
-	if (input.status) {
-		eventLines.push(`- status: ${auditYamlValue('status', input.status)}`);
-	}
-	if (input.taskId) {
-		eventLines.push(`- task_id: ${auditYamlValue('task_id', input.taskId)}`);
-	}
-	if (targetPaths.length > 0) {
-		eventLines.push(`- target_paths:`);
-		for (const item of targetPaths) {
-			eventLines.push(`  - ${auditYamlValue('target_path', item)}`);
-		}
-	} else {
-		eventLines.push('- target_paths: []');
-	}
-	if (input.argsSummary !== undefined && input.argsSummary !== '') {
-		eventLines.push(`- args_summary: ${auditYamlValue('args_summary', input.argsSummary)}`);
-	}
-	if (input.durationMs !== undefined) {
-		eventLines.push(`- duration_ms: ${input.durationMs}`);
-	}
-	if (input.riskLevel) {
-		eventLines.push(`- risk_level: ${auditYamlValue('risk_level', input.riskLevel)}`);
-	}
-	if (input.transport) {
-		eventLines.push(`- transport: ${auditYamlValue('transport', input.transport)}`);
-	}
-	if (input.runtimeVersion) {
-		eventLines.push(`- runtime_version: ${auditYamlValue('runtime_version', input.runtimeVersion)}`);
-	}
-	if (input.warnings && input.warnings.length > 0) {
-		eventLines.push(`- warnings: ${auditYamlValue('warnings', input.warnings)}`);
-	}
-	if (input.metadata && Object.keys(input.metadata).length > 0) {
-		const entries = Object.entries(input.metadata)
-			.filter(([, value]) => value !== undefined)
-			.sort(([left], [right]) => left.localeCompare(right))
-			.slice(0, MAX_AUDIT_METADATA_FIELDS);
-		for (const [key, value] of entries) {
-			eventLines.push(`- ${key}: ${auditYamlValue(key, value)}`);
-		}
-	}
-
-	return {
-		timestamp,
-		shardPath: normalizeNotePath(auditShardPath(timestamp)),
-		auditEventId,
-		entry: `${eventLines.join('\n')}\n`,
-	};
-}
-
-function auditShardHeader(timestamp: string): string {
-	const day = new Date(timestamp).toISOString().slice(0, 10);
-	return [
-		'---',
-		'type: tracekeeper_audit_shard',
-		`audit_schema_version: ${AUDIT_SCHEMA_VERSION}`,
-		`audit_date: ${day}`,
-		`audit_date_utc: ${day}`,
-		`created_at: ${timestamp}`,
-		`updated_at: ${timestamp}`,
-		`audit_hub: ${AUDIT_HUB_PATH}`,
-		'---',
-		`# Audit ${day}`,
-		'',
-		'[Audit hub](../index.md#audit)',
-		'',
-	].join('\n');
-}
-
-function auditHubContent(timestamp: string): string {
-	return [
-		'---',
-		'type: tracekeeper_audit_hub',
-		`audit_schema_version: ${AUDIT_SCHEMA_VERSION}`,
-		`created_at: ${timestamp}`,
-		'---',
-		'# Audit',
-		'',
-		'Daily audit shards link back to this hub.',
-		'',
-	].join('\n');
-}
-
-function ensureDirectAuditHub(vaultRoot: string, timestamp: string): void {
-	const hub = auditHubFile(vaultRoot);
-	if (fs.existsSync(hub.absolute)) {
-		if (!fs.lstatSync(hub.absolute).isFile()) {
-			throw new VaultPathError('Audit hub path is not a file.');
-		}
-		return;
-	}
-	try {
-		fs.writeFileSync(hub.absolute, auditHubContent(timestamp), {
-			encoding: 'utf8',
-			flag: 'wx',
-		});
-	} catch (error) {
-		if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) {
-			throw error;
-		}
-	}
-}
-
-async function ensureRepositoryAuditHub(
-	repository: VaultRepository,
-	timestamp: string
-): Promise<void> {
-	await withRepositoryAuditLock(repository, AUDIT_HUB_PATH, async () => {
-		if (await repository.readText(AUDIT_HUB_PATH)) {
-			return;
-		}
-		try {
-			await repository.createText(
-				AUDIT_HUB_PATH,
-				auditHubContent(timestamp)
-			);
-		} catch (error) {
-			if (!(await repository.readText(AUDIT_HUB_PATH))) {
-				throw error;
-			}
-		}
-	});
-}
-
-function appendPreparedAuditEvent(
-	current: string | null,
-	event: PreparedAuditEvent
-): { content: string; duplicate: boolean } {
-	const marker = `- audit_event_id: ${auditYamlValue('audit_event_id', event.auditEventId)}`;
-	if (current?.includes(marker)) {
-		return { content: current, duplicate: true };
-	}
-	if (
-		current
-		&& !/^---\n[\s\S]*?^type:\s*(?:tracekeeper_audit_shard|tracekeeper-audit-shard)\s*$/m.test(current)
-	) {
-		throw new OperationConflictError(`Audit shard has an invalid record type: ${event.shardPath}`);
-	}
-	const base = current
-		? current.replace(
-			/^updated_at:\s*.*$/m,
-			`updated_at: ${event.timestamp}`
-		)
-		: auditShardHeader(event.timestamp);
-	return {
-		content: `${base.trimEnd()}\n\n${event.entry.trimEnd()}\n`,
-		duplicate: false,
-	};
-}
-
-function appendAuditEvent(vaultRoot: string, input: AuditEventInput): AuditEventOutput {
-	const event = prepareAuditEvent(input);
-	ensureDirectAuditHub(vaultRoot, event.timestamp);
-	const shard = auditShardFile(vaultRoot, event.timestamp);
-	const current = fs.existsSync(shard.absolute)
-		? fs.readFileSync(shard.absolute, 'utf8')
-		: null;
-	const next = appendPreparedAuditEvent(current, event);
-	if (!next.duplicate) {
-		if (current === null) {
-			fs.writeFileSync(shard.absolute, next.content, { encoding: 'utf8', flag: 'wx' });
-		} else {
-			fs.writeFileSync(shard.absolute, next.content, 'utf8');
-		}
-	}
-	return { path: shard.relative };
-}
-
-async function appendAuditEventAsync(
-	vaultRoot: string,
-	input: AuditEventInput,
-	context: ToolContext
-): Promise<AuditEventOutput> {
-	if (!context.vaultRepository) {
-		return appendAuditEvent(vaultRoot, input);
-	}
-	const event = prepareAuditEvent(input);
-	await ensureRepositoryAuditHub(context.vaultRepository, event.timestamp);
-	await withRepositoryAuditLock(
-		context.vaultRepository,
-		event.shardPath,
-		async () => {
-			for (let attempt = 0; attempt < 3; attempt += 1) {
-				const existing = await context.vaultRepository!.readText(event.shardPath);
-				const next = appendPreparedAuditEvent(existing?.content || null, event);
-				if (next.duplicate) {
-					return;
-				}
-				try {
-					if (existing) {
-						await context.vaultRepository!.replaceText(
-							event.shardPath,
-							existing.version,
-							next.content
-						);
-					} else {
-						await context.vaultRepository!.createText(
-							event.shardPath,
-							next.content
-						);
-					}
-					return;
-				} catch (error) {
-					if (!(error instanceof OperationConflictError) || attempt === 2) {
-						throw error;
-					}
-				}
-			}
-		}
-	);
-	return { path: event.shardPath };
-}
-
-const repositoryAuditLocks = new WeakMap<
-	VaultRepository,
-	Map<string, Promise<void>>
->();
-
-async function withRepositoryAuditLock<T>(
-	repository: VaultRepository,
-	shardPath: string,
-	execute: () => Promise<T>
-): Promise<T> {
-	const locks = repositoryAuditLocks.get(repository) || new Map<string, Promise<void>>();
-	repositoryAuditLocks.set(repository, locks);
-	const previous = locks.get(shardPath) || Promise.resolve();
-	let release: () => void = () => undefined;
-	const next = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	const chain = previous.catch(() => undefined).then(() => next);
-	locks.set(shardPath, chain);
-
-	await previous.catch(() => undefined);
-	try {
-		return await execute();
-	} finally {
-		release();
-		if (locks.get(shardPath) === chain) {
-			locks.delete(shardPath);
-		}
-		if (locks.size === 0) {
-			repositoryAuditLocks.delete(repository);
-		}
-	}
-}
-
-function normalizeAuditTargets(paths: string[]): string[] {
-	const result: string[] = [];
-	for (const candidate of paths) {
-		const bounded = boundedAuditValue(candidate, 'target_path');
-		if (typeof bounded !== 'string' || !bounded) {
-			continue;
-		}
-		if (!result.includes(bounded)) {
-			result.push(bounded);
-		}
-		if (result.length >= MAX_AUDIT_ARRAY_ITEMS) {
-			break;
-		}
-	}
-	return result;
-}
-
-function isSensitiveKey(key: string): boolean {
-	return SENSITIVE_KEY_PATTERNS.some((pattern) => pattern.test(key));
-}
-
-function looksLikeSensitiveValue(value: string): boolean {
-	return !scanSensitiveText(value).ok;
-}
-
-const RECALL_FAMILY_AUDIT_TOOL_NAMES = new Set([
-	'tracekeeper.recall',
-	'tracekeeper.project_context',
-	'tracekeeper.project_history',
-]);
-
-const RECALL_AUDIT_METADATA_KEYS = [
-	'scope',
-	'project_hint',
-	'project_id',
-	'repo_path',
-	'repo',
-	'project_path',
-	'max_items',
-] as const;
-
-const AUDIT_BODY_ARGUMENT_KEYS = new Set([
-	'content',
-	'decisions',
-	'evidence',
-	'goal',
-	'lessons',
-	'memory_candidates',
-	'next_actions',
-	'outcomes',
-	'possible_preferences',
-	'preferences',
-	'query',
-	'solution_changes',
-	'summary',
-	'text',
-	'title',
-]);
-
-const AUDIT_LOCAL_PATH_ARGUMENT_KEYS = new Set([
-	'project_path',
-	'repo',
-	'repo_path',
-	'vaultRoot',
-]);
-
-function projectRecallAuditMetadataValue(key: string, value: unknown): unknown {
-	if (AUDIT_LOCAL_PATH_ARGUMENT_KEYS.has(key)) {
-		return '[redacted]';
-	}
-	if (
-		value === null ||
-		value === undefined ||
-		typeof value === 'string' ||
-		typeof value === 'number' ||
-		typeof value === 'boolean'
-	) {
-		return value;
-	}
-	return '[invalid]';
-}
-
-function projectArgumentsForAudit(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
-	if (RECALL_FAMILY_AUDIT_TOOL_NAMES.has(toolName)) {
-		const projected: Record<string, unknown> = {};
-		if (Object.prototype.hasOwnProperty.call(args, 'query')) {
-			projected.query = '[redacted]';
-		}
-		for (const key of RECALL_AUDIT_METADATA_KEYS) {
-			if (Object.prototype.hasOwnProperty.call(args, key)) {
-				projected[key] = projectRecallAuditMetadataValue(key, args[key]);
-			}
-		}
-		return projected;
-	}
-
-	const projected: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(args)) {
-		if (AUDIT_BODY_ARGUMENT_KEYS.has(key) || key === 'idempotency_key') {
-			projected[key] = '[redacted]';
-			continue;
-		}
-		if (AUDIT_LOCAL_PATH_ARGUMENT_KEYS.has(key)) {
-			projected[key] = '[redacted]';
-			continue;
-		}
-		projected[key] = value;
-	}
-	return projected;
-}
-
-function summarizeForAudit(args: Record<string, unknown>, limit = MAX_ARGS_SUMMARY_LENGTH): string {
-	const summary: Record<string, unknown> = {};
-
-	function summarize(value: unknown, keyHint = '', depth = 0): unknown {
-		if (depth > 2) {
-			if (value === null || value === undefined) {
-				return value;
-			}
-			if (typeof value === 'string') {
-				return value.length > 80 ? `${value.slice(0, 77)}...` : value;
-			}
-			if (typeof value === 'number' || typeof value === 'boolean') {
-				return value;
-			}
-			return '[object]';
-		}
-
-		if (isSensitiveKey(keyHint) || (typeof value === 'string' && looksLikeSensitiveValue(value))) {
-			return '[redacted]';
-		}
-
-		if (Array.isArray(value)) {
-			return value.slice(0, 10).map((entry, entryIndex) => summarize(entry, `${keyHint}[${entryIndex}]`, depth + 1));
-		}
-
-		if (value === null || value === undefined) {
-			return value;
-		}
-		if (typeof value === 'string') {
-			const text = value.trim();
-			return text.length > 180 ? `${text.slice(0, 177)}...` : text;
-		}
-		if (typeof value === 'number' || typeof value === 'boolean') {
-			return value;
-		}
-		if (isRecord(value)) {
-			const nested: Record<string, unknown> = {};
-			for (const [nestedKey, nestedValue] of Object.entries(value)) {
-				nested[nestedKey] = summarize(nestedValue, nestedKey, depth + 1);
-			}
-			return nested;
-		}
-
-		if (value === null || value === undefined) {
-			return value;
-		}
-		if (typeof value === 'bigint') {
-			return value.toString();
-		}
-		if (typeof value === 'symbol') {
-			return value.toString();
-		}
-		if (typeof value === 'function') {
-			return '[function]';
-		}
-		try {
-			const json = JSON.stringify(value);
-			return json ?? '[unserializable]';
-		} catch {
-			return '[unserializable]';
-		}
-	}
-
-	for (const [key, value] of Object.entries(args)) {
-		summary[key] = summarize(value, key, 0);
-	}
-
-	const text = JSON.stringify(summary);
-	return text.length <= limit ? text : `${text.slice(0, limit - 3)}...`;
-}
-
-function collectAuditTargetsFromArgs(toolName: string, args: Record<string, unknown>): string[] {
-	const targets = new Set<string>();
-	const explicitPathKeys = ['path', 'request_path', 'proposal_path', 'target_note', 'source', 'source_path'];
-	for (const key of explicitPathKeys) {
-		addTrimmedTarget(targets, getRecordValue(args, key));
-	}
-	return Array.from(targets).filter(Boolean);
-}
-
-function collectAuditTargetsFromResult(toolName: string, args: Record<string, unknown>, resultPayload: unknown): string[] {
-	const targets = new Set<string>(collectAuditTargetsFromArgs(toolName, args));
-	const payload: ToolResultPayload | null = isRecord(resultPayload) ? resultPayload : null;
-	if (payload) {
-		const candidateKeys = [
-			'path',
-			'target_note',
-			'proposal_path',
-			'request_path',
-			'audit_path',
-			'source_note',
-			'report',
-		];
-		for (const key of candidateKeys) {
-			addTrimmedTarget(targets, getRecordValue(payload, key));
-		}
-		const sourceNote = getRecordValue(payload, 'source_note');
-		if (isRecord(sourceNote)) {
-			addTrimmedTarget(targets, getRecordValue(sourceNote, 'path'));
-		}
-		const report = getRecordValue(payload, 'report');
-		if (isRecord(report)) {
-			addTrimmedTarget(targets, getRecordValue(report, 'path'));
-		}
-		const touchedNotes = getRecordValue(payload, 'touched_notes');
-		if (Array.isArray(touchedNotes)) {
-			for (const entry of touchedNotes) {
-				addTrimmedTarget(targets, entry);
-			}
-		}
-		const proposals = getRecordValue(payload, 'proposals');
-		if (Array.isArray(proposals)) {
-			for (const proposal of proposals) {
-				if (isRecord(proposal)) {
-					addTrimmedTarget(targets, getRecordValue(proposal, 'path'));
-				}
-			}
-		}
-		const steps = getRecordValue(payload, 'steps');
-		if (Array.isArray(steps)) {
-			for (const step of steps) {
-				addTrimmedTarget(targets, step);
-			}
-		}
-	}
-	return normalizeAuditTargets(Array.from(targets).filter(Boolean));
-}
-
 function toSourceRequestRow(note: ScannedNote) {
 	return {
 		noteType: readFrontmatterString(note.frontmatter, ['type']),
@@ -7307,155 +6284,38 @@ export async function callTool(
 	return toolResult;
 }
 
-export interface OperationRecoveryReport {
-	recovered: string[];
-	failed: Array<{ operation_id: string; error: string }>;
-	skipped: string[];
-}
+export type { OperationRecoveryReport };
 
 export async function recoverPendingOperations(
 	vaultRoot: string,
 	context: ToolInvocationContext = {}
 ): Promise<OperationRecoveryReport> {
-	const journal = operationJournalForVault(vaultRoot);
-	const records = await journal.listRecoverable();
-	const report: OperationRecoveryReport = { recovered: [], failed: [], skipped: [] };
-
-	for (const record of records) {
-		if (
-			record.operation_id.startsWith('writeback-')
-			&& !isApplyApprovedWritebackPayload(record.payload)
-		) {
-			const failedAt = new Date().toISOString();
-			await journal.save({
-				operation_id: record.operation_id,
-				idempotency_key: record.idempotency_key,
-				payload_hash: record.payload_hash,
-				status: 'conflicted',
-				created_at: record.created_at,
-				updated_at: failedAt,
-				failed_at: failedAt,
-				error: 'Incompatible writeback recovery record requires a fresh preview.',
-				completed_steps: record.completed_steps.map((step) => ({
-					name: step.name,
-					completed_at: step.completed_at,
-				})),
+	const controller = new RuntimeRecoveryController(operationJournalForVault(vaultRoot), {
+		isApplyApprovedWritebackPayload,
+		isProposeMemoryOperationPayload,
+		invoke: async (request, record, requestedVaultRoot) => {
+			const result = await callTool(request.tool as TracekeeperToolName, request.args, {
+				...context,
+				defaultVaultRoot: requestedVaultRoot,
+				principalId: context.principalId || LOCAL_TRUST_PRINCIPAL_ID,
+				credentialCapabilities: context.credentialCapabilities || LOCAL_TRUST_CAPABILITIES,
+				agentId: context.agentId || 'tracekeeper-recovery',
+				clientName: context.clientName || 'tracekeeper-runtime-recovery',
+				transport: context.transport || 'runtime-recovery',
+				writebackRecoveryOperationId: record.operation_id,
 			});
-			report.failed.push({
-				operation_id: record.operation_id,
-				error: 'Incompatible writeback recovery record requires a fresh preview.',
-			});
-			continue;
-		}
-		const request = recoveryRequestForRecord(record);
-		if (!request) {
-			report.skipped.push(record.operation_id);
-			continue;
-		}
-		const result = await callTool(request.tool, request.args, {
-			...context,
-			defaultVaultRoot: vaultRoot,
-			principalId: context.principalId || LOCAL_TRUST_PRINCIPAL_ID,
-			credentialCapabilities: context.credentialCapabilities || LOCAL_TRUST_CAPABILITIES,
-			agentId: context.agentId || 'tracekeeper-recovery',
-			clientName: context.clientName || 'tracekeeper-runtime-recovery',
-			transport: context.transport || 'runtime-recovery',
-			writebackRecoveryOperationId: record.operation_id,
-		});
-		if (result.isError) {
 			const structured = result.structuredContent;
-			report.failed.push({
-				operation_id: record.operation_id,
+			return {
+				isError: Boolean(result.isError),
 				error: isRecord(structured) && typeof structured.error === 'string'
 					? structured.error
-					: 'Operation recovery failed.',
-			});
-			continue;
-		}
-		report.recovered.push(record.operation_id);
-	}
-
-	return report;
-}
-
-function recoveryRequestForRecord(
-	record: OperationRecord
-): { tool: TracekeeperToolName; args: Record<string, unknown> } | null {
-	if (!isRecord(record.payload)) {
-		return null;
-	}
-	const payload = record.payload;
-	if (record.operation_id.startsWith('start-task-')) {
-		return {
-			tool: 'tracekeeper.start_task',
-			args: {
-				goal: payload.goal,
-				client: payload.client,
-				project_hint: payload.projectHint,
-				project_id: payload.projectId,
-				repo_path: payload.repoPath,
-				idempotency_key: record.idempotency_key,
-			},
-		};
-	}
-	if (record.operation_id.startsWith('finish-task-')) {
-		if (isRecord(payload.requestSnapshot)) {
-			return {
-				tool: 'tracekeeper.finish_task',
-				args: {
-					...payload.requestSnapshot,
-					idempotency_key: record.idempotency_key,
-				},
+					: undefined,
 			};
-		}
-		return {
-			tool: 'tracekeeper.finish_task',
-			args: {
-				task_id: payload.taskId,
-				summary: payload.summary,
-				outcomes: payload.outcomes,
-				decisions: payload.decisions,
-				solution_changes: payload.solutionChanges,
-				lessons: payload.lessons,
-				preferences: payload.preferences,
-				memory_candidates: payload.memoryCandidates,
-				next_actions: payload.nextActions,
-				review_proposal_mode: payload.reviewProposalMode,
-				client: payload.client,
-				project_hint: payload.projectHint,
-				project_id: payload.projectId,
-				repo_path: payload.repoPath,
-				memory_scope: payload.memoryScope,
-				related_wiki: payload.relatedWiki,
-				related_sources: payload.relatedSources,
-				filename: payload.filename,
-				idempotency_key: record.idempotency_key,
-			},
-		};
-	}
-	if (
-		record.operation_id.startsWith('propose-memory-')
-		&& isProposeMemoryOperationPayload(payload)
-	) {
-		return {
-			tool: 'tracekeeper.propose_memory',
-			args: {
-				...payload.requestSnapshot,
-				idempotency_key: record.idempotency_key,
-			},
-		};
-	}
-	if (record.operation_id.startsWith('writeback-')) {
-		return {
-			tool: 'tracekeeper.apply_approved_writeback',
-			args: {
-				proposal_path: payload.proposalPath,
-				task_id: payload.taskId,
-			},
-		};
-	}
-	return null;
+		},
+	});
+	return controller.recover(vaultRoot);
 }
+
 
 function toolResultWithError<T>(value: T): McpStructuredToolResult {
 	return toolResult(value);
@@ -7932,147 +6792,6 @@ function handleListSourceRequests(rawArgs: ListSourceRequestsArgs, context: Tool
 	};
 }
 
-function buildSourceRunToken(request: SourceRequestRecord): string {
-	const safeRequest = request.filename
-		.replace(/\.[^/.]+$/, '')
-		.replace(/[^a-z0-9._-]+/gi, '-')
-		.replace(/-+/g, '-')
-		.replace(/^-+|-+$/g, '')
-		.slice(0, 60);
-	return `${safeRequest}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-}
-
-async function resolveSourceInput(
-	request: SourceRequestRecord,
-	vaultRoot: string,
-	context: ToolContext
-): Promise<{ sourceText: string; mode: 'external_reference' | 'local_copy' | 'extracted_snapshot'; resolvedSourcePath?: string; warnings: string[] }> {
-	const source = request.source.trim();
-	const sourceKind = request.sourceKind.trim().toLowerCase();
-
-	if (!source) {
-		return {
-			sourceText: `No source identifier found in request ${request.path}.`,
-			mode: 'extracted_snapshot',
-			warnings: ['request has empty source field'],
-		};
-	}
-
-	if (isUrlSource(source)) {
-		return {
-			sourceText:
-				`External reference pending human/agent fetch. ` +
-				`Source URL: ${source}. ` +
-				'This request intentionally avoids network fetch.',
-			mode: 'external_reference',
-			warnings: ['external network fetch intentionally skipped'],
-		};
-	}
-
-	const parsedPath = parseOptionalIntendedSourcePath(source, sourceKind);
-	if (parsedPath.requestedPath) {
-		try {
-			const fileText = await safeReadTextFileAsync(vaultRoot, parsedPath.requestedPath, context);
-			return {
-				sourceText: fileText,
-				mode: 'local_copy',
-				resolvedSourcePath: parsedPath.requestedPath,
-				warnings: [],
-			};
-		} catch (error) {
-			if (error instanceof ToolInputError || error instanceof VaultPathError) {
-				return {
-					sourceText: request.content || source,
-					mode: 'extracted_snapshot',
-					warnings: ['source path is not readable, fallback to request body'],
-				};
-			}
-			throw error;
-		}
-	}
-
-	const bodyText = extractSelectionText(request.content);
-	return {
-		sourceText: bodyText || request.content || source,
-		mode: 'extracted_snapshot',
-		warnings: ['using request-provided text for analysis'],
-	};
-}
-
-function buildSourceNoteContent(
-	request: SourceRequestRecord,
-	mode: 'external_reference' | 'local_copy' | 'extracted_snapshot',
-	sourceText: string,
-	analysis: SourceAnalysisResult,
-	context: ToolContext,
-	resolvedSourcePath?: string,
-): string {
-	void sourceText;
-	const section = [contentText(context, '## 来源笔记', '## Source note'), `- request_path: ${request.path}`, `- mode: ${mode}`, `- source_kind: ${request.sourceKind || 'unknown'}`];
-	section.push(`- analysis_mode: ${request.analysisMode || 'default'}`);
-	if (resolvedSourcePath) {
-		section.push(`- resolved_source_path: ${resolvedSourcePath}`);
-	}
-	section.push('');
-	section.push(contentText(context, '## 来源摘要', '## Source summary'));
-	section.push(analysis.summary);
-	section.push('');
-	section.push(contentText(context, '## 证据脚手架', '## Evidence scaffold'));
-	for (const item of analysis.evidenceScaffolds) {
-		section.push(`- ${item}`);
-	}
-	section.push('');
-	section.push(contentText(context, '## 论断脚手架', '## Claim scaffold'));
-	for (const item of analysis.claimScaffolds) {
-		section.push(`- ${item}`);
-	}
-	section.push('');
-	section.push(contentText(context, '## 来源摘录', '## Source excerpt'));
-	section.push(analysis.excerpt);
-	return section.join('\n');
-}
-
-function buildReportContent(
-	request: SourceRequestRecord,
-	mode: 'external_reference' | 'local_copy' | 'extracted_snapshot',
-	sourceText: string,
-	analysis: SourceAnalysisResult,
-	sourceNotePath: string,
-	warnings: string[],
-	context: ToolContext,
-): string {
-	const sourceContent = `\n${contentText(context, '## 来源', '## Source')}\n\n${sourceText.slice(0, MAX_SOURCE_EXCERPT_LENGTH)}\n`;
-	const section = [
-		contentText(context, '## 来源分析报告', '## Source Analysis Report'),
-		`- source: ${request.source}`,
-		`- request_path: ${request.path}`,
-		`- source_kind: ${request.sourceKind || 'unknown'}`,
-		`- analysis_mode: ${request.analysisMode || 'default'}`,
-		`- mode: ${mode}`,
-		`- source_note: ${sourceNotePath}`,
-		`- related_project: ${request.relatedProject || 'unset'}`,
-		`- purpose: ${request.purpose || 'unset'}`,
-	];
-	if (warnings.length > 0) {
-		section.push(`- warnings: ${JSON.stringify(warnings)}`);
-	}
-	section.push('');
-	section.push(contentText(context, '## 摘要', '## Summary'));
-	section.push(analysis.summary);
-	section.push('');
-	section.push(contentText(context, '## 摘录', '## Excerpt'));
-	section.push(`\n${analysis.excerpt}\n`);
-	section.push('');
-	section.push(contentText(context, '## 证据脚手架', '## Evidence scaffold'));
-	section.push(...analysis.evidenceScaffolds.map((entry) => `- ${entry}`));
-	section.push('');
-	section.push(contentText(context, '## 论断脚手架', '## Claim scaffold'));
-	section.push(...analysis.claimScaffolds.map((entry) => `- ${entry}`));
-	section.push('');
-	section.push(sourceContent);
-	return section.join('\n');
-}
-
 async function handleAnalyzeSourceRequest(
 	rawArgs: AnalyzeSourceRequestArgs,
 	context: ToolContext,
@@ -8083,210 +6802,72 @@ async function handleAnalyzeSourceRequest(
 	if (!requestPath) {
 		throw new ToolInputError('Missing required argument: request_path or path.');
 	}
-	const requestPathAlias = requestPath;
 	const updateStatus = coerceBoolean(rawArgs.update_request_status, 'update_request_status', true);
 	const forceReprocess = coerceBoolean(rawArgs.force_reprocess, 'force_reprocess', false);
-	const now = new Date().toISOString();
-	let failureStatusAllowed = false;
-	let failureRequestPath = requestPathAlias;
-	let failureTaskId = coerceOptionalString(rawArgs.task_id) || null;
-
-	try {
-		const request = await readSourceRequestAsync(vaultRoot, requestPathAlias, context);
-		const taskId = coerceOptionalString(rawArgs.task_id) || request.taskId || null;
-		failureRequestPath = request.path;
-		failureTaskId = taskId;
-		if (!request.type.toLowerCase().includes('agent-request')) {
-			throw new ToolInputError('Request note is not an agent-request note.');
-		}
-		if (!forceReprocess && request.status && !isSourceRequestPending(request.status)) {
-			throw new ToolInputError(`Request status is ${request.status}; use force_reprocess=true to process anyway.`);
-		}
-		failureStatusAllowed = !request.status || isSourceRequestPending(request.status);
-
-		const { sourceText, mode, resolvedSourcePath, warnings } = await resolveSourceInput(request, vaultRoot, context);
-		const analysis = analyzeSourceText({
-			source: request.source,
-			sourceKind: request.sourceKind || 'unknown',
-			analysisMode: request.analysisMode || 'default',
-			purpose: request.purpose,
-			content: sourceText,
-			requestPath: request.path,
-			contentLanguage: contentLanguageFromContext(context),
-		});
-
-		assertNoSensitiveText([
-			{ label: 'source', value: request.source },
-			{ label: 'purpose', value: request.purpose },
-			{ label: 'source content', value: sourceText },
-			{ label: 'summary', value: analysis.summary },
-			{ label: 'excerpt', value: analysis.excerpt },
-		]);
-
-		const runToken = buildSourceRunToken(request);
-		const sourceFilename = buildSafeFilename(`${runToken}-source`, 'source', context);
-		const sourceNote = await buildAndWriteNoteAsync(
-			vaultRoot,
-			sourceToolName,
-			SOURCES_DIR,
-			sourceFilename,
-			{
-				tool: sourceToolName,
-				type: 'source_analysis_source',
-				title: `source_analysis_source_${runToken}`,
-				source: request.source,
-				source_kind: request.sourceKind || null,
-				analysis_mode: request.analysisMode || 'default',
-				request_path: request.path,
-				mode,
-				created_at: now,
-				task_id: taskId,
-			},
-			buildSourceNoteContent(request, mode, sourceText, analysis, context, resolvedSourcePath),
-			taskId,
-			context,
-			{ target_type: 'source', mode, request_path: request.path }
-		);
-
-		const reportFilename = buildSafeFilename(`${runToken}-report`, 'source-report', context);
-		const report = await buildAndWriteNoteAsync(
-			vaultRoot,
-			sourceToolName,
-			SOURCE_ANALYSIS_REPORT_DIR,
-			reportFilename,
-			{
-				tool: sourceToolName,
-				type: 'source_analysis_report',
-				title: `source_analysis_report_${runToken}`,
-				source: request.source,
-				source_kind: request.sourceKind || null,
-				analysis_mode: request.analysisMode || 'default',
-				request_path: request.path,
-				source_note: sourceNote.path,
-				created_at: now,
-				task_id: taskId,
-			},
-			buildReportContent(request, mode, sourceText, analysis, sourceNote.path, warnings, context),
-			taskId,
-			context,
-			{ target_type: 'source_analysis_report', request_path: request.path }
-		);
-
-		const proposals: ManagedProposalReference[] = [];
-		for (const [proposalIndex, entry] of analysis.proposalDrafts.entries()) {
-			const proposalId = buildStableProposalId(
-				`source-analysis\0${runToken}\0${proposalIndex}\0${entry.proposalKind}`
-			);
-			const proposalNote = await buildAndWriteNoteAsync(
-				vaultRoot,
-				sourceToolName,
-				MEMORY_PROPOSAL_DIR,
-				buildSafeFilename(`proposal-${runToken}-${entry.proposalKind}`, entry.proposalKind, context),
-				{
-					tool: sourceToolName,
-					type: 'memory_proposal',
-					proposal_id: proposalId,
-					title: entry.title || `source_proposal_${runToken}`,
-					proposal_kind: entry.proposalKind,
-					status: 'pending',
-					source: request.source,
-					source_kind: request.sourceKind || null,
-					target_note: report.path,
-					risk_level: entry.riskLevel || null,
-					created_at: now,
-					task_id: taskId,
-				},
-				`${contentText(context, '## 来源分析提案', '## Source analysis proposal')}\n\n- evidence: ${entry.evidence}\n\n${contentText(context, '## 写回内容', '## Writeback')}\n${entry.content}\n`,
-				taskId,
-				context,
-				{
-					target_type: 'memory_proposal',
-					proposal_kind: entry.proposalKind,
-					request_path: request.path,
-					source_note: sourceNote.path,
-				}
-			);
-			proposals.push({
-				proposalId,
-				path: proposalNote.path,
-				linkTarget: proposalNote.path,
-			});
-		}
-		let auditPathForReturn = sourceNote.audit_path;
-
-		if (updateStatus) {
-			failureStatusAllowed = false;
-			await updateRequestStatusAsync(vaultRoot, request.path, 'completed', context);
-			auditPathForReturn = (await appendAuditEventAsync(vaultRoot, {
-				tool: sourceToolName,
-				targetPath: request.path,
-				status: 'written',
-				taskId,
-				metadata: {
-					action: 'source.request.completed',
-					source_note: sourceNote.path,
-					source_report: report.path,
-					proposal_ids: proposals.map((proposal) => proposal.proposalId).join(','),
-					proposal_paths: proposals.map((proposal) => proposal.path).join(','),
-				},
-			}, context)).path;
-		}
-		const taskPath = await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
-			source_captures: [sourceNote.path, report.path],
-			proposal_ids: proposals.map((proposal) => proposal.proposalId),
-			proposal_paths: proposals.map((proposal) => proposal.path),
-			proposal_link_targets: proposals.map((proposal) => proposal.linkTarget),
-		});
-		if (taskPath) {
-			await updateManagedProposalReferences(vaultRoot, taskPath, proposals, context);
-		}
-
-		return {
-			ok: true,
-			read_only: false,
-			tool: sourceToolName,
-			status: 'completed',
-			vault_root: vaultRoot,
-			request_path: request.path,
-			mode,
-			source_note: {
-				path: sourceNote.path,
-				audit_path: sourceNote.audit_path,
-			},
-			report: {
-				path: report.path,
-				audit_path: report.audit_path,
-			},
-			proposals: proposals.map((proposal) => ({
-				proposal_id: proposal.proposalId,
-				path: proposal.path,
-				proposal_link_target: proposal.linkTarget,
-			})),
-			audit_path: auditPathForReturn,
-			summary: analysis.summary,
-			warnings,
-		};
-	} catch (error) {
-		if (updateStatus && failureStatusAllowed) {
+	const taskId = coerceOptionalString(rawArgs.task_id) || null;
+	const application = new SourceRequestApplicationService({
+		readRequest: async (requestPathValue) => readSourceRequestAsync(vaultRoot, requestPathValue, context),
+		readSourceText: async (sourcePath) => {
 			try {
-				await updateRequestStatusAsync(vaultRoot, failureRequestPath, 'failed', context);
-				await appendAuditEventAsync(vaultRoot, {
-					tool: sourceToolName,
-					targetPath: failureRequestPath,
-					status: 'failed',
-					taskId: failureTaskId,
-					metadata: {
-						action: 'source.request.failed',
-						error: toErrorMessage(error),
-					},
-				}, context);
-			} catch {
-				// audit and state update are best-effort; keep original error handling path.
+				return await safeReadTextFileAsync(vaultRoot, sourcePath, context);
+			} catch (error) {
+				if (error instanceof ToolInputError || error instanceof VaultPathError) {
+					return null;
+				}
+				throw error;
 			}
-		}
-		throw error;
-	}
+		},
+		writeNote: (input: SourceRequestWriteInput) => {
+			const allowedDir = input.kind === 'source'
+				? SOURCES_DIR
+				: input.kind === 'report'
+					? SOURCE_ANALYSIS_REPORT_DIR
+					: MEMORY_PROPOSAL_DIR;
+			return buildAndWriteNoteAsync(
+				vaultRoot,
+				input.toolName,
+				allowedDir,
+				input.filename,
+				input.frontmatter,
+				input.body,
+				input.taskId,
+				context,
+				input.metadata
+			);
+		},
+		updateRequestStatus: (requestPathValue, status) =>
+			updateRequestStatusAsync(vaultRoot, requestPathValue, status, context),
+		appendAudit: (input) => appendAuditEventAsync(vaultRoot, input, context),
+		updateTaskRecord: (taskIdValue, notePaths, proposals) => updateAgentTaskRecordAsync(
+			vaultRoot,
+			taskIdValue,
+			{},
+			context,
+			{
+				source_captures: notePaths,
+				proposal_ids: proposals.map((proposal) => proposal.proposalId),
+				proposal_paths: proposals.map((proposal) => proposal.path),
+				proposal_link_targets: proposals.map((proposal) => proposal.linkTarget),
+			}
+		),
+		updateManagedProposalReferences: (recordPath, proposals) =>
+			updateManagedProposalReferences(vaultRoot, recordPath, proposals, context),
+		assertSafeText: assertNoSensitiveText,
+		renderText: (zh, en) => contentText(context, zh, en),
+		contentLanguage: contentLanguageFromContext(context),
+		now: () => new Date().toISOString(),
+		buildFilename: (rawFilename, fallbackPrefix) => buildSafeFilename(rawFilename, fallbackPrefix, context),
+	});
+	const result = await application.execute({
+		requestPath,
+		taskId,
+		updateRequestStatus: updateStatus,
+		forceReprocess,
+		toolName: sourceToolName,
+	});
+	return { vault_root: vaultRoot, ...result };
 }
+
 
 function handleReviewQueueUnified(rawArgs: ReviewQueueArgs, context: ToolContext) {
 	const action = coerceReviewQueueAction(rawArgs.action);
@@ -8925,15 +7506,13 @@ async function handleApplyApprovedWriteback(rawArgs: ApplyApprovedWritebackArgs,
 async function handleAuditRecent(rawArgs: AuditRecentArgs, context: ToolContext) {
 	const vaultRoot = configuredVaultRoot(context);
 	const maxItems = coercePositiveInt(rawArgs.max_items, MAX_AUDIT_ITEMS, 1, 100);
-	const sections = await readMergedAuditSections(vaultRoot, context);
-
+	const application = new AuditRecentApplicationService({
+		auditLogPath: AUDIT_LOG_PATH,
+		readSections: () => readMergedAuditSections(vaultRoot, context),
+	});
 	return {
-		ok: true,
-		read_only: true,
 		vault_root: vaultRoot,
-		audit_log: sections[0]?.source_path || AUDIT_LOG_PATH,
-		total_sections: sections.length,
-		sections: sections.slice(0, maxItems),
+		...(await application.execute(maxItems)),
 	};
 }
 
@@ -9011,506 +7590,169 @@ async function handleWriteSessionNote(rawArgs: WriteSessionNoteArgs, context: To
 async function handleCaptureSource(rawArgs: CaptureSourceArgs, context: ToolInvocationContext) {
 	const vaultRoot = configuredVaultRoot(context);
 	const requestHash = computePayloadHash({ ...rawArgs });
-	const identity = buildToolOperationIdentity(
-		'capture-source',
-		rawArgs.idempotency_key,
-		{ requestHash },
-		context
-	);
-	const runner = new RecoverableOperationRunner({
-		operationId: identity.operationId,
-		idempotencyKey: identity.idempotencyKey,
-		payload: { request_hash: requestHash },
+	const normalizedIdempotencyKey = coerceOptionalString(rawArgs.idempotency_key);
+	const application = new CaptureSourceApplicationService({
 		journal: operationJournalForVault(vaultRoot),
 		failureInjection: context.operationFailureInjection,
-		steps: [],
-		finalize: () => handleCaptureSourceWrite(rawArgs, context, identity),
-	});
-	return runner.run();
-}
-
-async function handleCaptureSourceWrite(
-	rawArgs: CaptureSourceArgs,
-	context: ToolContext,
-	identity: { operationId: string; idempotencyKey: string }
-) {
-	const vaultRoot = configuredVaultRoot(context);
-	const source = coerceNonEmptyString(rawArgs.source, true, 'source');
-	const sourceKind = coerceOptionalString(rawArgs.source_kind);
-	const mode = coerceCaptureMode(rawArgs.mode);
-	const captureReason = coerceOptionalString(rawArgs.capture_reason);
-	const relatedProject = coerceOptionalString(rawArgs.related_project);
-	const filename = coerceOptionalString(rawArgs.filename)
-		? buildSafeFilename(rawArgs.filename, 'source', context)
-		: buildSafeFilename(`source-${identity.operationId}`, 'source', context);
-	const title = coerceOptionalString(rawArgs.title);
-	const taskId = coerceOptionalString(rawArgs.task_id) || null;
-	const now = new Date().toISOString();
-	const warnings: string[] = [];
-
-	const sourceText = coerceOptionalString(rawArgs.content) || coerceOptionalString(rawArgs.text);
-	if (mode !== 'external_reference' && !sourceText) {
-		throw new ToolInputError(`content/text is required when mode is "${mode}".`);
-	}
-	if (mode === 'external_reference' && sourceText) {
-		warnings.push('content/text is ignored for external_reference mode.');
-	}
-	assertNoSensitiveText([
-		{ label: 'source', value: source },
-		{ label: 'capture_reason', value: captureReason },
-		{ label: 'content', value: sourceText },
-		{ label: 'title', value: title },
-	]);
-
-	let body = `${contentText(context, '## 来源捕获', '## Source capture')}\n\n`;
-	if (mode === 'external_reference') {
-		body += `- mode: external_reference\n- source: ${source}\n`;
-		if (sourceKind) {
-			body += `- source_kind: ${sourceKind}\n`;
-		}
-		if (captureReason) {
-			body += `- capture_reason: ${captureReason}\n`;
-		}
-	} else {
-		body += `- mode: ${mode}\n- source: ${source}\n`;
-		if (sourceKind) {
-			body += `- source_kind: ${sourceKind}\n`;
-		}
-		body += `\n${sourceText}\n`;
-	}
-
-	const existing = await findOperationOwnedNoteAsync(
-		vaultRoot,
-		SOURCES_DIR,
-		filename,
-		'source_operation_id',
-		identity.operationId,
-		context
-	);
-	const note = existing || await buildAndWriteNoteAsync(
-		vaultRoot,
-		'tracekeeper.capture_source',
-		SOURCES_DIR,
-		filename,
-		{
-			tool: 'tracekeeper.capture_source',
-			type: 'source_capture',
-			title: title || `source_${mode}`,
-			source,
-			source_kind: sourceKind || null,
-			mode,
-			capture_reason: captureReason || null,
-			related_project: relatedProject || null,
-			created_at: now,
-			task_id: taskId || null,
-			source_operation_id: identity.operationId,
+		createIdentity: (hash, idempotencyKey) => buildToolOperationIdentity(
+			'capture-source',
+			idempotencyKey,
+			{ requestHash: hash },
+			context
+		),
+		now: () => new Date().toISOString(),
+		buildFilename: (rawFilename, fallbackPrefix) =>
+			coerceOptionalString(rawFilename)
+				? buildSafeFilename(rawFilename, 'source', context)
+				: buildSafeFilename(fallbackPrefix, 'source', context),
+		renderText: (zh, en) => contentText(context, zh, en),
+		assertSafeText: assertNoSensitiveText,
+		findOwnedSourceNote: async (filename, operationId) => {
+			const note = await findOperationOwnedNoteAsync(
+				vaultRoot,
+				SOURCES_DIR,
+				filename,
+				'source_operation_id',
+				operationId,
+				context
+			);
+			return note
+				? {
+					path: note.path,
+					audit_path: note.audit_path,
+					status: note.status,
+					warnings: note.warnings,
+				}
+				: null;
 		},
-		body,
-		taskId,
-		context,
-		{ target_type: 'source_capture', mode },
-		identity.operationId
-	);
-	await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
-		source_captures: [note.path],
+		writeSourceNote: (input: CaptureSourceWriteInput) => buildAndWriteNoteAsync(
+			vaultRoot,
+			'tracekeeper.capture_source',
+			SOURCES_DIR,
+			input.filename,
+			input.frontmatter,
+			input.body,
+			input.taskId,
+			context,
+			input.metadata,
+			input.operationId
+		),
+		updateTaskSourceCapture: async (taskId, sourcePath) => {
+			await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
+				source_captures: [sourcePath],
+			});
+		},
 	});
 
-	return {
-		ok: true,
-		tool: 'tracekeeper.capture_source',
-		operation_id: identity.operationId,
-		idempotency_key: identity.idempotencyKey,
-		status: note.status,
-		path: note.path,
-		audit_path: note.audit_path,
-		warnings,
-		metadata: {
-			source,
-			mode,
-		},
-	};
+	return application.execute({
+		rawArgs: rawArgs as CaptureSourceRawRequest,
+		requestHash,
+		idempotencyKey: normalizedIdempotencyKey,
+	});
 }
 
 async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolInvocationContext) {
 	const vaultRoot = configuredVaultRoot(context);
-	const requestSnapshot = buildProposeMemoryRequestSnapshot(rawArgs);
-	const requestHash = computePayloadHash(requestSnapshot);
-	const identity = buildToolOperationIdentity(
-		'propose-memory',
-		rawArgs.idempotency_key,
-		requestSnapshot,
-		context
-	);
-	const journal = operationJournalForVault(vaultRoot);
-	const existing = await journal.loadByIdempotencyKey(identity.idempotencyKey);
-	let operationPayload: ProposeMemoryOperationPayload;
-	if (existing) {
-		if (existing.operation_id !== identity.operationId) {
-			throw new OperationConflictError(
-				`Idempotency key conflict for "${identity.idempotencyKey}": associated with existing operation "${existing.operation_id}"`
-			);
-		}
-		if (!isProposeMemoryOperationPayload(existing.payload)) {
-			throw new OperationConflictError(
-				`Idempotency key conflict for "${identity.idempotencyKey}" with an incompatible legacy propose_memory operation`
-			);
-		}
-		if (existing.payload.requestHash !== requestHash) {
-			throw new OperationConflictError(
-				`Idempotency key conflict for "${identity.idempotencyKey}" with different propose_memory request hash`
-			);
-		}
-		operationPayload = existing.payload;
-	} else {
-		const observed = context.observedClientType
-			?? normalizeObservedClientType(context.clientName);
-		operationPayload = {
-			requestHash,
-			requestSnapshot,
-			projectMemoryCreatedAt: new Date().toISOString(),
-			projectMemoryAgentType: observed === 'unknown' ? 'custom' : observed,
-		};
-	}
-	const runner = new RecoverableOperationRunner({
-		operationId: identity.operationId,
-		idempotencyKey: identity.idempotencyKey,
-		payload: operationPayload,
-		journal,
+	const observed = context.observedClientType ?? normalizeObservedClientType(context.clientName);
+	const application = new ProposeMemoryApplicationService({
+		journal: operationJournalForVault(vaultRoot),
 		failureInjection: context.operationFailureInjection,
-		steps: [],
-		finalize: () => handleProposeMemoryWrite(
-			operationPayload.requestSnapshot,
-			context,
-			identity,
-			operationPayload.projectMemoryCreatedAt,
-			operationPayload.projectMemoryAgentType
+		createIdentity: (requestHash, idempotencyKey) => buildToolOperationIdentity(
+			'propose-memory',
+			idempotencyKey,
+			{ requestHash },
+			context
 		),
-	});
-	return runner.run();
-}
-
-async function handleProposeMemoryWrite(
-	rawArgs: ProposeMemoryArgs,
-	context: ToolInvocationContext,
-	identity: { operationId: string; idempotencyKey: string },
-	operationCreatedAt: string,
-	projectMemoryAgentType: ObservedClientType | 'custom'
-) {
-	const vaultRoot = configuredVaultRoot(context);
-	const proposalKind = coerceNonEmptyString(rawArgs.proposal_kind, true, 'proposal_kind');
-	const content = coerceNonEmptyString(rawArgs.content, true, 'content');
-	const evidence = coerceOptionalString(rawArgs.evidence);
-	const targetNote = coerceOptionalString(rawArgs.target_note);
-	const riskLevel = coerceOptionalString(rawArgs.risk_level);
-	const title = coerceOptionalString(rawArgs.title);
-	const filename = coerceOptionalString(rawArgs.filename)
-		? buildSafeFilename(rawArgs.filename, 'proposal', context)
-		: buildSafeFilename(`proposal-${identity.operationId}`, 'proposal', context);
-	const taskId = coerceOptionalString(rawArgs.task_id) || null;
-	const projectHint = coerceOptionalString(rawArgs.project_hint);
-	const proposalId = proposalIdFromOperation(identity.operationId, proposalKind);
-	const memoryScope = resolveMemoryScope(proposalKind, targetNote, projectHint, rawArgs.memory_scope);
-	const relatedWiki = normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki');
-	const relatedSources = normalizeMultiValueList(rawArgs.related_sources, 'related_sources');
-	const architectureStatus = buildArchitectureStatus(vaultRoot, context);
-	const bridgeMetadata = resolveProjectMemoryBridgeMetadata(
-		vaultRoot,
-		memoryScope,
-		projectHint,
-		relatedWiki,
-		relatedSources,
-		context
-	);
-	const resolvedProjectIdentity = memoryScope === 'project'
-		? resolveProjectIdentity(
-			rawArgs,
-			scanVaultForContext(vaultRoot, context).notes
-		)
-		: null;
-	const now = new Date().toISOString();
-	assertMemoryProposalAllowed(proposalKind, targetNote, projectHint, context, memoryScope);
-	assertNoSensitiveText([
-		{ label: 'content', value: content },
-		{ label: 'evidence', value: evidence },
-		{ label: 'target_note', value: targetNote },
-		{ label: 'title', value: title },
-		{ label: 'project_hint', value: projectHint },
-		{ label: 'related_wiki', value: relatedWiki.join('\n') },
-		{ label: 'related_sources', value: relatedSources.join('\n') },
-	]);
-
-	const memoryRule = memoryProposalRuleFor(proposalKind, targetNote, projectHint, context, memoryScope);
-	let immutableReviewRequired = false;
-	if (memoryRule === 'auto_write') {
-		const canAutoWrite = !(memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge);
-		if (canAutoWrite && memoryScope === 'project') {
-			const useResolvedIdentity = resolvedProjectIdentity
-				&& resolvedProjectIdentity.confidence !== 'uncertain';
-			const immutable = await writeImmutableProjectMemory(vaultRoot, {
-				toolName: 'tracekeeper.propose_memory',
-				projectId: useResolvedIdentity
-					? resolvedProjectIdentity.projectId
-					: rawArgs.project_id,
-				projectHint: useResolvedIdentity
-					? resolvedProjectIdentity.projectHint
-					: rawArgs.project_hint,
-				repoPath: useResolvedIdentity
-					? resolvedProjectIdentity.repoPath
-					: rawArgs.repo_path ?? rawArgs.repo ?? rawArgs.project_path,
-				agentType: projectMemoryAgentType,
-				taskId,
-				operationId: identity.operationId,
-				operationKind: 'propose_memory',
-				memoryKinds: [proposalKind],
-				body: content,
-				relatedWiki: bridgeMetadata.related_wiki,
-				relatedSources: bridgeMetadata.related_sources,
-				createdAt: operationCreatedAt,
-				context,
-			});
-			if (immutable.status !== 'review_required') {
-				await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
-					memory_writes: [immutable.path],
-				});
-				return {
-					ok: true,
-					tool: 'tracekeeper.propose_memory',
-					operation_id: identity.operationId,
-					idempotency_key: identity.idempotencyKey,
-					status: immutable.write_status,
-					path: immutable.path,
-					target_note: immutable.path,
-					audit_path: immutable.audit_path,
-					warnings: [],
-					auto_applied: true,
-					duplicate: immutable.duplicate,
-					memory_rule: 'auto_write',
-					memory_scope: memoryScope,
-					project_id: immutable.project_id,
-					project_hub: immutable.project_hub,
-					project_hint: projectHint || null,
-					agent_type: immutable.agent_type,
-					operation_hash: immutable.operation_hash,
-					related_wiki: bridgeMetadata.related_wiki,
-					related_sources: bridgeMetadata.related_sources,
-					missing_related_sources: bridgeMetadata.missing_related_sources,
-					architecture_status: architectureStatus.architecture_status,
-					missing_graph_bridges: architectureStatus.missing_graph_bridges,
-					missing_wiki_bridge: false,
-					proposal_id: null,
-					proposal_path: null,
-				};
-			}
-			immutableReviewRequired = true;
-		}
-		const autoTarget = canAutoWrite
-			&& memoryScope === 'global'
-			? resolveAutoMemoryTarget(
+		observedAgentType: observed === 'unknown' ? 'custom' : observed,
+		now: () => new Date().toISOString(),
+		buildFilename: (rawFilename, fallbackPrefix) => rawFilename
+			? buildSafeFilename(rawFilename, 'proposal', context)
+			: buildSafeFilename(fallbackPrefix, 'proposal', context),
+		resolveMemoryScope: (proposalKind, targetNote, projectHint, memoryScope) =>
+			resolveMemoryScope(proposalKind, targetNote, projectHint, memoryScope),
+		buildArchitectureStatus: () => buildArchitectureStatus(vaultRoot, context),
+		resolveBridgeMetadata: (memoryScope, projectHint, relatedWiki, relatedSources) =>
+			resolveProjectMemoryBridgeMetadata(
 				vaultRoot,
-				proposalKind,
-				targetNote,
-				projectHint,
-				context,
-				memoryScope
-			)
-			: null;
-		if (autoTarget) {
-			const note = await appendAutoMemoryWriteAsync(vaultRoot, {
-				toolName: 'tracekeeper.propose_memory',
-				proposalKind,
-				targetNote: autoTarget.targetNote,
-				allowedDir: autoTarget.allowedDir,
-				title: title || contentText(context, `记忆更新：${proposalKind}`, `Memory update: ${proposalKind}`),
-				content,
-				operationId: identity.operationId,
-				taskId,
-				context,
-				projectHint,
-				evidence,
-				riskLevel,
 				memoryScope,
-				relatedWiki: bridgeMetadata.related_wiki,
-				relatedSources: bridgeMetadata.related_sources,
-				architectureStatus,
-				missingGraphBridges: architectureStatus.missing_graph_bridges,
-				missingWikiBridge: false,
-				missingRelatedSources: bridgeMetadata.missing_related_sources,
-			});
-			await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
-				memory_writes: [note.path],
-			});
-
-			return {
-				ok: true,
-				tool: 'tracekeeper.propose_memory',
-				operation_id: identity.operationId,
-				idempotency_key: identity.idempotencyKey,
-				status: note.status,
-				path: note.path,
-				target_note: note.path,
-				audit_path: note.audit_path,
-				warnings: note.warnings,
-				auto_applied: true,
-				duplicate: note.duplicate,
-				memory_rule: 'auto_write',
-				memory_scope: memoryScope,
-				project_hint: projectHint || null,
-				related_wiki: bridgeMetadata.related_wiki,
-				related_sources: bridgeMetadata.related_sources,
-				missing_related_sources: bridgeMetadata.missing_related_sources,
-				architecture_status: architectureStatus.architecture_status,
-				missing_graph_bridges: architectureStatus.missing_graph_bridges,
-				missing_wiki_bridge: false,
-				proposal_id: null,
-				proposal_path: null,
-			};
-		}
-	}
-
-	const proposalTargetNote = immutableReviewRequired && memoryScope === 'project'
-		? ''
-		: targetNote;
-	const body = [
-		contentText(context, '## 记忆提案', '## Proposal'),
-		`- status: pending`,
-		`- proposal_kind: ${proposalKind}`,
-		evidence ? `- evidence: ${evidence}` : '',
-		proposalTargetNote ? `- target_note: ${proposalTargetNote}` : '',
-		`- memory_scope: ${memoryScope}`,
-		projectHint ? `- project_hint: ${projectHint}` : '',
-		bridgeMetadata.related_wiki.length ? `- related_wiki: ${JSON.stringify(bridgeMetadata.related_wiki)}` : '',
-		bridgeMetadata.related_sources.length ? `- related_sources: ${JSON.stringify(bridgeMetadata.related_sources)}` : '',
-		riskLevel ? `- risk_level: ${riskLevel}` : '',
-		`- architecture_status: ${architectureStatus.architecture_status}`,
-		`- missing_graph_bridges: ${JSON.stringify(architectureStatus.missing_graph_bridges)}`,
-		bridgeMetadata.missing_wiki_bridge ? '- missing_wiki_bridge: true' : '',
-		bridgeMetadata.missing_related_wiki.length ? `- missing_related_wiki: ${JSON.stringify(bridgeMetadata.missing_related_wiki)}` : '',
-		bridgeMetadata.missing_related_sources.length ? `- missing_related_sources: ${JSON.stringify(bridgeMetadata.missing_related_sources)}` : '',
-		'',
-		contentText(context, '## 写回内容', '## Writeback'),
-		content,
-	].filter(Boolean).join('\n');
-
-	const existing = await findOperationOwnedNoteAsync(
-		vaultRoot,
-		MEMORY_PROPOSAL_DIR,
-		filename,
-		'proposal_operation_id',
-		identity.operationId,
-		context
-	);
-	const note = existing || await buildAndWriteNoteAsync(
-		vaultRoot,
-		'tracekeeper.propose_memory',
-		MEMORY_PROPOSAL_DIR,
-		filename,
-		{
-			tool: 'tracekeeper.propose_memory',
-			type: 'memory_proposal',
-			proposal_id: proposalId,
-			title: title || contentText(context, `记忆提案：${proposalKind}`, `Memory proposal: ${proposalKind}`),
-			proposal_kind: proposalKind,
-			status: 'pending',
-			target_note: proposalTargetNote || null,
-			risk_level: riskLevel || null,
-			project_hint: projectHint || null,
-			memory_scope: memoryScope,
-			related_wiki: bridgeMetadata.related_wiki,
-			related_sources: bridgeMetadata.related_sources,
-			architecture_status: architectureStatus.architecture_status,
-			missing_graph_bridges: architectureStatus.missing_graph_bridges,
-			missing_wiki_bridge: bridgeMetadata.missing_wiki_bridge,
-			missing_related_wiki: bridgeMetadata.missing_related_wiki,
-			missing_related_sources: bridgeMetadata.missing_related_sources,
-			created_at: now,
-			task_id: taskId || null,
-			proposal_operation_id: identity.operationId,
+				projectHint,
+				relatedWiki,
+				relatedSources,
+				context
+			),
+		resolveProjectIdentity: (snapshot) => {
+			const resolved = resolveProjectIdentity({
+				project_hint: snapshot.project_hint,
+				project_id: snapshot.project_id,
+				repo_path: snapshot.repo_path,
+				repo: snapshot.repo,
+				project_path: snapshot.project_path,
+			}, scanVaultForContext(vaultRoot, context).notes);
+			return resolved as ProposeMemoryProjectIdentity;
 		},
-		body,
-		taskId,
-		context,
-		{
-			action: 'memory.proposal.created',
-			target_type: 'memory_proposal',
-			proposal_kind: proposalKind,
-			risk_level: riskLevel || null,
-		},
-		identity.operationId
-	);
-	if (existing) {
-		await ensureOperationOwnedProposalIdentity(
+		assertAllowed: (proposalKind, targetNote, projectHint, memoryScope) =>
+			assertMemoryProposalAllowed(proposalKind, targetNote, projectHint, context, memoryScope),
+		memoryRule: (proposalKind, targetNote, projectHint, memoryScope) =>
+			memoryProposalRuleFor(proposalKind, targetNote, projectHint, context, memoryScope),
+		writeImmutableProjectMemory: (input: ProposeMemoryImmutableWriteInput) =>
+			writeImmutableProjectMemory(vaultRoot, {
+				...input,
+				toolName: 'tracekeeper.propose_memory',
+				context,
+			}),
+		resolveAutoMemoryTarget: (proposalKind, targetNote, projectHint, memoryScope) =>
+			resolveAutoMemoryTarget(vaultRoot, proposalKind, targetNote, projectHint, context, memoryScope),
+		appendAutoMemoryWrite: (input) => appendAutoMemoryWriteAsync(vaultRoot, {
+			...input,
+			toolName: 'tracekeeper.propose_memory',
+			context,
+		}),
+		findOwnedProposalNote: async (filename, operationId) => findOperationOwnedNoteAsync(
 			vaultRoot,
-			note.path,
-			proposalId,
+			MEMORY_PROPOSAL_DIR,
+			filename,
 			'proposal_operation_id',
-			identity.operationId,
+			operationId,
 			context
-		);
-	}
-	const proposalReference: ManagedProposalReference = {
-		proposalId,
-		path: note.path,
-		linkTarget: note.path,
-	};
-	if (taskId) {
-		await updateManagedProposalReferences(
+		),
+		writeProposalNote: (input: ProposeMemoryWriteInput) => buildAndWriteNoteAsync(
 			vaultRoot,
-			buildTaskNotePath(taskId),
-			[proposalReference],
-			context
-		);
-	}
-	const response: {
-		ok: true;
-		tool: string;
-		operation_id: string;
-		idempotency_key: string;
-		status: string;
-		path: string;
-		audit_path: string;
-		warnings: string[];
-		auto_applied: boolean;
-		duplicate: boolean;
-		proposal_id: string;
-		proposal_path: string;
-		proposal_link_target: string;
-		memory_rule: MemoryProposalRule;
-		memory_scope: MemoryScope;
-		project_hint: string | null;
-		related_wiki: string[];
-		related_sources: string[];
-		architecture_status: ArchitectureStatus;
-		missing_graph_bridges: string[];
-		missing_wiki_bridge: boolean;
-		missing_related_sources: string[];
-	} = {
-		ok: true,
-		tool: 'tracekeeper.propose_memory',
-		operation_id: identity.operationId,
-		idempotency_key: identity.idempotencyKey,
-		status: note.status,
-		path: note.path,
-		audit_path: note.audit_path,
-		warnings: note.warnings,
-		auto_applied: false,
-		duplicate: false,
-		proposal_id: proposalId,
-		proposal_path: note.path,
-		proposal_link_target: note.path,
-		memory_rule: memoryRule,
-		memory_scope: memoryScope,
-		project_hint: projectHint || null,
-		related_wiki: bridgeMetadata.related_wiki,
-		related_sources: bridgeMetadata.related_sources,
-		missing_related_sources: bridgeMetadata.missing_related_sources,
-		architecture_status: architectureStatus.architecture_status,
-		missing_graph_bridges: architectureStatus.missing_graph_bridges,
-		missing_wiki_bridge: bridgeMetadata.missing_wiki_bridge,
-	};
-	if (memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge && memoryRule === 'auto_write') {
-		response.memory_rule = 'review_queue';
-	}
-	return response;
+			'tracekeeper.propose_memory',
+			MEMORY_PROPOSAL_DIR,
+			input.filename,
+			input.frontmatter,
+			input.body,
+			input.taskId,
+			context,
+			input.metadata,
+			input.operationId
+		),
+		ensureOwnedProposalIdentity: (proposalPath, proposalId, operationId) =>
+			ensureOperationOwnedProposalIdentity(
+				vaultRoot,
+				proposalPath,
+				proposalId,
+				'proposal_operation_id',
+				operationId,
+				context
+			),
+		updateTaskMemoryWrite: async (taskId, memoryPath) => {
+			await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
+				memory_writes: [memoryPath],
+			});
+		},
+		updateTaskProposalReference: async (taskId, proposal) => {
+			await updateManagedProposalReferences(
+				vaultRoot,
+				buildTaskNotePath(taskId),
+				[proposal],
+				context
+			);
+		},
+		assertSafeText: assertNoSensitiveText,
+		renderText: (zh, en) => contentText(context, zh, en),
+	});
+	return application.execute({ rawArgs: rawArgs as ProposeMemoryRawRequest });
 }
 
 async function handleBuildContextPack(rawArgs: BuildContextPackArgs, context: ToolContext) {
@@ -10926,239 +9168,165 @@ async function readTaskLifecycleStateAsync(
 
 async function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolInvocationContext) {
 	const vaultRoot = configuredVaultRoot(context);
-	const requestSnapshot = buildFinishTaskRequestSnapshot(rawArgs);
-	const requestHash = computePayloadHash(requestSnapshot);
-	const identity = buildToolOperationIdentity('finish-task', rawArgs.idempotency_key, requestSnapshot, context);
-	const journal = operationJournalForVault(vaultRoot);
-	const existing = await journal.loadByIdempotencyKey(identity.idempotencyKey);
-	let operationPayload: FinishTaskOperationPayload;
-	if (existing) {
-		if (existing.operation_id !== identity.operationId) {
-			throw new OperationConflictError(
-				`Idempotency key conflict for "${identity.idempotencyKey}": associated with existing operation "${existing.operation_id}"`
-			);
-		}
-		if (!isFinishTaskOperationPayload(existing.payload)) {
-			throw new OperationConflictError(
-				`Idempotency key conflict for "${identity.idempotencyKey}" with incompatible finish_task request payload`
-			);
-		}
-		const storedRequestHash = typeof existing.payload.requestHash === 'string'
-			? existing.payload.requestHash
-			: '';
-		if (storedRequestHash && storedRequestHash !== requestHash) {
-			throw new OperationConflictError(
-				`Idempotency key conflict for "${identity.idempotencyKey}" with different finish_task request hash`
-			);
-		}
-		operationPayload = existing.payload as unknown as FinishTaskOperationPayload;
-	} else {
-		operationPayload = await buildFinishTaskOperationPayload(
-			rawArgs,
-			context,
-			identity.operationId,
-			requestHash,
-			requestSnapshot
-		);
-	}
-	if (!existing) {
-		const lifecycle = await readTaskLifecycleStateAsync(vaultRoot, operationPayload.taskId, context);
-		if (lifecycle?.status === 'completed') {
-			throw new OperationConflictError(`Task is already completed: ${operationPayload.taskId}`);
-		}
-		if (
-			lifecycle?.status === 'closing' &&
-			lifecycle.finishOperationId &&
-			lifecycle.finishOperationId !== identity.operationId
-		) {
-			throw new OperationConflictError(`Task is closing under another operation: ${operationPayload.taskId}`);
-		}
-		await updateAgentTaskRecordAsync(vaultRoot, operationPayload.taskId, {
-			status: 'closing',
-			finish_operation_id: identity.operationId,
-		}, context);
-	}
-
-	const closeoutGroups = operationPayload.closeoutGroups.filter((group) =>
-		finishTaskShouldWriteCloseoutGroup(group, operationPayload, context)
-	);
-	const projectMemoryPlan = buildFinishTaskProjectMemoryPlan(
-		operationPayload,
-		context
-	);
-	const aggregateProjectMemoryPlan = operationPayload.projectMemoryEntryVersion === 1
-		? projectMemoryPlan
-		: null;
-	const aggregatedKinds = new Set(
-		aggregateProjectMemoryPlan?.groups.map((group) => group.kind) ?? []
-	);
-	const closeoutSteps: Array<{
-		name: string;
-		execute: () => Promise<unknown>;
-		persistResult?: boolean;
-	}> = closeoutGroups
-		.filter((group) => !aggregatedKinds.has(group.kind))
-		.map((group) => ({
-			name: `finish-task:${group.kind}`,
-			execute: () => writeFinishTaskCloseoutArtifacts(
-				operationPayload,
-				group,
-				context,
-				identity.operationId
-			),
-			persistResult: operationPayload.projectMemoryEntryVersion !== 1
-				&& Boolean(
-					projectMemoryPlan?.groups.some(
-						(projectGroup) => projectGroup.kind === group.kind
-					)
-				),
-		}));
-	if (aggregateProjectMemoryPlan) {
-		closeoutSteps.unshift({
-			name: 'finish-task:project-memory',
-			execute: () => writeFinishTaskProjectMemoryArtifacts(
-				operationPayload,
-				context,
-				identity.operationId
-			),
-			persistResult: true,
-		});
-	}
-
-	const runner = new RecoverableOperationRunner({
-		operationId: identity.operationId,
-		idempotencyKey: identity.idempotencyKey,
-		payload: operationPayload,
-		journal,
+	const application = new FinishTaskApplicationService({
+		journal: operationJournalForVault(vaultRoot),
 		failureInjection: context.operationFailureInjection,
-		steps: [
-			{
-				name: 'finish-task:session-note',
-				execute: () => writeFinishTaskSessionNote(operationPayload, context, identity.operationId),
-			},
-			...closeoutSteps,
-			{
-				name: 'finish-task:update-task-record',
-				execute: () => updateFinishTaskRecord(operationPayload, context, identity.operationId),
-			},
-		],
-		finalize: () => executeFinishTaskOperation(
+		requestSnapshot: buildFinishTaskRequestSnapshot,
+		requestIdempotencyKey: (args) => coerceOptionalString(args.idempotency_key),
+		createIdentity: (requestHash, idempotencyKey, requestSnapshot) => buildToolOperationIdentity(
+			'finish-task',
+			idempotencyKey,
+			requestSnapshot as Record<string, unknown>,
+			context
+		),
+		loadExistingPayload: isFinishTaskOperationPayload,
+		storedRequestHash: (payload) =>
+			isRecord(payload) && typeof payload.requestHash === 'string'
+				? payload.requestHash
+				: '',
+		buildPayload: (args, operationId, requestHash, requestSnapshot) =>
+			buildFinishTaskOperationPayload(
+				args,
+				context,
+				operationId,
+				requestHash,
+				requestSnapshot as ReturnType<typeof buildFinishTaskRequestSnapshot>
+			),
+		getTaskId: (payload) => payload.taskId,
+		readLifecycle: (taskId) => readTaskLifecycleStateAsync(vaultRoot, taskId, context),
+		markClosing: async (payload, operationId) => {
+			await updateAgentTaskRecordAsync(vaultRoot, payload.taskId, {
+				status: 'closing',
+				finish_operation_id: operationId,
+			}, context);
+		},
+		buildSteps: (operationPayload, operationId): FinishTaskRunnerStep[] => {
+			const closeoutGroups = operationPayload.closeoutGroups.filter((group) =>
+				finishTaskShouldWriteCloseoutGroup(group, operationPayload, context)
+			);
+			const projectMemoryPlan = buildFinishTaskProjectMemoryPlan(operationPayload, context);
+			const aggregateProjectMemoryPlan = operationPayload.projectMemoryEntryVersion === 1
+				? projectMemoryPlan
+				: null;
+			const aggregatedKinds = new Set(
+				aggregateProjectMemoryPlan?.groups.map((group) => group.kind) ?? []
+			);
+			const closeoutSteps: FinishTaskRunnerStep[] = closeoutGroups
+				.filter((group) => !aggregatedKinds.has(group.kind))
+				.map((group) => ({
+					name: `finish-task:${group.kind}`,
+					execute: () => writeFinishTaskCloseoutArtifacts(
+						operationPayload,
+						group,
+						context,
+						operationId
+					),
+					persistResult: operationPayload.projectMemoryEntryVersion !== 1
+						&& Boolean(
+							projectMemoryPlan?.groups.some(
+								(projectGroup) => projectGroup.kind === group.kind
+							)
+						),
+				}));
+			if (aggregateProjectMemoryPlan) {
+				closeoutSteps.unshift({
+					name: 'finish-task:project-memory',
+					execute: () => writeFinishTaskProjectMemoryArtifacts(
+						operationPayload,
+						context,
+						operationId
+					),
+					persistResult: true,
+				});
+			}
+			return [
+				{
+					name: 'finish-task:session-note',
+					execute: () => writeFinishTaskSessionNote(operationPayload, context, operationId),
+				},
+				...closeoutSteps,
+				{
+					name: 'finish-task:update-task-record',
+					execute: () => updateFinishTaskRecord(operationPayload, context, operationId),
+				},
+			];
+		},
+		finalize: (operationPayload, operationId, idempotencyKey) => executeFinishTaskOperation(
 			operationPayload,
 			context,
-			identity.operationId,
-			identity.idempotencyKey
+			operationId,
+			idempotencyKey
 		),
 	});
-
-	return runner.run();
+	return application.execute(rawArgs);
 }
+
 
 async function handleDistillSession(rawArgs: DistillSessionArgs, context: ToolContext) {
 	const vaultRoot = configuredVaultRoot(context);
-	const taskId = coerceNonEmptyString(rawArgs.task_id, true, 'task_id');
-	const summary = coerceNonEmptyString(rawArgs.summary, true, 'summary');
-	const decisions = coerceStringOrStringArray(rawArgs.decisions, 'decisions');
-	const nextActions = coerceStringOrStringArray(rawArgs.next_actions, 'next_actions');
-	const possiblePreferences = coerceStringOrStringArray(rawArgs.possible_preferences, 'possible_preferences');
-	const outcomes = coerceStringOrStringArray(rawArgs.outcomes, 'outcomes');
-	const projectHint = coerceOptionalString(rawArgs.project_hint) || (await readAgentTaskMetadataAsync(vaultRoot, taskId, context)).projectHint;
-	const filename = buildSafeFilename(rawArgs.filename, 'session', context);
-	const now = new Date().toISOString();
-
-	assertNoSensitiveText([
-		{ label: 'summary', value: summary },
-		{ label: 'decisions', value: decisions.join('\n') },
-		{ label: 'next_actions', value: nextActions.join('\n') },
-		{ label: 'possible_preferences', value: possiblePreferences.join('\n') },
-		{ label: 'outcomes', value: outcomes.join('\n') },
-		{ label: 'project_hint', value: projectHint },
-	]);
-
-	const body = buildSessionNoteBodyWithDistill(context, summary, outcomes, nextActions, decisions, possiblePreferences);
-	const note = await buildAndWriteNoteAsync(
-		vaultRoot,
-		'tracekeeper.distill_session',
-		SESSION_NOTE_DIR,
-		filename,
-		{
-			tool: 'tracekeeper.distill_session',
-			type: 'session_note',
-			title: contentText(context, `任务 ${taskId} 提炼记录`, `Task ${taskId} distill note`),
-			task_id: taskId,
-			project_hint: projectHint || null,
-			related_project: projectHint || null,
-			created_at: now,
+	const application = new DistillSessionApplicationService({
+		resolveProjectHint: async (taskId, explicitProjectHint) => {
+			if (explicitProjectHint) {
+				return explicitProjectHint;
+			}
+			return (await readAgentTaskMetadataAsync(vaultRoot, taskId, context)).projectHint;
 		},
-		body,
-		taskId,
-		context,
-		{
-			target_type: 'session_note',
-			task_stage: 'distill',
-		}
-	);
-
-	const proposals: ManagedProposalReference[] = [];
-	if (decisions.length > 0) {
-		if (isMemoryProposalAllowed('distill_decisions', '', projectHint, context)) {
-			const proposal = await createDistillProposal(
-				vaultRoot,
-				taskId,
-				'distill_decisions',
-				'Decisions',
+		assertSafeText: assertNoSensitiveText,
+		buildFilename: (rawFilename, fallbackPrefix) => buildSafeFilename(rawFilename, fallbackPrefix, context),
+		now: () => new Date().toISOString(),
+		renderText: (zh, en) => contentText(context, zh, en),
+		buildBody: (summary, outcomes, nextActions, decisions, possiblePreferences) =>
+			buildSessionNoteBodyWithDistill(
+				context,
+				summary,
+				outcomes,
+				nextActions,
 				decisions,
-				projectHint,
-				context
-			);
-			proposals.push({
-				proposalId: proposal.proposalId,
-				path: proposal.path,
-				linkTarget: proposal.path,
-			});
-		}
-	}
-	if (possiblePreferences.length > 0) {
-		if (isMemoryProposalAllowed('distill_preferences', '', projectHint, context)) {
+				possiblePreferences
+			),
+		writeSessionNote: (input) => buildAndWriteNoteAsync(
+			vaultRoot,
+			'tracekeeper.distill_session',
+			SESSION_NOTE_DIR,
+			input.filename,
+			input.frontmatter,
+			input.body,
+			input.taskId,
+			context,
+			input.metadata
+		),
+		memoryProposalAllowed: (proposalKind, projectHint) =>
+			isMemoryProposalAllowed(proposalKind, '', projectHint, context),
+		createProposal: async (input) => {
 			const proposal = await createDistillProposal(
 				vaultRoot,
-				taskId,
-				'distill_preferences',
-				'Possible Preferences',
-				possiblePreferences,
-				projectHint,
+				input.taskId,
+				input.proposalKind,
+				input.kindLabel,
+				input.values,
+				input.projectHint,
 				context
 			);
-			proposals.push({
+			return {
 				proposalId: proposal.proposalId,
 				path: proposal.path,
 				linkTarget: proposal.path,
-			});
-		}
-	}
-	const taskPath = await updateAgentTaskRecordAsync(vaultRoot, taskId, {
-		session_note: note.path,
-	}, context, {
-		memory_writes: [note.path],
-		proposal_ids: proposals.map((proposal) => proposal.proposalId),
-		proposal_paths: proposals.map((proposal) => proposal.path),
-		proposal_link_targets: proposals.map((proposal) => proposal.linkTarget),
+			};
+		},
+		updateTask: async (taskId, notePath, proposals) => updateAgentTaskRecordAsync(
+			vaultRoot,
+			taskId,
+			{ session_note: notePath },
+			context,
+			{
+				memory_writes: [notePath],
+				proposal_ids: proposals.map((proposal) => proposal.proposalId),
+				proposal_paths: proposals.map((proposal) => proposal.path),
+				proposal_link_targets: proposals.map((proposal) => proposal.linkTarget),
+			}
+		),
+		updateManagedProposalReferences: (recordPath, proposals) =>
+			updateManagedProposalReferences(vaultRoot, recordPath, proposals, context),
 	});
-	await updateManagedProposalReferences(vaultRoot, note.path, proposals, context);
-	if (taskPath) {
-		await updateManagedProposalReferences(vaultRoot, taskPath, proposals, context);
-	}
-
-	return {
-		ok: true,
-		read_only: false,
-		task_id: taskId,
-		path: note.path,
-		audit_path: note.audit_path,
-		proposals: proposals.map((proposal) => ({
-			proposal_id: proposal.proposalId,
-			path: proposal.path,
-			proposal_link_target: proposal.linkTarget,
-		})),
-		proposal_count: proposals.length,
-	};
+	return application.execute(rawArgs as DistillSessionRawRequest);
 }
