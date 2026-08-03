@@ -239,10 +239,12 @@ export class McpCapabilitiesModal extends Modal {
 			const description = localization ? localizedText(localization.description) : definition.description;
 			const category = localization ? localizedText(localization.category) : ui('功能', 'Capability');
 			const riskLabel = contract ? mcpCapabilityRiskLabel(contract.risk) : ui('功能说明', 'Capability');
+			const subtitle = `${title} · ${riskLabel}`;
 			const tooltip = `${definition.name}\n${description}`;
+			const accessibleLabel = `${definition.name}\n${subtitle}\n${description}`;
 			const row = list.createDiv({ cls: 'tracekeeper-capability-row' });
 			row.tabIndex = 0;
-			row.setAttr('aria-label', tooltip);
+			row.setAttr('aria-label', accessibleLabel);
 			row.setAttr('data-tooltip-position', 'top');
 			row.setAttr('title', tooltip);
 			row.createEl('span', {
@@ -250,10 +252,14 @@ export class McpCapabilitiesModal extends Modal {
 				cls: 'tracekeeper-badge tracekeeper-capability-row__badge',
 			});
 			const body = row.createDiv({ cls: 'tracekeeper-capability-row__body' });
-			const heading = body.createDiv({ cls: 'tracekeeper-capability-row__heading' });
-			heading.createEl('strong', { text: title });
-			heading.createEl('code', { text: definition.name });
-			body.createEl('small', { text: riskLabel });
+			body.createEl('code', {
+				text: definition.name,
+				cls: 'tracekeeper-capability-row__tool',
+			});
+			body.createEl('small', {
+				text: subtitle,
+				cls: 'tracekeeper-capability-row__subtitle',
+			});
 		}
 
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });

@@ -1655,21 +1655,13 @@ button.tracekeeper-review-inbox__row input[type='checkbox'] {
 	min-width: 0;
 }
 
-.tracekeeper-capability-row__heading {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px 10px;
-	align-items: baseline;
-	min-width: 0;
-}
-
-.tracekeeper-capability-row__heading strong,
-.tracekeeper-capability-row__heading code {
+.tracekeeper-capability-row__tool {
+	display: block;
+	color: var(--text-normal);
 	overflow-wrap: anywhere;
 }
 
-.tracekeeper-capability-row__heading code,
-.tracekeeper-capability-row__body small {
+.tracekeeper-capability-row__subtitle {
 	color: var(--text-muted);
 }
 
