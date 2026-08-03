@@ -2,12 +2,15 @@ import type { VaultRepository } from '@tracekeeper/core';
 import { type ProposalTransitionPort } from './tools';
 import { McpJsonRpcHandler } from './handler';
 import { type PairingTicket, type PairingTicketStatus } from './local-oauth';
+import type { OAuthUiLocale } from './oauth-page';
+export type { OAuthUiLocale } from './oauth-page';
 export type { PairingTicket, PairingTicketState, PairingTicketStatus } from './local-oauth';
 export type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed' | 'port_conflict';
 export interface StreamableHttpRuntimeOptions {
     localTrust?: boolean;
     serviceToken: string;
     getSharedBearerToken?: () => string | Promise<string>;
+    getOAuthUiLocale?: () => OAuthUiLocale;
     host?: string;
     port?: number;
     path?: string;

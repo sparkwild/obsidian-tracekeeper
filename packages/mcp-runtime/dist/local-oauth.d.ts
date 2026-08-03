@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { URL } from 'node:url';
+import { type OAuthUiLocale } from './oauth-page';
 export type PairingTicketState = 'pending' | 'awaiting_confirmation' | 'authorized' | 'expired' | 'attempts_exhausted';
 export interface PairingTicket {
     id: string;
@@ -32,6 +33,7 @@ export interface LocalOAuthAuthorizationServerOptions {
     authorizationCodeCapacity: number;
     clientRegistrationTtlMs: number;
     clientRegistrationCapacity: number;
+    getOAuthUiLocale?: () => OAuthUiLocale;
 }
 /**
  * Hosts local OAuth authorization and one-time pairing on the existing loopback listener.
@@ -50,6 +52,7 @@ export declare class LocalOAuthAuthorizationServer {
     private readonly authorizationCodeCapacity;
     private readonly clientRegistrationTtlMs;
     private readonly clientRegistrationCapacity;
+    private readonly getOAuthUiLocale;
     private readonly pairingTickets;
     private readonly registeredClients;
     private readonly authorizationApprovals;
@@ -72,6 +75,8 @@ export declare class LocalOAuthAuthorizationServer {
     private verifyPairingCode;
     private pairingEntryPage;
     private confirmationPage;
+    private errorPage;
+    private resolveOAuthUiLocale;
     private protectedResourceMetadata;
     private authorizationServerMetadata;
     private protectedResourceMetadataPath;

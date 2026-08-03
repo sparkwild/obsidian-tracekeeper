@@ -40,6 +40,13 @@ The complete connection outcome still requires:
    evidence is required, one `start -> recall -> finish` sequence observed in
    that same external Streamable HTTP Session.
 
+The local Tracekeeper authorization page uses the current Tracekeeper plugin
+language: Chinese locales render a complete Chinese page and all other locales
+render English. The browser's language preference cannot override that choice;
+the browser only controls the page's light or dark appearance. The page is a
+local, development-defined surface with no user CSS or theme setting. The final
+redirected callback page remains owned by the Agent client.
+
 The same Agent surface recommends the companion usage guide after authorization
 and offers its independent preview-and-confirm installation flow where
 supported. Guide installation is optional, does not add access permissions,

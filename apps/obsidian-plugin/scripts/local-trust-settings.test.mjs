@@ -87,6 +87,7 @@ try {
 	assert.match(mainSource, /runtimeAccessToken:\s*string/);
 	assert.match(mainSource, /serviceToken:\s*this\.settings\.runtimeAccessToken/);
 	assert.match(mainSource, /getSharedBearerToken:\s*\(\)\s*=>\s*this\.settings\.runtimeAccessToken/);
+	assert.match(mainSource, /getOAuthUiLocale:\s*\(\)\s*=>\s*\(isChineseLanguage\(getLanguage\(\)\)\s*\?\s*'zh-CN'\s*:\s*'en'\)/);
 	assert.match(mainSource, /issueAgentPairingTicket\(clientId:\s*string\)/);
 	assert.match(mainSource, /getAgentPairingTicketStatus\(id:\s*string\)/);
 	assert.match(mainSource, /buildGeneratedClientSetup\(profile,\s*this\.getMcpConnectionUrl\(\)\)/);
@@ -97,7 +98,7 @@ try {
 	assert.doesNotMatch(mainSource, /runtimeCredentials\s*[?:]/);
 	assert.doesNotMatch(mainSource, /regenerateRuntimeToken|rotateRuntimeCredential|setRuntimeCredentialProfile/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 30 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 31 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

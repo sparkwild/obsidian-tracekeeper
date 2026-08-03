@@ -1143,6 +1143,7 @@ export default class TracekeeperPlugin extends Plugin {
 			localTrust: true,
 			serviceToken: this.settings.runtimeAccessToken,
 			getSharedBearerToken: () => this.settings.runtimeAccessToken,
+			getOAuthUiLocale: () => (isChineseLanguage(getLanguage()) ? 'zh-CN' : 'en'),
 			host: DEFAULT_MCP_HOST,
 			port: this.settings.mcpPort,
 			path: DEFAULT_MCP_PATH,

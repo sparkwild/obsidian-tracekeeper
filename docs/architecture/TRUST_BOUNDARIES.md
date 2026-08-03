@@ -56,7 +56,8 @@ the user-facing data statement remains in [PRIVACY.md](../../PRIVACY.md).
 - Authorization codes require PKCE `S256`, an exact registered loopback redirect
   URI, `state`, and the MCP resource indicator. Pairing codes enter only a
   same-origin local form body; all OAuth responses are non-cacheable and the
-  authorization page uses a restrictive content-security policy.
+  authorization page uses a restrictive content-security policy with one
+  hash-bound static stylesheet, no scripts, and no external resources.
 - Pairing codes, client registrations, and authorization codes are bounded,
   short-lived, one-use memory state. Stop, restart, port change, plugin unload,
   and global reset invalidate them. Invalid, expired, replayed, mismatched, and

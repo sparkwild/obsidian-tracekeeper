@@ -84,6 +84,7 @@ class StreamableHttpMcpRuntime {
             ? new local_oauth_1.LocalOAuthAuthorizationServer({
                 serviceTokenHash: this.serviceTokenHash,
                 getSharedBearerToken: options.getSharedBearerToken,
+                getOAuthUiLocale: options.getOAuthUiLocale,
                 getOrigin: () => this.runtimeOrigin(),
                 getResource: () => `${this.runtimeOrigin()}${this.path}`,
                 maxRequestBytes: this.maxRequestBytes,

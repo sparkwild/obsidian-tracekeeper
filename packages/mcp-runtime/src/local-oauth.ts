@@ -2,6 +2,15 @@ import { Buffer } from 'node:buffer';
 import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { URL } from 'node:url';
+import {
+	normalizeOAuthUiLocale,
+	oauthContentSecurityPolicy,
+	renderOAuthConfirmationPage,
+	renderOAuthErrorPage,
+	renderOAuthPairingPage,
+	type OAuthPageErrorKind,
+	type OAuthUiLocale,
+} from './oauth-page';
 
 export type PairingTicketState =
 	| 'pending'
@@ -42,6 +51,7 @@ export interface LocalOAuthAuthorizationServerOptions {
 	authorizationCodeCapacity: number;
 	clientRegistrationTtlMs: number;
 	clientRegistrationCapacity: number;
+	getOAuthUiLocale?: () => OAuthUiLocale;
 }
 
 interface PairingTicketRecord {
@@ -122,7 +132,7 @@ const SECURITY_HEADERS = {
 	Pragma: 'no-cache',
 	'Referrer-Policy': 'no-referrer',
 	'X-Content-Type-Options': 'nosniff',
-	'Content-Security-Policy': "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+	'Content-Security-Policy': oauthContentSecurityPolicy(),
 };
 
 /**
@@ -142,6 +152,7 @@ export class LocalOAuthAuthorizationServer {
 	private readonly authorizationCodeCapacity: number;
 	private readonly clientRegistrationTtlMs: number;
 	private readonly clientRegistrationCapacity: number;
+	private readonly getOAuthUiLocale: () => OAuthUiLocale;
 	private readonly pairingTickets = new Map<string, PairingTicketRecord>();
 	private readonly registeredClients = new Map<string, RegisteredClient>();
 	private readonly authorizationApprovals = new Map<string, AuthorizationApproval>();
@@ -161,6 +172,7 @@ export class LocalOAuthAuthorizationServer {
 		this.authorizationCodeCapacity = options.authorizationCodeCapacity;
 		this.clientRegistrationTtlMs = options.clientRegistrationTtlMs;
 		this.clientRegistrationCapacity = options.clientRegistrationCapacity;
+		this.getOAuthUiLocale = options.getOAuthUiLocale ?? (() => 'zh-CN');
 	}
 
 	issuePairingTicket(expectedClientId: string): PairingTicket {
@@ -369,7 +381,7 @@ export class LocalOAuthAuthorizationServer {
 			this.writeOAuthHtml(
 				response,
 				400,
-				errorPage('授权请求无效', parsed.message),
+				this.errorPage('invalid_request'),
 				request
 			);
 			return;
@@ -379,14 +391,14 @@ export class LocalOAuthAuthorizationServer {
 			this.writeOAuthHtml(
 				response,
 				400,
-				errorPage('客户端注册无效', '请返回 Agent 重新发起连接。'),
+				this.errorPage('invalid_client'),
 				request
 			);
 			return;
 		}
 		const validationError = this.validateAuthorizationRequest(parsed, client);
 		if (validationError) {
-			this.writeOAuthHtml(response, 400, errorPage('授权请求无效', validationError), request);
+			this.writeOAuthHtml(response, 400, this.errorPage('invalid_request'), request);
 			return;
 		}
 		this.writeOAuthHtml(response, 200, this.pairingEntryPage(parsed, client), request);
@@ -435,7 +447,7 @@ export class LocalOAuthAuthorizationServer {
 		}
 		const parsed = this.parseAuthorizationRequest(new URLSearchParams(form));
 		if (parsed instanceof Error) {
-			this.writeOAuthHtml(response, 400, errorPage('授权请求无效', parsed.message), request);
+			this.writeOAuthHtml(response, 400, this.errorPage('invalid_request'), request);
 			return;
 		}
 		const client = this.registeredClients.get(parsed.clientId);
@@ -443,14 +455,14 @@ export class LocalOAuthAuthorizationServer {
 			this.writeOAuthHtml(
 				response,
 				400,
-				errorPage('客户端注册无效', '请返回 Agent 重新发起连接。'),
+				this.errorPage('invalid_client'),
 				request
 			);
 			return;
 		}
 		const validationError = this.validateAuthorizationRequest(parsed, client);
 		if (validationError) {
-			this.writeOAuthHtml(response, 400, errorPage('授权请求无效', validationError), request);
+			this.writeOAuthHtml(response, 400, this.errorPage('invalid_request'), request);
 			return;
 		}
 		const ticket = this.verifyPairingCode(form.pairing_code || '');
@@ -458,7 +470,7 @@ export class LocalOAuthAuthorizationServer {
 			this.writeOAuthHtml(
 				response,
 				400,
-				errorPage('配对码无效', '请回到 Obsidian 重新核对，或生成新的配对码。'),
+				this.errorPage('invalid_pairing_code'),
 				request
 			);
 			return;
@@ -498,7 +510,7 @@ export class LocalOAuthAuthorizationServer {
 			this.writeOAuthHtml(
 				response,
 				400,
-				errorPage('确认已失效', '请返回 Agent 重新发起连接。'),
+				this.errorPage('confirmation_expired'),
 				request
 			);
 			return;
@@ -513,7 +525,7 @@ export class LocalOAuthAuthorizationServer {
 			this.writeOAuthHtml(
 				response,
 				400,
-				errorPage('配对已失效', '请在 Obsidian 中生成新的配对码。'),
+				this.errorPage('pairing_expired'),
 				request
 			);
 			return;
@@ -523,14 +535,14 @@ export class LocalOAuthAuthorizationServer {
 			this.writeOAuthHtml(
 				response,
 				400,
-				errorPage('客户端注册无效', '请返回 Agent 重新发起连接。'),
+				this.errorPage('invalid_client'),
 				request
 			);
 			return;
 		}
 		const validationError = this.validateAuthorizationRequest(approval.request, client);
 		if (validationError) {
-			this.writeOAuthHtml(response, 400, errorPage('授权请求无效', validationError), request);
+			this.writeOAuthHtml(response, 400, this.errorPage('invalid_request'), request);
 			return;
 		}
 		const now = Date.now();
@@ -821,18 +833,11 @@ export class LocalOAuthAuthorizationServer {
 		request: AuthorizationRequest,
 		client: RegisteredClient
 	): string {
-		return htmlPage(
-			'连接 Tracekeeper',
-			`<h1>连接 Tracekeeper</h1>
-<p>OAuth 客户端自报名称：<strong>${escapeHtml(client.clientName)}</strong></p>
-<p>请输入在 Obsidian 为这个 Agent 生成的配对码。客户端名称仅供核对，不代表身份认证。</p>
-<form method="post" action="${escapeHtml(`${this.getOrigin()}${AUTHORIZE_PATH}`)}">
-${authorizationRequestInputs(request)}
-<input type="hidden" name="action" value="verify" />
-<label>配对码 <input name="pairing_code" inputmode="text" autocomplete="one-time-code" required /></label>
-<button type="submit">核对连接</button>
-</form>`
-		);
+		return renderOAuthPairingPage(this.resolveOAuthUiLocale(), {
+			actionUrl: `${this.getOrigin()}${AUTHORIZE_PATH}`,
+			hiddenFields: authorizationRequestInputs(request),
+			clientName: client.clientName,
+		});
 	}
 
 	private confirmationPage(
@@ -840,18 +845,27 @@ ${authorizationRequestInputs(request)}
 		ticket: PairingTicketRecord,
 		client: RegisteredClient
 	): string {
-		return htmlPage(
-			'确认 Tracekeeper 连接',
-			`<h1>确认连接</h1>
-<p>此配对码是在 Obsidian 为 <strong>${escapeHtml(ticket.expectedClientId)}</strong> 生成的。</p>
-<p>发起请求的 OAuth 客户端自报名称为 <strong>${escapeHtml(client.clientName)}</strong>。</p>
-<p>请确认两者符合你的预期。客户端自报名称不是认证凭据。</p>
-<form method="post" action="${escapeHtml(`${this.getOrigin()}${AUTHORIZE_PATH}`)}">
-<input type="hidden" name="action" value="approve" />
-<input type="hidden" name="approval_id" value="${escapeHtml(approvalSecret)}" />
-<button type="submit">确认并连接</button>
-</form>`
-		);
+		return renderOAuthConfirmationPage(this.resolveOAuthUiLocale(), {
+			actionUrl: `${this.getOrigin()}${AUTHORIZE_PATH}`,
+			hiddenFields: [
+				['action', 'approve'],
+				['approval_id', approvalSecret],
+			],
+			expectedClientId: ticket.expectedClientId,
+			clientName: client.clientName,
+		});
+	}
+
+	private errorPage(kind: OAuthPageErrorKind): string {
+		return renderOAuthErrorPage(this.resolveOAuthUiLocale(), kind);
+	}
+
+	private resolveOAuthUiLocale(): OAuthUiLocale {
+		try {
+			return normalizeOAuthUiLocale(this.getOAuthUiLocale());
+		} catch {
+			return 'zh-CN';
+		}
 	}
 
 	private protectedResourceMetadata(): Record<string, unknown> {
@@ -1177,8 +1191,8 @@ function isRecordLike(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function authorizationRequestInputs(request: AuthorizationRequest): string {
-	const values: Array<[string, string]> = [
+function authorizationRequestInputs(request: AuthorizationRequest): Array<[string, string]> {
+	return [
 		['response_type', request.responseType],
 		['client_id', request.clientId],
 		['redirect_uri', request.redirectUri],
@@ -1188,39 +1202,6 @@ function authorizationRequestInputs(request: AuthorizationRequest): string {
 		['resource', request.resource],
 		['scope', request.scope],
 	];
-	return values
-		.map(([name, value]) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}" />`)
-		.join('\n');
-}
-
-function htmlPage(title: string, body: string): string {
-	return `<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>${escapeHtml(title)}</title></head>
-<body><main>${body}</main></body>
-</html>`;
-}
-
-function oauthContentSecurityPolicy(callbackOrigin: string): string {
-	return [
-		"default-src 'none'",
-		"base-uri 'none'",
-		`form-action 'self' ${callbackOrigin}`,
-		"frame-ancestors 'none'",
-	].join('; ');
-}
-
-function errorPage(title: string, message: string): string {
-	return htmlPage(title, `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p>`);
-}
-
-function escapeHtml(value: string): string {
-	return value
-		.replace(/&/gu, '&amp;')
-		.replace(/</gu, '&lt;')
-		.replace(/>/gu, '&gt;')
-		.replace(/"/gu, '&quot;')
-		.replace(/'/gu, '&#39;');
 }
 
 function parseUniqueForm(body: string): Record<string, string> | Error {

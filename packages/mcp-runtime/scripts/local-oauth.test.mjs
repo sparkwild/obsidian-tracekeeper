@@ -159,7 +159,10 @@ async function completeAuthorization({
 	assert.equal(page.status, 200);
 	assert.equal(page.headers.get('referrer-policy'), 'same-origin');
 	const pageHtml = await page.text();
-	assert.match(pageHtml, /OAuth 客户端自报名称/u);
+	assert.match(pageHtml, /<html lang="zh-CN">/u);
+	assert.match(pageHtml, /正在请求连接/u);
+	assert.match(pageHtml, /连接 Tracekeeper/u);
+	assert.doesNotMatch(pageHtml, /OAuth 客户端自报名称/u);
 	assert.match(pageHtml, /Codex &lt;local&gt;/u);
 	assert.equal(pageHtml.includes(ticket.code), false);
 	const verified = await verifyPairing({
@@ -173,8 +176,10 @@ async function completeAuthorization({
 		verified.response.headers.get('content-security-policy'),
 		/form-action 'self' http:\/\/127\.0\.0\.1:48765/u
 	);
-	assert.match(verified.html, new RegExp(`为 <strong>${expectedClientId}</strong> 生成`, 'u'));
-	assert.match(verified.html, /客户端自报名称/u);
+	assert.match(verified.html, /<html lang="zh-CN">/u);
+	assert.match(verified.html, new RegExp(`<dd>${expectedClientId}</dd>`, 'u'));
+	assert.match(verified.html, /正在请求连接的客户端/u);
+	assert.doesNotMatch(verified.html, /OAuth 客户端/u);
 	const approvalId = extractHiddenInput(verified.html, 'approval_id');
 	const awaiting = runtime.getPairingTicketStatus(ticket.id);
 	assert.equal(awaiting?.state, 'awaiting_confirmation');
@@ -238,6 +243,93 @@ function rawRequest(url, options = {}) {
 		request.end();
 	});
 }
+
+function extractInlineStyle(html) {
+	const match = /<style>([\s\S]*?)<\/style>/u.exec(html);
+	assert.ok(match, 'Expected one inline OAuth page stylesheet.');
+	return match[1];
+}
+
+test('OAuth authorization pages follow the Runtime locale and strict visual CSP', async () => {
+	let locale = 'zh-CN';
+	let throwLocale = false;
+	let getterCalls = 0;
+	const { runtime, endpoint, origin } = await startRuntime({
+		getOAuthUiLocale: () => {
+			getterCalls += 1;
+			if (throwLocale) {
+				throw new Error('locale unavailable');
+			}
+			return locale;
+		},
+	});
+	try {
+		const registration = await registerClient(origin);
+		assert.equal(registration.response.status, 201);
+		const ticket = runtime.issuePairingTicket('codex');
+		const params = authorizationParams(registration.body.client_id, endpoint);
+		const page = await fetch(authorizationUrl(origin, params), {
+			headers: { 'accept-language': 'en-US' },
+		});
+		const pageHtml = await page.text();
+		assert.equal(page.status, 200);
+		assert.match(pageHtml, /<html lang="zh-CN">/u);
+		assert.match(pageHtml, /本机安全连接/u);
+		assert.match(pageHtml, /连接 Tracekeeper/u);
+		assert.doesNotMatch(pageHtml, /Secure local connection/u);
+		assert.equal(getterCalls, 1);
+		const pageStyle = extractInlineStyle(pageHtml);
+		const pageStyleHash = createHash('sha256').update(pageStyle, 'utf8').digest('base64');
+		const pageCsp = page.headers.get('content-security-policy') || '';
+		assert.ok(pageCsp.includes(`'sha256-${pageStyleHash}'`));
+		assert.doesNotMatch(pageCsp, /unsafe-inline/u);
+		assert.equal(pageHtml.includes('Codex &lt;local&gt;'), true);
+
+		locale = 'en';
+		const englishTicket = runtime.issuePairingTicket('codex');
+		const englishPage = await fetch(authorizationUrl(origin, params), {
+			headers: { 'accept-language': 'zh-CN' },
+		});
+		const englishHtml = await englishPage.text();
+		assert.equal(englishPage.status, 200);
+		assert.match(englishHtml, /<html lang="en">/u);
+		assert.match(englishHtml, /Secure local connection/u);
+		assert.match(englishHtml, /Connect Tracekeeper/u);
+		assert.doesNotMatch(englishHtml, /本机安全连接/u);
+
+		const verified = await verifyPairing({
+			origin,
+			params,
+			code: englishTicket.code,
+		});
+		assert.equal(verified.response.status, 200);
+		assert.match(verified.html, /<html lang="en">/u);
+		assert.match(verified.html, /Confirm connection/u);
+		assert.match(verified.html, /Agent selected in Obsidian/u);
+		assert.match(verified.html, /Client requesting access/u);
+
+		const invalid = await verifyPairing({
+			origin,
+			params,
+			code: wrongPairingCodeFor(ticket.code),
+		});
+		assert.equal(invalid.response.status, 400);
+		assert.match(invalid.html, /<html lang="en">/u);
+		assert.match(invalid.html, /The pairing code is invalid/u);
+		assert.doesNotMatch(invalid.html, /配对码无效/u);
+
+		locale = 'fr-FR';
+		const invalidLocale = await fetch(authorizationUrl(origin, params));
+		const invalidLocaleHtml = await invalidLocale.text();
+		assert.match(invalidLocaleHtml, /<html lang="zh-CN">/u);
+		throwLocale = true;
+		const thrownLocale = await fetch(authorizationUrl(origin, params));
+		const thrownLocaleHtml = await thrownLocale.text();
+		assert.match(thrownLocaleHtml, /<html lang="zh-CN">/u);
+	} finally {
+		await runtime.stop();
+	}
+});
 
 test('OAuth discovery, pairing, PKCE exchange, and MCP bearer use form a complete local flow', async () => {
 	const context = await startRuntime();
