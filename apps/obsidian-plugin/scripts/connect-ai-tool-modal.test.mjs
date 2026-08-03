@@ -26,10 +26,15 @@ const agentSection = methodBody(
 );
 const clientRow = methodBody(settingsSource, 'renderClientConfigRow', 'createSection');
 const copyActionStart = modalSource.indexOf('private renderConnectionActions');
-const copyActionEnd = modalSource.indexOf('private async beginPairing', copyActionStart + 1);
+const copyActionEnd = modalSource.indexOf('private async beginConnection', copyActionStart + 1);
 assert.ok(copyActionStart >= 0, 'renderConnectionActions must exist');
-assert.ok(copyActionEnd > copyActionStart, 'beginPairing must follow renderConnectionActions');
+assert.ok(copyActionEnd > copyActionStart, 'beginConnection must follow renderConnectionActions');
 const copyAction = modalSource.slice(copyActionStart, copyActionEnd);
+const beginConnectionStart = modalSource.indexOf('private async beginConnection');
+const beginConnectionEnd = modalSource.indexOf('private async copySetupInstruction', beginConnectionStart + 1);
+assert.ok(beginConnectionStart >= 0, 'beginConnection must exist');
+assert.ok(beginConnectionEnd > beginConnectionStart, 'copySetupInstruction must follow beginConnection');
+const beginConnection = modalSource.slice(beginConnectionStart, beginConnectionEnd);
 const onOpenStart = modalSource.indexOf('onOpen(): void');
 const onOpenEnd = modalSource.indexOf('onClose(): void', onOpenStart + 1);
 assert.ok(onOpenStart >= 0, 'onOpen must exist');
@@ -50,14 +55,18 @@ assert.ok(clientRow.includes("ui('管理 Agent', 'Manage Agent')"));
 assert.ok(clientRow.includes('new ConnectAiToolModal('));
 assert.ok(clientRow.includes("'manage'"));
 
-assert.ok(modalSource.includes('`Add ${this.config.displayName}`'));
-assert.ok(modalSource.includes('`Manage ${this.config.displayName}`'));
+assert.ok(modalSource.includes('`连接 ${this.config.displayName}`'));
+assert.ok(modalSource.includes('`管理 ${this.config.displayName}`'));
 assert.ok(modalSource.includes('private config: GeneratedClientConfig'));
 assert.ok(modalSource.includes("private mode: 'add' | 'manage'"));
 assert.ok(modalSource.includes("ui('已正常使用', 'Successfully used')"));
 assert.ok(modalSource.includes('config.supportsLocalOAuth'));
 assert.ok(modalSource.includes('issueAgentPairingTicket(this.config.clientId)'));
 assert.ok(modalSource.includes('getAgentPairingTicketStatus(ticket.id)'));
+assert.ok(modalSource.includes('private async beginConnection'));
+assert.ok(modalSource.includes('await this.plugin.copyToClipboard('));
+assert.ok(modalSource.includes("ui('开始连接', 'Start connection')"));
+assert.ok(modalSource.includes("ui('重新开始连接', 'Start again')"));
 assert.ok(modalSource.includes("case 'pending'"));
 assert.ok(modalSource.includes("case 'awaiting_confirmation'"));
 assert.ok(modalSource.includes("case 'authorized'"));
@@ -65,25 +74,36 @@ assert.ok(modalSource.includes("case 'expired'"));
 assert.ok(modalSource.includes("case 'attempts_exhausted'"));
 assert.ok(modalSource.includes("finishPairingState('redeemed')"));
 assert.ok(modalSource.includes("finishPairingState('retry')"));
-assert.ok(modalSource.includes("ui('等待授权页确认', 'Awaiting authorization confirmation')"));
-assert.ok(modalSource.includes('无需再次输入配对码'));
-assert.ok(modalSource.includes('do not enter the code again'));
-assert.ok(modalSource.includes("this.pairingState === 'ready' && this.pairingTicket"));
+assert.ok(modalSource.includes("ui('等待本机确认', 'Waiting for local confirmation')"));
+assert.ok(modalSource.includes('配对码只在本机授权页手工输入'));
+assert.ok(modalSource.includes('The pairing code is typed only in the local authorization page'));
 assert.equal(modalSource.match(/this\.pairingTicket\.code/g)?.length, 1);
 assert.ok(modalSource.includes('this.pairingTicket.code'));
-assert.ok(modalSource.includes('请勿复制给 AI、终端或聊天'));
-assert.ok(modalSource.includes('Do not copy it to an AI, terminal, or chat'));
+assert.ok(modalSource.includes('配对码只在本机授权页手工输入，不会进入命令、剪贴板、日志或客户端配置'));
+assert.ok(modalSource.includes('The pairing code is typed only in the local authorization page'));
 assert.equal(onOpenBody.includes('beginPairing'), false);
-assert.ok(copyAction.includes("this.pairingState === null"));
-assert.ok(modalSource.includes("ui('待生成配对码', 'Pairing code not generated')"));
+assert.ok(copyAction.includes("presentation.primaryAction"));
+assert.ok(modalSource.includes("ui('连接命令已复制', 'Connection command copied')"));
 assert.ok(modalSource.includes('renderClientSkillPrompt'));
-assert.ok(modalSource.includes("ui('复制终端 / AI 指令', 'Copy terminal / AI instruction')"));
-assert.ok(modalSource.includes("ui('复制本机端点', 'Copy local endpoint')"));
+assert.ok(modalSource.includes("ui('再次复制连接命令', 'Copy connection command again')"));
+assert.ok(modalSource.includes("ui('复制本机连接地址', 'Copy local connection address')"));
 assert.ok(copyAction.includes('this.config.setupInstruction'));
-assert.ok(copyAction.includes('copyToClipboard('));
+assert.ok(beginConnection.includes('this.config.setupInstruction'));
+assert.ok(beginConnection.includes('copyToClipboard('));
+assert.ok(beginConnection.includes('this.clipboardState = \'failed\''));
+assert.equal(beginConnection.includes('pairingTicket.code'), false);
+assert.equal(beginConnection.includes('pairingTicket.id'), false);
 assert.equal(copyAction.includes('pairingTicket.code'), false);
 assert.equal(copyAction.includes('pairingTicket.id'), false);
 assert.equal(copyAction.includes('runtimeAccessToken'), false);
+assert.ok(modalSource.includes("createEl('details'"));
+assert.ok(modalSource.includes("ui('技术详情', 'Technical details')"));
+assert.ok(modalSource.includes("presentation: this.mode === 'manage' ? 'compact' : 'optional'"));
+assert.ok(modalSource.includes("'aria-live': 'polite'"));
+assert.ok(modalSource.includes("'aria-atomic': 'true'"));
+assert.ok(modalSource.includes('private updatePairingMetadata'));
+assert.ok(modalSource.includes('this.lastRenderedState = presentation.state'));
+assert.ok(modalSource.includes('heading.tabIndex = -1'));
 
 for (const forbidden of [
 	'ClientConfigCopyModal',
@@ -103,6 +123,12 @@ for (const forbidden of [
 	"createEl('option'",
 	'selectedClientId',
 	'private configs:',
+	'复制终端 / AI 指令',
+	'Copy terminal / AI instruction',
+	'生成新配对码',
+	'Generate new pairing code',
+	'待生成配对码',
+	'Pairing code not generated',
 ]) {
 	assert.equal(modalSource.includes(forbidden), false, `${forbidden} must stay out of the normal modal`);
 }
@@ -112,5 +138,7 @@ assert.match(stylesSource, /\.tracekeeper-settings-add-agent\s*\{/);
 assert.doesNotMatch(stylesSource, /\.tracekeeper-connect-ai-tool-modal__select\s*\{/);
 assert.doesNotMatch(stylesSource, /\.tracekeeper-connect-ai-tool-modal__selector\s*\{/);
 assert.match(stylesSource, /max-width:\s*min\(720px,\s*calc\(100vw - 32px\)\)/);
+assert.match(stylesSource, /\.tracekeeper-connect-ai-tool-modal__technical-details\s*\{/);
+assert.match(stylesSource, /@media \(max-width: 520px\)/);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 69 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 78 })}\n`);

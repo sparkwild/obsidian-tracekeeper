@@ -370,6 +370,14 @@
 	border-top: 1px solid var(--background-modifier-border);
 }
 
+.tracekeeper-settings-client-skill__title {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	flex: 0 1 100%;
+}
+
 .tracekeeper-settings-client-skill__body {
 	flex: 1 1 240px;
 	display: grid;
@@ -398,6 +406,20 @@
 .tracekeeper-settings-client-skill__detail {
 	font-size: 12px;
 	overflow-wrap: anywhere;
+}
+
+.tracekeeper-settings-client-skill__benefit {
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-settings-client-skill__technical {
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+.tracekeeper-settings-client-skill__technical summary {
+	cursor: pointer;
 }
 
 .tracekeeper-settings-client-skill > button {
@@ -445,12 +467,100 @@
 
 .tracekeeper-connect-ai-tool-modal__actions {
 	flex-wrap: wrap;
+	margin-top: 14px;
+}
+
+.tracekeeper-connect-ai-tool-modal__actions button {
+	max-width: 100%;
+	white-space: normal;
+}
+
+.tracekeeper-connect-ai-tool-modal__steps {
+	margin: 10px 0 14px;
+	padding-inline-start: 22px;
+}
+
+.tracekeeper-connect-ai-tool-modal__steps li + li {
+	margin-top: 6px;
+}
+
+.tracekeeper-connect-ai-tool-modal__pairing {
+	display: grid;
+	gap: 6px;
+	margin-top: 12px;
+	padding: 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.tracekeeper-connect-ai-tool-modal__pairing-code {
+	font-size: 1.2em;
+	letter-spacing: 0.12em;
+	user-select: text;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-connect-ai-tool-modal__expiry {
+	margin: 0;
+}
+
+.tracekeeper-connect-ai-tool-modal__technical-details {
+	margin-top: 14px;
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.tracekeeper-connect-ai-tool-modal__technical-details summary {
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.tracekeeper-connect-ai-tool-modal__manual-endpoint {
+	margin-top: 8px;
+}
+
+.tracekeeper-connect-ai-tool-modal__loading {
+	min-height: 32px;
+}
+
+.tracekeeper-connect-ai-tool-modal__error-copy {
+	color: var(--text-error);
 }
 
 .tracekeeper-settings-root .setting-item-control select {
 	width: 140px;
 	min-width: 140px;
 	max-width: 140px;
+}
+
+@media (max-width: 520px) {
+	.tracekeeper-connect-ai-tool-modal {
+		max-width: calc(100vw - 20px);
+	}
+
+	.tracekeeper-connect-ai-tool-modal .tracekeeper-detail-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.tracekeeper-connect-ai-tool-modal__actions {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.tracekeeper-connect-ai-tool-modal__actions button {
+		width: 100%;
+	}
+
+	.tracekeeper-settings-client-skill {
+		flex-direction: column;
+	}
+
+	.tracekeeper-settings-client-skill > button {
+		width: 100%;
+	}
 }
 
 .tracekeeper-runtime-log-toolbar {

@@ -26,10 +26,12 @@ The complete connection outcome still requires:
 
 1. A ready Tracekeeper Vault structure and running local MCP Runtime.
 2. One Agent selected from the outer **Add Agent** menu.
-3. For a client with verified local OAuth support, an official client command
-   containing only the public loopback endpoint, followed by a short-lived
-   pairing code entered by the user on Tracekeeper's local authorization page.
-   Other clients receive an honest native-settings or manual fallback.
+3. For a client with verified local OAuth support, the modal's **Start
+   connection** action issues a short-lived pairing code and copies only the
+   official client command containing the public loopback endpoint. The user
+   runs that command and types the code by hand on Tracekeeper's local
+   authorization page. Other clients receive an honest native-settings or
+   manual fallback.
 4. Client-native credential storage and a reload or reconnect when required.
 5. One external Streamable HTTP Session that successfully initializes with the
    installation-level service Bearer and completes at least one Tracekeeper
@@ -38,9 +40,15 @@ The complete connection outcome still requires:
    evidence is required, one `start -> recall -> finish` sequence observed in
    that same external Streamable HTTP Session.
 
-The same Agent surface recommends the companion Skill and offers its independent
-preview-and-confirm installation flow where supported. Skill installation is
-not connection authentication and does not complete the protocol-use gate.
+The same Agent surface recommends the companion usage guide after authorization
+and offers its independent preview-and-confirm installation flow where
+supported. Guide installation is optional, does not add access permissions,
+is not connection authentication, and does not complete the protocol-use gate.
+
+The add modal shows one primary next action at a time. Raw commands, OAuth/PKCE
+terms, versions, and hashes remain in collapsed technical details. Manage mode
+stays compact until the user chooses to reconnect; connection completion and
+guide adoption remain separate evidence.
 
 The Runtime exposes one fixed capability set to every successfully authenticated
 request. Client configuration does not select a Recall-only or workflow profile,

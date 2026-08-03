@@ -22,26 +22,26 @@ export class SkillInstallPreviewModal extends Modal {
 		try {
 			this.plan = this.plugin.prepareSkillInstall(this.clientId, this.action);
 		} catch (error) {
-			contentEl.createEl('h2', { text: ui('无法预览 Skill', 'Cannot preview Skill change') });
+			contentEl.createEl('h2', { text: ui('无法预览使用指南', 'Cannot preview guide change') });
 			contentEl.createEl('p', { text: error instanceof Error ? error.message : String(error) });
 			return;
 		}
 
 		contentEl.createEl('h2', {
 			text: this.action === 'install'
-				? ui('确认安装 Skill', 'Confirm Skill install')
+				? ui('确认安装使用指南', 'Confirm guide install')
 				: this.action === 'update'
-					? ui('确认更新 Skill', 'Confirm Skill update')
-					: ui('确认迁移 Skill', 'Confirm Skill migration'),
+					? ui('确认更新使用指南', 'Confirm guide update')
+					: ui('确认迁移使用指南', 'Confirm guide migration'),
 		});
 		contentEl.createEl('p', {
 			text: ui(
 				this.action === 'migrate'
-					? '只会将下列 Tracekeeper bundle 文件复制到官方目录；旧目录不会删除或改写。确认时会重新检查目标目录 hash。'
-					: '只会写入下列 Tracekeeper bundle 文件；其他文件保持不变。更新前会备份已有受管文件，确认时会重新检查原始 hash。',
+					? '只会将下列 Tracekeeper 使用指南文件复制到官方目录；旧目录不会删除或改写。确认时会重新检查目标目录。'
+					: '只会写入下列 Tracekeeper 使用指南文件；其他文件保持不变。更新前会备份已有受管文件，确认时会重新检查原始文件。',
 				this.action === 'migrate'
-					? 'Only the listed Tracekeeper bundle files are copied to the official directory. The legacy directory is never removed or changed. Target hashes are rechecked at confirmation.'
-					: 'Only the listed Tracekeeper bundle files will be written. Other files stay unchanged. Existing managed files are backed up, and original hashes are rechecked at confirmation.'
+					? 'Only the listed Tracekeeper guide files are copied to the official directory. The legacy directory is never removed or changed. The target is rechecked at confirmation.'
+					: 'Only the listed Tracekeeper guide files will be written. Other files stay unchanged. Existing managed files are backed up, and original files are rechecked at confirmation.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
@@ -62,7 +62,7 @@ export class SkillInstallPreviewModal extends Modal {
 		const actions = contentEl.createDiv({ cls: 'tracekeeper-action-row' });
 		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
 		cancel.addEventListener('click', () => this.close());
-		const confirm = actions.createEl('button', { text: ui('确认写入', 'Confirm write'), cls: 'mod-cta' });
+		const confirm = actions.createEl('button', { text: ui('确认保存', 'Confirm save'), cls: 'mod-cta' });
 		confirm.addEventListener('click', () => {
 			void (async () => {
 				const plan = this.plan;
@@ -75,7 +75,7 @@ export class SkillInstallPreviewModal extends Modal {
 					this.close();
 				} catch (error) {
 					console.error('tracekeeper failed to confirm Skill change', error);
-					new Notice(ui('Skill 未修改，请重新预览。', 'Skill was not changed. Preview again.'));
+					new Notice(ui('使用指南未修改，请重新预览。', 'The guide was not changed. Preview again.'));
 					cancel.disabled = false;
 				}
 			})();

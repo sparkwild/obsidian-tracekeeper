@@ -2190,7 +2190,7 @@ export default class TracekeeperPlugin extends Plugin {
 	async copyTracekeeperSkillFallback(): Promise<void> {
 		await this.copyToClipboard(
 			TRACEKEEPER_SKILL_BUNDLE.flattened,
-			ui('Tracekeeper 单文件兼容 Skill 已复制。', 'Tracekeeper flattened compatibility Skill copied.')
+			ui('Tracekeeper 单文件使用指南已复制。', 'Tracekeeper flattened guide copied.')
 		);
 		await this.markOnboardingSkillCopied();
 	}
@@ -2535,8 +2535,8 @@ export default class TracekeeperPlugin extends Plugin {
 				console.error('tracekeeper failed to audit client Skill failure', auditError);
 			}
 			new Notice(error instanceof ClientSkillPlanConflictError
-				? ui('Skill 在预览后已变化，或包含用户修改。请重新检测和预览。', 'Skill changed after preview or contains user modifications. Detect and preview again.')
-				: ui('Skill 写入失败。', 'Failed to write Skill.'));
+				? ui('使用指南在预览后已变化，或包含用户修改。请重新检测和预览。', 'The guide changed after preview or contains local modifications. Detect and preview again.')
+				: ui('使用指南保存失败。', 'Failed to save the guide.'));
 			throw error;
 		}
 
@@ -2572,15 +2572,15 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 
 		const actionLabel = action === 'install'
-			? ui('Skill bundle 已安装。', 'Skill bundle installed.')
+			? ui('使用指南已安装。', 'Guide installed.')
 			: action === 'update'
-				? ui('Skill bundle 已更新。', 'Skill bundle updated.')
-				: ui('Skill 已复制到官方目录，旧目录保持不变。', 'Skill copied to the official directory. The legacy directory was kept unchanged.');
+				? ui('使用指南已更新。', 'Guide updated.')
+				: ui('使用指南已复制到官方目录，旧目录保持不变。', 'Guide copied to the official directory. The legacy directory was kept unchanged.');
 		if (!receiptPersisted || !auditRecorded) {
 			new Notice(
 				`${actionLabel} ${ui(
-					'本地收据或审计记录未完整保存；Skill 文件已经写入，请重新检测状态，不要重复安装。',
-					'The local receipt or audit record was not fully saved. Skill files were written; detect the current state instead of installing again.'
+					'本地收据或审计记录未完整保存；使用指南文件已经写入，请重新检测状态，不要重复安装。',
+					'The local receipt or audit record was not fully saved. Guide files were written; detect the current state instead of installing again.'
 				)}`
 			);
 		} else {

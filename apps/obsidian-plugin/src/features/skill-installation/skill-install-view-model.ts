@@ -49,10 +49,10 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 	switch (state.state) {
 		case 'installed':
 			return {
-				label: localize('Skill 已安装', 'Skill installed'),
+				label: localize('使用指南已安装', 'Guide installed'),
 				detail: localize(
-					'Skill 文件已验证。是否被 Agent 实际采用，仍需观察同一会话中的 start → recall → finish；若客户端未加载再重启。',
-					'Skill files are verified. Actual Agent adoption still requires an observed start → recall → finish sequence in one session; restart only if the client did not load it.'
+					'文件已验证。是否被 Agent 实际采用仍需后续使用观察；若客户端未加载，再重启客户端。',
+					'Files are verified. Actual Agent adoption still requires later use observation; restart the client only if it did not load the guide.'
 				),
 				...versions,
 				tone: 'success',
@@ -61,31 +61,31 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			};
 		case 'not_installed':
 			return {
-				label: localize('Skill 未安装', 'Skill not installed'),
+				label: localize('使用指南未安装', 'Guide not installed'),
 				detail: localize(
-					'安装会把记忆召回和任务收尾指导放到客户端约定位置，但不证明 Agent 已加载或采用；安装后仍需真实使用验证。',
-					'Installation places memory-recall and task-closeout guidance in the client location, but does not prove that the Agent loaded or adopted it; real-use verification is still required.'
+					'安装会把记忆协作使用指南放到客户端约定位置，但不会增加访问权限；安装后仍需通过实际使用观察效果。',
+					'Installation places the memory collaboration guide in the client location, but does not add access permissions; observe the result during actual use.'
 				),
 				...versions,
 				tone: 'warning',
 				action: 'install',
-				actionLabel: localize('安装 Skill', 'Install Skill'),
+				actionLabel: localize('安装使用指南', 'Install guide'),
 			};
 		case 'update_available':
 			return {
-				label: localize('Skill 可更新', 'Skill update available'),
+				label: localize('使用指南可更新', 'Guide update available'),
 				detail: localize(
-					'更新会替换为最新的记忆召回和任务收尾指导；是否被 Agent 采用仍需真实使用验证。',
-					'Updating installs the latest memory-recall and task-closeout guidance; actual Agent adoption still requires real-use verification.'
+					'更新会替换为最新的记忆协作使用指南；是否被 Agent 采用仍需通过实际使用观察。',
+					'Updating installs the latest memory collaboration guide; observe actual use to determine whether the Agent adopts it.'
 				),
 				...versions,
 				tone: 'warning',
 				action: 'update',
-				actionLabel: localize('更新 Skill', 'Update Skill'),
+				actionLabel: localize('更新使用指南', 'Update guide'),
 			};
 		case 'legacy_install':
 			return {
-				label: localize('Skill 位置待迁移', 'Skill location needs migration'),
+				label: localize('使用指南位置待迁移', 'Guide location needs migration'),
 				detail: localize(
 					'迁移后可从官方位置继续接收 Skill 更新；不会删除旧目录。',
 					'Migrating enables future Skill updates from the official location without deleting the legacy directory.'
@@ -93,11 +93,11 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 				...versions,
 				tone: 'warning',
 				action: 'migrate',
-				actionLabel: localize('迁移 Skill', 'Migrate Skill'),
+				actionLabel: localize('迁移使用指南', 'Migrate guide'),
 			};
 		case 'modified':
 			return {
-				label: localize('Skill 已被修改', 'Skill has local changes'),
+				label: localize('使用指南已被修改', 'Guide has local changes'),
 				detail: localize(
 					'保留用户修改，Tracekeeper 不会自动覆盖。',
 					'Local changes are preserved and Tracekeeper will not overwrite them.'
@@ -109,7 +109,7 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			};
 		case 'newer_than_bundled':
 			return {
-				label: localize('Skill 版本较新', 'Skill is newer than bundled'),
+				label: localize('使用指南版本较新', 'Guide is newer than bundled'),
 				detail: localize(
 					'当前版本高于插件内置版本，Tracekeeper 不会降级。',
 					'The current version is newer than the bundled version and will not be downgraded.'
@@ -121,7 +121,7 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			};
 		case 'location_conflict':
 			return {
-				label: localize('Skill 目录冲突', 'Skill directory conflict'),
+				label: localize('使用指南目录冲突', 'Guide directory conflict'),
 				detail: localize(
 					'官方目录和旧目录同时存在，请先手动保留需要的版本并清理重复目录。',
 					'Official and legacy directories both exist. Keep the desired version and resolve the duplicate locations manually.'
@@ -134,15 +134,15 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 		case 'copy_only':
 		case 'unavailable':
 			return {
-				label: localize('Skill 需手动设置', 'Skill requires manual setup'),
+				label: localize('使用指南需手动设置', 'Guide requires manual setup'),
 				detail: localize(
-					'请按客户端方式手动保存 Skill；保存只提供工作流指导，不证明 Agent 已加载或采用，仍需真实使用验证。',
-					'Save the Skill manually using the client workflow. Saving only provides workflow guidance and does not prove Agent loading or adoption; real-use verification is still required.'
+					'请按客户端方式手动保存使用指南；保存只提供工作流指导，不会增加访问权限，仍需通过实际使用观察效果。',
+					'Save the guide using the client workflow. It provides workflow guidance without adding access permissions; observe actual use to confirm the result.'
 				),
 				...versions,
 				tone: 'warning',
 				action: 'copy',
-				actionLabel: localize('复制 Skill', 'Copy Skill'),
+				actionLabel: localize('复制使用指南', 'Copy guide'),
 			};
 	}
 }

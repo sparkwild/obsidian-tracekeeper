@@ -10,6 +10,7 @@ export interface ClientSkillPromptOptions {
 	plugin: TracekeeperPlugin;
 	container: HTMLElement;
 	config: GeneratedClientConfig;
+	presentation?: 'compact' | 'optional';
 	onChanged?: () => void;
 }
 
@@ -18,17 +19,49 @@ export function renderClientSkillPrompt({
 	plugin,
 	container,
 	config,
+	presentation = 'compact',
 	onChanged,
 }: ClientSkillPromptOptions): void {
 	const state = plugin.getSkillInstallState(config.clientId);
 	const prompt = buildSkillInstallPrompt(state, ui);
-	const skill = container.createDiv({ cls: 'tracekeeper-settings-client-skill' });
+	const skill = container.createDiv({
+		cls: `tracekeeper-settings-client-skill tracekeeper-settings-client-skill--${presentation}`,
+	});
+	const title = skill.createDiv({ cls: 'tracekeeper-settings-client-skill__title' });
+	title.createEl('strong', {
+		text: ui(`增强 ${config.displayName} 的记忆协作`, `Enhance ${config.displayName} with memory collaboration`),
+	});
+	if (presentation === 'optional') {
+		title.createEl('span', {
+			text: ui('推荐，可稍后', 'Recommended, optional for now'),
+			cls: 'tracekeeper-badge tracekeeper-badge--muted',
+		});
+	}
 	skill.createEl('span', {
 		text: prompt.label,
 		cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}`,
 	});
 	const body = skill.createDiv({ cls: 'tracekeeper-settings-client-skill__body' });
-	const versions = body.createDiv({ cls: 'tracekeeper-settings-client-skill__versions' });
+	if (presentation === 'optional') {
+		body.createEl('div', {
+			text: ui(
+				'使用指南帮助 Agent 在合适任务中查找相关记忆并正确收尾，不会增加访问权限。',
+				'The guide helps the Agent find relevant memories and close tasks correctly without adding access permissions.'
+			),
+			cls: 'tracekeeper-settings-client-skill__benefit',
+		});
+	}
+	body.createEl('div', {
+		text: prompt.detail,
+		cls: 'tracekeeper-settings-client-skill__detail',
+	});
+	const technical = body.createEl('details', {
+		cls: 'tracekeeper-settings-client-skill__technical',
+	});
+	technical.createEl('summary', {
+		text: ui('技术信息', 'Technical information'),
+	});
+	const versions = technical.createDiv({ cls: 'tracekeeper-settings-client-skill__versions' });
 	const currentVersion = versions.createEl('span');
 	currentVersion.createEl('span', {
 		text: ui('当前版本', 'Current version'),
@@ -41,10 +74,6 @@ export function renderClientSkillPrompt({
 		cls: 'tracekeeper-settings-client-skill__version-label',
 	});
 	bundledVersion.createEl('strong', { text: prompt.bundledVersion });
-	body.createEl('div', {
-		text: prompt.detail,
-		cls: 'tracekeeper-settings-client-skill__detail',
-	});
 	if (!prompt.action) {
 		return;
 	}

@@ -1,6 +1,6 @@
 import { getLanguage } from 'obsidian';
 
-export const PLUGIN_DISPLAY_NAME_ZH = '知识库';
+export const PLUGIN_DISPLAY_NAME_ZH = 'Tracekeeper';
 
 export const PLUGIN_DISPLAY_NAME_EN = 'Tracekeeper';
 
