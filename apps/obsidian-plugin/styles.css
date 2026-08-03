@@ -431,12 +431,6 @@
 	max-width: min(720px, calc(100vw - 32px));
 }
 
-.tracekeeper-connect-ai-tool-modal__preview-label {
-	color: var(--text-muted);
-	font-size: 12px;
-	font-weight: 600;
-}
-
 .tracekeeper-settings-add-agent {
 	white-space: nowrap;
 }
@@ -453,16 +447,8 @@
 	gap: 8px;
 }
 
-.tracekeeper-connect-ai-tool-modal__header h3,
-.tracekeeper-connect-ai-tool-modal__preview-label {
+.tracekeeper-connect-ai-tool-modal__header h3 {
 	margin: 0;
-}
-
-.tracekeeper-connect-ai-tool-modal__compatibility {
-	padding: 8px 10px;
-	border-inline-start: 3px solid var(--tracekeeper-text-warning, var(--text-warning));
-	background: var(--background-secondary);
-	color: var(--text-muted);
 }
 
 .tracekeeper-connect-ai-tool-modal__actions {
@@ -475,60 +461,6 @@
 	white-space: normal;
 }
 
-.tracekeeper-connect-ai-tool-modal__steps {
-	margin: 10px 0 14px;
-	padding-inline-start: 22px;
-}
-
-.tracekeeper-connect-ai-tool-modal__steps li + li {
-	margin-top: 6px;
-}
-
-.tracekeeper-connect-ai-tool-modal__pairing {
-	display: grid;
-	gap: 6px;
-	margin-top: 12px;
-	padding: 12px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 8px;
-	background: var(--background-secondary);
-}
-
-.tracekeeper-connect-ai-tool-modal__pairing-code {
-	font-size: 1.2em;
-	letter-spacing: 0.12em;
-	user-select: text;
-	overflow-wrap: anywhere;
-}
-
-.tracekeeper-connect-ai-tool-modal__expiry {
-	margin: 0;
-}
-
-.tracekeeper-connect-ai-tool-modal__technical-details {
-	margin-top: 14px;
-	padding-top: 10px;
-	border-top: 1px solid var(--background-modifier-border);
-}
-
-.tracekeeper-connect-ai-tool-modal__technical-details summary {
-	color: var(--text-muted);
-	cursor: pointer;
-	font-size: 12px;
-	font-weight: 600;
-}
-
-.tracekeeper-connect-ai-tool-modal__manual-endpoint {
-	margin-top: 8px;
-}
-
-.tracekeeper-connect-ai-tool-modal__loading {
-	min-height: 32px;
-}
-
-.tracekeeper-connect-ai-tool-modal__error-copy {
-	color: var(--text-error);
-}
 
 .tracekeeper-settings-root .setting-item-control select {
 	width: 140px;

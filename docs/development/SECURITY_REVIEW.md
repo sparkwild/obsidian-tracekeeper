@@ -4,8 +4,9 @@ Changes require focused security review when they affect:
 
 - Vault root resolution, path normalization, symlink handling, or protected
   configuration paths;
-- service credential generation, storage, reset, Bearer validation, OAuth
-  discovery, dynamic registration, pairing, PKCE, redirect/resource validation,
+- per-Agent credential generation, digest storage, replacement, revocation,
+  Bearer validation, OAuth discovery, dynamic registration, approval, PKCE,
+  redirect/resource validation,
   query credential rejection, Host or Origin validation, bind address,
   sessions, `clientInfo` observation, request limits, or protocol negotiation;
 - any new read, write, external-network, or subprocess target;
@@ -32,13 +33,12 @@ The review must identify:
    protocol, and content inputs involved;
 2. all Vault and Vault-outside targets;
 3. the route and validation order: `Host`/`Origin`, public OAuth route
-   classification, valid preflight handling, service Bearer for MCP resource
+   classification, valid preflight handling, integration-bound Bearer for MCP resource
    requests, protocol and Session validation, then tool capability and input
    validation;
 4. failure, retry, conflict, and recovery semantics;
-5. audit fields and proof that pairing codes and hashes, authorization codes,
-   token responses, the service credential and hash, and the `Authorization`
-   Header are redacted;
+5. audit fields and proof that tokens, digests, authorization codes, PKCE
+  verifiers, pending handles, and the `Authorization` Header are redacted;
 6. focused tests for rejection paths and zero unintended side effects.
 
 For approved writeback, the evidence must additionally prove:

@@ -16,9 +16,26 @@ const {
 } = require('@tracekeeper/mcp-runtime');
 const { NodeFsVaultRepository } = require('@tracekeeper/core');
 
-const SERVICE_TOKEN = 'tracekeeper-smoke-service-token-0123456789abcdef';
-const WRONG_SERVICE_TOKEN = 'tracekeeper-smoke-wrong-token-abcdef0123456789';
-const SERVICE_TOKEN_HASH = createHash('sha256').update(SERVICE_TOKEN, 'utf8').digest('hex');
+const STANDALONE_BEARER = 'A'.repeat(43);
+const WRONG_BEARER = 'B'.repeat(43);
+const STANDALONE_BEARER_DIGEST = createHash('sha256').update(STANDALONE_BEARER, 'utf8').digest('hex');
+
+function makeCredentialVerifier(bearer, integrationId = 'smoke-integration', credentialId = 'smoke-credential') {
+	const digest = createHash('sha256').update(bearer, 'utf8').digest('hex');
+	return {
+		verifyBearer: async (token) => {
+			const presented = createHash('sha256').update(token, 'utf8').digest('hex');
+			if (presented !== digest) return null;
+			return {
+				integrationId,
+				credentialId,
+				authMode: 'bearer',
+				principalId: 'local-user',
+				capabilities: LOCAL_TRUST_CAPABILITIES,
+			};
+		},
+	};
+}
 
 function writeNote(vaultRoot, relativePath, content) {
 	const target = path.join(vaultRoot, relativePath);
@@ -189,17 +206,17 @@ function rawPost(endpoint, { chunks, headers = {}, contentLength, leaveOpen = fa
 }
 
 function runStandaloneProcess({
-	serviceToken,
+	bearer,
 	args,
 	stopAfterReady = false,
 	timeoutMs = 5_000,
 }) {
 	return new Promise((resolve, reject) => {
 		const env = { ...process.env };
-		if (serviceToken === undefined) {
-			delete env.TRACEKEEPER_MCP_TOKEN;
+		if (bearer === undefined) {
+			delete env.TRACEKEEPER_STANDALONE_BEARER;
 		} else {
-			env.TRACEKEEPER_MCP_TOKEN = serviceToken;
+			env.TRACEKEEPER_STANDALONE_BEARER = bearer;
 		}
 		const child = spawn(
 			process.execPath,
@@ -260,8 +277,8 @@ class McpTestClient {
 		this.sessionId = '';
 		this.protocolVersion = '';
 		this.options = options;
-		this.serviceToken = options.serviceToken ?? SERVICE_TOKEN;
-		this.authorization = `Bearer ${this.serviceToken}`;
+		this.bearer = options.bearer ?? STANDALONE_BEARER;
+		this.authorization = `Bearer ${this.bearer}`;
 	}
 
 	async start() {
@@ -273,7 +290,8 @@ class McpTestClient {
 			: undefined;
 		this.runtime = new StreamableHttpMcpRuntime({
 			localTrust: true,
-			serviceToken: this.serviceToken,
+			credentialVerifier: makeCredentialVerifier(this.bearer),
+			writebackConfirmationSecret: 'tracekeeper-smoke-writeback-secret',
 			host: '127.0.0.1',
 			port: 0,
 			maxSessions: this.options.maxSessions,
@@ -494,28 +512,28 @@ async function main() {
 			args: standaloneArgs,
 		});
 		assert.equal(missingStandaloneToken.code, 1);
-		assert.match(missingStandaloneToken.stderr, /serviceToken/i);
+		assert.match(missingStandaloneToken.stderr, /TRACEKEEPER_STANDALONE_BEARER/i);
 		const shortStandaloneToken = await runStandaloneProcess({
-			serviceToken: 'too-short',
+			bearer: 'too-short',
 			args: standaloneArgs,
 		});
 		assert.equal(shortStandaloneToken.code, 1);
-		assert.match(shortStandaloneToken.stderr, /serviceToken/i);
+		assert.match(shortStandaloneToken.stderr, /TRACEKEEPER_STANDALONE_BEARER/i);
 		const plaintextTokenOption = await runStandaloneProcess({
-			serviceToken: SERVICE_TOKEN,
+			bearer: STANDALONE_BEARER,
 			args: ['--token', 'legacy-token', ...standaloneArgs],
 		});
 		assert.equal(plaintextTokenOption.code, 1);
 		assert.match(plaintextTokenOption.stderr, /Plaintext MCP token options are not supported/);
-		assertContainsNoSensitiveText(plaintextTokenOption.stderr, ['legacy-token', SERVICE_TOKEN]);
+		assertContainsNoSensitiveText(plaintextTokenOption.stderr, ['legacy-token', STANDALONE_BEARER]);
 		const missingTokenBypass = await runStandaloneProcess({
-			serviceToken: SERVICE_TOKEN,
+			bearer: STANDALONE_BEARER,
 			args: ['--allow-missing-token-for-dev', ...standaloneArgs],
 		});
 		assert.equal(missingTokenBypass.code, 1);
 		assert.match(missingTokenBypass.stderr, /Plaintext MCP token options are not supported/);
 		const validStandaloneToken = await runStandaloneProcess({
-			serviceToken: SERVICE_TOKEN,
+			bearer: STANDALONE_BEARER,
 			args: standaloneArgs,
 			stopAfterReady: true,
 		});
@@ -527,13 +545,12 @@ async function main() {
 		assert.match(standaloneReady.endpoint, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/u);
 		assertContainsNoSensitiveText(
 			`${validStandaloneToken.stdout}\n${validStandaloneToken.stderr}`,
-			[SERVICE_TOKEN, SERVICE_TOKEN_HASH],
+			[STANDALONE_BEARER, STANDALONE_BEARER_DIGEST],
 		);
 		assert.throws(
 			() => new StreamableHttpMcpRuntime({
 				host: '127.0.0.1',
 				port: 0,
-				serviceToken: SERVICE_TOKEN,
 				defaultVaultRoot: vaultRoot,
 			}),
 			/requires explicit localTrust: true/
@@ -545,12 +562,13 @@ async function main() {
 				port: 0,
 				defaultVaultRoot: vaultRoot,
 			}),
-			/serviceToken/i
+			/credentialVerifier/i
 		);
 		assert.throws(
 			() => new StreamableHttpMcpRuntime({
 				localTrust: true,
-				serviceToken: SERVICE_TOKEN,
+				credentialVerifier: makeCredentialVerifier(STANDALONE_BEARER),
+				writebackConfirmationSecret: 'tracekeeper-smoke-writeback-secret',
 				host: '0.0.0.0',
 				port: 0,
 				defaultVaultRoot: vaultRoot,
@@ -559,7 +577,8 @@ async function main() {
 		);
 		const lifecycleRuntime = new StreamableHttpMcpRuntime({
 			localTrust: true,
-			serviceToken: SERVICE_TOKEN,
+			credentialVerifier: makeCredentialVerifier(STANDALONE_BEARER),
+			writebackConfirmationSecret: 'tracekeeper-smoke-writeback-secret',
 			host: '127.0.0.1',
 			port: 0,
 			defaultVaultRoot: vaultRoot,
@@ -865,16 +884,16 @@ async function main() {
 			status: 401,
 		});
 		const wrongBearer = await client.expectHttpStatus({
-			authorization: `Bearer ${WRONG_SERVICE_TOKEN}`,
+			authorization: `Bearer ${WRONG_BEARER}`,
 			sessionId: '',
 			method: 'initialize',
 			status: 401,
 		});
 		for (const response of [missingBearer, emptyBearer, wrongBearer]) {
 			assertContainsNoSensitiveText(await response.text(), [
-				SERVICE_TOKEN,
-				WRONG_SERVICE_TOKEN,
-				SERVICE_TOKEN_HASH,
+				STANDALONE_BEARER,
+				WRONG_BEARER,
+				STANDALONE_BEARER_DIGEST,
 			]);
 		}
 
@@ -917,13 +936,13 @@ async function main() {
 		});
 		const legacyQueryBody = await legacyQuery.text();
 		assert.match(legacyQueryBody, /Legacy MCP credentials are not supported/);
-		assertContainsNoSensitiveText(legacyQueryBody, ['legacy-token', SERVICE_TOKEN, SERVICE_TOKEN_HASH]);
+		assertContainsNoSensitiveText(legacyQueryBody, ['legacy-token', STANDALONE_BEARER, STANDALONE_BEARER_DIGEST]);
 		const missingSessionBearer = await client.expectHttpStatus({
 			authorization: '',
 			status: 401,
 		});
 		const wrongSessionBearer = await client.expectHttpStatus({
-			authorization: `Bearer ${WRONG_SERVICE_TOKEN}`,
+			authorization: `Bearer ${WRONG_BEARER}`,
 			status: 401,
 		});
 		const forbiddenOrigin = await client.expectHttpStatus({ origin: 'https://example.com', status: 403 });
@@ -949,13 +968,13 @@ async function main() {
 		await client.expectHttpStatus({ sessionId: '', status: 400 });
 		const missingGetBearer = await client.assertEventStream({ authorization: '', status: 401 });
 		const wrongGetBearer = await client.assertEventStream({
-			authorization: `Bearer ${WRONG_SERVICE_TOKEN}`,
+			authorization: `Bearer ${WRONG_BEARER}`,
 			status: 401,
 		});
 		await client.assertEventStream();
 		const missingDeleteBearer = await client.deleteSession({ authorization: '', status: 401 });
 		const wrongDeleteBearer = await client.deleteSession({
-			authorization: `Bearer ${WRONG_SERVICE_TOKEN}`,
+			authorization: `Bearer ${WRONG_BEARER}`,
 			status: 401,
 		});
 		const initAudit = readAuditLog(vaultRoot);
@@ -968,16 +987,16 @@ async function main() {
 			wrongDeleteBearer,
 		]) {
 			assertContainsNoSensitiveText(await response.text(), [
-				SERVICE_TOKEN,
-				WRONG_SERVICE_TOKEN,
-				SERVICE_TOKEN_HASH,
+				STANDALONE_BEARER,
+				WRONG_BEARER,
+				STANDALONE_BEARER_DIGEST,
 			]);
 		}
 		assertContainsNoSensitiveText(initAudit, [
 			'legacy-token',
-			SERVICE_TOKEN,
-			WRONG_SERVICE_TOKEN,
-			SERVICE_TOKEN_HASH,
+			STANDALONE_BEARER,
+			WRONG_BEARER,
+			STANDALONE_BEARER_DIGEST,
 			client.authorization,
 		]);
 		assert.ok(hasSectionWithValues(initAudit, ['- type: connection', '- event: connection', '- agent_id:']));

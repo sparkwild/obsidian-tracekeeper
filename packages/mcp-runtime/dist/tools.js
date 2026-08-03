@@ -4117,6 +4117,9 @@ function appendConnectionAuditEvent(vaultRoot, input) {
         runtimeVersion: input.runtimeVersion,
         metadata: {
             audit_schema_version: 2,
+            integration_id: input.integrationId,
+            credential_id: input.credentialId,
+            auth_mode: input.authMode,
             observed_client_name_raw: input.clientName,
             observed_client_type: input.observedClientType,
             observed_client_version: input.clientVersion,
@@ -4164,6 +4167,9 @@ function recordToolCallAuditEvent(vaultRoot, input) {
         argsSummary: input.argsSummary,
         metadata: {
             audit_schema_version: 2,
+            integration_id: input.integrationId,
+            credential_id: input.credentialId,
+            auth_mode: input.authMode,
             observed_client_name_raw: input.clientName,
             observed_client_type: input.observedClientType
                 || (0, observed_client_1.normalizeObservedClientType)(input.clientName),
@@ -4204,6 +4210,9 @@ async function recordToolCallAuditEventAsync(vaultRoot, input, context) {
         argsSummary: input.argsSummary,
         metadata: {
             audit_schema_version: 2,
+            integration_id: input.integrationId,
+            credential_id: input.credentialId,
+            auth_mode: input.authMode,
             observed_client_name_raw: input.clientName,
             observed_client_type: input.observedClientType
                 || (0, observed_client_1.normalizeObservedClientType)(input.clientName),
@@ -4464,6 +4473,9 @@ async function callTool(name, rawParams, context = {}) {
                     riskLevel: getToolRiskLevel(requestName),
                     agentId,
                     principalId: context.principalId,
+                    integrationId: context.integrationId,
+                    credentialId: context.credentialId,
+                    authMode: context.authMode,
                     sessionId,
                     clientName,
                     clientVersion: context.clientVersion,

@@ -21,64 +21,63 @@ try {
 	const { buildConnectionPresentation } = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 
 	const base = (overrides = {}) => ({
-		mode: 'add',
-		supportsLocalOAuth: true,
-		pairingLoading: false,
-		pairingState: null,
-		hasPairingTicket: false,
-		clipboardState: 'idle',
+		authMode: 'oauth',
+		hasCredential: false,
 		...overrides,
 	});
 	const presentations = [
 		buildConnectionPresentation(base()),
-		buildConnectionPresentation(base({ pairingLoading: true })),
-		buildConnectionPresentation(base({ pairingState: 'ready', hasPairingTicket: true, clipboardState: 'copied' })),
-		buildConnectionPresentation(base({ pairingState: 'awaiting_confirmation', hasPairingTicket: true })),
-		buildConnectionPresentation(base({ pairingState: 'redeemed' })),
-		buildConnectionPresentation(base({ pairingState: 'expired' })),
-		buildConnectionPresentation(base({ pairingState: 'failed' })),
-		buildConnectionPresentation(base({ pairingState: 'retry' })),
+		buildConnectionPresentation(base({ setupCommandCopiedAt: '2026-08-03T00:00:00.000Z' })),
+		buildConnectionPresentation(base({ hasPendingApproval: true })),
+		buildConnectionPresentation(base({ hasCredential: true })),
+		buildConnectionPresentation(base({ hasCredential: true, connected: true })),
+		buildConnectionPresentation(base({ hasCredential: true, connected: true, used: true })),
+		buildConnectionPresentation(base({ revoked: true })),
+		buildConnectionPresentation(base({ needsUpdate: true })),
 	];
 
 	assert.deepEqual(presentations.map(({ state }) => state), [
-		'idle',
-		'preparing',
-		'ready',
-		'awaiting_confirmation',
+		'not_configured',
+		'copied_unverified',
+		'pending_approval',
 		'authorized',
-		'expired',
-		'failed',
-		'retry',
+		'connected',
+		'used',
+		'revoked',
+		'needs_update',
 	]);
 	assert.deepEqual(presentations.map(({ primaryAction }) => primaryAction), [
-		'start',
+		'copy_setup',
+		'copy_setup',
 		null,
-		null,
-		null,
-		'close',
-		'retry',
-		'retry',
-		'retry',
+		'revoke',
+		'revoke',
+		'revoke',
+		'copy_setup',
+		'copy_setup',
 	]);
-	assert.equal(presentations.every(({ primaryAction }) => typeof primaryAction === 'string' || primaryAction === null), true);
-	assert.equal(
-		buildConnectionPresentation(base({ pairingState: 'ready', hasPairingTicket: true, clipboardState: 'failed' })).primaryAction,
-		'copy_setup'
-	);
-	assert.deepEqual(
-		buildConnectionPresentation(base({ mode: 'manage' })).visibleSections,
-		['usage_summary', 'skill', 'technical_details']
-	);
-	assert.equal(buildConnectionPresentation(base({ mode: 'manage' })).primaryAction, 'reconnect');
-	const manual = buildConnectionPresentation(base({ supportsLocalOAuth: false }));
-	assert.deepEqual(manual, {
+	assert.deepEqual(buildConnectionPresentation(base()).visibleSections, ['setup', 'authorization', 'skill']);
+	assert.deepEqual(buildConnectionPresentation(base({ hasCredential: true, used: true })).visibleSections, ['setup', 'authorization', 'usage', 'skill']);
+	assert.deepEqual(buildConnectionPresentation(base({ authMode: 'bearer' })), {
 		state: 'manual',
-		primaryAction: 'copy_setup',
-		secondaryActions: ['technical_details'],
-		visibleSections: ['manual_setup', 'technical_details'],
-		isBusy: false,
+		mcpState: 'not_started',
+		authorizationState: 'not_authorized',
+		usageState: 'never_used',
+		primaryAction: 'generate_bearer',
+		visibleSections: ['setup', 'authorization', 'skill'],
 	});
-	assert.equal(buildConnectionPresentation(base({ pairingLoading: true, supportsLocalOAuth: false })).state, 'manual');
+	assert.equal(buildConnectionPresentation(base({ authMode: 'bearer', revoked: true })).primaryAction, 'generate_bearer');
+	assert.deepEqual(
+		buildConnectionPresentation(base({ hasCredential: true, connected: true, used: true })),
+		{
+			state: 'used',
+			mcpState: 'connected',
+			authorizationState: 'authorized',
+			usageState: 'used',
+			primaryAction: 'revoke',
+			visibleSections: ['setup', 'authorization', 'usage', 'skill'],
+		}
+	);
 
 	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 19 })}\n`);
 } finally {

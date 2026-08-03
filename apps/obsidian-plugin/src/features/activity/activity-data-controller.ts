@@ -1573,6 +1573,11 @@ isConnectionAuditEvent(event: AuditEventRecord): boolean {
 		return event.eventType === 'connection' || event.eventType === 'agent-connection-event' || event.action === 'connection' || event.action === 'mcp.initialize';
 	}
 
+private readAgentAuthMode(values: ParsedRecord): 'oauth' | 'bearer' | '' {
+		const authMode = this.host.firstString(values, ['auth_mode', 'authMode']).trim().toLowerCase();
+		return authMode === 'oauth' || authMode === 'bearer' ? authMode : '';
+	}
+
 private normalizeAuditToolName(eventType: string, action: string, toolName: string): string {
 		const normalizedTool = toolName.trim();
 		const isConnection =
@@ -1589,6 +1594,9 @@ private normalizeAuditToolName(eventType: string, action: string, toolName: stri
 	toAgentToolCallRecord(event: AuditEventRecord): AgentToolCallRecord {
 		return {
 			principalId: event.principalId,
+			integrationId: event.integrationId,
+			credentialId: event.credentialId,
+			authMode: event.authMode,
 			taskId: event.taskId,
 			agentId: event.agentId || 'unknown',
 			sessionId: event.sessionId,
@@ -1736,6 +1744,9 @@ private async readAuditMarkdownFile(file: TFile, limit: number): Promise<AuditEv
 					snippet: this.host.snippetFromText(parsed.body, this.host.trimText(file.basename)),
 					eventType,
 					principalId: this.host.firstString(data, ['principal_id', 'principalId']),
+					integrationId: this.host.firstString(data, ['integration_id', 'integrationId']),
+					credentialId: this.host.firstString(data, ['credential_id', 'credentialId']),
+					authMode: this.readAgentAuthMode(data),
 					agentId: this.host.firstString(data, ['agent_id', 'agentId', 'session_id', 'sessionId']),
 					sessionId: this.host.firstString(data, ['session_id', 'sessionId']),
 					clientName: this.host.firstString(data, ['client_name', 'clientName', 'client']),
@@ -1839,6 +1850,9 @@ private parseAuditLogSections(
 				snippet: this.host.snippetFromText(bodyLines.join('\n')),
 				eventType,
 				principalId: this.host.firstString(row, ['principal_id', 'principalId']),
+				integrationId: this.host.firstString(row, ['integration_id', 'integrationId']),
+				credentialId: this.host.firstString(row, ['credential_id', 'credentialId']),
+				authMode: this.readAgentAuthMode(row),
 				agentId: this.host.firstString(row, ['agent_id', 'agentId', 'session_id', 'sessionId']),
 				sessionId: this.host.firstString(row, ['session_id', 'sessionId']),
 				clientName: this.host.firstString(row, ['client_name', 'clientName', 'client']),

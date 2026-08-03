@@ -35,6 +35,9 @@ export interface ToolInvocationContext extends ToolContext {
     requestId?: string;
     principalId?: string;
     credentialCapabilities?: readonly string[];
+    integrationId?: string;
+    credentialId?: string;
+    authMode?: 'oauth' | 'bearer';
     agentId?: string;
     sessionId?: string;
     clientName?: string | null;
@@ -50,6 +53,9 @@ export interface ToolInvocationContext extends ToolContext {
 }
 interface ConnectionAuditEventInput {
     principalId?: string;
+    integrationId?: string;
+    credentialId?: string;
+    authMode?: 'oauth' | 'bearer';
     agentId: string;
     sessionId?: string;
     clientName: string | null;
@@ -68,6 +74,9 @@ interface ToolCallAuditEventInput {
     riskLevel: string;
     agentId: string;
     principalId?: string;
+    integrationId?: string;
+    credentialId?: string;
+    authMode?: 'oauth' | 'bearer';
     sessionId?: string;
     clientName: string | null;
     clientVersion?: string | null;

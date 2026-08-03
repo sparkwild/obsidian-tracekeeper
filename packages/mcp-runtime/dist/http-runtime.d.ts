@@ -1,22 +1,23 @@
+import { type ServerResponse } from 'node:http';
 import type { VaultRepository } from '@tracekeeper/core';
 import { type ProposalTransitionPort } from './tools';
-import { McpJsonRpcHandler } from './handler';
-import { type PairingTicket, type PairingTicketStatus } from './local-oauth';
+import { McpConnectionState, McpJsonRpcHandler } from './handler';
+import { type BoundOAuthClient } from './local-oauth';
+import type { AgentCredentialVerifier, OAuthIntegrationPort } from './agent-auth';
 import type { OAuthUiLocale } from './oauth-page';
 export type { OAuthUiLocale } from './oauth-page';
-export type { PairingTicket, PairingTicketState, PairingTicketStatus } from './local-oauth';
+export type { AgentAuthMode, AuthenticatedCredentialContext, OAuthIntegrationPort } from './agent-auth';
 export type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed' | 'port_conflict';
 export interface StreamableHttpRuntimeOptions {
     localTrust?: boolean;
-    serviceToken: string;
-    getSharedBearerToken?: () => string | Promise<string>;
+    credentialVerifier: AgentCredentialVerifier;
+    writebackConfirmationSecret: string | Uint8Array;
+    oauthIntegration?: OAuthIntegrationPort;
+    getBoundOAuthClients?: () => readonly BoundOAuthClient[];
     getOAuthUiLocale?: () => OAuthUiLocale;
     host?: string;
     port?: number;
     path?: string;
-    pairingTicketTtlMs?: number;
-    pairingTicketCapacity?: number;
-    pairingTicketMaxAttempts?: number;
     authorizationCodeTtlMs?: number;
     authorizationCodeCapacity?: number;
     clientRegistrationTtlMs?: number;
@@ -59,11 +60,16 @@ export interface RuntimeRecoveryStatus {
     skipped: number;
     completedAt: string;
 }
+interface RuntimeSession extends McpConnectionState {
+    createdAt: number;
+    lastSeenAt: number;
+    streams: Set<ServerResponse>;
+}
 export declare class StreamableHttpMcpRuntime {
     private host;
     private port;
     private path;
-    private serviceTokenHash;
+    private credentialVerifier;
     private maxRequestBytes;
     private maxSessions;
     private maxStreamsPerSession;
@@ -82,11 +88,8 @@ export declare class StreamableHttpMcpRuntime {
     private lastError;
     private recoveryStatus;
     constructor(options: StreamableHttpRuntimeOptions);
-    /**
-     * Issues a one-time local pairing code for the Agent selected in Obsidian.
-     */
-    issuePairingTicket(expectedClientId: string): PairingTicket;
-    getPairingTicketStatus(id: string): PairingTicketStatus | null;
+    closeSessionsForIntegration(integrationId: string): number;
+    getSessionSnapshot(): Array<Pick<RuntimeSession, 'sessionId' | 'integrationId' | 'credentialId' | 'authMode' | 'createdAt' | 'lastSeenAt'>>;
     start(): Promise<StreamableHttpRuntimeStatus>;
     stop(): Promise<void>;
     private stopServer;
@@ -106,7 +109,7 @@ export declare class StreamableHttpMcpRuntime {
     private isAllowedOrigin;
     private isAllowedHost;
     private allowedCorsOrigin;
-    private serviceBearerStatus;
+    private authenticateRequest;
     private recordRequestRejection;
     private pruneExpiredSessions;
     private firstHeaderValue;

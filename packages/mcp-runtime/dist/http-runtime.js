@@ -48,14 +48,10 @@ const DEFAULT_MAX_SESSIONS = 32;
 const DEFAULT_MAX_STREAMS_PER_SESSION = 2;
 const DEFAULT_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30 * 1000;
-const DEFAULT_PAIRING_TICKET_TTL_MS = 5 * 60 * 1000;
-const DEFAULT_PAIRING_TICKET_CAPACITY = 3;
-const DEFAULT_PAIRING_TICKET_MAX_ATTEMPTS = 5;
 const DEFAULT_AUTHORIZATION_CODE_TTL_MS = 2 * 60 * 1000;
 const DEFAULT_AUTHORIZATION_CODE_CAPACITY = 32;
 const DEFAULT_CLIENT_REGISTRATION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_CLIENT_REGISTRATION_CAPACITY = 32;
-const MIN_SERVICE_TOKEN_BYTES = 32;
 class StreamableHttpMcpRuntime {
     constructor(options) {
         this.server = null;
@@ -68,30 +64,33 @@ class StreamableHttpMcpRuntime {
         if (options.localTrust !== true) {
             throw new Error('MCP Runtime requires explicit localTrust: true.');
         }
+        if (!options.credentialVerifier || typeof options.credentialVerifier.verifyBearer !== 'function') {
+            throw new Error('MCP Runtime requires an explicit per-Agent credentialVerifier.');
+        }
+        if (!options.writebackConfirmationSecret || (typeof options.writebackConfirmationSecret !== 'string' && !(options.writebackConfirmationSecret instanceof Uint8Array))) {
+            throw new Error('MCP Runtime requires an explicit writebackConfirmationSecret.');
+        }
         this.host = options.host || DEFAULT_HOST;
         if (this.host !== DEFAULT_HOST) {
             throw new Error(`MCP Runtime local trust requires host ${DEFAULT_HOST}.`);
         }
         this.port = options.port ?? 58437;
         this.path = options.path || DEFAULT_PATH;
-        this.serviceTokenHash = hashServiceToken(options.serviceToken);
+        this.credentialVerifier = options.credentialVerifier;
         this.maxRequestBytes = normalizePositiveLimit(options.maxRequestBytes, DEFAULT_MAX_REQUEST_BYTES, 'maxRequestBytes');
         this.maxSessions = normalizePositiveLimit(options.maxSessions, DEFAULT_MAX_SESSIONS, 'maxSessions');
         this.maxStreamsPerSession = normalizePositiveLimit(options.maxStreamsPerSession, DEFAULT_MAX_STREAMS_PER_SESSION, 'maxStreamsPerSession');
         this.sessionIdleTtlMs = normalizePositiveLimit(options.sessionIdleTtlMs, DEFAULT_SESSION_IDLE_TTL_MS, 'sessionIdleTtlMs');
         this.requestTimeoutMs = normalizePositiveLimit(options.requestTimeoutMs, DEFAULT_REQUEST_TIMEOUT_MS, 'requestTimeoutMs');
-        this.oauthServer = options.getSharedBearerToken
+        this.oauthServer = options.oauthIntegration
             ? new local_oauth_1.LocalOAuthAuthorizationServer({
-                serviceTokenHash: this.serviceTokenHash,
-                getSharedBearerToken: options.getSharedBearerToken,
+                oauthIntegration: options.oauthIntegration,
+                getBoundOAuthClients: options.getBoundOAuthClients,
                 getOAuthUiLocale: options.getOAuthUiLocale,
                 getOrigin: () => this.runtimeOrigin(),
                 getResource: () => `${this.runtimeOrigin()}${this.path}`,
                 maxRequestBytes: this.maxRequestBytes,
                 requestTimeoutMs: this.requestTimeoutMs,
-                pairingTicketTtlMs: normalizePositiveLimit(options.pairingTicketTtlMs, DEFAULT_PAIRING_TICKET_TTL_MS, 'pairingTicketTtlMs'),
-                pairingTicketCapacity: normalizePositiveLimit(options.pairingTicketCapacity, DEFAULT_PAIRING_TICKET_CAPACITY, 'pairingTicketCapacity'),
-                pairingTicketMaxAttempts: normalizePositiveLimit(options.pairingTicketMaxAttempts, DEFAULT_PAIRING_TICKET_MAX_ATTEMPTS, 'pairingTicketMaxAttempts'),
                 authorizationCodeTtlMs: normalizePositiveLimit(options.authorizationCodeTtlMs, DEFAULT_AUTHORIZATION_CODE_TTL_MS, 'authorizationCodeTtlMs'),
                 authorizationCodeCapacity: normalizePositiveLimit(options.authorizationCodeCapacity, DEFAULT_AUTHORIZATION_CODE_CAPACITY, 'authorizationCodeCapacity'),
                 clientRegistrationTtlMs: normalizePositiveLimit(options.clientRegistrationTtlMs, DEFAULT_CLIENT_REGISTRATION_TTL_MS, 'clientRegistrationTtlMs'),
@@ -109,7 +108,7 @@ class StreamableHttpMcpRuntime {
             memoryRules: options.memoryRules,
             contentLanguage: options.contentLanguage,
             contentLanguageSource: options.contentLanguageSource,
-            writebackConfirmationSecret: this.serviceTokenHash,
+            writebackConfirmationSecret: options.writebackConfirmationSecret,
             runtimeVersion: this.runtimeVersion,
             principalId: tools_1.LOCAL_TRUST_PRINCIPAL_ID,
             credentialCapabilities: tools_1.LOCAL_TRUST_CAPABILITIES,
@@ -124,22 +123,31 @@ class StreamableHttpMcpRuntime {
             memoryRules: options.memoryRules,
             contentLanguage: options.contentLanguage,
             contentLanguageSource: options.contentLanguageSource,
-            writebackConfirmationSecret: this.serviceTokenHash,
+            writebackConfirmationSecret: options.writebackConfirmationSecret,
             runtimeVersion: this.runtimeVersion,
             transport: handler_1.STREAMABLE_HTTP_TRANSPORT,
         });
     }
-    /**
-     * Issues a one-time local pairing code for the Agent selected in Obsidian.
-     */
-    issuePairingTicket(expectedClientId) {
-        if (this.state !== 'running' || !this.oauthServer) {
-            throw new Error('OAuth pairing is unavailable until the runtime is running with a token callback.');
+    closeSessionsForIntegration(integrationId) {
+        let closed = 0;
+        for (const [sessionId, session] of this.sessions.entries()) {
+            if (session.integrationId !== integrationId)
+                continue;
+            this.closeSession(session);
+            this.sessions.delete(sessionId);
+            closed += 1;
         }
-        return this.oauthServer.issuePairingTicket(expectedClientId);
+        return closed;
     }
-    getPairingTicketStatus(id) {
-        return this.oauthServer?.getPairingTicketStatus(id) || null;
+    getSessionSnapshot() {
+        return [...this.sessions.values()].map((session) => ({
+            sessionId: session.sessionId,
+            integrationId: session.integrationId,
+            credentialId: session.credentialId,
+            authMode: session.authMode,
+            createdAt: session.createdAt,
+            lastSeenAt: session.lastSeenAt,
+        }));
     }
     async start() {
         if (this.stopPromise) {
@@ -291,9 +299,9 @@ class StreamableHttpMcpRuntime {
             response.end();
             return;
         }
-        const bearerStatus = this.serviceBearerStatus(request);
-        if (bearerStatus !== 'valid') {
-            this.recordRequestRejection(bearerStatus === 'missing' ? 'auth_missing' : 'auth_invalid');
+        const credentialResult = await this.authenticateRequest(request);
+        if (credentialResult === 'missing' || credentialResult === 'invalid') {
+            this.recordRequestRejection(credentialResult === 'missing' ? 'auth_missing' : 'auth_invalid');
             if (this.oauthServer) {
                 response.setHeader('WWW-Authenticate', `Bearer resource_metadata="${this.oauthServer.protectedResourceMetadataUrl()}", scope="mcp"`);
             }
@@ -305,20 +313,20 @@ class StreamableHttpMcpRuntime {
                 this.writeJson(response, 415, this.errorResponse(null, -32015, 'Content-Type must be application/json.'), request);
                 return;
             }
-            await this.handlePost(request, response);
+            await this.handlePost(request, response, credentialResult);
             return;
         }
         if (request.method === 'GET') {
-            this.handleGet(request, response);
+            this.handleGet(request, response, credentialResult);
             return;
         }
         if (request.method === 'DELETE') {
-            this.handleDelete(request, response);
+            this.handleDelete(request, response, credentialResult);
             return;
         }
         this.writeJson(response, 405, this.errorResponse(null, -32005, 'Method not allowed.'), request);
     }
-    async handlePost(request, response) {
+    async handlePost(request, response, credential) {
         let body = '';
         try {
             body = await this.readBody(request);
@@ -353,8 +361,8 @@ class StreamableHttpMcpRuntime {
             return;
         }
         const session = isInitialize
-            ? this.createSession()
-            : this.requireSession(request, response);
+            ? this.createSession(credential)
+            : this.requireSession(request, response, credential);
         if (!session) {
             return;
         }
@@ -370,8 +378,8 @@ class StreamableHttpMcpRuntime {
         }
         this.writeJson(response, 200, result, request);
     }
-    handleGet(request, response) {
-        const session = this.requireSession(request, response);
+    handleGet(request, response, credential) {
+        const session = this.requireSession(request, response, credential);
         if (!session) {
             return;
         }
@@ -390,8 +398,8 @@ class StreamableHttpMcpRuntime {
             session.streams.delete(response);
         });
     }
-    handleDelete(request, response) {
-        const session = this.requireSession(request, response);
+    handleDelete(request, response, credential) {
+        const session = this.requireSession(request, response, credential);
         if (!session) {
             return;
         }
@@ -400,12 +408,15 @@ class StreamableHttpMcpRuntime {
         this.writeCors(response, 204, request);
         response.end();
     }
-    createSession() {
+    createSession(credential) {
         const sessionId = crypto.randomUUID();
         const session = {
             sessionId,
             principalId: tools_1.LOCAL_TRUST_PRINCIPAL_ID,
-            credentialCapabilities: tools_1.LOCAL_TRUST_CAPABILITIES,
+            credentialCapabilities: credential.capabilities,
+            integrationId: credential.integrationId,
+            credentialId: credential.credentialId,
+            authMode: credential.authMode,
             agentId: sessionId,
             clientName: null,
             clientVersion: null,
@@ -418,7 +429,7 @@ class StreamableHttpMcpRuntime {
         this.sessions.set(sessionId, session);
         return session;
     }
-    requireSession(request, response) {
+    requireSession(request, response, credential) {
         const sessionId = this.firstHeaderValue(request.headers['mcp-session-id']);
         if (!sessionId) {
             this.writeJson(response, 400, this.errorResponse(null, -32000, 'Missing Mcp-Session-Id header.'), request);
@@ -427,6 +438,12 @@ class StreamableHttpMcpRuntime {
         const session = this.sessions.get(sessionId);
         if (!session) {
             this.writeJson(response, 404, this.errorResponse(null, -32004, 'Unknown MCP session.'), request);
+            return null;
+        }
+        if (session.integrationId !== credential.integrationId
+            || session.credentialId !== credential.credentialId
+            || session.authMode !== credential.authMode) {
+            this.writeJson(response, 401, this.errorResponse(null, -32001, 'MCP credential does not match the Session.'), request);
             return null;
         }
         const requestedProtocolVersion = this.firstHeaderValue(request.headers['mcp-protocol-version']);
@@ -537,7 +554,7 @@ class StreamableHttpMcpRuntime {
             return null;
         }
     }
-    serviceBearerStatus(request) {
+    async authenticateRequest(request) {
         const authorization = this.firstHeaderValue(request.headers.authorization);
         if (!authorization) {
             return 'missing';
@@ -546,10 +563,13 @@ class StreamableHttpMcpRuntime {
         if (!match) {
             return 'invalid';
         }
-        const presentedHash = crypto.createHash('sha256').update(match[1], 'utf8').digest();
-        return crypto.timingSafeEqual(presentedHash, this.serviceTokenHash)
-            ? 'valid'
-            : 'invalid';
+        try {
+            const context = await this.credentialVerifier.verifyBearer(match[1]);
+            return context || 'invalid';
+        }
+        catch {
+            return 'invalid';
+        }
     }
     recordRequestRejection(reason) {
         if (!this.defaultVaultRoot) {
@@ -653,12 +673,4 @@ function normalizePositiveLimit(value, fallback, name) {
         throw new Error(`${name} must be a positive safe integer.`);
     }
     return resolved;
-}
-function hashServiceToken(serviceToken) {
-    if (typeof serviceToken !== 'string'
-        || node_buffer_1.Buffer.byteLength(serviceToken, 'utf8') < MIN_SERVICE_TOKEN_BYTES
-        || /\s/u.test(serviceToken)) {
-        throw new Error(`serviceToken must contain at least ${MIN_SERVICE_TOKEN_BYTES} non-whitespace UTF-8 bytes.`);
-    }
-    return crypto.createHash('sha256').update(serviceToken, 'utf8').digest();
 }

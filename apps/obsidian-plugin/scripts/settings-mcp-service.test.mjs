@@ -48,7 +48,7 @@ assert.ok(advancedSection.includes("createEl('details'"));
 assert.ok(advancedSection.includes("createEl('summary'"));
 assert.ok(advancedSection.includes('renderPortSetting'));
 assert.ok(advancedSection.includes("ui('重启服务', 'Restart service')"));
-assert.ok(advancedSection.includes("ui('重置访问凭据', 'Reset access credential')"));
+assert.ok(advancedSection.includes("ui('撤销全部 Agent 访问', 'Revoke all Agent access')"));
 assert.ok(advancedSection.includes('TRACEKEEPER_RUNTIME_LOG_VIEW'));
 
 process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 29 })}\n`);

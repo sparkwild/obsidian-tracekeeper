@@ -58,12 +58,12 @@ const upgradeFixture = async (vault) => {
 	delete settings.runtimeToken;
 	delete settings.runtimeTokenCreatedAt;
 	delete settings.runtimeCredentials;
-	settings.runtimeAccessToken = Buffer.alloc(32, 7).toString('base64url');
+	settings.runtimeSecuritySecret = createHash('sha256').update('tracekeeper-0.3.0-upgrade-fixture-runtime-secret').digest('base64url');
+	settings.agentIntegrations = [];
 	settings.memoryRulesVersion = 4;
 	settings.noteContentLanguage = 'auto';
 	settings.onboarding = {
 		selectedClientId: 'codex',
-		clientConfiguredAt: '',
 		skillSetupCompletedAt: '',
 		skillCopiedAt: '',
 		skillUserConfirmedAt: '',
@@ -115,7 +115,7 @@ test('creates one deterministic previous-release fixture without exposing its sy
 		assert.equal(first.release.version, '0.2.3');
 		assert.equal(first.seeded_files.every((entry) => entry.present), true);
 		assert.equal(Object.values(first.identity_occurrences).every((paths) => paths.length === 1), true);
-		assert.equal(first.settings.current_access_token.present, false);
+		assert.equal(first.settings.runtime_security_secret.present, false);
 		assert.equal(first.settings.legacy_credentials.runtimeToken, true);
 		assert.equal(first.settings.legacy_credentials.runtimeTokenCreatedAt, true);
 		assert.equal(first.settings.legacy_credentials.runtimeCredentials, false);
@@ -149,8 +149,8 @@ test('compares a normalized upgrade while preserving every seeded record and set
 		assert.equal(result.identities_unique, 16);
 		assert.equal(result.protected_vault_files_preserved, 2);
 		assert.equal(result.legacy_credentials_removed, true);
-		assert.equal(result.legacy_token_rotated, true);
-		assert.equal(result.current_access_token_valid, true);
+		assert.equal(result.legacy_token_rejected, true);
+		assert.equal(result.runtime_security_secret_valid, true);
 		assert.equal(result.agent_reauthorization_required, true);
 		assert.equal(result.managed_skill_ownership_claimed, false);
 		const wrongTargetAssets = structuredClone(expectedTargetAssets);
@@ -269,7 +269,7 @@ test('rejects retained legacy credentials and invalid published assets', async (
 		});
 		assert.throws(
 			() => compareUpgradeSnapshots(before, reusedTokenAfter, { expectedPreviousAssets: expectedAssets, expectedTargetAssets }),
-			/reused the legacy fixture token/
+			/retained a legacy credential key/
 		);
 
 		await fs.appendFile(path.resolve(assets, 'styles.css'), 'tampered');

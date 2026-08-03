@@ -14,10 +14,9 @@ try {
 	const vm = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 	const base = {
 		selectedClientId: 'codex',
-		entryPromptVersion: 0,
-		entryDeferredAt: '',
-		clientConfiguredAt: '',
-		skillSetupCompletedAt: '',
+	entryPromptVersion: 0,
+	entryDeferredAt: '',
+	skillSetupCompletedAt: '',
 		skillCopiedAt: '',
 		skillUserConfirmedAt: '',
 		skillFileVerifiedAt: '',
@@ -158,10 +157,10 @@ try {
 		runtimeEnabled: true,
 		selectedClient: { clientId: 'cursor', configState: 'unavailable' },
 		skillInstallState: { state: 'unavailable', fileVerified: false, updateAvailable: false },
-		onboarding: { ...base, selectedClientId: 'cursor', clientConfiguredAt: '2026-07-23T00:00:00.000Z', skillUserConfirmedAt: '2026-07-23T00:00:00.000Z' },
+		onboarding: { ...base, selectedClientId: 'cursor', skillUserConfirmedAt: '2026-07-23T00:00:00.000Z' },
 	});
 	assert.equal(selfAttested.skillSetupConfirmed, true);
-	assert.equal(selfAttested.clientConfigured, true);
+	assert.equal(selfAttested.clientConfigured, false);
 	assert.equal(selfAttested.skillFileVerified, false);
 	assert.equal(selfAttested.skillUserConfirmed, true);
 
@@ -182,13 +181,11 @@ try {
 	assert.equal(cleared.trackedWorkflowObservedAt, '');
 	const behaviorCleared = vm.clearOnboardingAgentBehaviorEvidence({
 		...base,
-		clientConfiguredAt: '2026-07-23T00:00:00.000Z',
 		agentRestartCompletedAt: '2026-07-23T00:01:00.000Z',
 		connectionVerifiedAt: '2026-07-23T00:02:00.000Z',
 		firstRecallCompletedAt: '2026-07-23T00:03:00.000Z',
 		trackedWorkflowObservedAt: '2026-07-23T00:04:00.000Z',
 	}, '2026-07-23T01:00:00.000Z');
-	assert.equal(behaviorCleared.clientConfiguredAt, '2026-07-23T00:00:00.000Z');
 	assert.equal(behaviorCleared.agentRestartCompletedAt, '');
 	assert.equal(behaviorCleared.connectionVerifiedAt, '');
 	assert.equal(behaviorCleared.connectionVerifiedSessionId, '');
@@ -196,11 +193,9 @@ try {
 	assert.equal(behaviorCleared.trackedWorkflowObservedAt, '');
 	const runtimeCleared = vm.clearOnboardingRuntimeEvidence({
 		...base,
-		clientConfiguredAt: '2026-07-23T00:00:00.000Z',
 		firstRecallCompletedAt: '2026-07-23T00:03:00.000Z',
 		trackedWorkflowObservedAt: '2026-07-23T00:04:00.000Z',
 	}, '2026-07-23T01:00:00.000Z');
-	assert.equal(runtimeCleared.clientConfiguredAt, '');
 	assert.equal(runtimeCleared.connectionVerifiedSessionId, '');
 	assert.equal(runtimeCleared.firstRecallCompletedAt, '');
 	assert.equal(runtimeCleared.trackedWorkflowObservedAt, '');
@@ -212,8 +207,7 @@ try {
 		const resolved = vm.resolveOnboardingSelectedClient({
 			...base,
 			selectedClientId: 'missing',
-			clientConfiguredAt: '2026-07-22T00:00:00.000Z',
-			skillUserConfirmedAt: '2026-07-22T00:00:00.000Z',
+		skillUserConfirmedAt: '2026-07-22T00:00:00.000Z',
 			memoryPolicyConfirmedAt: '2026-07-22T00:00:00.000Z',
 			connectionVerifiedAt: '2026-07-22T00:01:00.000Z',
 			connectionVerifiedSessionId: 'stale-session',
@@ -223,7 +217,6 @@ try {
 			trackedWorkflowTaskId: 'stale-task',
 		}, [{ clientId: 'codex', configState: 'configured' }], '2026-07-23T00:00:00.000Z');
 		assert.equal(resolved.selectedClientId, 'codex');
-		assert.equal(resolved.state.clientConfiguredAt, '');
 		assert.equal(resolved.state.skillUserConfirmedAt, '');
 		assert.equal(resolved.state.memoryPolicyConfirmedAt, '2026-07-22T00:00:00.000Z');
 		assert.equal(resolved.state.connectionVerifiedSessionId, '');

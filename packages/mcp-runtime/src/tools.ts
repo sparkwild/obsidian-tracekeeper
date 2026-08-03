@@ -235,6 +235,9 @@ export interface ToolInvocationContext extends ToolContext {
 	requestId?: string;
 	principalId?: string;
 	credentialCapabilities?: readonly string[];
+	integrationId?: string;
+	credentialId?: string;
+	authMode?: 'oauth' | 'bearer';
 	agentId?: string;
 	sessionId?: string;
 	clientName?: string | null;
@@ -280,6 +283,9 @@ function contentText(context: ToolContext, zh: string, en: string): string {
 
 interface ConnectionAuditEventInput {
 	principalId?: string;
+	integrationId?: string;
+	credentialId?: string;
+	authMode?: 'oauth' | 'bearer';
 	agentId: string;
 	sessionId?: string;
 	clientName: string | null;
@@ -299,6 +305,9 @@ interface ToolCallAuditEventInput {
 	riskLevel: string;
 	agentId: string;
 	principalId?: string;
+	integrationId?: string;
+	credentialId?: string;
+	authMode?: 'oauth' | 'bearer';
 	sessionId?: string;
 	clientName: string | null;
 	clientVersion?: string | null;
@@ -5872,6 +5881,9 @@ export function appendConnectionAuditEvent(vaultRoot: string, input: ConnectionA
 		runtimeVersion: input.runtimeVersion,
 		metadata: {
 			audit_schema_version: 2,
+			integration_id: input.integrationId,
+			credential_id: input.credentialId,
+			auth_mode: input.authMode,
 			observed_client_name_raw: input.clientName,
 			observed_client_type: input.observedClientType,
 			observed_client_version: input.clientVersion,
@@ -5924,6 +5936,9 @@ export function recordToolCallAuditEvent(vaultRoot: string, input: ToolCallAudit
 		argsSummary: input.argsSummary,
 		metadata: {
 			audit_schema_version: 2,
+			integration_id: input.integrationId,
+			credential_id: input.credentialId,
+			auth_mode: input.authMode,
 			observed_client_name_raw: input.clientName,
 			observed_client_type: input.observedClientType
 				|| normalizeObservedClientType(input.clientName),
@@ -5970,6 +5985,9 @@ async function recordToolCallAuditEventAsync(
 		argsSummary: input.argsSummary,
 		metadata: {
 			audit_schema_version: 2,
+			integration_id: input.integrationId,
+			credential_id: input.credentialId,
+			auth_mode: input.authMode,
 			observed_client_name_raw: input.clientName,
 			observed_client_type: input.observedClientType
 				|| normalizeObservedClientType(input.clientName),
@@ -6258,6 +6276,9 @@ export async function callTool(
 					riskLevel: getToolRiskLevel(requestName),
 					agentId,
 					principalId: context.principalId,
+					integrationId: context.integrationId,
+					credentialId: context.credentialId,
+					authMode: context.authMode,
 					sessionId,
 					clientName,
 					clientVersion: context.clientVersion,

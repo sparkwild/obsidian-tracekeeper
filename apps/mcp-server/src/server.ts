@@ -1,4 +1,6 @@
-import { StreamableHttpMcpRuntime } from '@tracekeeper/mcp-runtime';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { Buffer } from 'node:buffer';
+import { StreamableHttpMcpRuntime, LOCAL_TRUST_CAPABILITIES } from '@tracekeeper/mcp-runtime';
 
 interface ServerArgs {
 	defaultVaultRoot?: string;
@@ -38,7 +40,7 @@ function parseArgs(argv: string[]): ServerArgs {
 			continue;
 		}
 		if (value === '--token' || value === '--allow-missing-token-for-dev') {
-			throw new Error('Plaintext MCP token options are not supported. Set TRACEKEEPER_MCP_TOKEN in the process environment.');
+		throw new Error('Plaintext MCP token options are not supported. Set TRACEKEEPER_STANDALONE_BEARER in the process environment.');
 		}
 		if ((value === '--graph-profile' || value === '--graphProfile') && next) {
 			result.graphProfile = next;
@@ -66,11 +68,28 @@ function toErrorMessage(error: unknown): string {
 
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2));
-	const serviceToken = process.env.TRACEKEEPER_MCP_TOKEN || '';
+	const standaloneBearer = process.env.TRACEKEEPER_STANDALONE_BEARER || '';
+	if (!isStandaloneBearer(standaloneBearer)) {
+		throw new Error('TRACEKEEPER_STANDALONE_BEARER must be a 256-bit base64url bearer.');
+	}
+	const bearerDigest = createHash('sha256').update(standaloneBearer, 'utf8').digest();
 	const runtime = new StreamableHttpMcpRuntime({
 		...args,
 		localTrust: true,
-		serviceToken,
+		credentialVerifier: {
+			verifyBearer: async (token) => {
+				const presented = createHash('sha256').update(token, 'utf8').digest();
+				if (!timingSafeEqual(presented, bearerDigest)) return null;
+				return {
+					integrationId: 'standalone-process',
+					credentialId: 'standalone-process',
+					authMode: 'bearer',
+					principalId: 'local-user',
+					capabilities: LOCAL_TRUST_CAPABILITIES,
+				};
+			},
+		},
+		writebackConfirmationSecret: randomBytes(32).toString('base64url'),
 	});
 	const status = await runtime.start();
 
@@ -86,6 +105,12 @@ async function main(): Promise<void> {
 	});
 	process.stdout.write(`${JSON.stringify({ ok: true, endpoint: status.endpoint })}\n`);
 }
+
+const isStandaloneBearer = (value: string): boolean => {
+	if (!/^[A-Za-z0-9_-]{43}$/u.test(value)) return false;
+	const bytes = Buffer.from(value, 'base64url');
+	return bytes.byteLength === 32 && bytes.toString('base64url') === value;
+};
 
 void main().catch((error) => {
 	const message = toErrorMessage(error);

@@ -20,7 +20,7 @@ The runtime supports MCP `2025-06-18` and `2025-11-25` over Streamable HTTP. It 
 - the active Vault root is server-managed; `tools/call` cannot select or override it
 - no shell or network capabilities exposed through tools
 - exact `127.0.0.1` binding with no remote-listen mode
-- one installation-level service Bearer required on every non-preflight request
+- one explicit standalone Bearer required on every non-preflight request; the Obsidian-hosted runtime uses one credential per Agent integration
 - fixed local-user capabilities; client self-identification cannot change permissions
 - Token-free endpoint URLs; legacy Token query parameters and plaintext Token CLI options are rejected
 - Obsidian/loopback CORS allowlist rather than wildcard origins
@@ -36,11 +36,11 @@ npm install --cache /private/tmp/tracekeeper-npm-cache
 npm run typecheck
 npm run build
 npm run test
-export TRACEKEEPER_MCP_TOKEN='<at-least-32-byte-base64url-token>'
+export TRACEKEEPER_STANDALONE_BEARER='<32-byte-base64url-bearer>'
 node dist/server.js --vault-root <vault> --vault-config-dir <config-dir> --port 58437
 ```
 
-The endpoint is `http://127.0.0.1:58437/mcp` by default. The standalone runtime reads its service credential only from `TRACEKEEPER_MCP_TOKEN`, fails closed when the value is missing or invalid, and never accepts a plaintext `--token` argument. Clients send the credential as `Authorization: Bearer <token>`; the endpoint URL stays free of secrets. The standalone runtime uses the same explicit local-trust mode as the Obsidian-hosted runtime and refuses any bind address other than `127.0.0.1`.
+The endpoint is `http://127.0.0.1:58437/mcp` by default. The standalone runtime reads its Bearer only from `TRACEKEEPER_STANDALONE_BEARER`, fails closed when the value is missing or invalid, and never accepts a plaintext `--token` argument. Clients send the credential as `Authorization: Bearer <token>`; the endpoint URL stays free of secrets. The standalone runtime uses the same explicit local-trust mode as the Obsidian-hosted runtime and refuses any bind address other than `127.0.0.1`.
 
 ## Package Scripts
 

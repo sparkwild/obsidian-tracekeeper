@@ -198,44 +198,44 @@ function checkLocalTrustSemantics(contents, errors) {
 	const trustBoundaries = contents.get('docs/architecture/TRUST_BOUNDARIES.md') ?? '';
 	requirePattern(
 		readme,
-		/installation-level service Bearer/i,
-		'README does not disclose the installation-level service Bearer',
+		/persistent Agent integration[\s\S]{0,260}per-Agent access token/i,
+		'README does not define persistent per-Agent credentials',
 		errors,
 	);
 	requirePattern(
 		readme,
-		/authorization-code \+ PKCE pairing/i,
-		'README does not define OAuth authorization-code and PKCE pairing',
+		/authorization-code \+ PKCE[\s\S]{0,180}resource binding/i,
+		'README does not define OAuth authorization-code, PKCE, and resource binding',
 		errors,
 	);
 	requirePattern(
 		chineseReadme,
-		/安装级[\s\S]{0,40}服务级 Bearer/i,
-		'Chinese README does not disclose the installation-level service Bearer',
+		/每种客户端最多一张卡[\s\S]{0,220}活动凭据/i,
+		'Chinese README does not define per-Agent integration credentials',
 		errors,
 	);
 	requirePattern(
 		chineseReadme,
-		/authorization code \+ PKCE 配对/i,
-		'Chinese README does not define OAuth authorization-code and PKCE pairing',
+		/authorization code \+ PKCE[\s\S]{0,180}resource 绑定/i,
+		'Chinese README does not define OAuth authorization-code, PKCE, and resource binding',
 		errors,
 	);
 	requirePattern(
 		privacy,
-		/installation-level service credential/i,
-		'privacy policy does not disclose the installation-level service credential',
+		/digest per Agent integration/i,
+		'privacy policy does not disclose per-Agent credential digests',
 		errors,
 	);
 	requirePattern(
 		privacy,
-		/local OAuth token endpoint/i,
-		'privacy policy does not disclose local OAuth credential delivery',
+		/local OAuth discovery[\s\S]{0,140}token[\s\S]{0,80}revocation/i,
+		'privacy policy does not disclose local OAuth credential delivery and revocation',
 		errors,
 	);
 	requirePattern(
 		agentConnection,
-		/same external Streamable HTTP Session/i,
-		'Agent connection contract does not require same-session protocol-use evidence',
+		/Every request revalidates the Bearer[\s\S]{0,180}Session is bound/i,
+		'Agent connection contract does not define request-time credential and Session binding',
 		errors,
 	);
 	requirePattern(
@@ -258,8 +258,8 @@ function checkLocalTrustSemantics(contents, errors) {
 	);
 	requirePattern(
 		trustBoundaries,
-		/installation-level service Bearer/i,
-		'trust boundaries do not define the installation-level service Bearer',
+		/per-Agent Bearer/i,
+		'trust boundaries do not define the per-Agent Bearer boundary',
 		errors,
 	);
 	requirePattern(
@@ -276,8 +276,8 @@ function checkLocalTrustSemantics(contents, errors) {
 	);
 	requirePattern(
 		trustBoundaries,
-		/Pairing codes[\s\S]{0,220}(?:memory state|one-use memory)/i,
-		'trust boundaries do not keep pairing state memory-only',
+		/pending approvals[\s\S]{0,180}memory-only/i,
+		'trust boundaries do not keep pending OAuth state memory-only',
 		errors,
 	);
 }

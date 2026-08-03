@@ -21,27 +21,30 @@ import {
 } from './handler';
 import {
 	LocalOAuthAuthorizationServer,
-	type PairingTicket,
-	type PairingTicketStatus,
+	type BoundOAuthClient,
 } from './local-oauth';
+import type {
+	AgentCredentialVerifier,
+	AuthenticatedCredentialContext,
+	OAuthIntegrationPort,
+} from './agent-auth';
 import type { OAuthUiLocale } from './oauth-page';
 
 export type { OAuthUiLocale } from './oauth-page';
-export type { PairingTicket, PairingTicketState, PairingTicketStatus } from './local-oauth';
+export type { AgentAuthMode, AuthenticatedCredentialContext, OAuthIntegrationPort } from './agent-auth';
 
 export type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed' | 'port_conflict';
 
 export interface StreamableHttpRuntimeOptions {
 	localTrust?: boolean;
-	serviceToken: string;
-	getSharedBearerToken?: () => string | Promise<string>;
+	credentialVerifier: AgentCredentialVerifier;
+	writebackConfirmationSecret: string | Uint8Array;
+	oauthIntegration?: OAuthIntegrationPort;
+	getBoundOAuthClients?: () => readonly BoundOAuthClient[];
 	getOAuthUiLocale?: () => OAuthUiLocale;
 	host?: string;
 	port?: number;
 	path?: string;
-	pairingTicketTtlMs?: number;
-	pairingTicketCapacity?: number;
-	pairingTicketMaxAttempts?: number;
 	authorizationCodeTtlMs?: number;
 	authorizationCodeCapacity?: number;
 	clientRegistrationTtlMs?: number;
@@ -100,20 +103,16 @@ const DEFAULT_MAX_SESSIONS = 32;
 const DEFAULT_MAX_STREAMS_PER_SESSION = 2;
 const DEFAULT_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30 * 1000;
-const DEFAULT_PAIRING_TICKET_TTL_MS = 5 * 60 * 1000;
-const DEFAULT_PAIRING_TICKET_CAPACITY = 3;
-const DEFAULT_PAIRING_TICKET_MAX_ATTEMPTS = 5;
 const DEFAULT_AUTHORIZATION_CODE_TTL_MS = 2 * 60 * 1000;
 const DEFAULT_AUTHORIZATION_CODE_CAPACITY = 32;
 const DEFAULT_CLIENT_REGISTRATION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_CLIENT_REGISTRATION_CAPACITY = 32;
-const MIN_SERVICE_TOKEN_BYTES = 32;
 
 export class StreamableHttpMcpRuntime {
 	private host: string;
 	private port: number;
 	private path: string;
-	private serviceTokenHash: Buffer;
+	private credentialVerifier: AgentCredentialVerifier;
 	private maxRequestBytes: number;
 	private maxSessions: number;
 	private maxStreamsPerSession: number;
@@ -136,13 +135,19 @@ export class StreamableHttpMcpRuntime {
 		if (options.localTrust !== true) {
 			throw new Error('MCP Runtime requires explicit localTrust: true.');
 		}
+		if (!options.credentialVerifier || typeof options.credentialVerifier.verifyBearer !== 'function') {
+			throw new Error('MCP Runtime requires an explicit per-Agent credentialVerifier.');
+		}
+		if (!options.writebackConfirmationSecret || (typeof options.writebackConfirmationSecret !== 'string' && !(options.writebackConfirmationSecret instanceof Uint8Array))) {
+			throw new Error('MCP Runtime requires an explicit writebackConfirmationSecret.');
+		}
 		this.host = options.host || DEFAULT_HOST;
 		if (this.host !== DEFAULT_HOST) {
 			throw new Error(`MCP Runtime local trust requires host ${DEFAULT_HOST}.`);
 		}
 		this.port = options.port ?? 58437;
 		this.path = options.path || DEFAULT_PATH;
-		this.serviceTokenHash = hashServiceToken(options.serviceToken);
+		this.credentialVerifier = options.credentialVerifier;
 		this.maxRequestBytes = normalizePositiveLimit(
 			options.maxRequestBytes,
 			DEFAULT_MAX_REQUEST_BYTES,
@@ -168,30 +173,15 @@ export class StreamableHttpMcpRuntime {
 			DEFAULT_REQUEST_TIMEOUT_MS,
 			'requestTimeoutMs'
 		);
-		this.oauthServer = options.getSharedBearerToken
+		this.oauthServer = options.oauthIntegration
 			? new LocalOAuthAuthorizationServer({
-				serviceTokenHash: this.serviceTokenHash,
-				getSharedBearerToken: options.getSharedBearerToken,
+				oauthIntegration: options.oauthIntegration,
+				getBoundOAuthClients: options.getBoundOAuthClients,
 				getOAuthUiLocale: options.getOAuthUiLocale,
 				getOrigin: () => this.runtimeOrigin(),
 				getResource: () => `${this.runtimeOrigin()}${this.path}`,
 				maxRequestBytes: this.maxRequestBytes,
 				requestTimeoutMs: this.requestTimeoutMs,
-				pairingTicketTtlMs: normalizePositiveLimit(
-					options.pairingTicketTtlMs,
-					DEFAULT_PAIRING_TICKET_TTL_MS,
-					'pairingTicketTtlMs'
-				),
-				pairingTicketCapacity: normalizePositiveLimit(
-					options.pairingTicketCapacity,
-					DEFAULT_PAIRING_TICKET_CAPACITY,
-					'pairingTicketCapacity'
-				),
-				pairingTicketMaxAttempts: normalizePositiveLimit(
-					options.pairingTicketMaxAttempts,
-					DEFAULT_PAIRING_TICKET_MAX_ATTEMPTS,
-					'pairingTicketMaxAttempts'
-				),
 				authorizationCodeTtlMs: normalizePositiveLimit(
 					options.authorizationCodeTtlMs,
 					DEFAULT_AUTHORIZATION_CODE_TTL_MS,
@@ -225,7 +215,7 @@ export class StreamableHttpMcpRuntime {
 			memoryRules: options.memoryRules,
 			contentLanguage: options.contentLanguage,
 			contentLanguageSource: options.contentLanguageSource,
-			writebackConfirmationSecret: this.serviceTokenHash,
+			writebackConfirmationSecret: options.writebackConfirmationSecret,
 			runtimeVersion: this.runtimeVersion,
 			principalId: LOCAL_TRUST_PRINCIPAL_ID,
 			credentialCapabilities: LOCAL_TRUST_CAPABILITIES,
@@ -240,24 +230,32 @@ export class StreamableHttpMcpRuntime {
 			memoryRules: options.memoryRules,
 			contentLanguage: options.contentLanguage,
 			contentLanguageSource: options.contentLanguageSource,
-			writebackConfirmationSecret: this.serviceTokenHash,
+			writebackConfirmationSecret: options.writebackConfirmationSecret,
 			runtimeVersion: this.runtimeVersion,
 			transport: STREAMABLE_HTTP_TRANSPORT,
 		});
 	}
 
-	/**
-	 * Issues a one-time local pairing code for the Agent selected in Obsidian.
-	 */
-	issuePairingTicket(expectedClientId: string): PairingTicket {
-		if (this.state !== 'running' || !this.oauthServer) {
-			throw new Error('OAuth pairing is unavailable until the runtime is running with a token callback.');
+	closeSessionsForIntegration(integrationId: string): number {
+		let closed = 0;
+		for (const [sessionId, session] of this.sessions.entries()) {
+			if (session.integrationId !== integrationId) continue;
+			this.closeSession(session);
+			this.sessions.delete(sessionId);
+			closed += 1;
 		}
-		return this.oauthServer.issuePairingTicket(expectedClientId);
+		return closed;
 	}
 
-	getPairingTicketStatus(id: string): PairingTicketStatus | null {
-		return this.oauthServer?.getPairingTicketStatus(id) || null;
+	getSessionSnapshot(): Array<Pick<RuntimeSession, 'sessionId' | 'integrationId' | 'credentialId' | 'authMode' | 'createdAt' | 'lastSeenAt'>> {
+		return [...this.sessions.values()].map((session) => ({
+			sessionId: session.sessionId,
+			integrationId: session.integrationId,
+			credentialId: session.credentialId,
+			authMode: session.authMode,
+			createdAt: session.createdAt,
+			lastSeenAt: session.lastSeenAt,
+		}));
 	}
 
 	async start(): Promise<StreamableHttpRuntimeStatus> {
@@ -432,9 +430,9 @@ export class StreamableHttpMcpRuntime {
 			response.end();
 			return;
 		}
-		const bearerStatus = this.serviceBearerStatus(request);
-		if (bearerStatus !== 'valid') {
-			this.recordRequestRejection(bearerStatus === 'missing' ? 'auth_missing' : 'auth_invalid');
+		const credentialResult = await this.authenticateRequest(request);
+		if (credentialResult === 'missing' || credentialResult === 'invalid') {
+			this.recordRequestRejection(credentialResult === 'missing' ? 'auth_missing' : 'auth_invalid');
 			if (this.oauthServer) {
 				response.setHeader(
 					'WWW-Authenticate',
@@ -459,15 +457,15 @@ export class StreamableHttpMcpRuntime {
 				);
 				return;
 			}
-			await this.handlePost(request, response);
+			await this.handlePost(request, response, credentialResult);
 			return;
 		}
 		if (request.method === 'GET') {
-			this.handleGet(request, response);
+			this.handleGet(request, response, credentialResult);
 			return;
 		}
 		if (request.method === 'DELETE') {
-			this.handleDelete(request, response);
+			this.handleDelete(request, response, credentialResult);
 			return;
 		}
 		this.writeJson(
@@ -480,7 +478,8 @@ export class StreamableHttpMcpRuntime {
 
 	private async handlePost(
 		request: IncomingMessage,
-		response: ServerResponse
+		response: ServerResponse,
+		credential: AuthenticatedCredentialContext
 	): Promise<void> {
 		let body = '';
 		try {
@@ -539,8 +538,8 @@ export class StreamableHttpMcpRuntime {
 			return;
 		}
 		const session = isInitialize
-			? this.createSession()
-			: this.requireSession(request, response);
+			? this.createSession(credential)
+			: this.requireSession(request, response, credential);
 		if (!session) {
 			return;
 		}
@@ -557,8 +556,12 @@ export class StreamableHttpMcpRuntime {
 		this.writeJson(response, 200, result, request);
 	}
 
-	private handleGet(request: IncomingMessage, response: ServerResponse): void {
-		const session = this.requireSession(request, response);
+	private handleGet(
+		request: IncomingMessage,
+		response: ServerResponse,
+		credential: AuthenticatedCredentialContext
+	): void {
+		const session = this.requireSession(request, response, credential);
 		if (!session) {
 			return;
 		}
@@ -583,8 +586,12 @@ export class StreamableHttpMcpRuntime {
 		});
 	}
 
-	private handleDelete(request: IncomingMessage, response: ServerResponse): void {
-		const session = this.requireSession(request, response);
+	private handleDelete(
+		request: IncomingMessage,
+		response: ServerResponse,
+		credential: AuthenticatedCredentialContext
+	): void {
+		const session = this.requireSession(request, response, credential);
 		if (!session) {
 			return;
 		}
@@ -594,12 +601,15 @@ export class StreamableHttpMcpRuntime {
 		response.end();
 	}
 
-	private createSession(): RuntimeSession {
+	private createSession(credential: AuthenticatedCredentialContext): RuntimeSession {
 		const sessionId = crypto.randomUUID();
 		const session: RuntimeSession = {
 			sessionId,
 			principalId: LOCAL_TRUST_PRINCIPAL_ID,
-			credentialCapabilities: LOCAL_TRUST_CAPABILITIES,
+			credentialCapabilities: credential.capabilities,
+			integrationId: credential.integrationId,
+			credentialId: credential.credentialId,
+			authMode: credential.authMode,
 			agentId: sessionId,
 			clientName: null,
 			clientVersion: null,
@@ -615,7 +625,8 @@ export class StreamableHttpMcpRuntime {
 
 	private requireSession(
 		request: IncomingMessage,
-		response: ServerResponse
+		response: ServerResponse,
+		credential: AuthenticatedCredentialContext
 	): RuntimeSession | null {
 		const sessionId = this.firstHeaderValue(request.headers['mcp-session-id']);
 		if (!sessionId) {
@@ -633,6 +644,19 @@ export class StreamableHttpMcpRuntime {
 				response,
 				404,
 				this.errorResponse(null, -32004, 'Unknown MCP session.'),
+				request
+			);
+			return null;
+		}
+		if (
+			session.integrationId !== credential.integrationId
+			|| session.credentialId !== credential.credentialId
+			|| session.authMode !== credential.authMode
+		) {
+			this.writeJson(
+				response,
+				401,
+				this.errorResponse(null, -32001, 'MCP credential does not match the Session.'),
 				request
 			);
 			return null;
@@ -779,7 +803,9 @@ export class StreamableHttpMcpRuntime {
 		}
 	}
 
-	private serviceBearerStatus(request: IncomingMessage): 'valid' | 'missing' | 'invalid' {
+	private async authenticateRequest(
+		request: IncomingMessage
+	): Promise<AuthenticatedCredentialContext | 'missing' | 'invalid'> {
 		const authorization = this.firstHeaderValue(request.headers.authorization);
 		if (!authorization) {
 			return 'missing';
@@ -788,10 +814,12 @@ export class StreamableHttpMcpRuntime {
 		if (!match) {
 			return 'invalid';
 		}
-		const presentedHash = crypto.createHash('sha256').update(match[1], 'utf8').digest();
-		return crypto.timingSafeEqual(presentedHash, this.serviceTokenHash)
-			? 'valid'
-			: 'invalid';
+		try {
+			const context = await this.credentialVerifier.verifyBearer(match[1]);
+			return context || 'invalid';
+		} catch {
+			return 'invalid';
+		}
 	}
 
 	private recordRequestRejection(
@@ -939,17 +967,4 @@ function normalizePositiveLimit(
 		throw new Error(`${name} must be a positive safe integer.`);
 	}
 	return resolved;
-}
-
-function hashServiceToken(serviceToken: string): Buffer {
-	if (
-		typeof serviceToken !== 'string'
-		|| Buffer.byteLength(serviceToken, 'utf8') < MIN_SERVICE_TOKEN_BYTES
-		|| /\s/u.test(serviceToken)
-	) {
-		throw new Error(
-			`serviceToken must contain at least ${MIN_SERVICE_TOKEN_BYTES} non-whitespace UTF-8 bytes.`
-		);
-	}
-	return crypto.createHash('sha256').update(serviceToken, 'utf8').digest();
 }

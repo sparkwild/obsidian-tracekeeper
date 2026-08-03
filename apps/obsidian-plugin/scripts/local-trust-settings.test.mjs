@@ -21,37 +21,38 @@ try {
 	});
 
 	const settings = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
-	const stableToken = Buffer.alloc(32, 0x5a).toString('base64url');
-	const replacementToken = Buffer.alloc(32, 0xa5).toString('base64url');
-	const generatedToken = settings.generateRuntimeAccessToken();
+	const stableSecret = Buffer.alloc(32, 0x5a).toString('base64url');
+	const replacementSecret = Buffer.alloc(32, 0xa5).toString('base64url');
+	const generatedSecret = settings.generateRuntimeSecuritySecret();
 
-	assert.match(generatedToken, /^[A-Za-z0-9_-]{43}$/);
-	assert.equal(Buffer.from(generatedToken, 'base64url').byteLength, 32);
-	assert.equal(settings.isRuntimeAccessToken(generatedToken), true);
-	assert.equal(settings.isRuntimeAccessToken(`${generatedToken}=`), false);
-	assert.equal(settings.isRuntimeAccessToken('too-short'), false);
+	assert.match(generatedSecret, /^[A-Za-z0-9_-]{43}$/);
+	assert.equal(Buffer.from(generatedSecret, 'base64url').byteLength, 32);
+	assert.equal(settings.isRuntimeSecuritySecret(generatedSecret), true);
+	assert.equal(settings.isRuntimeSecuritySecret(`${generatedSecret}=`), false);
+	assert.equal(settings.isRuntimeSecuritySecret('too-short'), false);
 
 	const newInstall = settings.normalizeLocalTrustSettings({
 		runtimeEnabled: true,
 		customSetting: 'preserved',
-	}, () => stableToken);
-	assert.equal(newInstall.runtimeAccessToken, stableToken);
+	}, () => stableSecret);
+	assert.equal(newInstall.runtimeSecuritySecret, stableSecret);
+	assert.deepEqual(newInstall.agentIntegrations, []);
 	assert.equal(newInstall.customSetting, 'preserved');
 
 	const restarted = settings.normalizeLocalTrustSettings(newInstall, () => {
-		throw new Error('stable token should not be regenerated');
+		throw new Error('stable secret should not be regenerated');
 	});
-	assert.equal(restarted.runtimeAccessToken, stableToken);
+	assert.equal(restarted.runtimeSecuritySecret, stableSecret);
 
 	const invalidCurrent = settings.normalizeLocalTrustSettings({
 		runtimeAccessToken: 'invalid-current-secret',
-	}, () => replacementToken);
-	assert.equal(invalidCurrent.runtimeAccessToken, replacementToken);
+	}, () => replacementSecret);
+	assert.equal(invalidCurrent.runtimeSecuritySecret, replacementSecret);
 
 	const sanitized = settings.stripLegacyConnectionSettings({
 		runtimeEnabled: true,
 		runtimePort: 58437,
-		runtimeToken: stableToken,
+		runtimeToken: stableSecret,
 		runtimeTokenCreatedAt: '2026-07-01T00:00:00.000Z',
 		runtimeCredentials: [
 			{
@@ -68,35 +69,40 @@ try {
 		runtimePort: 58437,
 		customSetting: 'preserved',
 	});
-	assert.equal(JSON.stringify(sanitized).includes(stableToken), false);
+	assert.equal(JSON.stringify(sanitized).includes(stableSecret), false);
 	assert.equal(JSON.stringify(sanitized).includes('legacy-client-secret'), false);
 	assert.deepEqual(settings.stripLegacyConnectionSettings(null), {});
 	assert.deepEqual(settings.stripLegacyConnectionSettings([]), {});
 
 	const upgraded = settings.normalizeLocalTrustSettings({
-		runtimeToken: stableToken,
+		runtimeToken: stableSecret,
 		runtimeCredentials: [{ token: 'legacy-client-secret' }],
-	}, () => replacementToken);
-	assert.equal(upgraded.runtimeAccessToken, replacementToken);
-	assert.equal(JSON.stringify(upgraded).includes(stableToken), false);
+	}, () => replacementSecret);
+	assert.equal(upgraded.runtimeSecuritySecret, replacementSecret);
+	assert.equal(upgraded.agentIntegrations.length, 0);
+	assert.equal(JSON.stringify(upgraded).includes(stableSecret), false);
 	assert.equal(JSON.stringify(upgraded).includes('legacy-client-secret'), false);
 
 	const mainSource = fs.readFileSync(path.resolve('src/main.ts'), 'utf8');
 	assert.match(mainSource, /normalizeLocalTrustSettings\(raw\)/);
 	assert.match(mainSource, /saveData\(stripLegacyConnectionSettings\(this\.settings\)\)/);
-	assert.match(mainSource, /runtimeAccessToken:\s*string/);
-	assert.match(mainSource, /serviceToken:\s*this\.settings\.runtimeAccessToken/);
-	assert.match(mainSource, /getSharedBearerToken:\s*\(\)\s*=>\s*this\.settings\.runtimeAccessToken/);
+	assert.match(mainSource, /runtimeSecuritySecret:\s*string/);
+	assert.match(mainSource, /agentIntegrations:\s*AgentIntegrationRecord\[\]/);
 	assert.match(mainSource, /getOAuthUiLocale:\s*\(\)\s*=>\s*\(isChineseLanguage\(getLanguage\(\)\)\s*\?\s*'zh-CN'\s*:\s*'en'\)/);
-	assert.match(mainSource, /issueAgentPairingTicket\(clientId:\s*string\)/);
-	assert.match(mainSource, /getAgentPairingTicketStatus\(id:\s*string\)/);
+	assert.match(mainSource, /credentialVerifier:\s*\{/);
+	assert.match(mainSource, /writebackConfirmationSecret:\s*this\.settings\.runtimeSecuritySecret/);
+	assert.match(mainSource, /issueManualBearerCredential\(integrationId:\s*string\)/);
+	assert.match(mainSource, /decideOAuthRequest\(requestId:\s*string/);
+	assert.match(mainSource, /revokeAllAgentAccess\(\)/);
 	assert.match(mainSource, /buildGeneratedClientSetup\(profile,\s*this\.getMcpConnectionUrl\(\)\)/);
 	assert.doesNotMatch(mainSource, /readClientConfigStatus\(/);
 	assert.doesNotMatch(mainSource, /buildClientConfigTexts\(\s*profile,\s*this\.getMcpConnectionUrl\(\)/);
-	assert.match(mainSource, /accessProtected:\s*isRuntimeAccessToken\(this\.settings\.runtimeAccessToken\)/);
+	assert.match(mainSource, /accessProtected:\s*isRuntimeSecuritySecret\(this\.settings\.runtimeSecuritySecret\)/);
+	assert.doesNotMatch(mainSource, /runtimeAccessToken\s*:/);
 	assert.doesNotMatch(mainSource, /runtimeToken\s*[?:]/);
 	assert.doesNotMatch(mainSource, /runtimeCredentials\s*[?:]/);
 	assert.doesNotMatch(mainSource, /regenerateRuntimeToken|rotateRuntimeCredential|setRuntimeCredentialProfile/);
+	assert.doesNotMatch(mainSource, /issueAgentPairingTicket|getAgentPairingTicketStatus|serviceToken|getSharedBearerToken|supportsLocalOAuth|markClientConfigured/);
 
 	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 31 })}\n`);
 } finally {

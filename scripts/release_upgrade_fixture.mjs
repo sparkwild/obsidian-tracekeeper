@@ -41,9 +41,11 @@ const LEGACY_CREDENTIAL_KEYS = Object.freeze([
 	'runtimeToken',
 	'runtimeTokenCreatedAt',
 	'runtimeCredentials',
+	'runtimeAccessToken',
+	'pairingTickets',
+	'pairingCodes',
 ]);
 const ONBOARDING_CONNECTION_EVIDENCE_KEYS = Object.freeze([
-	'clientConfiguredAt',
 	'connectionVerifiedAt',
 	'connectionVerifiedSessionId',
 	'firstRecallCompletedAt',
@@ -636,13 +638,17 @@ const normalizeSettingsEvidence = (settings) => {
 		legacy_credentials: Object.fromEntries(
 			LEGACY_CREDENTIAL_KEYS.map((key) => [key, Object.hasOwn(settings, key)])
 		),
-		current_access_token: {
-			present: Object.hasOwn(settings, 'runtimeAccessToken'),
-			valid_32_byte_base64url: typeof settings.runtimeAccessToken === 'string'
-				&& /^[A-Za-z0-9_-]{43}$/.test(settings.runtimeAccessToken)
-				&& Buffer.from(settings.runtimeAccessToken, 'base64url').byteLength === 32
-				&& Buffer.from(settings.runtimeAccessToken, 'base64url').toString('base64url') === settings.runtimeAccessToken,
-			matches_previous_fixture_token: settings.runtimeAccessToken === stableSyntheticLegacyToken(),
+		runtime_security_secret: {
+			present: Object.hasOwn(settings, 'runtimeSecuritySecret'),
+			valid_32_byte_base64url: typeof settings.runtimeSecuritySecret === 'string'
+				&& /^[A-Za-z0-9_-]{43}$/.test(settings.runtimeSecuritySecret)
+				&& Buffer.from(settings.runtimeSecuritySecret, 'base64url').byteLength === 32
+				&& Buffer.from(settings.runtimeSecuritySecret, 'base64url').toString('base64url') === settings.runtimeSecuritySecret,
+			matches_previous_fixture_token: settings.runtimeSecuritySecret === stableSyntheticLegacyToken(),
+		},
+		agent_integrations: {
+			present: Object.hasOwn(settings, 'agentIntegrations'),
+			count: Array.isArray(settings.agentIntegrations) ? settings.agentIntegrations.length : null,
 		},
 		agent_skill_state: {
 			onboarding_present: onboarding !== null,
@@ -899,14 +905,15 @@ export function compareUpgradeSnapshots(
 		Object.values(after.settings.legacy_credentials).every((present) => !present),
 		'Upgrade retained a legacy credential key.'
 	);
-	assert(!before.settings.current_access_token.present, 'Before fixture unexpectedly contains a current access token.');
+	assert(!before.settings.runtime_security_secret.present, 'Before fixture unexpectedly contains a runtime security secret.');
 	assert(
 		before.settings.memory_rules_version === before.previous_memory_rules_version,
 		'Before memory rules version does not match the fixture baseline.'
 	);
-	assert(after.settings.current_access_token.present, 'Upgrade did not create a current access token.');
-	assert(after.settings.current_access_token.valid_32_byte_base64url, 'Upgrade created an invalid current access token.');
-	assert(!after.settings.current_access_token.matches_previous_fixture_token, 'Upgrade reused the legacy fixture token.');
+	assert(after.settings.runtime_security_secret.present, 'Upgrade did not create a runtime security secret.');
+	assert(after.settings.runtime_security_secret.valid_32_byte_base64url, 'Upgrade created an invalid runtime security secret.');
+	assert(!after.settings.runtime_security_secret.matches_previous_fixture_token, 'Upgrade reused the legacy fixture token as an internal secret.');
+	assert(after.settings.agent_integrations.present && after.settings.agent_integrations.count === 0, 'Upgrade did not initialize empty Agent integrations.');
 	const beforeAgentSkillState = before.settings.agent_skill_state;
 	const afterAgentSkillState = after.settings.agent_skill_state;
 	assert(!beforeAgentSkillState.onboarding_present, 'Published fixture unexpectedly contains candidate onboarding state.');
@@ -933,8 +940,8 @@ export function compareUpgradeSnapshots(
 		protected_vault_files_preserved: beforeProtectedFiles.size,
 		identities_unique: Object.keys(before.identity_occurrences).length,
 		legacy_credentials_removed: true,
-		legacy_token_rotated: true,
-		current_access_token_valid: true,
+		legacy_token_rejected: true,
+		runtime_security_secret_valid: true,
 		agent_reauthorization_required: true,
 		managed_skill_ownership_claimed: false,
 		preserved_settings: Object.keys(before.settings.preserved),

@@ -20,3 +20,4 @@ __exportStar(require("./handler"), exports);
 __exportStar(require("./http-runtime"), exports);
 __exportStar(require("./observed-client"), exports);
 __exportStar(require("./result-validation"), exports);
+__exportStar(require("./agent-auth"), exports);

@@ -1,18 +1,11 @@
 export type OAuthUiLocale = 'zh-CN' | 'en';
-export type OAuthPageErrorKind = 'invalid_request' | 'invalid_client' | 'invalid_pairing_code' | 'confirmation_expired' | 'pairing_expired';
-export interface OAuthPairingPageModel {
-    actionUrl: string;
-    hiddenFields: ReadonlyArray<readonly [string, string]>;
+export type OAuthPageErrorKind = 'invalid_request' | 'invalid_client' | 'access_denied' | 'temporarily_unavailable' | 'server_error' | 'authorization_expired';
+export interface OAuthWaitingPageModel {
     clientName: string;
-}
-export interface OAuthConfirmationPageModel {
-    actionUrl: string;
-    hiddenFields: ReadonlyArray<readonly [string, string]>;
-    expectedClientId: string;
-    clientName: string;
+    expiresAt: string;
+    refreshUrl: string;
 }
 export declare function normalizeOAuthUiLocale(value: unknown): OAuthUiLocale;
 export declare function oauthContentSecurityPolicy(callbackOrigin?: string): string;
-export declare function renderOAuthPairingPage(locale: OAuthUiLocale, model: OAuthPairingPageModel): string;
-export declare function renderOAuthConfirmationPage(locale: OAuthUiLocale, model: OAuthConfirmationPageModel): string;
+export declare function renderOAuthWaitingPage(locale: OAuthUiLocale, model: OAuthWaitingPageModel): string;
 export declare function renderOAuthErrorPage(locale: OAuthUiLocale, kind: OAuthPageErrorKind): string;

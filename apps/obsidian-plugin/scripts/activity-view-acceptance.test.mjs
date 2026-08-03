@@ -70,6 +70,9 @@ assert.ok(runtimeStatusSource.includes('openSettingsTab'));
 
 assert.ok(activityControllerSource.includes('recentAgents,'));
 assert.ok(activityControllerSource.includes('buildRecentObservedClientConnections'));
+assert.ok(activityControllerSource.includes('integration_id'), 'activity audit parser must expose integration id');
+assert.ok(activityControllerSource.includes('credential_id'), 'activity audit parser must expose credential id');
+assert.ok(activityControllerSource.includes('readAgentAuthMode'));
 assert.ok(activityControllerSource.includes('RUNTIME_LOG_MAX_EVENTS + 1'));
 assert.equal(
 	/loadRuntimeLogSnapshot[\s\S]*?readRecentAuditEvents\(Number\.MAX_SAFE_INTEGER\)/.test(activityControllerSource),

@@ -1,13 +1,14 @@
 import type { AgentConnectionRecord } from '../activity/activity-model';
-import {
-	buildSuccessfullyUsedAgentSummary,
-	type ActivityAgentGroup,
-} from '../activity/activity-view-model';
+import type { AgentIntegrationSnapshot } from './agent-integrations';
 import type { GeneratedClientConfig } from '../client-config/client-config';
+import type { PendingOAuthApproval } from '../activity/activity-model';
+import { buildConnectionPresentation, type ConnectionPresentation } from '../client-config/agent-connection-view-model';
 
 export interface VisibleAgentConfiguration {
-	agent: ActivityAgentGroup;
+	agent: AgentConnectionRecord | null;
 	config: GeneratedClientConfig;
+	integration: AgentIntegrationSnapshot;
+	presentation: ConnectionPresentation;
 }
 
 export interface AgentConfigurationViewModel {
@@ -17,22 +18,34 @@ export interface AgentConfigurationViewModel {
 
 export function buildAgentConfigurationViewModel(
 	clientConfigs: GeneratedClientConfig[],
-	recentAgents: AgentConnectionRecord[]
+	recentAgents: AgentConnectionRecord[],
+	integrations: AgentIntegrationSnapshot[] = [],
+	pendingOAuthRequests: PendingOAuthApproval[] = []
 ): AgentConfigurationViewModel {
-	const summary = buildSuccessfullyUsedAgentSummary(recentAgents);
-	const visibleClientIds = new Set<string>();
-	const visibleAgents = summary.agentGroups.flatMap((agent) => {
-		const config = clientConfigs.find(
-			(candidate) => candidate.clientId === agent.observedClientType
-		);
-		if (!config) {
-			return [];
-		}
-		visibleClientIds.add(config.clientId);
-		return [{ agent, config }];
+	const integrationByClient = new Map(integrations.map((integration) => [integration.clientProfileId, integration]));
+	const visibleAgents = clientConfigs.flatMap((config) => {
+		const integration = integrationByClient.get(config.clientId);
+		if (!integration) return [];
+		const agent = recentAgents.find((candidate) => candidate.integrationId === integration.integrationId) ?? null;
+		return [{
+			config,
+			integration,
+			agent,
+			presentation: buildConnectionPresentation({
+				authMode: integration.authMode,
+				setupCommandCopiedAt: integration.setupCommandCopiedAt,
+					hasCredential: Boolean(integration.credential),
+					hasPendingApproval: integration.authMode === 'oauth' && pendingOAuthRequests.length > 0,
+					clientReached: Boolean(agent?.connectedAt) || (integration.authMode === 'oauth' && Boolean(integration.lastAuthorizedAt)),
+				connected: Boolean(agent?.connectedAt),
+				used: Boolean(agent?.lastUsedAt),
+				revoked: Boolean(integration.lastRevokedAt) && !integration.credential,
+				needsUpdate: config.configState === 'needs_update',
+			}),
+		}];
 	});
 	return {
 		visibleAgents,
-		candidateConfigs: clientConfigs.filter((config) => !visibleClientIds.has(config.clientId)),
+		candidateConfigs: clientConfigs.filter((config) => !integrationByClient.has(config.clientId)),
 	};
 }

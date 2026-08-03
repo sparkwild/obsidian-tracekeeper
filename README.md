@@ -47,16 +47,17 @@ Tracekeeper treats every AI suggestion as a candidate memory proposal. You can i
 1. Write and collect notes in Obsidian as usual.
 2. Enable Tracekeeper and open **Settings -> Community plugins -> Tracekeeper**.
 3. In **MCP Service**, start the Runtime and confirm that the credential-free loopback endpoint reports **Local access protected**.
-4. In **Agent Configuration**, choose **Add Agent** and one AI tool. Run only the public, client-native command shown there. For OAuth-capable clients, generate a short-lived pairing code and enter it on Tracekeeper's local authorization page. Clients without a verified local OAuth path show an honest native/manual fallback.
-5. Install the recommended companion Skill separately when available, then reload the AI tool if required and ask it to initialize Tracekeeper and call a `tracekeeper.*` tool. The Agent appears in the normal list only after one external Session both initializes and successfully uses Tracekeeper.
-6. Review proposed memory, wiki, graph, or migration changes in **Knowledge Change Review**.
-7. Edit a change proposal, approve it, return it for revision, or do not accept it. An approved change still requires a preview and explicit apply confirmation before it enters the vault.
+4. In **Agent Configuration**, choose **Add Agent** and one AI tool. The persistent card appears immediately. Run only the public, client-native command shown there; copy is explicit and remains unverified until the client reaches the endpoint.
+5. Use the card's default OAuth flow when the client supports it: the browser waits while Obsidian shows an explicit Allow/Deny approval. Choose manual Bearer only when the client can safely set `Authorization: Bearer`; the plaintext is shown once in the current modal and is never stored.
+6. Install the recommended companion Skill separately when available. Skill installation, authorization, connection, and usage remain independent; reload the AI tool if required and ask it to initialize Tracekeeper and call a `tracekeeper.*` tool.
+7. Review proposed memory, wiki, graph, or migration changes in **Knowledge Change Review**.
+8. Edit a change proposal, approve it, return it for revision, or do not accept it. An approved change still requires a preview and explicit apply confirmation before it enters the vault.
 
 ## Agent And MCP Connection
 
-Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian is open. Production binds to exact `127.0.0.1`, and every MCP resource request requires one installation-level service Bearer shared by this plugin installation. The endpoint, client-native command, and authorization URL never contain credentials. Supported clients discover Tracekeeper's local OAuth metadata, complete authorization-code + PKCE pairing, store the returned access token through their own credential mechanism, and send it in the `Authorization` Header.
+Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian is open. Production binds to exact `127.0.0.1`, and every MCP resource request requires a credential belonging to one persistent Agent integration. The endpoint and client-native command never contain credentials. Supported clients discover Tracekeeper's local OAuth metadata, complete authorization-code + PKCE with RFC 8707 resource binding, and receive a per-Agent access token. Manual Bearer credentials use the same verifier, Session binding, revocation, and audit foundation.
 
-The service Bearer is an access gate, not proof of client identity. OAuth does not create per-client credentials or permissions. Successful requests use the Runtime's fixed `local-user` capability set, while MCP `clientInfo` is retained only as self-reported observation data. Removing one client configuration does not revoke that client at the server. The advanced global credential reset terminates all Sessions and requires every configured client to authorize again.
+Each Agent credential is an access gate bound to its integration and Session, not to untrusted `clientInfo`. OAuth and manual Bearer credentials are independently replaceable and revocable; replacing or revoking one closes its Sessions without changing other cards or Skill files. Successful requests still use the Runtime's fixed `local-user` capability set.
 
 AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and submit memory updates according to your memory rules. Global memory goes to review by default; when you enable project auto-save, each eligible operation creates its own immutable Markdown entry under a stable project hub.
 
@@ -112,7 +113,7 @@ Graph health never creates notes or rewrites links by itself. Use the report, or
 
 ## Safety Model
 
-Tracekeeper is desktop-only because it hosts a local MCP Runtime. Every MCP resource request requires the installation-level service Bearer. Public OAuth routes cannot dispatch tools. The Runtime validates `Host`, restricts browser-style CORS to Obsidian and loopback origins, enforces PKCE and exact loopback redirects, and rejects legacy query-parameter credentials.
+Tracekeeper is desktop-only because it hosts a local MCP Runtime. Every MCP resource request requires a valid credential for one persistent Agent integration. Public OAuth routes cannot dispatch tools. The Runtime validates `Host`, restricts browser-style CORS to Obsidian and loopback origins, enforces PKCE and exact loopback redirects, and rejects query-parameter credentials.
 
 MCP writes are intentionally narrow:
 
@@ -120,10 +121,10 @@ MCP writes are intentionally narrow:
 - generated records do not overwrite existing notes
 - approved writeback appends to an existing target note from an approved proposal
 - multi-step task and writeback operations are idempotent, journaled, and resumed on runtime startup
-- every Session has a random identifier, every Session request revalidates the service Bearer, and request-size, session-count, stream, and idle-time limits remain enforced
+- every Session has a random identifier, every Session request revalidates its integration-bound credential, and request-size, session-count, stream, and idle-time limits remain enforced
 - delete, rename, bulk rewrite, and system command execution are not available MCP actions
 
-Normal Agent configuration is owned by each client's official OAuth/MCP entry; Tracekeeper does not read or write cross-platform client configuration paths. Confirmed managed Skill installation remains a recoverable Vault-outside write. Pairing codes, authorization codes, the service credential, token responses, and Authorization Headers never enter connection URLs, copied commands, AI instructions, Runtime logs, or Vault audit records.
+Normal Agent configuration is owned by each client's official OAuth/MCP entry; Tracekeeper does not read or write cross-platform client configuration paths. Confirmed managed Skill installation remains a recoverable Vault-outside write. Tokens, digests, authorization codes, PKCE verifiers, pending handles, token responses, and Authorization Headers never enter connection URLs, copied commands, AI instructions, Runtime logs, or Vault audit records.
 
 ## Documentation
 

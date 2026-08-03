@@ -34,7 +34,7 @@ try {
 		'zcode',
 		'custom',
 	]);
-	assert.equal(profiles.filter((profile) => profile.supportsLocalOAuth).length, 3);
+	assert.equal(profiles.filter((profile) => profile.supportedAuthModes.includes('oauth')).length, 4);
 	assert.equal(profiles.some((profile) => 'targetPath' in profile), false);
 	assert.equal(profiles.some((profile) => 'supportsAutoConfigure' in profile), false);
 	assert.equal(profiles.some((profile) => 'configFormat' in profile), false);
@@ -42,21 +42,21 @@ try {
 	const byId = (id) => profiles.find((profile) => profile.id === id);
 	const codex = config.buildGeneratedClientSetup(byId('codex'), endpoint);
 	assert.equal(codex.setupInstruction, `codex mcp add tracekeeper --url ${endpoint}`);
-	assert.equal(codex.supportsLocalOAuth, true);
+	assert.deepEqual(codex.supportedAuthModes, ['oauth', 'bearer']);
 	assert.equal(codex.setupCapability, 'oauth-cli');
 	assert.match(codex.setupFollowup, /codex mcp login tracekeeper --scopes mcp/);
 
 	const claude = config.buildGeneratedClientSetup(byId('claude-code'), endpoint);
 	assert.equal(claude.setupInstruction, `claude mcp add --transport http --scope user tracekeeper ${endpoint}`);
-	assert.equal(claude.supportsLocalOAuth, true);
+	assert.deepEqual(claude.supportedAuthModes, ['oauth', 'bearer']);
 	const gemini = config.buildGeneratedClientSetup(byId('gemini'), endpoint);
 	assert.equal(gemini.setupInstruction, `gemini mcp add --transport http --scope user tracekeeper ${endpoint}`);
-	assert.equal(gemini.supportsLocalOAuth, true);
+	assert.deepEqual(gemini.supportedAuthModes, ['oauth', 'bearer']);
 
-	for (const id of ['claude-desktop', 'cursor', 'grok', 'zcode', 'custom']) {
+	for (const id of ['claude-desktop', 'cursor', 'grok', 'zcode']) {
 		const setup = config.buildGeneratedClientSetup(byId(id), endpoint);
 		assert.equal(setup.setupInstruction, endpoint);
-		assert.equal(setup.supportsLocalOAuth, false);
+		assert.deepEqual(setup.supportedAuthModes, ['bearer']);
 	}
 
 	for (const invalid of [
@@ -98,7 +98,7 @@ try {
 	]) {
 		assert.equal(mainSource.includes(removedCapability), false);
 	}
-	assert.match(mainSource, /configState:\s*'unavailable'/);
+	assert.doesNotMatch(mainSource, /configState:\s*'unavailable'/);
 
 	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 48 })}\n`);
 } finally {

@@ -4,6 +4,8 @@ export interface ManagedMcpRuntime {
 	start(): Promise<StreamableHttpRuntimeStatus>;
 	stop(): Promise<void>;
 	getStatus(): StreamableHttpRuntimeStatus;
+	closeSessionsForIntegration?(integrationId: string): number;
+	getSessionSnapshot?(): Array<{ sessionId: string; integrationId?: string; credentialId?: string; authMode?: 'oauth' | 'bearer'; createdAt: number; lastSeenAt: number }>;
 }
 
 export type ManagedMcpRuntimeFactory = () => ManagedMcpRuntime;

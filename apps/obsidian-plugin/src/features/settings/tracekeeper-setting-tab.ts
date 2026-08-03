@@ -1,8 +1,8 @@
 import { App, Menu, Notice, PluginSettingTab, Setting } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import type { AgentConnectionsSnapshot } from '../activity/activity-model';
-import type { ActivityAgentGroup } from '../activity/activity-view-model';
 import type { GeneratedClientConfig } from '../client-config/client-config';
+import type { AgentIntegrationSnapshot } from './agent-integrations';
 import { ConnectAiToolModal } from '../client-config/client-config-modals';
 import { MemoryRecallPreviewModal } from '../recall/memory-recall-preview-modal';
 import { McpCapabilitiesModal } from '../runtime/mcp-capabilities-modal';
@@ -58,14 +58,20 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	private renderAgentClientConfigSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
 		const { visibleAgents, candidateConfigs } = buildAgentConfigurationViewModel(
 			snapshot.clientConfigs,
-			snapshot.recentAgents
+			snapshot.recentAgents,
+			snapshot.integrations,
+			snapshot.pendingOAuthRequests
 		);
+		const skillOnlyConfigs = candidateConfigs.filter((config) => {
+			const state = this.plugin.getSkillInstallState(config.clientId).state;
+			return state !== 'unavailable' && state !== 'not_installed';
+		});
 		const section = this.createSection(
 			container,
 			ui('Agent 配置', 'Agent configuration'),
 			ui(
-				'这里只显示已经成功连接并实际使用过 Tracekeeper 的 Agent。',
-				'Only Agents that have connected successfully and used Tracekeeper appear here.'
+			'持久 Agent 卡片独立展示 MCP 配置、授权、连接、使用和 Skill 状态。',
+			'Persistent Agent cards show MCP setup, authorization, connection, usage, and Skill state independently.'
 			)
 		);
 		const sectionActions = section.createDiv({
@@ -109,21 +115,24 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			}, addAgent.ownerDocument);
 		});
 		const grid = section.createDiv({ cls: 'tracekeeper-settings-grid' });
-		if (visibleAgents.length === 0) {
+		if (visibleAgents.length === 0 && skillOnlyConfigs.length === 0) {
 			const empty = grid.createDiv({ cls: 'tracekeeper-empty-state' });
 			empty.createEl('strong', {
-				text: ui('尚无可展示的 Agent', 'No Agents to show yet'),
+				text: ui('尚无 Agent 卡片', 'No Agent cards yet'),
 			});
 			empty.createEl('p', {
 				text: ui(
-					'完成配置后，让 Agent 成功调用一次 Tracekeeper；确认正常使用后会自动显示在这里。',
-					'After setup, let the Agent successfully call Tracekeeper. It appears here automatically after real use is confirmed.'
+					'点击“添加 Agent”即可立即创建卡片；复制、授权和使用状态随后分别更新。',
+					'Click “Add Agent” to create a card immediately; setup, authorization, and usage update independently.'
 				),
 			});
 			return;
 		}
-		for (const { agent, config } of visibleAgents) {
-			this.renderClientConfigRow(grid, config, agent);
+		for (const { agent, config, integration, presentation } of visibleAgents) {
+			this.renderClientConfigRow(grid, config, agent, integration, presentation);
+		}
+		for (const config of skillOnlyConfigs) {
+			this.renderSkillOnlyRow(grid, config);
 		}
 	}
 
@@ -215,10 +224,10 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	): void {
 		const protectedAccess = snapshot.runtimeStatus.accessProtected;
 		const setting = new Setting(container)
-			.setName(ui('本机访问保护', 'Local access protection'))
+			.setName(ui('全部 Agent 访问', 'All Agent access'))
 			.setDesc(ui(
-				'安装级服务凭据保护本机端点；它是访问门槛，不代表客户端身份。',
-				'An installation-level service credential protects the local endpoint. It is an access gate, not a client identity.'
+				'每个 Agent 使用独立 OAuth 或 Bearer 凭据；状态和撤销按卡片管理。',
+				'Each Agent uses an independent OAuth or Bearer credential; status and revocation are managed per card.'
 			));
 		setting.nameEl.addClass('tracekeeper-settings-runtime-name');
 		setting.nameEl.createEl('span', {
@@ -456,14 +465,14 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 					})
 			);
 		new Setting(section)
-			.setName(ui('本机访问保护', 'Local access protection'))
+			.setName(ui('全部 Agent 访问', 'All Agent access'))
 			.setDesc(ui(
-				'本机访问已保护。重置会终止全部现有 Session，并要求所有客户端重新授权。',
-				'Local access is protected. Resetting ends every existing session and requires every client to authorize again.'
+				'撤销会清空全部活动凭据并终止 Session，但保留 Agent 卡片和 Skill。',
+				'Revocation clears all active credentials and ends Sessions while retaining Agent cards and Skills.'
 			))
 			.addButton((button) => {
 				button
-					.setButtonText(ui('重置访问凭据', 'Reset access credential'))
+					.setButtonText(ui('撤销全部 Agent 访问', 'Revoke all Agent access'))
 					.onClick(() => {
 						new RuntimeAccessResetModal(this.app, this.plugin, () => {
 							void this.renderSettings();
@@ -561,23 +570,25 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	private renderClientConfigRow(
 		container: HTMLElement,
 		config: GeneratedClientConfig,
-		agent: ActivityAgentGroup
+		agent: import('../activity/activity-model').AgentConnectionRecord | null,
+		integration: AgentIntegrationSnapshot,
+	presentation: import('../client-config/agent-connection-view-model').ConnectionPresentation
 	): void {
 		const row = container.createDiv({ cls: 'tracekeeper-settings-client-row' });
 		const info = row.createDiv({ cls: 'tracekeeper-settings-client-row__info' });
 		const title = info.createDiv({ cls: 'tracekeeper-config-row__title' });
 		title.createEl('strong', { text: config.displayName });
 		title.createEl('span', {
-			text: ui('已正常使用', 'Successfully used'),
-			cls: 'tracekeeper-badge tracekeeper-badge--success',
+			text: this.connectionStateLabel(presentation.state),
+			cls: `tracekeeper-badge ${presentation.state === 'connected' || presentation.state === 'used' || presentation.state === 'authorized' ? 'tracekeeper-badge--success' : presentation.state === 'revoked' || presentation.state === 'needs_update' ? 'tracekeeper-badge--warning' : 'tracekeeper-badge--muted'}`,
 		});
 		const meta = info.createDiv({ cls: 'tracekeeper-settings-client-row__meta' });
-		meta.createEl('span', {
-			text: `${ui('最近连接', 'Last connected')} ${this.plugin.formatDisplayTime(agent.lastConnectedAt)}`,
-		});
-		meta.createEl('span', {
-			text: `${ui('最近成功使用', 'Last successful use')} ${this.plugin.formatDisplayTime(agent.lastUsedAt)}`,
-		});
+		meta.createEl('span', { text: `${ui('授权方式', 'Auth mode')}: ${integration.authMode === 'oauth' ? 'OAuth' : 'Bearer'}` });
+		meta.createEl('span', { text: `${ui('MCP', 'MCP')}: ${this.mcpStateLabel(presentation.mcpState)}` });
+		meta.createEl('span', { text: `${ui('授权', 'Authorization')}: ${this.authorizationStateLabel(presentation.authorizationState)}` });
+		meta.createEl('span', { text: `${ui('使用', 'Usage')}: ${this.usageStateLabel(presentation.usageState)}` });
+		meta.createEl('span', { text: agent ? `${ui('最近连接', 'Last connected')} ${agent.connectedAt}` : ui('尚未连接', 'Not connected') });
+		meta.createEl('span', { text: agent?.lastUsedAt ? `${ui('最近使用', 'Last used')} ${agent.lastUsedAt}` : ui('尚未使用', 'Never used') });
 		const actions = row.createDiv({ cls: 'tracekeeper-settings-client-row__actions' });
 		const manage = actions.createEl('button', {
 			text: ui('管理 Agent', 'Manage Agent'),
@@ -603,6 +614,57 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				void this.renderSettings();
 			},
 		});
+	}
+
+	private renderSkillOnlyRow(container: HTMLElement, config: GeneratedClientConfig): void {
+		const row = container.createDiv({ cls: 'tracekeeper-settings-client-row' });
+		const info = row.createDiv({ cls: 'tracekeeper-settings-client-row__info' });
+		const title = info.createDiv({ cls: 'tracekeeper-config-row__title' });
+		title.createEl('strong', { text: config.displayName });
+		title.createEl('span', { text: ui('仅 Skill', 'Skill only'), cls: 'tracekeeper-badge tracekeeper-badge--muted' });
+		info.createEl('p', { text: ui('已检测到 Skill，但尚无 MCP 集成卡片。', 'A Skill was detected, but no MCP integration card exists yet.'), cls: 'tracekeeper-view__description' });
+		const actions = row.createDiv({ cls: 'tracekeeper-settings-client-row__actions' });
+		const configure = actions.createEl('button', { text: ui('配置 MCP', 'Configure MCP'), cls: 'mod-cta' });
+		configure.addEventListener('click', () => new ConnectAiToolModal(this.app, this.plugin, config, 'add', () => this.display()).open());
+		renderClientSkillPrompt({ app: this.app, plugin: this.plugin, container: row, config, onChanged: () => { void this.renderSettings(); } });
+	}
+
+	private connectionStateLabel(state: import('../client-config/agent-connection-view-model').ConnectionUiState): string {
+		switch (state) {
+			case 'copied_unverified': return ui('配置未验证', 'Setup unverified');
+			case 'client_reached': return ui('客户端已触达', 'Client reached');
+			case 'pending_approval': return ui('待审批', 'Approval pending');
+			case 'authorized': return ui('已授权', 'Authorized');
+			case 'connected': return ui('已连接', 'Connected');
+			case 'used': return ui('已使用', 'Used');
+			case 'revoked': return ui('已撤销', 'Revoked');
+			case 'needs_update': return ui('需要更新配置', 'Setup update needed');
+			case 'manual': return ui('手工授权', 'Manual authorization');
+			default: return ui('未配置', 'Not configured');
+		}
+	}
+
+	private mcpStateLabel(state: import('../client-config/agent-connection-view-model').McpConnectionState): string {
+		switch (state) {
+			case 'copied_unverified': return ui('配置未验证', 'Setup unverified');
+			case 'client_reached': return ui('客户端已触达', 'Client reached');
+			case 'connected': return ui('已连接', 'Connected');
+			case 'needs_update': return ui('需要更新配置', 'Setup update needed');
+			default: return ui('未开始', 'Not started');
+		}
+	}
+
+	private authorizationStateLabel(state: import('../client-config/agent-connection-view-model').AuthorizationState): string {
+		switch (state) {
+			case 'pending_approval': return ui('待审批', 'Approval pending');
+			case 'authorized': return ui('已授权', 'Authorized');
+			case 'revoked': return ui('已撤销', 'Revoked');
+			default: return ui('未授权', 'Not authorized');
+		}
+	}
+
+	private usageStateLabel(state: import('../client-config/agent-connection-view-model').UsageState): string {
+		return state === 'used' ? ui('已使用', 'Used') : ui('从未使用', 'Never used');
 	}
 
 	private createSection(container: HTMLElement, title: string, description: string): HTMLElement {

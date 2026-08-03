@@ -139,9 +139,12 @@ export function buildRecentObservedClientConnections(
 		const observedType = normalizeObservedClientType(rawName, event.observedClientType);
 		const sessionId = event.sessionId.trim();
 		const connectionKey = sessionId || event.agentId || 'unknown';
+		const integrationKey = event.integrationId.trim();
 		const connectedAt = event.connectedAt || event.timestamp;
 		const connectedTimestamp = timestampValue(connectedAt, event.sortTimestamp);
-		const key = `${observedType}::${connectionKey}`;
+		const key = integrationKey
+			? `integration::${integrationKey}::${connectionKey}`
+			: `${observedType}::${connectionKey}`;
 		const existing = connections.get(key);
 		if (existing && timestampValue(existing.connectedAt, existing.sortTimestamp) >= connectedTimestamp) {
 			continue;
@@ -149,6 +152,9 @@ export function buildRecentObservedClientConnections(
 
 		connections.set(key, {
 			principalId: event.principalId,
+			integrationId: event.integrationId,
+			credentialId: event.credentialId,
+			authMode: event.authMode,
 			agentId: event.agentId || connectionKey,
 			sessionId,
 			clientName: event.clientName || rawName || 'unknown',
@@ -178,13 +184,20 @@ export function buildRecentObservedClientConnections(
 		const observedType = normalizeObservedClientType(rawName, call.observedClientType);
 		const sessionId = call.sessionId.trim();
 		const connectionKey = sessionId || call.agentId || 'unknown';
+		const integrationKey = call.integrationId.trim();
 		const key = `${observedType}::${connectionKey}`;
+		const scopedKey = integrationKey
+			? `integration::${integrationKey}::${connectionKey}`
+			: key;
 		const lastUsedAt = call.lastUsedAt || call.timestamp;
 		const usedTimestamp = timestampValue(lastUsedAt, call.sortTimestamp);
-		const existing = connections.get(key);
+		const existing = connections.get(scopedKey);
 		if (!existing) {
-			connections.set(key, {
+			connections.set(scopedKey, {
 				principalId: call.principalId,
+				integrationId: call.integrationId,
+				credentialId: call.credentialId,
+				authMode: call.authMode,
 				agentId: call.agentId || connectionKey,
 				sessionId,
 				clientName: call.clientName || rawName || 'unknown',
@@ -211,6 +224,9 @@ export function buildRecentObservedClientConnections(
 			continue;
 		}
 		existing.principalId = call.principalId || existing.principalId;
+		existing.integrationId = call.integrationId || existing.integrationId;
+		existing.credentialId = call.credentialId || existing.credentialId;
+		existing.authMode = call.authMode || existing.authMode;
 		existing.agentId = call.agentId || existing.agentId;
 		existing.clientName = call.clientName || existing.clientName;
 		existing.observedClientNameRaw = rawName || existing.observedClientNameRaw;

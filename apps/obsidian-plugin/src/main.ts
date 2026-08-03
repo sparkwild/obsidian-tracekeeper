@@ -12,6 +12,11 @@ import {
 import {
 	LOCAL_TRUST_CAPABILITIES,
 	StreamableHttpMcpRuntime,
+	type AgentAuthMode,
+	type AuthenticatedCredentialContext as RuntimeAuthenticatedCredentialContext,
+	type OAuthDecision,
+	type OAuthIntegrationPort,
+	type PendingOAuthRequest,
 	type StreamableHttpRuntimeStatus,
 	type RuntimeState,
 } from '@tracekeeper/mcp-runtime';
@@ -84,8 +89,6 @@ import {
 import {
 	buildGeneratedClientSetup,
 	buildClientProfiles,
-	type ClientPairingTicket,
-	type ClientPairingTicketStatus,
 	type ClientProfile,
 	type GeneratedClientConfig,
 } from './features/client-config/client-config';
@@ -107,15 +110,26 @@ import {
 	type SkillInstallReceipts,
 } from './features/skill-installation/skill-install-receipts';
 import {
-	isRuntimeAccessToken,
+	generateRuntimeSecuritySecret,
+	isRuntimeSecuritySecret,
 	normalizeLocalTrustSettings,
 	stripLegacyConnectionSettings,
 } from './features/settings/local-trust-settings';
+import {
+	createAgentIntegration,
+	issueAgentCredential,
+	markSetupCommandCopied,
+	revokeAgentCredential,
+	verifyAgentCredential,
+	type AgentIntegrationRecord,
+	type AgentIntegrationSnapshot,
+} from './features/settings/agent-integrations';
 import {
 	onboardingEvidenceNotBefore,
 	parseOnboardingRecallQuery,
 	clearOnboardingAgentBehaviorEvidence,
 	clearOnboardingClientEvidence,
+	clearOnboardingRuntimeEvidence,
 	resolveOnboardingSelectedClient,
 	buildOnboardingContext,
 } from './features/onboarding/onboarding-view-model';
@@ -143,7 +157,6 @@ import {
 	DEFAULT_MCP_PATH,
 	DEFAULT_MCP_PORT,
 	DEFAULT_MCP_REQUEST_TIMEOUT_MS,
-	LEGACY_DEFAULT_MCP_HTTP_ENDPOINTS,
 } from './features/runtime/runtime-defaults';
 import {
 	MEMORY_RULES_VERSION,
@@ -182,10 +195,6 @@ import { TracekeeperMemoryInspectorView } from './features/memory/memory-inspect
 import { TracekeeperRuntimeLogView } from './features/runtime/runtime-log-view';
 import { TracekeeperRuntimeStatusView } from './features/runtime/runtime-status-view';
 import { McpRuntimeLifecycleController } from './features/runtime/runtime-lifecycle-controller';
-import {
-	RuntimeAccessResetController,
-	type RuntimeAccessResetResult,
-} from './features/runtime/runtime-access-reset-controller';
 import { runtimeViewModel } from './features/runtime/runtime-view-model';
 import { TracekeeperPermissionPolicyView } from './features/permissions/permission-policy-view';
 import { TracekeeperSettingTab } from './features/settings/tracekeeper-setting-tab';
@@ -208,6 +217,7 @@ import {
 	type ActivityTimelineItem,
 	type AgentActivitySnapshot,
 	type AgentConnectionsSnapshot,
+	type PendingOAuthApproval,
 	type SourceRequestRecord,
 } from './features/activity/activity-model';
 import { ActivityDataController } from './features/activity/activity-data-controller';
@@ -438,7 +448,8 @@ interface TracekeeperSettings {
 	defaultAgentScope: string;
 	mcpRuntimeEnabled: boolean;
 	mcpPort: number;
-	runtimeAccessToken: string;
+	runtimeSecuritySecret: string;
+	agentIntegrations: AgentIntegrationRecord[];
 	onboarding: OnboardingSettingsState;
 	skillInstallReceipts: SkillInstallReceipts;
 	graphProfile: GraphProfile;
@@ -455,7 +466,8 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 	defaultAgentScope: 'vault',
 	mcpRuntimeEnabled: true,
 	mcpPort: DEFAULT_MCP_PORT,
-	runtimeAccessToken: '',
+	runtimeSecuritySecret: '',
+	agentIntegrations: [],
 	onboarding: {
 		...DEFAULT_ONBOARDING_SETTINGS,
 		selectedClientId: 'codex',
@@ -473,16 +485,9 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 export default class TracekeeperPlugin extends Plugin {
 	settings: TracekeeperSettings = DEFAULT_SETTINGS;
 	private readonly mcpRuntimeLifecycle = new McpRuntimeLifecycleController();
-	private readonly runtimeAccessResetController = new RuntimeAccessResetController({
-		getAccessToken: () => this.settings.runtimeAccessToken,
-		setAccessToken: (value) => {
-			this.settings.runtimeAccessToken = value;
-		},
-		isRuntimeEnabled: () => this.settings.mcpRuntimeEnabled,
-		stopRuntime: () => this.stopMcpRuntimeForAccessReset(),
-		persistSettings: () => this.saveSettings(),
-		startRuntime: () => this.startMcpRuntimeForAccessReset(),
-	});
+	private agentCredentialOperation: Promise<void> = Promise.resolve();
+	private readonly pendingOAuthDecisions = new Map<string, OAuthDecision>();
+	private readonly pendingOAuthRequests = new Map<string, PendingOAuthRequest>();
 	private localToolExecutor!: LocalToolExecutor;
 	private vaultRepository!: ObsidianVaultRepository;
 	private knowledgeIndex: ObsidianKnowledgeIndexAdapter | null = null;
@@ -767,17 +772,14 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private normalizeSettings(raw: unknown): TracekeeperSettings {
+		const rawSettings = this.isRecord(raw) ? raw : {};
+		const legacyConnectionKeys = ['runtimeAccessToken', 'runtimeToken', 'runtimeTokenCreatedAt', 'runtimeCredentials', 'pairingTickets', 'pairingCodes'];
+		const isHardMigration = !isRuntimeSecuritySecret(rawSettings.runtimeSecuritySecret)
+			|| legacyConnectionKeys.some((key) => Object.prototype.hasOwnProperty.call(rawSettings, key));
 		const saved = normalizeLocalTrustSettings(raw) as Partial<TracekeeperSettings>
 			& Record<string, unknown>
-			& { runtimeAccessToken: string };
+			& { runtimeSecuritySecret: string; agentIntegrations: AgentIntegrationRecord[] };
 		const next: TracekeeperSettings = { ...DEFAULT_SETTINGS };
-		const legacyEndpoint = typeof saved.mcpHttpEndpoint === 'string' ? saved.mcpHttpEndpoint.trim() : '';
-		if (legacyEndpoint && !LEGACY_DEFAULT_MCP_HTTP_ENDPOINTS.includes(legacyEndpoint)) {
-			const legacyPort = this.portFromEndpoint(legacyEndpoint);
-			if (legacyPort) {
-				next.mcpPort = legacyPort;
-			}
-		}
 		next.defaultAgentScope = typeof saved.defaultAgentScope === 'string' && saved.defaultAgentScope.trim()
 			? saved.defaultAgentScope.trim()
 			: DEFAULT_SETTINGS.defaultAgentScope;
@@ -785,9 +787,13 @@ export default class TracekeeperPlugin extends Plugin {
 			? saved.mcpRuntimeEnabled
 			: DEFAULT_SETTINGS.mcpRuntimeEnabled;
 		next.mcpPort = this.normalizePort(saved.mcpPort ?? next.mcpPort);
-		next.runtimeAccessToken = saved.runtimeAccessToken;
+		next.runtimeSecuritySecret = isHardMigration ? generateRuntimeSecuritySecret() : saved.runtimeSecuritySecret;
+		next.agentIntegrations = isHardMigration ? [] : saved.agentIntegrations;
 		next.graphProfile = normalizeGraphProfileValue(saved.graphProfile);
-		next.onboarding = normalizeOnboardingSettingsState(saved.onboarding);
+		const normalizedOnboarding = normalizeOnboardingSettingsState(saved.onboarding);
+		next.onboarding = isHardMigration
+			? clearOnboardingRuntimeEvidence(normalizedOnboarding)
+			: normalizedOnboarding;
 		next.skillInstallReceipts = normalizeSkillInstallReceipts(saved.skillInstallReceipts);
 		const memoryRules = normalizeMemoryRuleSettings(saved, DEFAULT_SETTINGS);
 		next.memoryRulesVersion = memoryRules.memoryRulesVersion;
@@ -861,16 +867,6 @@ export default class TracekeeperPlugin extends Plugin {
 		};
 	}
 
-	private portFromEndpoint(endpoint: string): number | null {
-		try {
-			const parsed = new URL(endpoint);
-			const port = Number.parseInt(parsed.port || String(DEFAULT_MCP_PORT), 10);
-			return this.normalizePort(port);
-		} catch {
-			return null;
-		}
-	}
-
 	async restartMcpRuntime(): Promise<void> {
 		if (this.settings.mcpRuntimeEnabled) {
 			await this.replaceMcpRuntime();
@@ -878,18 +874,6 @@ export default class TracekeeperPlugin extends Plugin {
 			await this.stopMcpRuntime();
 		}
 		await this.refreshGovernanceViews();
-	}
-
-	async resetRuntimeAccessCredential(): Promise<RuntimeAccessResetResult> {
-		try {
-			return await this.runtimeAccessResetController.reset();
-		} finally {
-			try {
-				await this.refreshGovernanceViews();
-			} catch {
-				console.error('tracekeeper failed to refresh views after access credential reset');
-			}
-		}
 	}
 
 	async setMcpRuntimeEnabled(enabled: boolean): Promise<void> {
@@ -1113,27 +1097,7 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.runMcpRuntimeStart(() => this.mcpRuntimeLifecycle.restart(
 			() => this.createMcpRuntime()
 		));
-	}
-
-	private async stopMcpRuntimeForAccessReset(): Promise<void> {
-		await this.mcpRuntimeLifecycle.stop();
-		this.runtimeStatus = this.createStoppedRuntimeStatus();
-	}
-
-	private async startMcpRuntimeForAccessReset(): Promise<void> {
-		try {
-			const status = await this.mcpRuntimeLifecycle.start(
-				() => this.createMcpRuntime()
-			);
-			if (!status || status.state !== 'running') {
-				throw new Error('MCP Runtime did not reach the running state.');
-			}
-			this.runtimeStatus = status;
-		} catch (error) {
-			this.runtimeStatus = this.mcpRuntimeLifecycle.getStatus()
-				?? this.createStoppedRuntimeStatus();
-			throw error;
-		}
+		this.clearPendingOAuthState();
 	}
 
 	private createMcpRuntime(): StreamableHttpMcpRuntime {
@@ -1141,8 +1105,20 @@ export default class TracekeeperPlugin extends Plugin {
 		const noteContentLanguage = this.resolveNoteContentLanguage();
 		const runtimeOptions: StreamableHttpRuntimeOptionsWithGraphProfile = {
 			localTrust: true,
-			serviceToken: this.settings.runtimeAccessToken,
-			getSharedBearerToken: () => this.settings.runtimeAccessToken,
+			credentialVerifier: {
+				verifyBearer: async (token) => this.verifyAgentCredential(token),
+			},
+			writebackConfirmationSecret: this.settings.runtimeSecuritySecret,
+			oauthIntegration: this.buildOAuthIntegrationPort(),
+			getBoundOAuthClients: () => this.settings.agentIntegrations
+				.filter((entry) => entry.oauthClient)
+				.map((entry) => ({
+					clientId: entry.oauthClient?.clientId ?? '',
+					clientNameClaim: entry.oauthClient?.clientNameClaim ?? '',
+					redirectUris: [...(entry.oauthClient?.redirectUris ?? [])],
+					integrationId: entry.integrationId,
+					clientProfileId: entry.clientProfileId,
+				})),
 			getOAuthUiLocale: () => (isChineseLanguage(getLanguage()) ? 'zh-CN' : 'en'),
 			host: DEFAULT_MCP_HOST,
 			port: this.settings.mcpPort,
@@ -1191,6 +1167,7 @@ export default class TracekeeperPlugin extends Plugin {
 		this.runtimeStatus = this.mcpRuntimeLifecycle.getStatus() ?? this.runtimeStatus;
 		await this.refreshRuntimeViews();
 		await pending;
+		this.clearPendingOAuthState();
 		this.runtimeStatus = this.createStoppedRuntimeStatus();
 		await this.refreshRuntimeViews();
 	}
@@ -1203,8 +1180,14 @@ export default class TracekeeperPlugin extends Plugin {
 			this.runtimeStatus = this.mcpRuntimeLifecycle.getStatus() ?? this.runtimeStatus;
 			console.error('tracekeeper failed to stop MCP Runtime during plugin unload', error);
 		} finally {
+			this.clearPendingOAuthState();
 			this.knowledgeIndex = null;
 		}
+	}
+
+	private clearPendingOAuthState(): void {
+		this.pendingOAuthDecisions.clear();
+		this.pendingOAuthRequests.clear();
 	}
 
 	private createStoppedRuntimeStatus(): StreamableHttpRuntimeStatus {
@@ -1915,45 +1898,13 @@ export default class TracekeeperPlugin extends Plugin {
 			connectionUrl,
 			runtimeStatus,
 			clientConfigs: this.buildClientConfigs(),
+			integrations: this.getAgentIntegrationsSnapshot(),
+			pendingOAuthRequests: this.getPendingOAuthRequests(),
+			activeSessions: this.mcpRuntimeLifecycle.getRuntime()?.getSessionSnapshot?.() ?? [],
 			recentAgents,
 			recentToolCalls: toolCalls,
 			missingAuditSources: auditLogMissing && auditDirMissing,
 			updatedAt: new Date().toISOString(),
-		};
-	}
-
-	issueAgentPairingTicket(clientId: string): ClientPairingTicket {
-		const runtime = this.mcpRuntimeLifecycle.getRuntime();
-		if (!(runtime instanceof StreamableHttpMcpRuntime)) {
-			throw new Error('Local OAuth pairing requires a running MCP Runtime.');
-		}
-		const ticket = runtime.issuePairingTicket(clientId);
-		return {
-			id: ticket.id,
-			code: ticket.code,
-			expectedClientId: ticket.expectedClientId,
-			issuedAt: ticket.issuedAt,
-			expiresAt: ticket.expiresAt,
-		};
-	}
-
-	getAgentPairingTicketStatus(id: string): ClientPairingTicketStatus | null {
-		const runtime = this.mcpRuntimeLifecycle.getRuntime();
-		if (!(runtime instanceof StreamableHttpMcpRuntime)) {
-			return null;
-		}
-		const status = runtime.getPairingTicketStatus(id);
-		if (!status) {
-			return null;
-		}
-		return {
-			id: status.id,
-			expectedClientId: status.expectedClientId,
-			state: status.state,
-			issuedAt: status.issuedAt,
-			expiresAt: status.expiresAt,
-			attemptsRemaining: status.attemptsRemaining,
-			authorizedAt: status.authorizedAt,
 		};
 	}
 
@@ -1995,11 +1946,19 @@ export default class TracekeeperPlugin extends Plugin {
 	private buildClientConfigs(): GeneratedClientConfig[] {
 		return this.getClientProfiles().map((profile) => {
 			const setup = buildGeneratedClientSetup(profile, this.getMcpConnectionUrl());
+			const integration = this.settings.agentIntegrations.find((entry) => entry.clientProfileId === profile.id);
+			const configState = !integration
+				? 'not_configured'
+				: integration.lastPreparedEndpoint !== this.getMcpConnectionUrl()
+					? 'needs_update'
+					: integration.credential
+						? 'configured'
+						: 'not_configured';
 			return {
 				clientId: profile.id,
 				displayName: profile.displayName,
 				description: profile.description,
-				configState: 'unavailable',
+				configState,
 				...setup,
 			};
 		});
@@ -2015,12 +1974,271 @@ export default class TracekeeperPlugin extends Plugin {
 		);
 	}
 
+	private assertClientAuthModeSupported(clientProfileId: string, authMode: AgentAuthMode): void {
+		const profile = this.getClientProfiles().find((candidate) => candidate.id === clientProfileId);
+		if (!profile) throw new Error('The requested Agent client profile is not supported.');
+		if (!profile.supportedAuthModes.includes(authMode)) {
+			throw new Error(`The ${authMode} authentication mode is not supported for this Agent client.`);
+		}
+	}
+
 	getMcpHttpEndpoint(): string {
 		return `http://${DEFAULT_MCP_HOST}:${this.settings.mcpPort || DEFAULT_MCP_PORT}${DEFAULT_MCP_PATH}`;
 	}
 
 	getMcpConnectionUrl(): string {
 		return this.getMcpHttpEndpoint();
+	}
+
+	verifyAgentCredential(token: string): RuntimeAuthenticatedCredentialContext | null {
+		const context = verifyAgentCredential(this.settings.agentIntegrations, token);
+		return context
+			? {
+				...context,
+				capabilities: LOCAL_TRUST_CAPABILITIES,
+			}
+			: null;
+	}
+
+	private enqueueAgentCredentialOperation<T>(operation: () => Promise<T>): Promise<T> {
+		const run = this.agentCredentialOperation.then(operation, operation);
+		this.agentCredentialOperation = run.then(() => undefined, () => undefined);
+		return run;
+	}
+
+	getAgentIntegrationsSnapshot(): AgentIntegrationSnapshot[] {
+		return this.settings.agentIntegrations.map((integration) => this.toAgentIntegrationSnapshot(integration));
+	}
+
+	private toAgentIntegrationSnapshot(integration: AgentIntegrationRecord): AgentIntegrationSnapshot {
+		return {
+			...integration,
+			credential: integration.credential ? {
+				credentialId: integration.credential.credentialId,
+				kind: integration.credential.kind,
+				issuedAt: integration.credential.issuedAt,
+			} : null,
+			oauthClient: integration.oauthClient ? { ...integration.oauthClient, redirectUris: [...integration.oauthClient.redirectUris] } : null,
+		};
+	}
+
+	async createAgentIntegration(clientProfileId: string, authMode: AgentAuthMode = 'oauth'): Promise<AgentIntegrationSnapshot> {
+		return this.enqueueAgentCredentialOperation(async () => {
+			this.assertClientAuthModeSupported(clientProfileId, authMode);
+			const existing = this.settings.agentIntegrations.find((entry) => entry.clientProfileId === clientProfileId);
+			if (existing) return this.toAgentIntegrationSnapshot(existing);
+			const integration = createAgentIntegration(clientProfileId, authMode, this.getMcpHttpEndpoint());
+			const previous = this.settings.agentIntegrations;
+			this.settings.agentIntegrations = [...previous, integration];
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				this.settings.agentIntegrations = previous;
+				throw error;
+			}
+			return this.toAgentIntegrationSnapshot(integration);
+		});
+	}
+
+	async setAgentAuthMode(integrationId: string, authMode: AgentAuthMode): Promise<AgentIntegrationSnapshot> {
+		return this.enqueueAgentCredentialOperation(async () => {
+			const index = this.settings.agentIntegrations.findIndex((entry) => entry.integrationId === integrationId);
+			if (index < 0) throw new Error('Agent integration was not found.');
+			const current = this.settings.agentIntegrations[index];
+			this.assertClientAuthModeSupported(current.clientProfileId, authMode);
+			if (current.credential && current.authMode !== authMode) throw new Error('Revoke the active credential before changing auth mode.');
+			const next = {
+				...current,
+				authMode,
+				oauthClient: authMode === 'oauth' ? current.oauthClient : null,
+				updatedAt: new Date().toISOString(),
+			};
+			const previous = this.settings.agentIntegrations;
+			this.settings.agentIntegrations = previous.map((entry, entryIndex) => entryIndex === index ? next : entry);
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				this.settings.agentIntegrations = previous;
+				throw error;
+			}
+			return this.toAgentIntegrationSnapshot(next);
+		});
+	}
+
+	async markAgentSetupCommandCopied(integrationId: string): Promise<AgentIntegrationSnapshot> {
+		return this.enqueueAgentCredentialOperation(async () => {
+			const index = this.settings.agentIntegrations.findIndex((entry) => entry.integrationId === integrationId);
+			if (index < 0) throw new Error('Agent integration was not found.');
+			const next = markSetupCommandCopied(this.settings.agentIntegrations[index], this.getMcpHttpEndpoint());
+			const previous = this.settings.agentIntegrations;
+			this.settings.agentIntegrations = previous.map((entry, entryIndex) => entryIndex === index ? next : entry);
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				this.settings.agentIntegrations = previous;
+				throw error;
+			}
+			return this.toAgentIntegrationSnapshot(next);
+		});
+	}
+
+	async issueManualBearerCredential(integrationId: string): Promise<string> {
+		return this.enqueueAgentCredentialOperation(async () => {
+			const index = this.settings.agentIntegrations.findIndex((entry) => entry.integrationId === integrationId);
+			if (index < 0) throw new Error('Agent integration was not found.');
+			const current = this.settings.agentIntegrations[index];
+			if (current.authMode !== 'bearer') throw new Error('This Agent integration is configured for OAuth.');
+			const issued = issueAgentCredential(current, 'manual_bearer');
+			const previous = this.settings.agentIntegrations;
+			this.settings.agentIntegrations = previous.map((entry, entryIndex) => entryIndex === index ? issued.record : entry);
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				this.settings.agentIntegrations = previous;
+				throw error;
+			}
+			return issued.plaintextToken;
+		});
+	}
+
+	async revokeAgentIntegration(integrationId: string): Promise<void> {
+		await this.enqueueAgentCredentialOperation(async () => {
+			const index = this.settings.agentIntegrations.findIndex((entry) => entry.integrationId === integrationId);
+			if (index < 0) return;
+			const next = revokeAgentCredential(this.settings.agentIntegrations[index]);
+			const previous = this.settings.agentIntegrations;
+			this.settings.agentIntegrations = previous.map((entry, entryIndex) => entryIndex === index ? next : entry);
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				this.settings.agentIntegrations = previous;
+				throw error;
+			}
+			this.pendingOAuthRequests.forEach((_request, requestId) => {
+				const decision = this.pendingOAuthDecisions.get(requestId);
+				if (decision?.decision === 'allow' && decision.integrationId === integrationId) {
+					this.pendingOAuthDecisions.set(requestId, { decision: 'deny' });
+				}
+			});
+			this.mcpRuntimeLifecycle.getRuntime()?.closeSessionsForIntegration?.(integrationId);
+		});
+	}
+
+	async forgetAgentIntegration(integrationId: string): Promise<void> {
+		await this.enqueueAgentCredentialOperation(async () => {
+			const entry = this.settings.agentIntegrations.find((candidate) => candidate.integrationId === integrationId);
+			if (!entry) return;
+			if (entry.credential) throw new Error('Revoke the Agent credential before forgetting the card.');
+			const previous = this.settings.agentIntegrations;
+			this.settings.agentIntegrations = previous.filter((candidate) => candidate.integrationId !== integrationId);
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				this.settings.agentIntegrations = previous;
+				throw error;
+			}
+		});
+	}
+
+	async revokeAllAgentAccess(): Promise<void> {
+		await this.enqueueAgentCredentialOperation(async () => {
+			const now = new Date().toISOString();
+			const previous = this.settings.agentIntegrations;
+			const next = previous.map((entry) => ({
+				...entry,
+				updatedAt: now,
+				lastRevokedAt: now,
+				credential: null,
+			}));
+			this.settings.agentIntegrations = next;
+			const previousDecisions = new Map(this.pendingOAuthDecisions);
+			const previousRequests = new Map(this.pendingOAuthRequests);
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				this.settings.agentIntegrations = previous;
+				this.pendingOAuthDecisions.clear();
+				previousDecisions.forEach((decision, requestId) => this.pendingOAuthDecisions.set(requestId, decision));
+				this.pendingOAuthRequests.clear();
+				previousRequests.forEach((request, requestId) => this.pendingOAuthRequests.set(requestId, request));
+				throw error;
+			}
+			this.pendingOAuthDecisions.clear();
+			this.pendingOAuthRequests.clear();
+			const runtime = this.mcpRuntimeLifecycle.getRuntime();
+			for (const entry of next) runtime?.closeSessionsForIntegration?.(entry.integrationId);
+		});
+	}
+
+	getPendingOAuthRequests(): PendingOAuthApproval[] {
+		return [...this.pendingOAuthRequests.values()].map((request) => ({
+			requestId: request.requestId,
+			clientNameClaim: request.clientNameClaim,
+			redirectUri: request.redirectUri,
+			resource: request.resource,
+			scope: request.scope,
+			issuedAt: request.issuedAt,
+			expiresAt: request.expiresAt,
+		}));
+	}
+
+	async decideOAuthRequest(requestId: string, decision: OAuthDecision): Promise<void> {
+		if (!this.pendingOAuthRequests.has(requestId)) throw new Error('OAuth request is no longer pending.');
+		if (decision?.decision === 'allow' && !this.settings.agentIntegrations.some((entry) => entry.integrationId === decision.integrationId)) {
+			throw new Error('OAuth approval must target an existing Agent integration.');
+		}
+		this.pendingOAuthDecisions.set(requestId, decision);
+	}
+
+	private buildOAuthIntegrationPort(): OAuthIntegrationPort {
+		return {
+			publishPendingRequest: async (request) => {
+				this.pendingOAuthRequests.set(request.requestId, request);
+				new Notice(ui('新的 MCP OAuth 请求待审批，请在 Agent 集成卡片中 Allow 或 Deny。', 'A new MCP OAuth request is waiting. Choose Allow or Deny on the Agent integration card.'));
+			},
+			readDecision: async (requestId) => {
+				if (!this.pendingOAuthRequests.has(requestId)) return { decision: 'deny' };
+				const decision = this.pendingOAuthDecisions.get(requestId);
+				if (decision) {
+					this.pendingOAuthDecisions.delete(requestId);
+					this.pendingOAuthRequests.delete(requestId);
+				}
+				return decision ?? null;
+			},
+			issueOAuthCredential: async (input) => this.enqueueAgentCredentialOperation(async () => {
+				const index = this.settings.agentIntegrations.findIndex((entry) => entry.integrationId === input.integrationId);
+				if (index < 0) throw new Error('Agent integration was not found.');
+				const current = this.settings.agentIntegrations[index];
+				if (current.authMode !== 'oauth') throw new Error('Agent integration is not in OAuth mode.');
+				if (current.oauthClient && (current.oauthClient.clientId !== input.clientId || current.oauthClient.redirectUris.join('|') !== input.redirectUris.join('|'))) {
+					throw new Error('OAuth client metadata does not match the bound Agent integration.');
+				}
+				const issued = issueAgentCredential(current, 'oauth', input.accessToken, new Date().toISOString(), input.credentialId);
+				const next: AgentIntegrationRecord = {
+					...issued.record,
+					oauthClient: current.oauthClient ?? {
+						clientId: input.clientId,
+						clientNameClaim: input.clientNameClaim,
+						redirectUris: [...input.redirectUris],
+						registeredAt: new Date().toISOString(),
+					},
+				};
+				const previous = this.settings.agentIntegrations;
+				this.settings.agentIntegrations = previous.map((entry, entryIndex) => entryIndex === index ? next : entry);
+				try {
+					await this.saveSettings();
+				} catch (error) {
+					this.settings.agentIntegrations = previous;
+					throw error;
+				}
+				return { integrationId: input.integrationId, credentialId: next.credential?.credentialId ?? input.credentialId, accessToken: input.accessToken };
+			}),
+			revokeOAuthCredential: async (input) => {
+				const context = input.token ? this.verifyAgentCredential(input.token) : null;
+				const integrationId = input.integrationId ?? context?.integrationId;
+				if (integrationId) await this.revokeAgentIntegration(integrationId);
+			},
+		};
 	}
 
 	getRuntimeViewStatus(): RuntimeViewStatus {
@@ -2034,7 +2252,7 @@ export default class TracekeeperPlugin extends Plugin {
 		}, ui);
 		return {
 			enabled,
-			accessProtected: isRuntimeAccessToken(this.settings.runtimeAccessToken),
+			accessProtected: isRuntimeSecuritySecret(this.settings.runtimeSecuritySecret),
 			state: status.state,
 			label: viewModel.label,
 			detail: viewModel.detail,
@@ -2860,7 +3078,6 @@ export default class TracekeeperPlugin extends Plugin {
 		if (
 			!normalized
 			|| normalized === 'unknown'
-			|| normalized === 'legacy-shared-token'
 			|| (compact.length >= 24 && /^[a-f0-9]+$/i.test(compact))
 		) {
 			return ui('AI 工具', 'AI tool');

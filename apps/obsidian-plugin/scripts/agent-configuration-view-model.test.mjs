@@ -13,20 +13,34 @@ const config = (clientId, overrides = {}) => ({
 	clientId,
 	displayName: clientId,
 	description: '',
-	transport: 'streamable-http',
-	completeConfigText: '{}',
-	redactedConfigText: '{}',
-	supportsAutoConfigure: ['codex', 'gemini', 'grok', 'zcode'].includes(clientId),
-	restartRequired: false,
-	configFormat: 'mcp-json',
 	configState: 'not_configured',
-	configStatusLabel: 'Not configured',
-	configStatusDetail: '',
+	setupCapability: 'manual',
+	supportedAuthModes: ['oauth', 'bearer'],
+	setupInstruction: 'http://127.0.0.1:58437/mcp',
+	...overrides,
+});
+
+const integration = (clientProfileId, overrides = {}) => ({
+	schemaVersion: 1,
+	integrationId: `integration-${clientProfileId}`,
+	clientProfileId,
+	authMode: 'oauth',
+	createdAt: '2026-08-03T00:00:00.000Z',
+	updatedAt: '2026-08-03T00:00:00.000Z',
+	setupCommandCopiedAt: '',
+	lastPreparedEndpoint: 'http://127.0.0.1:58437/mcp',
+	lastAuthorizedAt: '',
+	lastRevokedAt: '',
+	credential: null,
+	oauthClient: null,
 	...overrides,
 });
 
 const agent = (overrides = {}) => ({
 	principalId: 'local-user',
+	integrationId: 'integration-codex',
+	credentialId: 'credential-codex',
+	authMode: 'oauth',
 	agentId: 'agent-codex',
 	sessionId: 'session-codex',
 	clientName: 'Codex',
@@ -36,15 +50,15 @@ const agent = (overrides = {}) => ({
 	displayName: 'Codex',
 	transport: 'streamable-http',
 	status: 'active',
-	lastSeen: '2026-07-29T08:01:00.000Z',
+	lastSeen: '2026-08-03T00:01:00.000Z',
 	lastToolCall: 'tracekeeper.status',
-	connectedAt: '2026-07-29T08:00:00.000Z',
+	connectedAt: '2026-08-03T00:00:00.000Z',
 	resultStatus: 'success',
-	lastUsedAt: '2026-07-29T08:01:00.000Z',
+	lastUsedAt: '2026-08-03T00:01:00.000Z',
 	lastSuccessfulTool: 'tracekeeper.status',
 	runtimeVersion: '0.2.4',
 	permissionProfile: 'local trust fixed capability set',
-	sortTimestamp: Date.parse('2026-07-29T08:01:00.000Z'),
+	sortTimestamp: Date.parse('2026-08-03T00:01:00.000Z'),
 	...overrides,
 });
 
@@ -57,129 +71,33 @@ try {
 		format: 'esm',
 		logLevel: 'silent',
 	});
-	const { buildAgentConfigurationViewModel } = await import(
-		`${pathToFileURL(output).href}?test=${Date.now()}`
-	);
-	const clientConfigs = [
-		config('codex', { configState: 'configured' }),
-		config('claude-code'),
-		config('claude-desktop'),
-		config('cursor'),
-		config('gemini', { configState: 'configured' }),
-		config('grok', { configState: 'configured' }),
-		config('zcode', { configState: 'configured' }),
-		config('custom'),
-	];
-	const projection = buildAgentConfigurationViewModel(clientConfigs, [
-		agent(),
-		agent({
-			agentId: 'agent-codex-two',
-			sessionId: 'session-codex-two',
-			connectedAt: '2026-07-29T07:00:00.000Z',
-			lastUsedAt: '2026-07-29T07:01:00.000Z',
-			sortTimestamp: Date.parse('2026-07-29T07:01:00.000Z'),
-		}),
-		agent({
-			agentId: 'agent-claude',
-			sessionId: 'session-claude',
-			observedClientType: 'claude-code',
-			displayName: 'Claude Code',
-			lastUsedAt: '',
-			lastSuccessfulTool: '',
-		}),
-		agent({
-			agentId: 'agent-cursor',
-			sessionId: 'session-cursor',
-			observedClientType: 'cursor',
-			displayName: 'Cursor',
-			connectedAt: '',
-		}),
-		agent({
-			agentId: 'agent-custom',
-			sessionId: 'session-custom',
-			observedClientType: 'custom',
-			displayName: 'Custom client',
-			resultStatus: 'failed',
-		}),
-		agent({
-			agentId: 'agent-unknown',
-			sessionId: 'session-unknown',
-			observedClientType: 'unknown',
-			displayName: 'Unknown client',
-		}),
-		agent({
-			agentId: 'tracekeeper-plugin-ui',
-			sessionId: 'plugin-ui-session',
-			observedClientType: 'custom',
-			displayName: 'Custom client',
-			transport: 'obsidian-direct',
-		}),
-		agent({
-			agentId: 'agent-gemini',
-			sessionId: 'session-gemini',
-			observedClientType: 'gemini',
-			displayName: 'Gemini CLI',
-		}),
-		agent({
-			agentId: 'agent-grok',
-			sessionId: 'session-grok',
-			observedClientType: 'grok',
-			displayName: 'Grok Build',
-		}),
-		agent({
-			agentId: 'agent-zcode',
-			sessionId: 'session-zcode',
-			observedClientType: 'zcode',
-			displayName: 'ZCode',
-		}),
-	]);
-
-	assert.equal(projection.visibleAgents.length, 4);
-	assert.deepEqual(
-		projection.visibleAgents.map(({ config: visibleConfig }) => visibleConfig.clientId),
-		['codex', 'gemini', 'grok', 'zcode']
-	);
-	assert.equal(
-		projection.visibleAgents.find(({ config: visibleConfig }) => visibleConfig.clientId === 'codex').agent.sessionCount,
-		2
-	);
-	assert.deepEqual(
-		projection.candidateConfigs.map((candidate) => candidate.clientId),
-		['claude-code', 'claude-desktop', 'cursor', 'custom']
-	);
-	assert.equal(
-		projection.candidateConfigs.some((candidate) => candidate.clientId === 'codex'),
-		false
-	);
-	assert.equal(
-		projection.visibleAgents.some(({ config: visibleConfig }) => visibleConfig.clientId === 'custom'),
-		false
+	const { buildAgentConfigurationViewModel } = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
+	const clientConfigs = [config('codex'), config('claude-code'), config('cursor'), config('custom')];
+	const projection = buildAgentConfigurationViewModel(
+		clientConfigs,
+		[agent(), agent({ integrationId: 'integration-claude-code', credentialId: 'credential-claude', observedClientType: 'claude-code', displayName: 'Claude Code', agentId: 'agent-claude' })],
+		[integration('codex'), integration('claude-code')],
 	);
 
-	const manualConfigProof = buildAgentConfigurationViewModel(
-		[config('custom')],
-		[agent({ observedClientType: 'custom', displayName: 'Custom client' })]
+	assert.deepEqual(projection.visibleAgents.map(({ config: visibleConfig }) => visibleConfig.clientId), ['codex', 'claude-code']);
+	assert.equal(projection.visibleAgents.find(({ config: visibleConfig }) => visibleConfig.clientId === 'codex').agent?.sessionId, 'session-codex');
+	assert.equal(projection.visibleAgents.find(({ config: visibleConfig }) => visibleConfig.clientId === 'claude-code').agent?.displayName, 'Claude Code');
+	assert.deepEqual(projection.candidateConfigs.map((candidate) => candidate.clientId), ['cursor', 'custom']);
+
+	const noRecentUse = buildAgentConfigurationViewModel(
+		[config('codex'), config('gemini')],
+		[],
+		[integration('codex')],
 	);
-	assert.equal(manualConfigProof.visibleAgents.length, 1);
-	assert.equal(manualConfigProof.candidateConfigs.length, 0);
+	assert.equal(noRecentUse.visibleAgents.length, 1);
+	assert.equal(noRecentUse.visibleAgents[0].agent, null);
+	assert.deepEqual(noRecentUse.candidateConfigs.map((candidate) => candidate.clientId), ['gemini']);
 
-	const staleManagedConfig = buildAgentConfigurationViewModel(
-		[config('codex', { configState: 'needs_update' })],
-		[agent()]
-	);
-	assert.equal(staleManagedConfig.visibleAgents.length, 1);
-	assert.equal(staleManagedConfig.candidateConfigs.length, 0);
+	const allCandidates = buildAgentConfigurationViewModel([config('custom')], [], []);
+	assert.equal(allCandidates.visibleAgents.length, 0);
+	assert.deepEqual(allCandidates.candidateConfigs.map((candidate) => candidate.clientId), ['custom']);
 
-	for (const clientId of ['gemini', 'grok', 'zcode']) {
-		const unconfiguredManaged = buildAgentConfigurationViewModel(
-			[config(clientId, { configState: 'not_configured' })],
-			[agent({ observedClientType: clientId, displayName: clientId })]
-		);
-		assert.equal(unconfiguredManaged.visibleAgents.length, 1);
-		assert.equal(unconfiguredManaged.candidateConfigs.length, 0);
-	}
-
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 18 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 10 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

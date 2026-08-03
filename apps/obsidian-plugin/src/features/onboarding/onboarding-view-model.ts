@@ -136,14 +136,7 @@ export const hasWorkflowManageCapability = (capabilities: readonly string[] | un
 	Boolean(capabilities?.includes('*') || capabilities?.includes('workflow.manage'));
 
 export const buildOnboardingContext = (input: BuildOnboardingContextInput): OnboardingProgressContext => {
-	const hasExplicitInvalidConfig = input.selectedClient?.configState === 'needs_update'
-		|| input.selectedClient?.configState === 'not_configured';
-	const clientConfigured = input.selectedClient
-		? input.selectedClient.configState === 'configured'
-			|| (!hasExplicitInvalidConfig
-				&& input.onboarding.clientConfiguredAt !== ''
-				&& input.selectedClient.clientId === input.onboarding.selectedClientId)
-		: false;
+	const clientConfigured = input.selectedClient?.configState === 'configured';
 	const liveFileVerified = input.skillInstallState?.fileVerified === true;
 	const updateAvailable = input.skillInstallState?.updateAvailable === true;
 	const userConfirmed = input.onboarding.skillUserConfirmedAt !== '';
@@ -175,7 +168,6 @@ export const buildOnboardingContext = (input: BuildOnboardingContextInput): Onbo
 
 export const clearOnboardingClientEvidence = (state: OnboardingSettingsState): OnboardingSettingsState => ({
 	...state,
-	clientConfiguredAt: '',
 	skillSetupCompletedAt: '',
 	skillCopiedAt: '',
 	skillUserConfirmedAt: '',
@@ -197,7 +189,6 @@ export const clearOnboardingRuntimeEvidence = (
 	now = new Date().toISOString()
 ): OnboardingSettingsState => ({
 	...state,
-	clientConfiguredAt: '',
 	agentRestartCompletedAt: '',
 	connectionVerifiedAt: '',
 	connectionVerifiedSessionId: '',
@@ -226,7 +217,6 @@ export const clearOnboardingAgentBehaviorEvidence = (
 });
 
 export const onboardingEvidenceNotBefore = (state: OnboardingSettingsState): number => Math.max(
-	Date.parse(state.clientConfiguredAt) || 0,
 	Date.parse(state.agentRestartCompletedAt) || 0
 );
 

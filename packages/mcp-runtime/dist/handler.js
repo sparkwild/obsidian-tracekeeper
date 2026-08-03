@@ -343,6 +343,9 @@ class McpJsonRpcHandler {
             writebackConfirmationSecret: this.writebackConfirmationSecret,
             principalId: state.principalId,
             credentialCapabilities: state.credentialCapabilities,
+            integrationId: state.integrationId,
+            credentialId: state.credentialId,
+            authMode: state.authMode,
             agentId: state.agentId,
             sessionId: state.sessionId,
             clientName: state.clientName,
@@ -364,6 +367,9 @@ class McpJsonRpcHandler {
         try {
             (0, tools_1.appendConnectionAuditEvent)(this.defaultVaultRoot, {
                 principalId: state.principalId,
+                integrationId: state.integrationId,
+                credentialId: state.credentialId,
+                authMode: state.authMode,
                 agentId: state.agentId,
                 sessionId: state.sessionId,
                 clientName: state.clientName,

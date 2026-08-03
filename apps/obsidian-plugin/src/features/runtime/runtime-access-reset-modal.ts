@@ -1,7 +1,6 @@
 import { App, Modal, Notice } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import { ui } from '../../ui/localization';
-import { RuntimeAccessResetError } from './runtime-access-reset-controller';
 
 export class RuntimeAccessResetModal extends Modal {
 	constructor(
@@ -16,18 +15,18 @@ export class RuntimeAccessResetModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.createEl('h2', {
-			text: ui('重置访问凭据', 'Reset access credential'),
+			text: ui('撤销全部 Agent 访问', 'Revoke all Agent access'),
 		});
 		contentEl.createEl('p', {
 			text: ui(
-				'这是一项全局操作：全部现有 MCP Session 会立即终止，所有已连接的 AI 工具都需要重新授权。',
-				'This is a global action: every existing MCP session ends immediately, and every connected AI tool must authorize again.'
+				'这是一项全局操作：所有 Agent 凭据和活动 Session 会立即失效，但 Skill 文件和卡片会保留。',
+				'This is a global action: every Agent credential and active Session becomes invalid immediately, while Skill files and cards remain.'
 			),
 		});
 		contentEl.createEl('p', {
 			text: ui(
-				'Tracekeeper 不会自动改写客户端配置。重置成功后，请从各客户端的原生 MCP 入口重新连接。',
-				'Tracekeeper does not rewrite client configuration automatically. After reset succeeds, reconnect from each client-native MCP entry.'
+				'Tracekeeper 不会自动改写客户端配置。撤销后，请从各客户端的原生 MCP 入口重新授权。',
+				'Tracekeeper does not rewrite client configuration automatically. After revocation, reauthorize from each client-native MCP entry.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
@@ -37,7 +36,7 @@ export class RuntimeAccessResetModal extends Modal {
 		});
 		cancel.addEventListener('click', () => this.close());
 		const confirm = actions.createEl('button', {
-			text: ui('确认全局重置', 'Confirm global reset'),
+			text: ui('确认全部撤销', 'Confirm global revocation'),
 			cls: 'mod-warning',
 		});
 		const status = contentEl.createEl('p', {
@@ -46,38 +45,21 @@ export class RuntimeAccessResetModal extends Modal {
 		confirm.addEventListener('click', () => {
 			confirm.disabled = true;
 			cancel.disabled = true;
-			status.setText(ui('正在安全重启 MCP 服务...', 'Safely restarting the MCP service...'));
-			void this.plugin.resetRuntimeAccessCredential()
-				.then((result) => {
+			status.setText(ui('正在撤销全部 Agent 访问...', 'Revoking all Agent access...'));
+			void this.plugin.revokeAllAgentAccess()
+				.then(() => {
 					this.onReset?.();
-					new Notice(result.runtimeRestarted
-						? ui(
-							'MCP 访问凭据已重置；现有客户端需要重新授权。',
-							'MCP access credential reset. Existing clients must authorize again.'
-						)
-						: ui(
-							'MCP 访问凭据已重置；服务保持关闭，现有客户端需要在服务恢复后重新授权。',
-							'MCP access credential reset. The service remains off, and existing clients must authorize again after it resumes.'
-						));
+					new Notice(ui(
+						'全部 Agent 访问已撤销；现有客户端需要重新授权。',
+						'All Agent access was revoked. Existing clients must authorize again.'
+					));
 					this.close();
 				})
 				.catch((error: unknown) => {
-					console.error('tracekeeper runtime access credential reset failed');
-					const rollbackSucceeded = error instanceof RuntimeAccessResetError
-						&& error.rollbackSucceeded;
-					status.setText(rollbackSucceeded
-						? ui(
-							'重置失败；先前凭据和 MCP 服务状态已恢复。',
-							'Reset failed. The previous credential and MCP service state were restored.'
-						)
-						: ui(
-							'重置失败且自动恢复未完成。请重启 Obsidian 后再重新授权客户端。',
-							'Reset failed and automatic recovery did not complete. Restart Obsidian before authorizing clients again.'
-						));
-					if (rollbackSucceeded) {
-						confirm.disabled = false;
-						cancel.disabled = false;
-					}
+					console.error('tracekeeper Agent access revocation failed', error);
+					status.setText(ui('撤销失败，请检查设置后重试。', 'Revocation failed. Check settings and try again.'));
+					confirm.disabled = false;
+					cancel.disabled = false;
 				});
 		});
 	}

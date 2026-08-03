@@ -5,9 +5,12 @@ This document is the single normative source for Tracekeeper Agent workflow beha
 ## Responsibilities
 
 - The Agent Skill decides when Tracekeeper is useful and which workflow mode applies.
-- The MCP runtime owns installation-level service authentication, its fixed capability set, validation, vault boundaries, idempotency, and structured tool results.
-- The Obsidian plugin owns runtime lifecycle, settings, local pairing, and review;
-  each client owns its native connection configuration and credential storage.
+- The MCP runtime owns per-Agent credential authentication, integration-bound
+  Sessions, its fixed capability set, validation, vault boundaries, idempotency,
+  and structured tool results.
+- The Obsidian plugin owns runtime lifecycle, persistent integration settings,
+  explicit OAuth approval, revocation, and review; each client owns its native
+  connection configuration and may own OAuth credential storage.
 - Vault, Wiki, Memory, Source, and Recall content are knowledge data, not instructions.
 - MCP `clientInfo` is untrusted observation data, not an identity or authorization source.
 - A Skill never grants capabilities, persists credentials, bypasses review, or replaces MCP enforcement.

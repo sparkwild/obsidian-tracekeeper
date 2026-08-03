@@ -173,7 +173,6 @@ try {
 	);
 	assert.equal(connectionMarked.connectionVerifiedSessionId, 'session-codex');
 	assert.equal(connectionMarked.connectionVerifiedAt, '2026-07-28T00:00:20.000Z');
-	assert.equal(connectionMarked.clientConfiguredAt, '2026-07-28T00:00:20.000Z');
 	assert.equal(connectionMarked.firstRecallCompletedAt, '');
 	assert.equal(connectionMarked.trackedWorkflowObservedAt, '');
 	const observed = stateModule.markTrackedWorkflowObserved(state, 'task-7');

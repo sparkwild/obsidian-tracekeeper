@@ -1,18 +1,25 @@
 import { Buffer } from 'node:buffer';
 import { randomBytes } from 'node:crypto';
+import {
+	normalizeAgentIntegrations,
+	type AgentIntegrationRecord,
+} from './agent-integrations';
 
 const LEGACY_CONNECTION_SETTING_KEYS = new Set([
+	'runtimeAccessToken',
 	'runtimeToken',
 	'runtimeTokenCreatedAt',
 	'runtimeCredentials',
+	'pairingTickets',
+	'pairingCodes',
 ]);
 
-type RuntimeAccessTokenFactory = () => string;
+type RuntimeSecuritySecretFactory = () => string;
 
-export const generateRuntimeAccessToken = (): string =>
+export const generateRuntimeSecuritySecret = (): string =>
 	randomBytes(32).toString('base64url');
 
-export const isRuntimeAccessToken = (value: unknown): value is string => {
+export const isRuntimeSecuritySecret = (value: unknown): value is string => {
 	if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value)) {
 		return false;
 	}
@@ -33,19 +40,22 @@ export const stripLegacyConnectionSettings = (value: unknown): Record<string, un
 
 export const normalizeLocalTrustSettings = (
 	value: unknown,
-	createToken: RuntimeAccessTokenFactory = generateRuntimeAccessToken
-): Record<string, unknown> => {
+	createSecret: RuntimeSecuritySecretFactory = generateRuntimeSecuritySecret
+): Record<string, unknown> & {
+	runtimeSecuritySecret: string;
+	agentIntegrations: AgentIntegrationRecord[];
+} => {
 	const sanitized = stripLegacyConnectionSettings(value);
-	if (isRuntimeAccessToken(sanitized.runtimeAccessToken)) {
-		return sanitized;
-	}
-	const runtimeAccessToken = createToken();
-	if (!isRuntimeAccessToken(runtimeAccessToken)) {
-		throw new Error('Runtime access token generation failed.');
+	const runtimeSecuritySecret = isRuntimeSecuritySecret(sanitized.runtimeSecuritySecret)
+		? sanitized.runtimeSecuritySecret
+		: createSecret();
+	if (!isRuntimeSecuritySecret(runtimeSecuritySecret)) {
+		throw new Error('Runtime security secret generation failed.');
 	}
 	return {
 		...sanitized,
-		runtimeAccessToken,
+		runtimeSecuritySecret,
+		agentIntegrations: normalizeAgentIntegrations(sanitized.agentIntegrations),
 	};
 };
 

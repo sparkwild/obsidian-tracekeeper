@@ -38,7 +38,6 @@ export interface OnboardingSettingsState {
 	selectedClientId: string;
 	entryPromptVersion: number;
 	entryDeferredAt: string;
-	clientConfiguredAt: string;
 	skillSetupCompletedAt: string;
 	skillCopiedAt: string;
 	skillUserConfirmedAt: string;
@@ -93,7 +92,6 @@ export const DEFAULT_ONBOARDING_SETTINGS: OnboardingSettingsState = {
 	selectedClientId: 'codex',
 	entryPromptVersion: 0,
 	entryDeferredAt: '',
-	clientConfiguredAt: '',
 	skillSetupCompletedAt: '',
 	skillCopiedAt: '',
 	skillUserConfirmedAt: '',
@@ -134,7 +132,6 @@ export const normalizeOnboardingSettingsState = (raw: unknown): OnboardingSettin
 		selectedClientId: asString(rawState.selectedClientId) || DEFAULT_ONBOARDING_SETTINGS.selectedClientId,
 		entryPromptVersion: asNonNegativeInteger(rawState.entryPromptVersion, DEFAULT_ONBOARDING_SETTINGS.entryPromptVersion),
 		entryDeferredAt: asTimestamp(rawState.entryDeferredAt),
-		clientConfiguredAt: asTimestamp(rawState.clientConfiguredAt),
 		skillSetupCompletedAt: legacySkillConfirmation || userConfirmation,
 		skillCopiedAt: asTimestamp(rawState.skillCopiedAt),
 		skillUserConfirmedAt: userConfirmation,
@@ -301,13 +298,6 @@ export const findOnboardingTrackedWorkflowEvidence = (
 	return null;
 };
 
-export const markClientConfigured = (state: OnboardingSettingsState, clientId: string): OnboardingSettingsState => ({
-	...state,
-	selectedClientId: clientId,
-	clientConfiguredAt: new Date().toISOString(),
-	lastUpdatedAt: new Date().toISOString(),
-});
-
 export const markSkillCopied = (state: OnboardingSettingsState): OnboardingSettingsState => timestamped(state, { skillCopiedAt: new Date().toISOString() });
 
 export const markSkillUserConfirmed = (state: OnboardingSettingsState): OnboardingSettingsState => {
@@ -352,7 +342,6 @@ export const markConnectionVerified = (
 		return state;
 	}
 	return timestamped(state, {
-		clientConfiguredAt: verifiedAt,
 		connectionVerifiedAt: verifiedAt,
 		connectionVerifiedSessionId: verifiedSessionId,
 		firstRecallCompletedAt: '',

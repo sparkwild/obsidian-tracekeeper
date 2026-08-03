@@ -227,31 +227,43 @@ test('observed-client audit timestamps only successful initialize and tool use',
 	}
 });
 
-test('local trust and its installation-level service credential must be explicit', () => {
+test('local trust and its per-Agent credential verifier must be explicit', () => {
 	assert.throws(
 		() => new StreamableHttpMcpRuntime({
 			host: '127.0.0.1',
 			port: 0,
-			serviceToken: SERVICE_TOKEN,
+			credentialVerifier: { verifyBearer: async () => null },
+			writebackConfirmationSecret: SERVICE_TOKEN,
 		}),
 		/requires explicit localTrust: true/
 	);
-	for (const serviceToken of [undefined, '', 'too-short']) {
+	for (const credentialVerifier of [undefined, { verifyBearer: null }]) {
 		assert.throws(
 			() => new StreamableHttpMcpRuntime({
 				localTrust: true,
 				host: '127.0.0.1',
 				port: 0,
-				serviceToken,
+				credentialVerifier,
+				writebackConfirmationSecret: SERVICE_TOKEN,
 			}),
-			/serviceToken/i
+			/credentialVerifier/i
 		);
 	}
+	assert.throws(
+		() => new StreamableHttpMcpRuntime({
+			localTrust: true,
+			host: '127.0.0.1',
+			port: 0,
+			credentialVerifier: { verifyBearer: async () => null },
+		}),
+		/writebackConfirmationSecret/i
+	);
 	const runtime = new StreamableHttpMcpRuntime({
 		localTrust: true,
 		host: '127.0.0.1',
 		port: 0,
-		serviceToken: SERVICE_TOKEN,
+		credentialVerifier: { verifyBearer: async () => null },
+		writebackConfirmationSecret: SERVICE_TOKEN,
 	});
 	assert.equal(runtime.getStatus().host, '127.0.0.1');
 	assert.equal('credentialCount' in runtime.getStatus(), false);
@@ -265,7 +277,8 @@ test('local trust rejects every bind address other than exact 127.0.0.1', () => 
 				localTrust: true,
 				host,
 				port: 0,
-				serviceToken: SERVICE_TOKEN,
+				credentialVerifier: { verifyBearer: async () => null },
+				writebackConfirmationSecret: SERVICE_TOKEN,
 			}),
 			/requires host 127\.0\.0\.1/
 		);

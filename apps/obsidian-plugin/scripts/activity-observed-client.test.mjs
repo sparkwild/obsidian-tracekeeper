@@ -22,6 +22,9 @@ const auditEvent = (overrides = {}) => ({
 	snippet: '',
 	eventType: 'connection',
 	principalId: 'local-user',
+	integrationId: 'integration-codex',
+	credentialId: 'credential-codex',
+	authMode: 'oauth',
 	agentId: 'session-one',
 	sessionId: 'session-one',
 	clientName: 'spoofed Codex name',
@@ -59,6 +62,9 @@ const auditEvent = (overrides = {}) => ({
 
 const toolCall = (overrides = {}) => ({
 	principalId: 'local-user',
+	integrationId: 'integration-codex',
+	credentialId: 'credential-codex',
+	authMode: 'oauth',
 	taskId: '',
 	agentId: 'session-one',
 	sessionId: 'session-one',
@@ -174,6 +180,9 @@ try {
 
 	assert.equal(connections.length, 3);
 	assert.equal(connections[0].sessionId, 'session-one');
+	assert.equal(connections[0].integrationId, 'integration-codex');
+	assert.equal(connections[0].credentialId, 'credential-codex');
+	assert.equal(connections[0].authMode, 'oauth');
 	assert.equal(connections[0].observedClientType, 'codex');
 	assert.equal(connections[0].connectedAt, '2026-07-28T02:00:00.000Z');
 	assert.equal(connections[0].lastUsedAt, '2026-07-28T03:00:00.000Z');

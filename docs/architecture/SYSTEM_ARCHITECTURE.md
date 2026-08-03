@@ -6,7 +6,7 @@
 AI Agent
    │  Companion Skill: workflow habits
    │  MCP Streamable HTTP + local OAuth/PKCE
-   │  installation Bearer + fixed capabilities
+   │  per-Agent credential + fixed capabilities
    ▼
 Obsidian-hosted local MCP Runtime
    │
@@ -29,10 +29,10 @@ architecture.
 
 | Component | Owns | Must not become |
 | --- | --- | --- |
-| `apps/obsidian-plugin` | Composition, Obsidian adapters, Runtime lifecycle, installation credential and pairing lifecycle, native UI, onboarding, review, and confirmed client integration | A second knowledge store or duplicate application kernel |
+| `apps/obsidian-plugin` | Composition, Obsidian adapters, Runtime lifecycle, per-Agent integration records, OAuth approval bridge, native UI, onboarding, review, and Skill lifecycle | A second knowledge store or duplicate application kernel |
 | `apps/mcp-server` | Standalone Node composition and cross-layer smoke tests | A separate production Runtime |
 | `packages/contracts` | Public and compatibility tool identity, capability, effect, idempotency, workflow role, schemas, and deprecation metadata | A transport or UI package |
-| `packages/mcp-runtime` | MCP protocol, local OAuth/PKCE delivery, Bearer authentication, sessions, structured results/actions, dispatch adaptation, and limits | The owner of Agent workflow habits |
+| `packages/mcp-runtime` | MCP protocol, local OAuth/PKCE delivery, credential verification, integration-bound sessions, structured results/actions, dispatch adaptation, and limits | The owner of Agent workflow habits |
 | `packages/core` | Markdown, paths, repository ports, indexing, Recall, graph, lint, journal, and knowledge primitives | An Obsidian UI or client-integration layer |
 | `skills/tracekeeper` | Agent mode selection, Recall, closeout, recovery, and instruction-isolation guidance | Permission enforcement or a duplicate server |
 | Vault | Operational records, durable knowledge, sources, proposals, and archive | An opaque cache hidden from the user |
@@ -61,25 +61,20 @@ settings work cannot reopen the listener after Obsidian unloads. A configured
 port conflict is visible and fail-closed; Tracekeeper never silently chooses
 another port that no longer matches confirmed client configuration.
 
-The plugin generates and persists one installation-level service credential.
-Runtime composition receives the credential, retains only its digest for request
-comparison, and requires it as a Bearer on every MCP resource request. Advanced
-global reset serializes Runtime stop, credential rotation, and restart; it
-invalidates every Session and every existing client authorization. Removing one
-client configuration does not revoke that client at the Runtime.
+The plugin persists one integration record per client profile and at most one
+active credential digest per record. Runtime composition receives a verifier,
+revalidates the Bearer on every MCP request, and binds each Session to the
+integration and credential that created it. A single-card revoke closes only
+that card's Sessions; global revoke clears all credentials and pending approval
+state while retaining cards and Skill files.
 
-The same listener publishes the public MCP Protected Resource Metadata,
-Authorization Server Metadata, public-client registration, authorization-code
-and token endpoints. Authorization requires PKCE `S256`, an exact registered
-loopback redirect URI, the MCP resource indicator, and a short-lived pairing
-code issued inside Obsidian. Pairing records, dynamic registrations, and
-authorization codes are capacity-bounded memory state and disappear on Runtime
-stop, restart, port change, credential reset, plugin unload, or expiry.
-
-Runtime stores only the pairing-code digest and service-credential digest. It
-requests the shared credential from the plugin composition only while completing
-a valid one-time token exchange. OAuth does not mint a per-client Principal,
-capability profile, refresh token, or separately revocable access token.
+The same listener publishes protected-resource metadata, authorization-server
+metadata, public-client registration, authorization-code, token, and revoke
+endpoints. Authorization requires PKCE `S256`, an exact registered loopback
+redirect URI, and the MCP resource indicator. Pending requests, unbound DCR
+records, PKCE state, and one-time authorization codes are bounded memory state.
+The first approved token exchange binds the OAuth client record to the selected
+integration; later requests must match that binding. No refresh token is issued.
 
 ## Agent Interaction Boundary
 
@@ -91,8 +86,8 @@ and the fixed `local-user` capability set; dispatch performs the same capability
 check. The registry publishes the output schemas used by both discovery and
 Runtime result validation: public top-level success/failure fields are closed,
 while evidence, metadata, and diagnostics are extensible only where their
-schema says so. The service Bearer gates local access but does not establish
-client identity. MCP `clientInfo` and Session identifiers are retained only as
+schema says so. A per-Agent Bearer gates local access but does not establish
+identity from untrusted client claims. MCP `clientInfo` and Session identifiers are retained only as
 untrusted observation evidence and never change authorization. Results provide
 validated structured content plus equivalent compact JSON text. Structured
 actions carry stable identities, timing, reason codes, required capabilities,
@@ -126,10 +121,10 @@ hosting the Runtime and cannot read the Vault, implement tools, or maintain an
 index.
 
 Client-native OAuth/MCP entries keep the endpoint, command, authorization URL,
-and redirect URI credential-free. The client receives the installation-level
-service Bearer only from the token endpoint and later sends it through the
-`Authorization` Header. Tracekeeper's normal flow does not read or write
-operating-system-specific Agent configuration paths.
+and redirect URI credential-free. OAuth clients receive their integration's
+Bearer only from the token endpoint; manual Bearer clients receive plaintext
+only in the explicit current modal. Tracekeeper's normal flow does not read or
+write operating-system-specific Agent configuration paths.
 
 ## Related Architecture
 
@@ -144,12 +139,13 @@ operating-system-specific Agent configuration paths.
 ## Architecture Invariants
 
 - Markdown in the active Vault remains the reconstructible knowledge source.
-- Production Agent access binds exact `127.0.0.1` and requires the
-  installation-level service Bearer on every MCP resource request.
+- Production Agent access binds exact `127.0.0.1` and requires a valid
+  per-integration Bearer on every MCP resource request.
 - OAuth discovery, authorization, and token delivery remain exact-loopback only;
   their public routes cannot dispatch MCP tools.
 - Successful requests use the fixed `local-user` capability set; client claims
-  never create a separate authorization profile.
+  never create a separate authorization profile, and Sessions cannot cross
+  integration or credential bindings.
 - MCP cannot read outside the active Vault or inside its Obsidian configuration.
 - Agent guidance cannot expand Runtime permissions.
 - Global durable memory remains review-gated by default.

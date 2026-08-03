@@ -1,25 +1,13 @@
-export type ClientConfigState = 'configured' | 'needs_update' | 'not_configured' | 'unavailable';
+export type ClientConfigState = 'configured' | 'needs_update' | 'not_configured';
 export type ClientSetupCapability = 'oauth-cli' | 'oauth-link' | 'extension' | 'native-gui' | 'manual';
-export type ClientPairingState =
-	| 'ready'
-	| 'awaiting_confirmation'
-	| 'redeemed'
-	| 'expired'
-	| 'failed'
-	| 'retry';
-export type ClientPairingRuntimeState =
-	| 'pending'
-	| 'awaiting_confirmation'
-	| 'authorized'
-	| 'expired'
-	| 'attempts_exhausted';
+export type ClientAuthMode = 'oauth' | 'bearer';
 
 export interface ClientProfile {
 	id: string;
 	displayName: string;
 	description: string;
 	setupCapability: ClientSetupCapability;
-	supportsLocalOAuth: boolean;
+	supportedAuthModes: readonly ClientAuthMode[];
 	setupUrl?: string;
 	buildSetupInstruction?: (connectionUrl: string) => string;
 	setupFollowup?: string;
@@ -31,7 +19,7 @@ export interface GeneratedClientConfig {
 	description: string;
 	configState: ClientConfigState;
 	setupCapability: ClientSetupCapability;
-	supportsLocalOAuth: boolean;
+	supportedAuthModes: readonly ClientAuthMode[];
 	setupInstruction: string;
 	setupUrl?: string;
 	setupFollowup?: string;
@@ -39,28 +27,10 @@ export interface GeneratedClientConfig {
 
 export interface GeneratedClientSetup {
 	setupCapability: ClientSetupCapability;
-	supportsLocalOAuth: boolean;
+	supportedAuthModes: readonly ClientAuthMode[];
 	setupInstruction: string;
 	setupUrl?: string;
 	setupFollowup?: string;
-}
-
-export interface ClientPairingTicket {
-	id: string;
-	code: string;
-	expectedClientId?: string;
-	issuedAt: string;
-	expiresAt: string;
-}
-
-export interface ClientPairingTicketStatus {
-	id: string;
-	expectedClientId?: string;
-	state: ClientPairingRuntimeState;
-	issuedAt: string;
-	expiresAt: string;
-	attemptsRemaining: number;
-	authorizedAt?: string;
 }
 
 export const buildClientProfiles = (
@@ -76,7 +46,7 @@ export const buildClientProfiles = (
 			'Copy the official Codex MCP command, then complete OAuth authorization in the local page it opens.'
 		),
 		setupCapability: 'oauth-cli',
-		supportsLocalOAuth: true,
+		supportedAuthModes: ['oauth', 'bearer'],
 		buildSetupInstruction: (connectionUrl) =>
 			`codex mcp add tracekeeper --url ${connectionUrl}`,
 		setupFollowup: localize(
@@ -92,7 +62,7 @@ export const buildClientProfiles = (
 			'Copy the official CLI command, then complete local OAuth authorization in Claude Code.'
 		),
 		setupCapability: 'oauth-cli',
-		supportsLocalOAuth: true,
+		supportedAuthModes: ['oauth', 'bearer'],
 		buildSetupInstruction: (connectionUrl) =>
 			`claude mcp add --transport http --scope user tracekeeper ${connectionUrl}`,
 		setupFollowup: localize(
@@ -108,7 +78,7 @@ export const buildClientProfiles = (
 			'Claude Desktop requires a compatible MCPB extension. No Tracekeeper local OAuth extension is verified yet, so automatic connection is not claimed.'
 		),
 		setupCapability: 'extension',
-		supportsLocalOAuth: false,
+		supportedAuthModes: ['bearer'],
 	},
 	{
 		id: 'cursor',
@@ -118,7 +88,7 @@ export const buildClientProfiles = (
 			'Use the local endpoint in Cursor MCP settings. Loopback OAuth compatibility has not completed live verification.'
 		),
 		setupCapability: 'native-gui',
-		supportsLocalOAuth: false,
+		supportedAuthModes: ['bearer'],
 	},
 	{
 		id: 'gemini',
@@ -128,7 +98,7 @@ export const buildClientProfiles = (
 			'Copy the official CLI command, then complete local OAuth authorization in Gemini CLI.'
 		),
 		setupCapability: 'oauth-cli',
-		supportsLocalOAuth: true,
+		supportedAuthModes: ['oauth', 'bearer'],
 		buildSetupInstruction: (connectionUrl) =>
 			`gemini mcp add --transport http --scope user tracekeeper ${connectionUrl}`,
 		setupFollowup: localize(
@@ -144,7 +114,7 @@ export const buildClientProfiles = (
 			'Grok Build local OAuth compatibility still requires live verification. Use its native MCP management and do not paste a long-lived access credential.'
 		),
 		setupCapability: 'manual',
-		supportsLocalOAuth: false,
+		supportedAuthModes: ['bearer'],
 	},
 	{
 		id: 'zcode',
@@ -154,7 +124,7 @@ export const buildClientProfiles = (
 			'Use the local endpoint on the MCP page in ZCode settings. No local OAuth flow is verified yet.'
 		),
 		setupCapability: 'native-gui',
-		supportsLocalOAuth: false,
+		supportedAuthModes: ['bearer'],
 	},
 	{
 		id: 'custom',
@@ -164,7 +134,7 @@ export const buildClientProfiles = (
 			'Use the local endpoint manually only when the client supports Streamable HTTP, MCP OAuth discovery, PKCE S256, and secure credential storage.'
 		),
 		setupCapability: 'manual',
-		supportsLocalOAuth: false,
+		supportedAuthModes: ['oauth', 'bearer'],
 	},
 ];
 
@@ -175,7 +145,7 @@ export const buildGeneratedClientSetup = (
 	const endpoint = requirePublicLoopbackEndpoint(connectionUrl);
 	return {
 		setupCapability: profile.setupCapability,
-		supportsLocalOAuth: profile.supportsLocalOAuth,
+		supportedAuthModes: profile.supportedAuthModes,
 		setupInstruction: profile.buildSetupInstruction?.(endpoint) ?? endpoint,
 		setupUrl: profile.setupUrl,
 		setupFollowup: profile.setupFollowup,

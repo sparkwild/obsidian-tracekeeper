@@ -33,6 +33,7 @@ import {
 	normalizeObservedClientType,
 	type ObservedClientType,
 } from './observed-client';
+import type { AgentAuthMode } from './agent-auth';
 import {
 	ToolInputError,
 	assertNoSymlinkSegments,
@@ -122,6 +123,9 @@ export interface McpConnectionState {
 	sessionId: string;
 	principalId: string;
 	credentialCapabilities: readonly string[];
+	integrationId?: string;
+	credentialId?: string;
+	authMode?: AgentAuthMode;
 	agentId: string;
 	clientName: string | null;
 	clientVersion: string | null;
@@ -466,6 +470,9 @@ export class McpJsonRpcHandler {
 			writebackConfirmationSecret: this.writebackConfirmationSecret,
 			principalId: state.principalId,
 			credentialCapabilities: state.credentialCapabilities,
+			integrationId: state.integrationId,
+			credentialId: state.credentialId,
+			authMode: state.authMode,
 			agentId: state.agentId,
 			sessionId: state.sessionId,
 			clientName: state.clientName,
@@ -490,6 +497,9 @@ export class McpJsonRpcHandler {
 		try {
 			appendConnectionAuditEvent(this.defaultVaultRoot, {
 				principalId: state.principalId,
+				integrationId: state.integrationId,
+				credentialId: state.credentialId,
+				authMode: state.authMode,
 				agentId: state.agentId,
 				sessionId: state.sessionId,
 				clientName: state.clientName,

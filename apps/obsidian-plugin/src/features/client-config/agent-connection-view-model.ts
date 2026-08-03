@@ -1,132 +1,60 @@
-import type { ClientPairingState } from './client-config';
+import type { ClientAuthMode } from './client-config';
 
-export type ConnectionUiState =
-	| 'idle'
-	| 'preparing'
-	| 'ready'
-	| 'awaiting_confirmation'
-	| 'authorized'
-	| 'expired'
-	| 'failed'
-	| 'retry'
-	| 'manual';
-
-export type ConnectionClipboardState = 'idle' | 'copied' | 'failed';
-export type ConnectionPrimaryAction = 'start' | 'reconnect' | 'copy_setup' | 'retry' | 'close' | null;
-export type ConnectionSecondaryAction = 'copy_setup' | 'technical_details' | 'help';
-export type ConnectionVisibleSection =
-	| 'intro'
-	| 'usage_summary'
-	| 'instructions'
-	| 'pairing_code'
-	| 'manual_setup'
-	| 'recovery'
-	| 'skill'
-	| 'technical_details';
+export type ConnectionUiState = 'not_configured' | 'copied_unverified' | 'client_reached' | 'pending_approval' | 'authorized' | 'connected' | 'used' | 'revoked' | 'needs_update' | 'manual';
+export type McpConnectionState = 'not_started' | 'copied_unverified' | 'client_reached' | 'connected' | 'needs_update';
+export type AuthorizationState = 'not_authorized' | 'pending_approval' | 'authorized' | 'revoked';
+export type UsageState = 'never_used' | 'used';
+export type ConnectionPrimaryAction = 'create' | 'copy_setup' | 'generate_bearer' | 'revoke' | null;
+export type ConnectionVisibleSection = 'setup' | 'authorization' | 'skill' | 'usage';
 
 export interface ConnectionPresentationInput {
-	mode: 'add' | 'manage';
-	supportsLocalOAuth: boolean;
-	pairingLoading: boolean;
-	pairingState: ClientPairingState | null;
-	hasPairingTicket: boolean;
-	clipboardState: ConnectionClipboardState;
+	authMode: ClientAuthMode;
+	setupCommandCopiedAt?: string;
+	hasCredential: boolean;
+	hasPendingApproval?: boolean;
+	clientReached?: boolean;
+	connected?: boolean;
+	used?: boolean;
+	revoked?: boolean;
+	needsUpdate?: boolean;
+	configured?: boolean;
 }
 
 export interface ConnectionPresentation {
 	state: ConnectionUiState;
+	mcpState: McpConnectionState;
+	authorizationState: AuthorizationState;
+	usageState: UsageState;
 	primaryAction: ConnectionPrimaryAction;
-	secondaryActions: readonly ConnectionSecondaryAction[];
 	visibleSections: readonly ConnectionVisibleSection[];
-	isBusy: boolean;
 }
 
-const technicalDetails: readonly ConnectionVisibleSection[] = ['technical_details'];
-
-export function buildConnectionPresentation(
-	input: ConnectionPresentationInput
-): ConnectionPresentation {
-	if (!input.supportsLocalOAuth) {
-		return {
-			state: 'manual',
-			primaryAction: 'copy_setup',
-			secondaryActions: ['technical_details'],
-			visibleSections: ['manual_setup', ...technicalDetails],
-			isBusy: false,
-		};
-	}
-
-	if (input.pairingLoading) {
-		return {
-			state: 'preparing',
-			primaryAction: null,
-			secondaryActions: [],
-			visibleSections: ['intro'],
-			isBusy: true,
-		};
-	}
-
-	switch (input.pairingState) {
-		case 'ready':
-			return {
-				state: 'ready',
-				primaryAction: input.clipboardState === 'failed' ? 'copy_setup' : null,
-				secondaryActions: ['copy_setup', 'technical_details', 'help'],
-				visibleSections: [
-					'instructions',
-					...(input.hasPairingTicket ? (['pairing_code'] as const) : []),
-					...technicalDetails,
-				],
-				isBusy: false,
-			};
-		case 'awaiting_confirmation':
-			return {
-				state: 'awaiting_confirmation',
-				primaryAction: null,
-				secondaryActions: ['technical_details'],
-				visibleSections: ['instructions', ...technicalDetails],
-				isBusy: false,
-			};
-		case 'redeemed':
-			return {
-				state: 'authorized',
-				primaryAction: 'close',
-				secondaryActions: ['technical_details'],
-				visibleSections: ['usage_summary', 'skill', ...technicalDetails],
-				isBusy: false,
-			};
-		case 'expired':
-			return recoveryPresentation('expired');
-		case 'failed':
-			return recoveryPresentation('failed');
-		case 'retry':
-			return recoveryPresentation('retry');
-		case null:
-		default:
-			return input.mode === 'manage'
-				? {
-						state: 'idle',
-						primaryAction: 'reconnect',
-						secondaryActions: ['technical_details'],
-						visibleSections: ['usage_summary', 'skill', ...technicalDetails],
-						isBusy: false,
-					}
-				: {
-						state: 'idle',
-						primaryAction: 'start',
-						secondaryActions: ['technical_details'],
-						visibleSections: ['intro', ...technicalDetails],
-						isBusy: false,
-					};
-	}
-}
-
-function recoveryPresentation(state: Extract<ConnectionUiState, 'expired' | 'failed' | 'retry'>): ConnectionPresentation {
-	return {
-		state,
-		primaryAction: 'retry',
-		secondaryActions: ['technical_details'],
-		visibleSections: ['recovery', ...technicalDetails],
-		isBusy: false,
-	};
+export function buildConnectionPresentation(input: ConnectionPresentationInput): ConnectionPresentation {
+	const clientReached = input.clientReached || input.hasPendingApproval;
+	const mcpState: McpConnectionState = input.needsUpdate
+		? 'needs_update'
+		: input.connected
+			? 'connected'
+			: clientReached
+				? 'client_reached'
+				: input.setupCommandCopiedAt
+					? 'copied_unverified'
+					: 'not_started';
+	const authorizationState: AuthorizationState = input.revoked
+		? 'revoked'
+		: input.hasCredential
+			? 'authorized'
+			: input.hasPendingApproval
+				? 'pending_approval'
+				: 'not_authorized';
+	const usageState: UsageState = input.used ? 'used' : 'never_used';
+	if (input.needsUpdate) return { state: 'needs_update', mcpState, authorizationState, usageState, primaryAction: 'copy_setup', visibleSections: ['setup', 'authorization', 'skill'] };
+	if (input.revoked) return { state: 'revoked', mcpState, authorizationState, usageState, primaryAction: input.authMode === 'bearer' ? 'generate_bearer' : 'copy_setup', visibleSections: ['setup', 'authorization', 'skill'] };
+	if (input.used) return { state: 'used', mcpState, authorizationState, usageState, primaryAction: 'revoke', visibleSections: ['setup', 'authorization', 'usage', 'skill'] };
+	if (input.connected) return { state: 'connected', mcpState, authorizationState, usageState, primaryAction: 'revoke', visibleSections: ['setup', 'authorization', 'usage', 'skill'] };
+	if (input.hasPendingApproval) return { state: 'pending_approval', mcpState, authorizationState, usageState, primaryAction: null, visibleSections: ['setup', 'authorization', 'skill'] };
+	if (input.hasCredential) return { state: 'authorized', mcpState, authorizationState, usageState, primaryAction: 'revoke', visibleSections: ['setup', 'authorization', 'skill'] };
+	if (clientReached) return { state: 'client_reached', mcpState, authorizationState, usageState, primaryAction: 'copy_setup', visibleSections: ['setup', 'authorization', 'skill'] };
+	if (input.setupCommandCopiedAt) return { state: 'copied_unverified', mcpState, authorizationState, usageState, primaryAction: 'copy_setup', visibleSections: ['setup', 'authorization', 'skill'] };
+	return { state: input.authMode === 'bearer' ? 'manual' : 'not_configured', mcpState, authorizationState, usageState, primaryAction: input.authMode === 'bearer' ? 'generate_bearer' : 'copy_setup', visibleSections: ['setup', 'authorization', 'skill'] };
 }

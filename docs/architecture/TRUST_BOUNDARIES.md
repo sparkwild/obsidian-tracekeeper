@@ -14,9 +14,9 @@ the user-facing data statement remains in [PRIVACY.md](../../PRIVACY.md).
 | --- | --- |
 | Active Vault | User-owned source of truth; every access is scoped and validated |
 | Tracekeeper-controlled Vault folders | Bounded operational writes are allowed according to policy |
-| Local MCP Runtime | Exact-loopback service protected by one installation-level service Bearer |
+| Local MCP Runtime | Exact-loopback service protected by a per-Agent credential verifier |
 | Connected Agent | Observed consumer of bounded tools; self-reported identity is untrusted and never grants filesystem access |
-| Client OAuth state and Skill targets | OAuth registrations, pairing, and codes are memory-only; Vault-outside Skill changes require confirmed, recoverable plugin flows |
+| Client OAuth state and Skill targets | Pending approvals, unbound registrations, and codes are memory-only; Vault-outside Skill changes require confirmed, recoverable plugin flows |
 | Network and shell | Not exposed by Tracekeeper MCP tools |
 
 ## Runtime Boundary
@@ -30,18 +30,20 @@ the user-facing data statement remains in [PRIVACY.md](../../PRIVACY.md).
   only on the exact `127.0.0.1` listener used by desktop Obsidian and supported
   loopback clients. This exception never applies to LAN, remote, hosted, or
   non-loopback authorization endpoints.
-- Loopback is not authentication. Every MCP resource request requires the same
-  installation-level service Bearer in the `Authorization` Header; query
-  credentials are rejected and endpoint URLs remain credential-free.
-- Runtime retains only the service credential's normalized hash and compares
-  request credentials without persisting plaintext credentials or Headers.
+- Loopback is not authentication. Every MCP resource request requires a valid
+  per-Agent Bearer in the `Authorization` Header; query credentials are
+  rejected and endpoint URLs remain credential-free.
+- Runtime receives a verifier and retains no plaintext credential. The plugin
+  persists only SHA-256 digests and returns a trusted integration/credential
+  context after constant-time comparison.
 - Successful requests enter one fixed `local-user` execution domain. Discovery
   and dispatch use the same fixed capability set, and dispatch rechecks the
   required capability and operation policy.
 - Sessions use random opaque identifiers and are limited by idle lifetime,
   active count, per-session streams, request size, read time, content type, and
   negotiated MCP protocol version. Every Session request revalidates the
-  Bearer; a Session identifier is continuity evidence, not client identity.
+  Bearer and compares its bound integration/credential context; a Session
+  identifier is continuity evidence, not client identity.
 - MCP `clientInfo` is an untrusted observation claim, not authentication or an
   authorization source. It may label local diagnostics but cannot create a
   Principal or capability profile.
@@ -54,21 +56,23 @@ the user-facing data statement remains in [PRIVACY.md](../../PRIVACY.md).
   `WWW-Authenticate` challenge and Protected Resource Metadata. OAuth metadata,
   registration, authorization, and token routes cannot dispatch tools.
 - Authorization codes require PKCE `S256`, an exact registered loopback redirect
-  URI, `state`, and the MCP resource indicator. Pairing codes enter only a
-  same-origin local form body; all OAuth responses are non-cacheable and the
-  authorization page uses a restrictive content-security policy with one
-  hash-bound static stylesheet, no scripts, and no external resources.
-- Pairing codes, client registrations, and authorization codes are bounded,
+  URI, `state`, and the MCP resource indicator. Obsidian approval is an explicit
+  same-origin bridge; the browser page only waits. All OAuth responses are
+  non-cacheable and the page uses a restrictive content-security policy with
+  one hash-bound static stylesheet, no scripts, and no external resources.
+- Pending requests, unbound registrations, and authorization codes are bounded,
   short-lived, one-use memory state. Stop, restart, port change, plugin unload,
-  and global reset invalidate them. Invalid, expired, replayed, mismatched, and
-  over-attempt requests fail closed without revealing which check failed.
-- The token endpoint returns the existing installation Bearer as an opaque
-  access token. It does not create per-client credentials, refresh tokens,
-  Principals, capability profiles, or independent revocation semantics.
+  and global revoke invalidate them. Invalid, expired, replayed, mismatched,
+  and capacity-exhausted requests fail closed without revealing which check
+  failed.
+- The token endpoint atomically persists the selected integration's digest and
+  returns one opaque access token. It does not issue refresh tokens; revoke and
+  replacement close only the bound integration's Sessions.
 - Fixed resources and capability-filtered prompts cannot grant capabilities.
-- Removing one client through its client-native entry does not revoke server access. Advanced
-  global credential reset rotates the service Bearer, terminates all Sessions,
-  and requires every configured client to be updated.
+- Removing one client through its client-native entry requires revocation first;
+  it removes metadata without deleting Skill files. Global revoke clears all
+  active credentials and pending approvals, terminates all Sessions,
+  and requires every configured client to be reauthorized.
 
 ## Filesystem Boundary
 
@@ -221,10 +225,11 @@ empty-root eligibility before the native effect. Drift after confirmation is a
 conflict and never inherits the old preview's authority.
 
 Audit records may contain operation identity, the fixed execution-domain label,
-untrusted client/Session claims, bounded target paths, result summary, duration,
-risk, and bounded workflow metadata. They must not persist service credentials,
-credential or pairing-code hashes, pairing codes, OAuth authorization codes or
-token responses, authorization headers, writeback confirmation tokens or their
+trusted integration and credential identifiers, auth mode, untrusted
+client/Session claims, bounded target paths, result summary, duration, risk, and
+bounded workflow metadata. They must not persist plaintext credentials, token
+digests, pending handles, PKCE verifiers, OAuth authorization codes or token
+responses, authorization headers, writeback confirmation tokens or their
 hashes, absolute external Skill paths, complete prompts, note bodies, Recall
 content, full results, or other sensitive payloads. Raw operation-journal JSON
 contains neither plaintext payloads nor plaintext completed results. Journals

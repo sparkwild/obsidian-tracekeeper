@@ -3,6 +3,10 @@ import type { GeneratedClientConfig } from '../client-config/client-config';
 import type { MemoryProposalRecord } from '../review/review-view-model';
 import type { RuntimeViewStatus } from '../../main';
 import type { TracekeeperStructureStatus } from '../structure/legacy-migration-controller';
+import type { AgentAuthMode, AgentIntegrationSnapshot } from '../settings/agent-integrations';
+import type { PendingOAuthRequest } from '@tracekeeper/mcp-runtime';
+
+export type PendingOAuthApproval = Pick<PendingOAuthRequest, 'requestId' | 'clientNameClaim' | 'redirectUri' | 'resource' | 'scope' | 'issuedAt' | 'expiresAt'>;
 
 export const AGENT_TASKS_PATH = TRACEKEEPER_TASKS_DIR;
 
@@ -101,6 +105,9 @@ export interface AuditEventRecord {
 	snippet: string;
 	eventType: string;
 	principalId: string;
+	integrationId: string;
+	credentialId: string;
+	authMode: AgentAuthMode | '';
 	agentId: string;
 	sessionId: string;
 	clientName: string;
@@ -208,6 +215,9 @@ export interface AgentActivitySnapshot {
 
 export interface AgentConnectionRecord {
 	principalId: string;
+	integrationId: string;
+	credentialId: string;
+	authMode: AgentAuthMode | '';
 	agentId: string;
 	sessionId: string;
 	clientName: string;
@@ -230,6 +240,9 @@ export interface AgentConnectionRecord {
 
 export interface AgentToolCallRecord {
 	principalId: string;
+	integrationId: string;
+	credentialId: string;
+	authMode: AgentAuthMode | '';
 	taskId: string;
 	agentId: string;
 	sessionId: string;
@@ -259,6 +272,9 @@ export interface AgentConnectionsSnapshot {
 	connectionUrl: string;
 	runtimeStatus: RuntimeViewStatus;
 	clientConfigs: GeneratedClientConfig[];
+	integrations: AgentIntegrationSnapshot[];
+	pendingOAuthRequests: PendingOAuthApproval[];
+	activeSessions: Array<{ sessionId: string; integrationId?: string; credentialId?: string; authMode?: 'oauth' | 'bearer'; createdAt: number; lastSeenAt: number }>;
 	recentAgents: AgentConnectionRecord[];
 	recentToolCalls: AgentToolCallRecord[];
 	missingAuditSources: boolean;
