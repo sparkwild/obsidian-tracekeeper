@@ -104,3 +104,36 @@ test('rejects multiline dynamic imports and re-exports across workspaces', () =>
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test('rejects public tool contracts that expose a caller-selected Vault root', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'packages/contracts/src/contracts.ts', [
+			'function withVaultRoot(properties) { return properties; }',
+			'const inputSchema = { properties: { vaultRoot: { type: \'string\' } } };',
+			'void withVaultRoot(inputSchema);',
+			'',
+		].join('\n'));
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, false);
+		assert.ok(result.errors.some((error) => /contract helper withVaultRoot/.test(error)));
+		assert.ok(result.errors.some((error) => /public contract property vaultRoot/.test(error)));
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('rejects runtime tool argument access to Vault root', () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-architecture-'));
+	try {
+		write(root, 'packages/mcp-runtime/src/tools.ts', [
+			'function read(args) { return args.vaultRoot; }',
+			'',
+		].join('\n'));
+		const result = checkArchitectureBoundaries(root);
+		assert.equal(result.ok, false);
+		assert.ok(result.errors.some((error) => /tool argument access args\.vaultRoot/.test(error)));
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});

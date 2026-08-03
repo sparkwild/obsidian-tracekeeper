@@ -83,11 +83,6 @@ export type TracekeeperToolName =
 	| 'tracekeeper.capture_source'
 	| 'tracekeeper.propose_memory';
 
-const vaultRootProperty = {
-	type: 'string',
-	description: 'Vault root path. If omitted, uses server configured --vault-root.',
-};
-
 function withResultSchema(schema: ToolOutputSchema): { outputSchema: ToolOutputSchema; resultSchema: ToolOutputSchema } {
 	return {
 		outputSchema: schema,
@@ -95,13 +90,10 @@ function withResultSchema(schema: ToolOutputSchema): { outputSchema: ToolOutputS
 	};
 }
 
-function withVaultRoot(properties: Record<string, unknown>, required: string[] = []): ToolInputSchema {
+function withToolInput(properties: Record<string, unknown>, required: string[] = []): ToolInputSchema {
 	return {
 		type: 'object',
-		properties: {
-			vaultRoot: vaultRootProperty,
-			...properties,
-		},
+		properties,
 		additionalProperties: false,
 		...(required.length > 0 ? { required } : {}),
 	};
@@ -193,7 +185,7 @@ const compatibilityToolNameSet = new Set(compatibilityFallbackTools.map((entry) 
 export const toolContracts = [
 	{
 		name: 'tracekeeper.status',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -204,12 +196,12 @@ export const toolContracts = [
 		useCase: 'status',
 		description:
 			'[read-only] Quick vault and service summary. Does not read full note content or write files.',
-		inputSchema: withVaultRoot({}),
+		inputSchema: withToolInput({}),
 		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.graph_health',
-		version: 1,
+		version: 2,
 		visibility: 'compatibility',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -219,7 +211,7 @@ export const toolContracts = [
 		workflowRole: 'observe',
 		useCase: 'graph_health',
 		description: '[deprecated] Use tracekeeper.lint for graph checks. This compatibility tool is read-only.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			max_items: { type: 'integer', description: 'Maximum number of array entries to return.' },
 			graph_profile: {
 				type: 'string',
@@ -234,7 +226,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.start_task',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'workflow.manage',
 		risk: 'low-risk-write',
@@ -245,7 +237,7 @@ export const toolContracts = [
 		useCase: 'start_task',
 		description:
 			'[low-risk write] Call once when starting meaningful work. Records a bounded task and returns the recommended recall step.',
-		inputSchema: withVaultRoot(
+		inputSchema: withToolInput(
 			{
 				goal: { type: 'string', description: 'Task goal statement.' },
 				client: { type: 'string', description: 'Optional client context.' },
@@ -269,7 +261,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.recall',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -280,7 +272,7 @@ export const toolContracts = [
 		useCase: 'recall',
 		description:
 			'[read-only] Find relevant memory, Wiki, and source notes in the active local Obsidian Vault before read_note. Supports global, project, and project_history scopes.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			query: { type: 'string', description: 'Recall query text. Required unless scope is project_history.' },
 			scope: {
 				type: 'string',
@@ -298,7 +290,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.project_memory',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -309,7 +301,7 @@ export const toolContracts = [
 		useCase: 'project_memory',
 		description:
 			'[read-only] Enumerate the complete generation-bound project-memory catalog in the active local Obsidian Vault. Returns metadata only; use tracekeeper.read_note for full note bodies.',
-		inputSchema: withVaultRoot(
+		inputSchema: withToolInput(
 			{
 				action: {
 					const: 'list',
@@ -340,7 +332,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.project_context',
-		version: 1,
+		version: 2,
 		visibility: 'compatibility',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -351,7 +343,7 @@ export const toolContracts = [
 		useCase: 'project_context',
 		description:
 			'[deprecated] Use tracekeeper.recall with scope="project". Compatibility tool, read-only.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			query: { type: 'string', description: 'Project-scoped recall query.' },
 			project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
 			project_id: { type: 'string', description: 'Project id for scoped matching.' },
@@ -367,7 +359,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.project_history',
-		version: 1,
+		version: 2,
 		visibility: 'compatibility',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -378,7 +370,7 @@ export const toolContracts = [
 		useCase: 'project_history',
 		description:
 			'[deprecated] Use tracekeeper.recall with scope="project_history". Compatibility tool, read-only.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
 			project_id: { type: 'string', description: 'Project id for scoped matching.' },
 			repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
@@ -394,7 +386,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.read_note',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -405,7 +397,7 @@ export const toolContracts = [
 		useCase: 'read_note',
 		description:
 			'[read-only] Read one vault note only after recall excerpts are not enough. Does not write files.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			path: { type: 'string', description: 'Vault-relative note path.' },
 			recall_id: {
 				type: 'string',
@@ -416,7 +408,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.review_queue',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'memory.review',
 		risk: 'read-only',
@@ -427,7 +419,7 @@ export const toolContracts = [
 		useCase: 'review_queue',
 		description:
 			'[read-only] Inspect pending local Vault proposals or approved writeback candidates. Does not approve or apply changes.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			action: {
 				type: 'string',
 				enum: ['list_pending', 'list_approved'],
@@ -444,7 +436,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.list_review_queue',
-		version: 1,
+		version: 2,
 		visibility: 'compatibility',
 		capability: 'memory.review',
 		risk: 'read-only',
@@ -455,7 +447,7 @@ export const toolContracts = [
 		useCase: 'review_queue',
 		description:
 			'[deprecated] Use tracekeeper.review_queue with action="list_pending". Compatibility tool, read-only.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			max_items: { type: 'integer', description: 'Maximum number of pending entries.' },
 		}),
 		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
@@ -465,7 +457,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.list_source_requests',
-		version: 1,
+		version: 2,
 		visibility: 'compatibility',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -476,7 +468,7 @@ export const toolContracts = [
 		useCase: 'source_request',
 		description:
 			'[deprecated] Use tracekeeper.source_request with action="list". Compatibility tool, read-only.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			max_items: { type: 'integer', description: 'Maximum number of pending requests to return.' },
 			status: { type: 'string', description: 'Optional status filter, defaults to pending.' },
 			source_kind: { type: 'string', description: 'Optional source kind filter.' },
@@ -488,7 +480,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.list_approved_writebacks',
-		version: 1,
+		version: 2,
 		visibility: 'compatibility',
 		capability: 'memory.review',
 		risk: 'read-only',
@@ -499,7 +491,7 @@ export const toolContracts = [
 		useCase: 'review_queue',
 		description:
 			'[deprecated] Use tracekeeper.review_queue with action="list_approved". Compatibility tool, read-only.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			scope: { type: 'string', description: 'Optional proposal kind or target-note prefix filter.' },
 			max_items: { type: 'integer', description: 'Maximum number of approved writebacks to return.' },
 			limit: { type: 'integer', description: 'Alias of max_items.' },
@@ -511,7 +503,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.audit_recent',
-		version: 1,
+		version: 2,
 		visibility: 'compatibility',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -521,7 +513,7 @@ export const toolContracts = [
 		workflowRole: 'observe',
 		useCase: 'audit_recent',
 		description: '[deprecated] Prefer the Obsidian runtime log view. Compatibility tool, read-only.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			max_items: { type: 'integer', description: 'Maximum number of parsed sections.' },
 		}),
 		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
@@ -531,7 +523,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.source_request',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'vault.write',
 		risk: 'low-risk-write',
@@ -542,7 +534,7 @@ export const toolContracts = [
 		useCase: 'source_request',
 		description:
 			'[read-only | low-risk write] List source requests or analyze one existing request. Does not fetch network content.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			action: {
 				type: 'string',
 				enum: ['list', 'analyze'],
@@ -567,7 +559,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.analyze_source_request',
-		version: 1,
+		version: 2,
 		visibility: 'compatibility',
 		capability: 'vault.write',
 		risk: 'low-risk-write',
@@ -578,7 +570,7 @@ export const toolContracts = [
 		useCase: 'source_request',
 		description:
 			'[deprecated] Use tracekeeper.source_request with action="analyze". Compatibility tool, low-risk write.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			request_path: { type: 'string', description: 'Vault-relative path to an agent-request note.' },
 			path: { type: 'string', description: 'Alias of request_path.' },
 			task_id: { type: 'string', description: 'Optional task id to update with generated source/proposal paths.' },
@@ -595,7 +587,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.apply_approved_writeback',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'memory.apply',
 		risk: 'review-gated-write',
@@ -606,7 +598,7 @@ export const toolContracts = [
 		useCase: 'apply_approved_writeback',
 		description:
 			'[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content to the local Vault target note.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			proposal_id: { type: 'string', description: 'Proposal id to apply.' },
 			proposal_path: { type: 'string', description: 'Vault-relative proposal note path.' },
 			path: { type: 'string', description: 'Alias of proposal_path.' },
@@ -622,7 +614,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.build_context_pack',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'workflow.manage',
 		risk: 'low-risk-write',
@@ -633,7 +625,7 @@ export const toolContracts = [
 		useCase: 'build_context_pack',
 		description:
 			'[read-only | optional write] Build a compact context pack from recall results. Writes an artifact only when write=true.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			query: { type: 'string', description: 'Context pack query.' },
 			task_id: {
 				type: 'string',
@@ -652,7 +644,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.lint',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -663,7 +655,7 @@ export const toolContracts = [
 		useCase: 'lint',
 		description:
 			'[read-only] Run the single vault check entry for structure, links, sources, claims, and graph health.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			max_items: { type: 'integer', description: 'Maximum number of issues to return.' },
 			graph_profile: {
 				type: 'string',
@@ -675,7 +667,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.finish_task',
-		version: 1,
+		version: 2,
 		visibility: 'public',
 		capability: 'workflow.manage',
 		risk: 'low-risk-write',
@@ -686,7 +678,7 @@ export const toolContracts = [
 		useCase: 'finish_task',
 		description:
 			'[low-risk write] Required once at task closeout. Record the session and submit durable decisions, solution changes, lessons, preferences, next actions, and memory candidates according to memory rules.',
-		inputSchema: withVaultRoot(
+		inputSchema: withToolInput(
 			{
 				task_id: { type: 'string', description: 'Task id.' },
 				summary: { type: 'string', description: 'Task summary.' },
@@ -754,7 +746,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.distill_session',
-		version: 1,
+		version: 2,
 		visibility: 'compatibility',
 		capability: 'workflow.manage',
 		risk: 'low-risk-write',
@@ -764,7 +756,7 @@ export const toolContracts = [
 		workflowRole: 'task-finish',
 		useCase: 'finish_task',
 		description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool for older session distillation flows.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			task_id: { type: 'string', description: 'Task id.' },
 			summary: { type: 'string', description: 'Session summary.' },
 			decisions: {
@@ -793,7 +785,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.write_context_pack',
-		version: 1,
+		version: 2,
 		visibility: 'compatibility',
 		capability: 'workflow.manage',
 		risk: 'low-risk-write',
@@ -804,7 +796,7 @@ export const toolContracts = [
 		useCase: 'build_context_pack',
 		description:
 			'[deprecated] Use tracekeeper.build_context_pack with write=true. Compatibility tool, low-risk write.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			filename: { type: 'string', description: 'Optional file stem. If omitted, auto-generates one.' },
 			title: { type: 'string', description: 'Optional note title.' },
 			content: { type: 'string', description: 'Context pack markdown/text content.' },
@@ -817,7 +809,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.write_session_note',
-		version: 1,
+		version: 2,
 		visibility: 'compatibility',
 		capability: 'workflow.manage',
 		risk: 'low-risk-write',
@@ -827,7 +819,7 @@ export const toolContracts = [
 		workflowRole: 'task-finish',
 		useCase: 'finish_task',
 		description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool, low-risk write.',
-		inputSchema: withVaultRoot({
+		inputSchema: withToolInput({
 			filename: { type: 'string', description: 'Optional file stem. If omitted, auto-generates one.' },
 			content: { type: 'string', description: 'Session content.' },
 			task_id: { type: 'string', description: 'Optional task id for traceability.' },
@@ -839,7 +831,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.capture_source',
-		version: 2,
+		version: 3,
 		visibility: 'public',
 		capability: 'vault.write',
 		risk: 'low-risk-write',
@@ -850,7 +842,7 @@ export const toolContracts = [
 		useCase: 'capture_source',
 		description:
 			'[low-risk write] Save user-provided source metadata or content under sources. Does not fetch external content.',
-		inputSchema: withVaultRoot(
+		inputSchema: withToolInput(
 			{
 				source: { type: 'string', description: 'Source identifier (usually URL or local path).' },
 				source_kind: { type: 'string', description: 'Source type label (optional).' },
@@ -877,7 +869,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.propose_memory',
-		version: 2,
+		version: 3,
 		visibility: 'public',
 		capability: 'memory.propose',
 		risk: 'low-risk-write',
@@ -888,7 +880,7 @@ export const toolContracts = [
 		useCase: 'propose_memory',
 		description:
 			'[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. Global memory stays review-gated by default.',
-		inputSchema: withVaultRoot(
+		inputSchema: withToolInput(
 			{
 				proposal_kind: { type: 'string', description: 'Proposal kind.' },
 				content: { type: 'string', description: 'Proposal markdown/text content.' },

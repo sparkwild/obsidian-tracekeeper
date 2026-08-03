@@ -351,7 +351,7 @@ test('application owner: injected clock exclusively controls the existing recenc
 test('contract: Recall retains public order, schema, capability, risk, effect, idempotency, and compatibility replacements', async (t) => {
 	const contract = getContractByName('tracekeeper.recall');
 	assert.ok(contract);
-	assert.equal(contract.version, 1);
+	assert.equal(contract.version, 2);
 	assert.equal(contract.visibility, 'public');
 	assert.equal(contract.capability, 'vault.read');
 	assert.equal(contract.risk, 'read-only');

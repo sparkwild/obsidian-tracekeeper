@@ -16,6 +16,11 @@ for (const definition of definitions) {
 	assert(contract, `missing contract for ${definition.name}`);
 	assert.equal(contract.visibility, 'public');
 	assert.deepEqual(definition.inputSchema, contract.inputSchema);
+	assert.equal(
+		Object.prototype.hasOwnProperty.call(definition.inputSchema.properties || {}, 'vaultRoot'),
+		false,
+		`${definition.name} must not expose a caller-selected Vault root`,
+	);
 	assert.deepEqual(definition.outputSchema, contract.outputSchema);
 	assert.equal(definition.title, definition.name);
 	assert.equal(definition.description, contract.description);

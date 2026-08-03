@@ -110,6 +110,48 @@ function forbiddenPluginTransportReasons(sourceFile) {
 	return [...reasons].sort();
 }
 
+function forbiddenVaultRootOverrideReasons(relativeFile, sourceFile) {
+	const normalizedRelativeFile = relativeFile.split(path.sep).join('/');
+	const reasons = new Set();
+	const visit = (node) => {
+		if (
+			normalizedRelativeFile === 'packages/contracts/src/contracts.ts'
+			&& ts.isIdentifier(node)
+			&& node.text === 'withVaultRoot'
+		) {
+			reasons.add('contract helper withVaultRoot');
+		}
+		if (
+			normalizedRelativeFile === 'packages/contracts/src/contracts.ts'
+			&& ts.isPropertyAssignment(node)
+			&& ts.isIdentifier(node.name)
+			&& node.name.text === 'vaultRoot'
+		) {
+			reasons.add('public contract property vaultRoot');
+		}
+		if (
+			normalizedRelativeFile === 'packages/mcp-runtime/src/tools.ts'
+			&& ts.isPropertyAccessExpression(node)
+			&& ts.isIdentifier(node.name)
+			&& node.name.text === 'vaultRoot'
+			&& ts.isIdentifier(node.expression)
+			&& (node.expression.text === 'args' || node.expression.text === 'rawArgs')
+		) {
+			reasons.add(`tool argument access ${node.expression.text}.vaultRoot`);
+		}
+		if (
+			normalizedRelativeFile === 'packages/mcp-runtime/src/tools.ts'
+			&& ts.isIdentifier(node)
+			&& node.text === 'vaultRootFromArgs'
+		) {
+			reasons.add('runtime resolver vaultRootFromArgs');
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+	return [...reasons].sort();
+}
+
 function parseSource(relativeFile, content) {
 	return ts.createSourceFile(
 		relativeFile,
@@ -147,6 +189,9 @@ export function checkArchitectureBoundaries(root = process.cwd()) {
 			for (const reason of forbiddenPluginTransportReasons(sourceFile)) {
 				errors.push(`${relativeFile}: plugin UI must not call its own MCP transport (${reason})`);
 			}
+		}
+		for (const reason of forbiddenVaultRootOverrideReasons(relativeFile, sourceFile)) {
+			errors.push(`${relativeFile}: MCP tools must not accept a caller-selected Vault root (${reason})`);
 		}
 	}
 

@@ -78,6 +78,12 @@ for (const contract of toolContracts) {
 	);
 	assert(typeof contract.useCase === 'string' && contract.useCase.length > 0, `tool contract ${contract.name} missing useCase`);
 	assert(contract.inputSchema && contract.inputSchema.type === 'object', `tool contract ${contract.name} missing input schema`);
+	assert.equal(
+		Object.prototype.hasOwnProperty.call(contract.inputSchema.properties, 'vaultRoot'),
+		false,
+		`tool contract ${contract.name} must not expose a caller-selected Vault root`,
+	);
+	assert.equal(contract.inputSchema.additionalProperties, false, `tool contract ${contract.name} must remain closed-world`);
 	assert(contract.outputSchema && contract.outputSchema.type === 'object', `tool contract ${contract.name} missing output schema`);
 	assert.deepStrictEqual(contract.outputSchema, contract.resultSchema, `tool contract ${contract.name} resultSchema must alias outputSchema`);
 	if (contract.idempotency === 'none') {

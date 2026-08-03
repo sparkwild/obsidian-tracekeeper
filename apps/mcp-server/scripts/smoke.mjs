@@ -478,6 +478,7 @@ function ensureToolNames(result, names) {
 async function main() {
 	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-mcp-smoke-'));
 	const vaultRoot = path.join(tempRoot, 'vault');
+	const externalVaultRoot = path.join(tempRoot, 'external-vault');
 	const atlasRepoPath = path.join(vaultRoot, 'repo', 'atlas-temp');
 	const vaultConfigDir = 'vault-config';
 	const fixturePath = path.join(vaultRoot, '00_tracekeeper', 'inbox', 'agent_requests', 'local-source-request.md');
@@ -573,6 +574,8 @@ async function main() {
 		assert.equal(lifecycleRuntime.getStatus().state, 'stopped');
 
 		fs.mkdirSync(vaultRoot, { recursive: true });
+		fs.mkdirSync(externalVaultRoot, { recursive: true });
+		writeNote(externalVaultRoot, 'outside-secret.md', '# Outside secret\n\nThis content must never cross the active Vault boundary.');
 		writeNote(vaultRoot, `${vaultConfigDir}/config.md`, '# Config\n');
 		writeNote(vaultRoot, '00_tracekeeper/control/system.md', '# System\n');
 		writeNote(vaultRoot, '00_tracekeeper/control/audit_log.md', '# Audit Log\n');
@@ -1017,6 +1020,13 @@ async function main() {
 			'tracekeeper.capture_source',
 			'tracekeeper.propose_memory',
 		]);
+		for (const definition of buildStructured(tools).tools) {
+			assert.equal(
+				Object.prototype.hasOwnProperty.call(definition.inputSchema?.properties || {}, 'vaultRoot'),
+				false,
+				`${definition.name} must not expose a caller-selected Vault root`,
+			);
+		}
 		assert.equal(listedTools.length, 11, 'tools/list should expose the fixed local trust toolset');
 		assert.equal(listedTools.includes('tracekeeper.review_queue'), false);
 		assert.equal(listedTools.includes('tracekeeper.apply_approved_writeback'), false);
@@ -1150,6 +1160,39 @@ async function main() {
 		assert.ok(statusAudit.includes('- observed_client_type: "custom"'));
 		assert.ok(statusAudit.includes('- last_used_at:'));
 		assert.ok(statusAudit.includes('- last_successful_tool: "tracekeeper.status"'));
+
+		const activeWorkflowBeforeOverride = managedWorkflowArtifactSnapshot(vaultRoot);
+		const externalWorkflowBeforeOverride = managedWorkflowArtifactSnapshot(externalVaultRoot);
+		const externalRead = await client.call('tools/call', {
+			name: 'tracekeeper.read_note',
+			arguments: {
+				path: 'outside-secret.md',
+				vaultRoot: externalVaultRoot,
+			},
+		}, { allowToolError: true });
+		const externalReadStructured = buildStructured(externalRead);
+		assert.equal(externalRead.isError, true);
+		assert.equal(externalReadStructured.error_detail.code, 'INVALID_REQUEST');
+		assert.doesNotMatch(JSON.stringify(externalRead), /Outside secret/);
+
+		const externalStart = await client.call('tools/call', {
+			name: 'tracekeeper.start_task',
+			arguments: {
+				goal: 'This must not create a task outside the active Vault.',
+				idempotency_key: 'external-vault-override-start',
+				vaultRoot: externalVaultRoot,
+			},
+		}, { allowToolError: true });
+		const externalStartStructured = buildStructured(externalStart);
+		assert.equal(externalStart.isError, true);
+		assert.equal(externalStartStructured.error_detail.code, 'INVALID_REQUEST');
+		assert.deepEqual(managedWorkflowArtifactSnapshot(vaultRoot), activeWorkflowBeforeOverride);
+		assert.deepEqual(managedWorkflowArtifactSnapshot(externalVaultRoot), externalWorkflowBeforeOverride);
+		const overrideAudit = readAuditLog(vaultRoot);
+		assert.ok(overrideAudit.includes('vaultRoot'));
+		assert.doesNotMatch(overrideAudit, new RegExp(externalVaultRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+		assert.doesNotMatch(readAuditLog(externalVaultRoot), /tool_name/);
+
 		const graphHealth = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.graph_health',
 			arguments: {},

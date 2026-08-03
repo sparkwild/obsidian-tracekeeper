@@ -731,14 +731,16 @@ function validateToolResult(toolName, result) {
         },
     }, true);
 }
-function vaultRootFromArgs(args, context) {
-    if (args.vaultRoot !== undefined) {
-        return (0, safety_1.toSafeVaultRoot)(args.vaultRoot);
-    }
+function configuredVaultRoot(context) {
     if (!context.defaultVaultRoot) {
         throw new safety_1.ToolInputError('vaultRoot is required unless --vault-root is configured.');
     }
     return (0, safety_1.toSafeVaultRoot)(context.defaultVaultRoot);
+}
+function assertCallerDoesNotSelectVaultRoot(args) {
+    if (Object.prototype.hasOwnProperty.call(args, 'vaultRoot')) {
+        throw new safety_1.ToolInputError('vaultRoot is managed by the Tracekeeper server and must not be supplied in tool arguments.');
+    }
 }
 function pathSafetyOptions(context) {
     return {
@@ -4708,6 +4710,7 @@ const AUDIT_LOCAL_PATH_ARGUMENT_KEYS = new Set([
     'project_path',
     'repo',
     'repo_path',
+    'vaultRoot',
 ]);
 function projectRecallAuditMetadataValue(key, value) {
     if (AUDIT_LOCAL_PATH_ARGUMENT_KEYS.has(key)) {
@@ -4917,18 +4920,14 @@ function getToolRiskLevel(toolName) {
     }
     return 'low-risk write';
 }
-function resolveAuditVaultRoot(args, context) {
-    const explicit = coerceOptionalString(args.vaultRoot);
-    if (explicit) {
+function resolveAuditVaultRoot(context) {
+    if (typeof context.defaultVaultRoot === 'string' && context.defaultVaultRoot.trim()) {
         try {
-            return (0, safety_1.toSafeVaultRoot)(explicit);
+            return (0, safety_1.toSafeVaultRoot)(context.defaultVaultRoot);
         }
         catch {
             return null;
         }
-    }
-    if (typeof context.defaultVaultRoot === 'string' && context.defaultVaultRoot.trim()) {
-        return context.defaultVaultRoot;
     }
     return null;
 }
@@ -5061,7 +5060,7 @@ async function recordToolCallAuditEventAsync(vaultRoot, input, context) {
     }, context);
 }
 async function recordRejectedToolCallAuditEvent(context, reason) {
-    const vaultRoot = resolveAuditVaultRoot({}, context);
+    const vaultRoot = resolveAuditVaultRoot(context);
     if (!vaultRoot) {
         return;
     }
@@ -5257,12 +5256,13 @@ async function callTool(name, rawParams, context = {}) {
     const agentId = context.agentId || 'unknown session id';
     const sessionId = context.sessionId;
     const clientName = context.clientName ?? null;
-    const auditVaultRoot = resolveAuditVaultRoot(args, context);
+    const auditVaultRoot = resolveAuditVaultRoot(context);
     let toolResult = toolError(`Unknown tool: ${requestName}`);
     let status = 'failed';
     const toolName = requestName || 'unknown';
     const argsSummary = summarizeForAudit(projectArgumentsForAudit(requestName, args));
     try {
+        assertCallerDoesNotSelectVaultRoot(args);
         const contract = (0, contracts_1.getContractByName)(requestName);
         const capabilities = context.credentialCapabilities;
         if (contract &&
@@ -5537,7 +5537,7 @@ function buildStartTaskNextActions(identity, context) {
     return actions;
 }
 function handleStatus(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const scan = scanVaultForContext(vaultRoot, context);
     return {
         ok: true,
@@ -5556,7 +5556,7 @@ function handleStatus(rawArgs, context) {
     };
 }
 function handleGraphHealth(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const maxItems = coercePositiveInt(rawArgs.max_items, 20, 1, 2000);
     const profile = graphProfileFromArgs(rawArgs.graph_profile, context);
     if (profile === 'off') {
@@ -5611,7 +5611,7 @@ function buildToolOperationIdentity(tool, rawIdempotencyKey, payload, context) {
     };
 }
 async function handleStartTask(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const goal = coerceNonEmptyString(rawArgs.goal, true, 'goal');
     const client = coerceNonEmptyString(rawArgs.client);
     const scan = scanVaultForContext(vaultRoot, context);
@@ -5701,7 +5701,7 @@ async function handleStartTask(rawArgs, context) {
     return runner.run();
 }
 function executeRecallApplication(scope, rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const query = scope === 'project_history'
         ? coerceOptionalString(rawArgs.query)
         : coerceNonEmptyString(rawArgs.query, true, 'query');
@@ -5753,7 +5753,7 @@ function handleProjectMemory(rawArgs, context) {
     if (action !== 'list') {
         throw new safety_1.ToolInputError('project_memory action must be: list.');
     }
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const scan = scanVaultForContext(vaultRoot, context);
     const identity = (0, project_identity_1.resolveProjectIdentity)(rawArgs, scan.notes);
     if (identity.confidence === 'uncertain' || !identity.projectId) {
@@ -5771,7 +5771,7 @@ function handleProjectMemory(rawArgs, context) {
     };
 }
 async function handleReadNote(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const notePath = coerceNonEmptyString(rawArgs.path, true, 'path');
     const recallId = coerceOptionalString(rawArgs.recall_id);
     const safePath = (0, safety_1.relativeFromAbsolute)(vaultRoot, (0, safety_1.resolveSafeNotePath)(vaultRoot, notePath, pathSafetyOptions(context)));
@@ -5813,7 +5813,7 @@ function handleProjectHistory(rawArgs, context) {
     return executeRecallApplication('project_history', rawArgs, context);
 }
 function handleListSourceRequests(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const maxItems = coercePositiveInt(rawArgs.max_items, MAX_LIST_QUEUE_ITEMS, 1, MAX_LIST_QUEUE_ITEMS);
     const statusFilter = coerceOptionalString(rawArgs.status) || 'pending';
     const sourceKindFilter = coerceOptionalString(rawArgs.source_kind).toLowerCase();
@@ -5974,7 +5974,7 @@ function buildReportContent(request, mode, sourceText, analysis, sourceNotePath,
     return section.join('\n');
 }
 async function handleAnalyzeSourceRequest(rawArgs, context, sourceToolName = 'tracekeeper.analyze_source_request') {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const requestPath = coerceOptionalString(rawArgs.request_path) || coerceOptionalString(rawArgs.path);
     if (!requestPath) {
         throw new safety_1.ToolInputError('Missing required argument: request_path or path.');
@@ -6168,7 +6168,7 @@ async function handleSourceRequest(rawArgs, context) {
     };
 }
 function handleReviewQueue(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const maxItems = coercePositiveInt(rawArgs.max_items, MAX_LIST_QUEUE_ITEMS, 1, MAX_LIST_QUEUE_ITEMS);
     const scan = scanVaultForContext(vaultRoot, context);
     const pending = scan.notes
@@ -6193,7 +6193,7 @@ function handleReviewQueue(rawArgs, context) {
     };
 }
 function handleListApprovedWritebacks(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const rawLimit = rawArgs.max_items ?? rawArgs.limit;
     const maxItems = coercePositiveInt(rawLimit, MAX_APPROVED_WRITEBACKS, 1, MAX_APPROVED_WRITEBACKS);
     const scope = coerceOptionalString(rawArgs.scope);
@@ -6398,7 +6398,7 @@ function assertJournaledWritebackRequest(rawArgs, payload, context) {
     }
 }
 async function handleApplyApprovedWriteback(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const dryRun = coerceBoolean(rawArgs.dry_run, 'dry_run', false);
     if (dryRun) {
         const proposal = await resolveMemoryProposalFromArgs(vaultRoot, rawArgs, context);
@@ -6583,7 +6583,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
     });
 }
 async function handleAuditRecent(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const maxItems = coercePositiveInt(rawArgs.max_items, MAX_AUDIT_ITEMS, 1, 100);
     const sections = await readMergedAuditSections(vaultRoot, context);
     return {
@@ -6596,7 +6596,7 @@ async function handleAuditRecent(rawArgs, context) {
     };
 }
 async function handleWriteContextPack(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const content = coerceNonEmptyString(rawArgs.content, true, 'content');
     const title = coerceNonEmptyString(rawArgs.title);
     const filename = buildSafeFilename(rawArgs.filename, 'context_pack', context);
@@ -6621,7 +6621,7 @@ async function handleWriteContextPack(rawArgs, context) {
     return makeToolResultForWrite('tracekeeper.write_context_pack', note);
 }
 async function handleWriteSessionNote(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const content = coerceNonEmptyString(rawArgs.content, true, 'content');
     const filename = buildSafeFilename(rawArgs.filename, 'session', context);
     const taskId = coerceOptionalString(rawArgs.task_id) || null;
@@ -6641,7 +6641,7 @@ async function handleWriteSessionNote(rawArgs, context) {
     return makeToolResultForWrite('tracekeeper.write_session_note', note);
 }
 async function handleCaptureSource(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const requestHash = (0, core_1.computePayloadHash)({ ...rawArgs });
     const identity = buildToolOperationIdentity('capture-source', rawArgs.idempotency_key, { requestHash }, context);
     const runner = new core_1.RecoverableOperationRunner({
@@ -6656,7 +6656,7 @@ async function handleCaptureSource(rawArgs, context) {
     return runner.run();
 }
 async function handleCaptureSourceWrite(rawArgs, context, identity) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const source = coerceNonEmptyString(rawArgs.source, true, 'source');
     const sourceKind = coerceOptionalString(rawArgs.source_kind);
     const mode = coerceCaptureMode(rawArgs.mode);
@@ -6732,7 +6732,7 @@ async function handleCaptureSourceWrite(rawArgs, context, identity) {
     };
 }
 async function handleProposeMemory(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const requestSnapshot = buildProposeMemoryRequestSnapshot(rawArgs);
     const requestHash = (0, core_1.computePayloadHash)(requestSnapshot);
     const identity = buildToolOperationIdentity('propose-memory', rawArgs.idempotency_key, requestSnapshot, context);
@@ -6773,7 +6773,7 @@ async function handleProposeMemory(rawArgs, context) {
     return runner.run();
 }
 async function handleProposeMemoryWrite(rawArgs, context, identity, operationCreatedAt, projectMemoryAgentType) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const proposalKind = coerceNonEmptyString(rawArgs.proposal_kind, true, 'proposal_kind');
     const content = coerceNonEmptyString(rawArgs.content, true, 'content');
     const evidence = coerceOptionalString(rawArgs.evidence);
@@ -7016,7 +7016,7 @@ async function handleProposeMemoryWrite(rawArgs, context, identity, operationCre
     return response;
 }
 async function handleBuildContextPack(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const query = coerceNonEmptyString(rawArgs.query, true, 'query');
     const taskId = coerceOptionalString(rawArgs.task_id);
     const candidateLimit = coercePositiveInt(rawArgs.candidate_limit, 8, 1, 120);
@@ -7129,7 +7129,7 @@ async function handleBuildContextPack(rawArgs, context) {
     };
 }
 function handleLint(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const maxItems = coercePositiveInt(rawArgs.max_items, 40, 1, 2000);
     const profile = graphProfileFromArgs(rawArgs.graph_profile, context);
     const scan = scanVaultForContext(vaultRoot, context);
@@ -7492,7 +7492,7 @@ function buildFinishTaskRequestSnapshot(rawArgs) {
     };
 }
 async function buildFinishTaskOperationPayload(rawArgs, context, operationId, requestHash, requestSnapshot) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const taskId = coerceNonEmptyString(rawArgs.task_id, true, 'task_id');
     const summary = coerceNonEmptyString(rawArgs.summary, true, 'summary');
     const outcomes = coerceStringOrStringArray(rawArgs.outcomes, 'outcomes');
@@ -7965,7 +7965,7 @@ async function readTaskLifecycleStateAsync(vaultRoot, taskId, context) {
     }
 }
 async function handleFinishTask(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const requestSnapshot = buildFinishTaskRequestSnapshot(rawArgs);
     const requestHash = (0, core_1.computePayloadHash)(requestSnapshot);
     const identity = buildToolOperationIdentity('finish-task', rawArgs.idempotency_key, requestSnapshot, context);
@@ -8048,7 +8048,7 @@ async function handleFinishTask(rawArgs, context) {
     return runner.run();
 }
 async function handleDistillSession(rawArgs, context) {
-    const vaultRoot = vaultRootFromArgs(rawArgs, context);
+    const vaultRoot = configuredVaultRoot(context);
     const taskId = coerceNonEmptyString(rawArgs.task_id, true, 'task_id');
     const summary = coerceNonEmptyString(rawArgs.summary, true, 'summary');
     const decisions = coerceStringOrStringArray(rawArgs.decisions, 'decisions');

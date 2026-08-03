@@ -44,7 +44,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.status";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -62,7 +62,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.graph_health";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "compatibility";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -77,7 +77,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.start_task";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -92,7 +92,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.recall";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -107,7 +107,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.project_memory";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -125,7 +125,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.project_context";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "compatibility";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -143,7 +143,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.project_history";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "compatibility";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -158,7 +158,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.read_note";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -173,7 +173,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.review_queue";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "memory.review";
     readonly risk: "read-only";
@@ -191,7 +191,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.list_review_queue";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "compatibility";
     readonly capability: "memory.review";
     readonly risk: "read-only";
@@ -209,7 +209,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.list_source_requests";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "compatibility";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -227,7 +227,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.list_approved_writebacks";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "compatibility";
     readonly capability: "memory.review";
     readonly risk: "read-only";
@@ -245,7 +245,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.audit_recent";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "compatibility";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -260,7 +260,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.source_request";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "vault.write";
     readonly risk: "low-risk-write";
@@ -278,7 +278,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.analyze_source_request";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "compatibility";
     readonly capability: "vault.write";
     readonly risk: "low-risk-write";
@@ -293,7 +293,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.apply_approved_writeback";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "memory.apply";
     readonly risk: "review-gated-write";
@@ -308,7 +308,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.build_context_pack";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -323,7 +323,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.lint";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -338,7 +338,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.finish_task";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -356,7 +356,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.distill_session";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "compatibility";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -374,7 +374,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.write_context_pack";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "compatibility";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -392,7 +392,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.write_session_note";
-    readonly version: 1;
+    readonly version: 2;
     readonly visibility: "compatibility";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -407,7 +407,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.capture_source";
-    readonly version: 2;
+    readonly version: 3;
     readonly visibility: "public";
     readonly capability: "vault.write";
     readonly risk: "low-risk-write";
@@ -422,7 +422,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.propose_memory";
-    readonly version: 2;
+    readonly version: 3;
     readonly visibility: "public";
     readonly capability: "memory.propose";
     readonly risk: "low-risk-write";

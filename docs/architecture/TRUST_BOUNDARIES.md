@@ -75,6 +75,8 @@ the user-facing data statement remains in [PRIVACY.md](../../PRIVACY.md).
 MCP tools must:
 
 - resolve every path against the configured active Vault;
+- treat the active Vault root as server-managed runtime context; tool arguments
+  must not select or override it;
 - reject traversal, Vault-outside paths, symlink escapes, and the active
   Obsidian configuration directory;
 - never access arbitrary client configuration;

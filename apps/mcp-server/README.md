@@ -17,6 +17,7 @@ The runtime supports MCP `2025-06-18` and `2025-11-25` over Streamable HTTP. It 
 - read-only by default, with bounded writes to allowlisted Tracekeeper vault paths
 - review-gated durable writeback and user-controlled append-only project memory
 - active-vault containment and Obsidian configuration-directory exclusion
+- the active Vault root is server-managed; `tools/call` cannot select or override it
 - no shell or network capabilities exposed through tools
 - exact `127.0.0.1` binding with no remote-listen mode
 - one installation-level service Bearer required on every non-preflight request
