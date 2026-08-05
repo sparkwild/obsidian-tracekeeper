@@ -22,6 +22,13 @@ try {
 	});
 	const module = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 
+	for (const state of ['location_required', 'not_installed', 'unavailable']) {
+		assert.equal(module.hasDetectedSkillEvidence(state), false, `${state} is not Skill evidence`);
+	}
+	for (const state of ['installed', 'update_available', 'newer_than_bundled', 'modified', 'legacy_install', 'location_conflict']) {
+		assert.equal(module.hasDetectedSkillEvidence(state), true, `${state} is Skill evidence`);
+	}
+
 	const files = new Map();
 	const symbolicLinks = new Set();
 	let renameFailureTarget = '';
@@ -69,20 +76,18 @@ try {
 	const grokDirectory = path.join(homeDirectory, '.grok', 'skills', 'tracekeeper');
 	const zcodeDirectory = path.join(homeDirectory, '.zcode', 'skills', 'tracekeeper');
 
-	const codexProfile = module.buildClientSkillProfile('codex', 'Codex', homeDirectory, path.join);
-	assert.equal(codexProfile.supportsManagedInstall, true);
-	assert.equal(codexProfile.deliveryMode, 'managed');
-	assert.equal(codexProfile.targetDirectory, primaryDirectory);
+	const codexRegistryProfile = module.buildClientSkillProfile('codex', 'Codex', homeDirectory, path.join);
+	assert.equal(codexRegistryProfile.targetDirectory, undefined);
+	assert.equal(codexRegistryProfile.recommendation.skillsRootDirectory, path.join(homeDirectory, '.agents', 'skills'));
+	const codexProfile = { ...codexRegistryProfile, targetDirectory: primaryDirectory };
 	assert.deepEqual(codexProfile.legacyTargetDirectories, [legacyDirectory]);
-	assert.equal(codexProfile.targetDirectory, path.join(homeDirectory, '.agents', 'skills', 'tracekeeper'));
 
 	const claudeCodeProfile = module.buildClientSkillProfile('claude-code', 'Claude Code', homeDirectory, path.join);
-	assert.equal(claudeCodeProfile.supportsManagedInstall, true);
-	assert.equal(claudeCodeProfile.targetDirectory, claudeCodeDirectory);
+	assert.equal(claudeCodeProfile.targetDirectory, undefined);
+	assert.equal(claudeCodeProfile.recommendation.skillsRootDirectory, path.join(homeDirectory, '.claude', 'skills'));
 
 	const cursorProfile = module.buildClientSkillProfile('cursor', 'Cursor', homeDirectory, path.join);
-	assert.equal(cursorProfile.supportsManagedInstall, false);
-	assert.equal(cursorProfile.deliveryMode, 'copy-only');
+	assert.equal(cursorProfile.recommendation, null);
 	assert.equal(cursorProfile.targetDirectory, undefined);
 
 	for (const [clientId, displayName, targetDirectory] of [
@@ -91,9 +96,8 @@ try {
 		['zcode', 'ZCode', zcodeDirectory],
 	]) {
 		const profile = module.buildClientSkillProfile(clientId, displayName, homeDirectory, path.join);
-		assert.equal(profile.supportsManagedInstall, true);
-		assert.equal(profile.deliveryMode, 'managed');
-		assert.equal(profile.targetDirectory, targetDirectory);
+		assert.equal(clientId === 'gemini' ? profile.recommendation.skillsRootDirectory : profile.recommendation, clientId === 'gemini' ? path.join(homeDirectory, '.gemini', 'skills') : null);
+		assert.equal(profile.targetDirectory, undefined);
 		assert.equal(profile.restartRequired, true);
 	}
 

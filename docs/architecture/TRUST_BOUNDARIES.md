@@ -94,11 +94,14 @@ handle metadata, and revalidates the resolved path identity before returning.
 Replacement or mutation during the read is a conflict, not a mixed
 content/version result.
 
-The plugin may change managed Skill targets only through the confirmed flow
-defined by the [Knowledge Runtime](KNOWLEDGE_RUNTIME.md). Normal Agent
-configuration remains client-owned. Production contains no client-configuration
-file reader, merger, backup, or writer. Skill content, placement, file
-verification, or user confirmation cannot expand MCP permissions.
+The plugin may change user-selected Skill targets only through the confirmed
+flow defined by the [Knowledge Runtime](KNOWLEDGE_RUNTIME.md). Official client
+directories are suggestions, not implicit write targets; the AI-assisted flow
+does not count as installation until an external directory is verified. Normal
+Agent configuration remains client-owned. Production contains no
+client-configuration file reader, merger, backup, or writer. Skill content,
+placement, file verification, or user confirmation cannot expand MCP
+permissions.
 
 ## Capability And Write Boundary
 
@@ -257,7 +260,7 @@ Content may still leave the machine when the user connects a client backed by a
 remote model or service. Users choose those clients, protect connection
 credentials, review durable changes, and maintain normal Vault backups.
 
-Review artifacts, append-only behavior, duplicate protection, and managed Skill
+Review artifacts, append-only behavior, duplicate protection, and selected Skill
 backups improve recoverability but do not replace a Vault backup.
 
 The local Vault is not an adversarial trust boundary against its owner or

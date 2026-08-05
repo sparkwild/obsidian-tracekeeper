@@ -49,7 +49,7 @@ Tracekeeper 会把 AI 给出的整理结果当成候选记忆提案。你可以�
 3. 在 **MCP 服务** 中启动 Runtime，并确认不含凭据的 loopback 地址显示“本机访问已保护”。
 4. 在 **Agent 配置** 中点击 **添加 Agent** 并选择一个 AI 工具；持久卡片会立即出现。只执行界面给出的公开原生命令，复制操作必须显式点击，且在客户端触达端点前仍标记为未验证。
 5. 支持 OAuth 的客户端默认使用 OAuth：浏览器只等待，Obsidian 显示 Allow/Deny 审批；不能安全完成 OAuth 的客户端可显式选择手工 Bearer，明文凭据只在当前弹窗显示一次。配置、授权、连接、使用和 Skill 状态彼此独立。
-6. 在适用时单独安装推荐的配套 Skill，再按提示重新加载 AI 工具，让它初始化 Tracekeeper 并调用一个 `tracekeeper.*` 工具。卡片在首次调用前已经存在，成功工具调用只更新使用状态。
+6. 从 Agent 卡片中选择 Skills 目录安装配套 Skill，或打开 AI 辅助安装面板，把使用本地导出 bundle 的提示词交给 Agent。复制提示词不代表已经安装；Tracekeeper 会在最终目录验证完整 bundle 和哈希后才标记已安装。卡片在首次调用前已经存在，成功工具调用只更新使用状态。
 7. 在 **知识变更审核** 中查看需要处理的记忆、Wiki、图谱或迁移候选变更。
 8. 逐条编辑提案、通过审核、退回修改或不采纳；通过审核后仍需预览并明确确认写入。
 
@@ -124,7 +124,7 @@ MCP 写入范围被刻意限制：
 - 每个 Session 使用随机标识，每次 Session 请求都会重新校验其 integration/credential 绑定，并继续执行请求体大小、会话数量、流数量和空闲时间上限
 - MCP 不提供删除、重命名、批量重写和系统命令执行能力
 
-正常 Agent 配置由客户端官方 OAuth/MCP 入口拥有；Tracekeeper 不读取或写入跨平台客户端配置路径。经确认的受管 Skill 安装仍是可恢复的 Vault 外写入。Token、digest、授权码、PKCE verifier、pending handle、token response 和 Authorization Header 都不会进入连接 URL、复制命令、AI 指令、Runtime 日志或 Vault 审计记录。
+正常 Agent 配置由客户端官方 OAuth/MCP 入口拥有；Tracekeeper 不读取或写入跨平台客户端配置路径。Skill 安装必须由用户选择目录并确认预览；AI 辅助流程只提供本地源目录和提示词，外部目录验证通过后才算完成。Token、digest、授权码、PKCE verifier、pending handle、token response 和 Authorization Header 都不会进入连接 URL、复制命令、AI 指令、Runtime 日志或 Vault 审计记录。
 
 ## 项目文档
 

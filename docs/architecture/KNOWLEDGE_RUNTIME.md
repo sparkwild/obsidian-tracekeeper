@@ -167,12 +167,16 @@ daily shard.
 ## Vault-Outside Integration
 
 Explicitly confirmed Skill installation is the normal Vault-outside write owned
-by the Obsidian plugin; MCP tools do not perform it. Agent connection
-configuration is owned by each client's official OAuth/MCP entry. Tracekeeper
-does not detect or write cross-platform client configuration paths during
-normal setup.
+by the Obsidian plugin; MCP tools do not perform it. The user selects a Skills
+root through the desktop directory picker, and Tracekeeper previews a single
+`tracekeeper` target beneath it (or uses the selected directory when it is
+already named `tracekeeper`). Official client locations are suggestions only.
+An AI-assisted flow exports the complete local bundle to a versioned plugin
+source directory and supplies a prompt; it does not claim installation until a
+user-selected external directory passes verification. Agent connection
+configuration remains owned by each client's official OAuth/MCP entry.
 
-Every managed change:
+Every direct Skill change:
 
 1. previews the exact target and Tracekeeper-only modification;
 2. binds a short-lived plan to original hashes, bundle identity, and the exact
@@ -185,7 +189,7 @@ Every managed change:
 8. records a bounded local audit result without credentials, authorization
    Headers, credential hashes, or absolute target paths.
 
-Every existing physical path segment from the managed Skill target through its
+Every existing physical path segment from the selected Skill target through its
 parent chain is checked with `lstat`; a symbolic-link segment blocks detection,
 preview, backup, staging, and replacement. Successful file commit is the
 durable boundary. If local receipt persistence or audit append fails afterward,

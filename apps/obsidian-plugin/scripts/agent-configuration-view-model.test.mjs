@@ -97,7 +97,30 @@ try {
 	assert.equal(allCandidates.visibleAgents.length, 0);
 	assert.deepEqual(allCandidates.candidateConfigs.map((candidate) => candidate.clientId), ['custom']);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 10 })}\n`);
+	const matchingCredential = buildAgentConfigurationViewModel(
+		[config('codex')],
+		[agent()],
+		[integration('codex', { credential: { credentialId: 'credential-codex', kind: 'oauth', issuedAt: '2026-08-03T00:00:00.000Z' } })],
+	);
+	assert.equal(matchingCredential.visibleAgents[0].presentation.mcpState, 'connected');
+
+	const replacedCredential = buildAgentConfigurationViewModel(
+		[config('codex')],
+		[agent()],
+		[integration('codex', { credential: { credentialId: 'credential-new', kind: 'oauth', issuedAt: '2026-08-03T00:02:00.000Z' } })],
+	);
+	assert.equal(replacedCredential.visibleAgents[0].presentation.mcpState, 'client_reached');
+	assert.equal(replacedCredential.visibleAgents[0].presentation.authorizationState, 'authorized');
+
+	const revokedCredential = buildAgentConfigurationViewModel(
+		[config('codex')],
+		[agent()],
+		[integration('codex', { lastRevokedAt: '2026-08-03T00:02:00.000Z' })],
+	);
+	assert.equal(revokedCredential.visibleAgents[0].presentation.mcpState, 'client_reached');
+	assert.equal(revokedCredential.visibleAgents[0].presentation.authorizationState, 'revoked');
+
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 15 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

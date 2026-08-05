@@ -543,19 +543,19 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	]) {
 		requirePattern(bundleSource, pattern, label, errors);
 	}
-	for (const state of ['not_installed', 'installed', 'update_available', 'newer_than_bundled', 'modified', 'legacy_install', 'location_conflict', 'copy_only', 'unavailable']) {
-		requirePattern(adapterSource, new RegExp(`['"]${state}['"]`), `managed Skill adapter is missing state: ${state}`, errors);
+	for (const state of ['location_required', 'not_installed', 'installed', 'update_available', 'newer_than_bundled', 'modified', 'legacy_install', 'location_conflict', 'unavailable']) {
+		requirePattern(adapterSource, new RegExp(`['"]${state}['"]`), `Skill adapter is missing state: ${state}`, errors);
 	}
 	for (const pattern of [/planTtlMs/, /originalHashes/, /tracekeeper-backup-/, /Automatic overwrite is disabled/, /ownedBundleHash/, /ownedSkillVersion/]) {
 		requirePattern(adapterSource, pattern, `managed Skill adapter is missing safety control: ${pattern.source}`, errors);
 	}
-	for (const pattern of [/\.agents/, /\.codex/, /\.claude/, /copy-only/, /activationMode/, /targetId/]) {
-		requirePattern(targetRegistrySource, pattern, `managed Skill target registry is missing contract: ${pattern.source}`, errors);
+	for (const pattern of [/\.agents/, /\.claude/, /\.gemini/, /official_documentation/, /recommendation/, /activationMode/, /targetId/]) {
+		requirePattern(targetRegistrySource, pattern, `Skill target registry is missing contract: ${pattern.source}`, errors);
 	}
-	for (const pattern of [/bundleHash/, /skillVersion/, /installedAt/, /normalizeSkillInstallReceipts/]) {
+	for (const pattern of [/schemaVersion/, /targetDirectory/, /bundleHash/, /skillVersion/, /provenance/, /normalizeSkillInstallReceipts/]) {
 		requirePattern(receiptSource, pattern, `managed Skill receipt store is missing contract: ${pattern.source}`, errors);
 	}
-	for (const evidence of ['skillCopiedAt', 'skillUserConfirmedAt', 'skillFileVerifiedAt', 'agentRestartCompletedAt', 'connectionVerifiedAt', 'firstRecallCompletedAt', 'trackedWorkflowObservedAt']) {
+	for (const evidence of ['skillAssistantPromptCopiedAt', 'skillUserConfirmedAt', 'skillFileVerifiedAt', 'agentRestartCompletedAt', 'connectionVerifiedAt', 'firstRecallCompletedAt', 'trackedWorkflowObservedAt']) {
 		requirePattern(onboardingSource, new RegExp(`\\b${evidence}\\b`), `onboarding evidence is missing field: ${evidence}`, errors);
 	}
 	for (const pattern of [/['"]tracked_workflow['"]/, /workflowManageAvailable/, /getOnboardingStepSequence/]) {
@@ -587,13 +587,13 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	]) {
 		if (pattern.test(settingsSource)) errors.push(label);
 	}
-	for (const state of ['not_installed', 'installed', 'update_available', 'newer_than_bundled', 'modified', 'legacy_install', 'location_conflict', 'copy_only', 'unavailable']) {
+	for (const state of ['location_required', 'not_installed', 'installed', 'update_available', 'newer_than_bundled', 'modified', 'legacy_install', 'location_conflict', 'unavailable']) {
 		requirePattern(skillPromptSource, new RegExp(`['"]${state}['"]`), `Skill prompt model is missing state: ${state}`, errors);
 	}
 	if (/clientId\s*===\s*['"]codex['"]/.test(settingsSource)) {
 		errors.push('settings must use Skill delivery capability state instead of a Codex-only installation gate');
 	}
-	for (const field of ['action', 'client_id', 'bundle_hash', 'backup_created', 'result', 'timestamp']) {
+	for (const field of ['action', 'client_id', 'bundle_hash', 'backup_created', 'install_method', 'result', 'timestamp']) {
 		requirePattern(auditSource, new RegExp(`\\b${field}\\b`), `Skill install audit is missing field: ${field}`, errors);
 	}
 	for (const forbidden of ['targetDirectory', 'backupDirectory', 'token']) {

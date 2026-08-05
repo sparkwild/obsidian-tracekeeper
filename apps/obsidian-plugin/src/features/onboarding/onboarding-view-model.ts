@@ -155,7 +155,7 @@ export const buildOnboardingContext = (input: BuildOnboardingContextInput): Onbo
 		connectionVerified,
 		firstRecallCompleted: recallObserved,
 		skillAvailable: Boolean(input.skillInstallState),
-		skillCopied: input.onboarding.skillCopiedAt !== '',
+		skillAssistantPromptCopied: input.onboarding.skillAssistantPromptCopiedAt !== '',
 		skillUserConfirmed: userConfirmed,
 		skillFileVerified: liveFileVerified,
 		skillUpdateAvailable: updateAvailable,
@@ -169,7 +169,7 @@ export const buildOnboardingContext = (input: BuildOnboardingContextInput): Onbo
 export const clearOnboardingClientEvidence = (state: OnboardingSettingsState): OnboardingSettingsState => ({
 	...state,
 	skillSetupCompletedAt: '',
-	skillCopiedAt: '',
+	skillAssistantPromptCopiedAt: '',
 	skillUserConfirmedAt: '',
 	skillFileVerifiedAt: '',
 	skillVerifiedBundleHash: '',

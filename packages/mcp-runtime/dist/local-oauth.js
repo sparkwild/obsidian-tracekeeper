@@ -412,7 +412,7 @@ class LocalOAuthAuthorizationServer {
         if (request.token_endpoint_auth_method !== undefined && request.token_endpoint_auth_method !== 'none')
             return new Error('Only public clients with token_endpoint_auth_method=none are supported.');
         if (!matchesRegistrationGrantTypes(request.grant_types))
-            return new Error('Only authorization_code client metadata is accepted.');
+            return new Error('grant_types must include authorization_code and may also declare refresh_token.');
         if (!matchesOptionalExactArray(request.response_types, ['code']))
             return new Error('Only the code response type is supported.');
         if (request.scope !== undefined && (typeof request.scope !== 'string' || request.scope.trim() !== OAUTH_SCOPE))
@@ -591,7 +591,12 @@ function matchesOptionalExactArray(value, expected) {
 function matchesRegistrationGrantTypes(value) {
     if (value === undefined)
         return true;
-    return Array.isArray(value) && value.length === 1 && value[0] === 'authorization_code';
+    if (!Array.isArray(value) || value.length === 0 || value.length > 2 || !value.every((entry) => typeof entry === 'string'))
+        return false;
+    const grantTypes = new Set(value);
+    return grantTypes.size === value.length
+        && grantTypes.has('authorization_code')
+        && [...grantTypes].every((entry) => entry === 'authorization_code' || entry === 'refresh_token');
 }
 function isRecordLike(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);

@@ -39,8 +39,8 @@ Each card renders four independent axes:
 - **Authorization:** `not_authorized`, `pending_approval`, `authorized`,
   `revoked`.
 - **Usage:** `never_used` or `used`, with the latest successful call.
-- **Skill:** not installed, installed, update available, externally modified,
-  legacy, conflict, or copy-only.
+- **Skill:** location required, not installed, installed, update available,
+  newer than bundled, modified, legacy, conflict, or unavailable.
 
 Skill actions never create or alter credentials. Revoking MCP access never
 uninstalls Skill files. Forgetting a card requires its credential to be revoked
@@ -76,7 +76,7 @@ OAuth temporary requests, authorization codes, PKCE challenges, and unbound DCR
 records stay in memory. A pending request contains only the opaque request
 handle, client claim, redirect origin, resource, scope, challenge, and bounded
 timestamps. Obsidian's approval view displays the target Agent, the client name
-as an explicitly untrusted claim, redirect origin, resource, scope, and expiry.
+supplied by the client, redirect origin, resource, scope, and expiry.
 
 Allow binds the request to the explicitly selected `integrationId`. The one-time
 authorization code is additionally bound to integration, credential, OAuth
@@ -94,6 +94,13 @@ approval button, or opaque handle beyond the waiting URL required for polling.
 The companion Skill teaches `no_track`, `recall_only`, and `tracked_task` habits;
 it never grants Runtime permissions or proves MCP use. Skill installation keeps
 the existing preview, confirm, backup, rollback, symlink, and receipt controls.
+The user explicitly chooses a Skills root through the desktop directory picker;
+Tracekeeper appends one `tracekeeper` directory unless that directory was chosen
+directly. Officially documented locations are shown only as suggestions. An
+AI-assisted panel can export the complete local bundle to a versioned plugin
+source directory and provide a selectable prompt; copying that prompt is not
+installation. A direct install or an external directory verification must pass
+the bundle and manifest hash checks before the card shows **installed**.
 
 Settings owns connection, authorization, revocation, replacement, forgetting,
 and Skill actions. Activity may show recent non-secret integration and

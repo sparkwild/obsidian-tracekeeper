@@ -1,33 +1,18 @@
-export type SkillDeliveryMode = 'managed' | 'copy-only';
 export type SkillActivationMode = 'automatic_with_restart_fallback' | 'restart_required';
 
-interface BaseClientSkillTargetDescriptor {
+export interface ClientSkillDirectoryRecommendation {
+	skillsRootDirectory: string;
+	source: 'official_documentation';
+	documentationUrl: string;
+}
+
+interface ClientSkillTargetDescriptor {
 	clientId: string;
 	targetId: string;
 	displayName: string;
-	deliveryMode: SkillDeliveryMode;
-	restartRequired: boolean;
-	activationMode: SkillActivationMode;
-	profileLabel: string;
-}
-
-interface ManagedClientSkillTargetDescriptor extends BaseClientSkillTargetDescriptor {
-	deliveryMode: 'managed';
-	primaryDirectoryFactory: (homeDirectory: string, joinPath: (...parts: string[]) => string) => string;
-	legacyDirectoryFactories?: Array<(homeDirectory: string, joinPath: (...parts: string[]) => string) => string>;
-}
-
-interface CopyOnlyClientSkillTargetDescriptor extends BaseClientSkillTargetDescriptor {
-	deliveryMode: 'copy-only';
-}
-
-export type ClientSkillTargetDescriptor = ManagedClientSkillTargetDescriptor | CopyOnlyClientSkillTargetDescriptor;
-
-interface ResolvedClientSkillTarget {
-	targetId: string;
-	deliveryMode: SkillDeliveryMode;
-	targetDirectory?: string;
-	legacyTargetDirectories: readonly string[];
+	recommendationPath?: readonly string[];
+	documentationUrl?: string;
+	legacyDirectoryPaths?: readonly (readonly string[])[];
 	restartRequired: boolean;
 	activationMode: SkillActivationMode;
 	profileLabel: string;
@@ -36,8 +21,7 @@ interface ResolvedClientSkillTarget {
 export interface ClientSkillTargetProfile {
 	targetId: string;
 	displayName: string;
-	deliveryMode: SkillDeliveryMode;
-	targetDirectory?: string;
+	recommendation: ClientSkillDirectoryRecommendation | null;
 	legacyTargetDirectories: readonly string[];
 	restartRequired: boolean;
 	activationMode: SkillActivationMode;
@@ -49,81 +33,74 @@ const CLIENT_SKILL_TARGETS: readonly ClientSkillTargetDescriptor[] = [
 		clientId: 'codex',
 		targetId: 'codex-user',
 		displayName: 'Codex',
-		deliveryMode: 'managed',
+		recommendationPath: ['.agents', 'skills'],
+		documentationUrl: 'https://developers.openai.com/codex/skills/',
+		legacyDirectoryPaths: [['.codex', 'skills']],
 		restartRequired: false,
 		activationMode: 'automatic_with_restart_fallback',
-		profileLabel: 'Local managed profile',
-		primaryDirectoryFactory: (homeDirectory, joinPath) => joinPath(homeDirectory, '.agents', 'skills', 'tracekeeper'),
-		legacyDirectoryFactories: [
-			(homeDirectory, joinPath) => joinPath(homeDirectory, '.codex', 'skills', 'tracekeeper'),
-		],
+		profileLabel: '官方目录建议',
 	},
 	{
 		clientId: 'claude-code',
 		targetId: 'claude-code-user',
 		displayName: 'Claude Code',
-		deliveryMode: 'managed',
+		recommendationPath: ['.claude', 'skills'],
+		documentationUrl: 'https://code.claude.com/docs/en/skills',
 		restartRequired: false,
 		activationMode: 'automatic_with_restart_fallback',
-		profileLabel: 'Local managed profile',
-		primaryDirectoryFactory: (homeDirectory, joinPath) => joinPath(homeDirectory, '.claude', 'skills', 'tracekeeper'),
+		profileLabel: '官方目录建议',
 	},
 	{
 		clientId: 'claude-desktop',
-		targetId: 'claude-desktop-copy-only',
+		targetId: 'claude-desktop-user',
 		displayName: 'Claude Desktop',
-		deliveryMode: 'copy-only',
 		restartRequired: true,
 		activationMode: 'restart_required',
-		profileLabel: 'Local copy-only profile',
+		profileLabel: '用户选择目录',
 	},
 	{
 		clientId: 'cursor',
-		targetId: 'cursor-copy-only',
+		targetId: 'cursor-user',
 		displayName: 'Cursor',
-		deliveryMode: 'copy-only',
 		restartRequired: true,
 		activationMode: 'restart_required',
-		profileLabel: 'Local copy-only profile',
+		profileLabel: '用户选择目录',
 	},
 	{
 		clientId: 'gemini',
 		targetId: 'gemini-user',
 		displayName: 'Gemini CLI',
-		deliveryMode: 'managed',
+		recommendationPath: ['.gemini', 'skills'],
+		documentationUrl: 'https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/tools.md',
 		restartRequired: true,
 		activationMode: 'restart_required',
-		profileLabel: 'Local managed profile',
-		primaryDirectoryFactory: (homeDirectory, joinPath) => joinPath(homeDirectory, '.gemini', 'skills', 'tracekeeper'),
+		profileLabel: '官方目录建议',
 	},
 	{
 		clientId: 'grok',
 		targetId: 'grok-user',
+		legacyDirectoryPaths: [['.grok', 'skills']],
 		displayName: 'Grok Build',
-		deliveryMode: 'managed',
 		restartRequired: true,
 		activationMode: 'restart_required',
-		profileLabel: 'Local managed profile',
-		primaryDirectoryFactory: (homeDirectory, joinPath) => joinPath(homeDirectory, '.grok', 'skills', 'tracekeeper'),
+		profileLabel: '用户选择目录',
 	},
 	{
 		clientId: 'zcode',
 		targetId: 'zcode-user',
+		legacyDirectoryPaths: [['.zcode', 'skills']],
 		displayName: 'ZCode',
-		deliveryMode: 'managed',
 		restartRequired: true,
 		activationMode: 'restart_required',
-		profileLabel: 'Local managed profile',
-		primaryDirectoryFactory: (homeDirectory, joinPath) => joinPath(homeDirectory, '.zcode', 'skills', 'tracekeeper'),
+		profileLabel: '用户选择目录',
 	},
 	{
 		clientId: 'custom',
-		targetId: 'custom-copy-only',
+		targetId: 'custom-user',
 		displayName: 'Custom MCP tool',
-		deliveryMode: 'copy-only',
 		restartRequired: true,
 		activationMode: 'restart_required',
-		profileLabel: 'Local copy-only profile',
+		profileLabel: '用户选择目录',
 	},
 ];
 
@@ -135,39 +112,35 @@ export function resolveClientSkillTargetProfile(
 	clientId: string,
 	homeDirectory: string | undefined,
 	joinPath: (...parts: string[]) => string
-): ResolvedClientSkillTarget {
+): ClientSkillTargetProfile {
 	const trimmedId = clientId.trim();
 	const entry = REGISTRY_BY_ID.get(trimmedId);
 	if (!entry) {
 		return {
-			targetId: `${trimmedId || 'unknown'}-copy-only`,
-			deliveryMode: 'copy-only',
+			targetId: `${trimmedId || 'unknown'}-user`,
+			displayName: trimmedId || 'Unknown client',
+			recommendation: null,
+			legacyTargetDirectories: Object.freeze([]),
 			restartRequired: true,
-			targetDirectory: undefined,
-			legacyTargetDirectories: Object.freeze([]),
 			activationMode: 'restart_required',
-			profileLabel: 'Local copy-only profile',
+			profileLabel: '用户选择目录',
 		};
 	}
 
-	if (entry.deliveryMode === 'copy-only' || !homeDirectory) {
-		return {
-			targetId: entry.targetId,
-			deliveryMode: 'copy-only',
-			restartRequired: entry.restartRequired,
-			targetDirectory: undefined,
-			legacyTargetDirectories: Object.freeze([]),
-			activationMode: entry.activationMode,
-			profileLabel: entry.profileLabel,
-		};
-	}
-
-	const legacyTargetDirectories = entry.legacyDirectoryFactories?.map((factory) => factory(homeDirectory, joinPath))
-		|| [];
+	const recommendation = homeDirectory && entry.recommendationPath && entry.documentationUrl
+		? {
+			skillsRootDirectory: joinPath(homeDirectory, ...entry.recommendationPath),
+			source: 'official_documentation' as const,
+			documentationUrl: entry.documentationUrl,
+		}
+		: null;
+	const legacyTargetDirectories = homeDirectory
+		? entry.legacyDirectoryPaths?.map((parts) => joinPath(homeDirectory, ...parts, 'tracekeeper')) ?? []
+		: [];
 	return {
 		targetId: entry.targetId,
-		deliveryMode: 'managed',
-		targetDirectory: entry.primaryDirectoryFactory(homeDirectory, joinPath),
+		displayName: entry.displayName,
+		recommendation,
 		legacyTargetDirectories: Object.freeze(legacyTargetDirectories),
 		restartRequired: entry.restartRequired,
 		activationMode: entry.activationMode,
@@ -181,17 +154,20 @@ export function buildClientSkillProfileFromRegistry(
 	homeDirectory: string | undefined,
 	joinPath: (...parts: string[]) => string
 ): ClientSkillTargetProfile {
-	const trimmedId = clientId.trim();
-	const resolved = resolveClientSkillTargetProfile(trimmedId, homeDirectory, joinPath);
-	const registryDisplayName = REGISTRY_BY_ID.get(trimmedId)?.displayName;
+	const resolved = resolveClientSkillTargetProfile(clientId, homeDirectory, joinPath);
 	return {
-		targetId: resolved.targetId,
-		displayName: displayName || registryDisplayName || trimmedId,
-		deliveryMode: resolved.deliveryMode,
-		targetDirectory: resolved.targetDirectory,
-		restartRequired: resolved.restartRequired,
-		profileLabel: resolved.profileLabel,
-		activationMode: resolved.activationMode,
-		legacyTargetDirectories: resolved.legacyTargetDirectories,
+		...resolved,
+		displayName: displayName || resolved.displayName,
 	};
+}
+
+export function legacySkillTargetDirectoryForId(
+	targetId: string,
+	homeDirectory: string | undefined,
+	joinPath: (...parts: string[]) => string
+): string | null {
+	if (!homeDirectory) return null;
+	const descriptor = CLIENT_SKILL_TARGETS.find((entry) => entry.targetId === targetId);
+	const first = descriptor?.legacyDirectoryPaths?.[0];
+	return first ? joinPath(homeDirectory, ...first, 'tracekeeper') : null;
 }

@@ -28,6 +28,9 @@ const actionInput = (overrides = {}) => ({
 
 const agent = (overrides = {}) => ({
 	principalId: 'principal-codex',
+	integrationId: 'integration-codex',
+	credentialId: 'credential-codex',
+	authMode: 'oauth',
 	agentId: 'codex',
 	sessionId: 'session-codex',
 	clientName: 'codex',

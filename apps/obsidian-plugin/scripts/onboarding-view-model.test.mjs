@@ -17,7 +17,7 @@ try {
 	entryPromptVersion: 0,
 	entryDeferredAt: '',
 	skillSetupCompletedAt: '',
-		skillCopiedAt: '',
+	skillAssistantPromptCopiedAt: '',
 		skillUserConfirmedAt: '',
 		skillFileVerifiedAt: '',
 		skillVerifiedBundleHash: '',
@@ -175,8 +175,8 @@ try {
 	assert.equal(update.skillUpdateAvailable, true);
 	assert.equal(update.skillFileVerified, false);
 
-	const cleared = vm.clearOnboardingClientEvidence({ ...base, skillCopiedAt: '2026-07-23T00:00:00.000Z', skillUserConfirmedAt: '2026-07-23T00:00:00.000Z', trackedWorkflowObservedAt: '2026-07-23T00:00:00.000Z' });
-	assert.equal(cleared.skillCopiedAt, '');
+	const cleared = vm.clearOnboardingClientEvidence({ ...base, skillAssistantPromptCopiedAt: '2026-07-23T00:00:00.000Z', skillUserConfirmedAt: '2026-07-23T00:00:00.000Z', trackedWorkflowObservedAt: '2026-07-23T00:00:00.000Z' });
+	assert.equal(cleared.skillAssistantPromptCopiedAt, '');
 	assert.equal(cleared.skillUserConfirmedAt, '');
 	assert.equal(cleared.trackedWorkflowObservedAt, '');
 	const behaviorCleared = vm.clearOnboardingAgentBehaviorEvidence({

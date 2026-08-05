@@ -24,8 +24,16 @@ import { ui } from '../../ui/localization';
 import { TRACEKEEPER_RUNTIME_LOG_VIEW } from '../../ui/view-types';
 import { renderClientSkillPrompt } from '../skill-installation/client-skill-prompt';
 import { buildAgentConfigurationViewModel } from './agent-configuration-view-model';
+import { hasDetectedSkillEvidence } from '../../adapters/client-skill-adapter';
 
 export class TracekeeperSettingTab extends PluginSettingTab {
+	private visible = false;
+	private renderVersion = 0;
+	private agentListHostEl: HTMLElement | null = null;
+	private agentListFingerprint = '';
+	private agentListRefreshInFlight = false;
+	private agentConfigurationFocusPending = false;
+
 	constructor(
 		app: App,
 		private plugin: TracekeeperPlugin
@@ -34,6 +42,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
+		this.visible = true;
 		const { containerEl } = this;
 		containerEl.empty();
 		containerEl.addClass('tracekeeper-settings-root');
@@ -42,17 +51,83 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		void this.renderSettings();
 	}
 
+	hide(): void {
+		this.visible = false;
+		this.renderVersion += 1;
+		this.agentListHostEl = null;
+		this.agentListFingerprint = '';
+		this.agentConfigurationFocusPending = false;
+		super.hide();
+	}
+
+	isAgentListVisible(): boolean {
+		return this.visible && Boolean(this.agentListHostEl?.isConnected);
+	}
+
+	focusAgentConfiguration(): void {
+		this.agentConfigurationFocusPending = true;
+		this.applyAgentConfigurationFocus();
+	}
+
+	async refreshAgentList(): Promise<void> {
+		const host = this.agentListHostEl;
+		if (!this.visible || !host?.isConnected || this.agentListRefreshInFlight) return;
+		this.agentListRefreshInFlight = true;
+		try {
+			const snapshot = await this.plugin.loadAgentConnectionsSnapshot();
+			if (!this.visible || host !== this.agentListHostEl || !host.isConnected) return;
+			const fingerprint = this.buildAgentListFingerprint(snapshot);
+			if (fingerprint === this.agentListFingerprint) return;
+			host.empty();
+			this.renderAgentClientConfigSection(host, snapshot);
+			this.agentListFingerprint = fingerprint;
+		} catch (error) {
+			console.error('tracekeeper failed to refresh Agent settings list', error);
+		} finally {
+			this.agentListRefreshInFlight = false;
+		}
+	}
+
 	private async renderSettings(): Promise<void> {
+		const renderVersion = ++this.renderVersion;
 		const snapshot = await this.plugin.loadAgentConnectionsSnapshot();
+		if (!this.visible || renderVersion !== this.renderVersion) return;
 		const { containerEl } = this;
 		containerEl.empty();
 		containerEl.addClass('tracekeeper-settings-root');
 		this.renderConnectionInfoSection(containerEl, snapshot);
-		this.renderAgentClientConfigSection(containerEl, snapshot);
+		this.agentListHostEl = containerEl.createDiv({
+			cls: 'tracekeeper-settings-agent-list-host',
+			attr: { 'data-tracekeeper-section': 'agent-configuration' },
+		});
+		this.renderAgentClientConfigSection(this.agentListHostEl, snapshot);
+		this.agentListFingerprint = this.buildAgentListFingerprint(snapshot);
 		this.renderViewRefreshSection(containerEl);
 		this.renderNoteContentSection(containerEl);
 		this.renderMemoryRulesSection(containerEl);
 		this.renderAdvancedMaintenanceSection(containerEl, snapshot);
+		this.applyAgentConfigurationFocus();
+	}
+
+	private buildAgentListFingerprint(snapshot: AgentConnectionsSnapshot): string {
+		return JSON.stringify({
+			clientConfigs: snapshot.clientConfigs,
+			integrations: snapshot.integrations,
+			pendingOAuthRequests: snapshot.pendingOAuthRequests,
+			recentAgents: snapshot.recentAgents,
+			skillStates: snapshot.clientConfigs.map((config) => this.plugin.getSkillInstallState(config.clientId)),
+		});
+	}
+
+	private applyAgentConfigurationFocus(): void {
+		const target = this.agentListHostEl;
+		if (!this.agentConfigurationFocusPending || !this.visible || !target?.isConnected) return;
+		this.agentConfigurationFocusPending = false;
+		window.requestAnimationFrame(() => {
+			if (!target.isConnected) return;
+			target.scrollIntoView({ block: 'start', behavior: 'auto' });
+			target.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+		});
 	}
 
 	private renderAgentClientConfigSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
@@ -64,17 +139,14 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		);
 		const skillOnlyConfigs = candidateConfigs.filter((config) => {
 			const state = this.plugin.getSkillInstallState(config.clientId).state;
-			return state !== 'unavailable' && state !== 'not_installed';
+			return hasDetectedSkillEvidence(state);
 		});
 		const section = this.createSection(
 			container,
 			ui('Agent 配置', 'Agent configuration'),
-			ui(
-			'持久 Agent 卡片独立展示 MCP 配置、授权、连接、使用和 Skill 状态。',
-			'Persistent Agent cards show MCP setup, authorization, connection, usage, and Skill state independently.'
-			)
 		);
-		const sectionActions = section.createDiv({
+		const sectionHeader = section.querySelector<HTMLElement>('.tracekeeper-settings-section__header');
+		const sectionActions = (sectionHeader ?? section).createDiv({
 			cls: 'tracekeeper-settings-agent-actions',
 		});
 		const addAgent = sectionActions.createEl('button', {
@@ -99,7 +171,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 								this.plugin,
 								config,
 								'add',
-								() => this.display()
+								() => { void this.refreshAgentList(); }
 							).open();
 						});
 				});
@@ -128,8 +200,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			});
 			return;
 		}
-		for (const { agent, config, integration, presentation } of visibleAgents) {
-			this.renderClientConfigRow(grid, config, agent, integration, presentation);
+		for (const { agent, config, presentation } of visibleAgents) {
+			this.renderClientConfigRow(grid, config, agent, presentation);
 		}
 		for (const config of skillOnlyConfigs) {
 			this.renderSkillOnlyRow(grid, config);
@@ -226,8 +298,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		const setting = new Setting(container)
 			.setName(ui('全部 Agent 访问', 'All Agent access'))
 			.setDesc(ui(
-				'每个 Agent 使用独立 OAuth 或 Bearer 凭据；状态和撤销按卡片管理。',
-				'Each Agent uses an independent OAuth or Bearer credential; status and revocation are managed per card.'
+				'每个 Agent 使用独立的 OAuth 或手动访问令牌；状态和撤销按卡片管理。',
+				'Each Agent uses an independent OAuth or manual access token; status and revocation are managed per card.'
 			));
 		setting.nameEl.addClass('tracekeeper-settings-runtime-name');
 		setting.nameEl.createEl('span', {
@@ -247,15 +319,15 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			container,
 			ui('视图刷新', 'View refresh'),
 			ui(
-				'活动页和知识变更审核打开时会自动同步最新任务、记忆和审核状态。',
-				'When Activity or Knowledge Change Review is open, Tracekeeper keeps task, memory, and review status in sync.'
+				'Agent 配置列表、活动页和知识变更审核打开时会自动同步最新状态。',
+				'When Agent configuration, Activity, or Knowledge Change Review is open, Tracekeeper keeps the visible status in sync.'
 			)
 		);
 		new Setting(section)
 			.setName(ui('自动刷新', 'Auto refresh'))
 			.setDesc(ui(
-				'开启后定时刷新，并在 Tracekeeper 相关文件变化时自动刷新。',
-				'Refreshes on a timer and after Tracekeeper-related file changes.'
+				'开启后按下方间隔刷新当前打开的 Tracekeeper 视图，并在相关文件变化时触发刷新。',
+				'Refreshes open Tracekeeper views at the interval below and after related file changes.'
 			))
 			.addToggle((toggle) =>
 				toggle
@@ -571,8 +643,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		container: HTMLElement,
 		config: GeneratedClientConfig,
 		agent: import('../activity/activity-model').AgentConnectionRecord | null,
-		integration: AgentIntegrationSnapshot,
-	presentation: import('../client-config/agent-connection-view-model').ConnectionPresentation
+		presentation: import('../client-config/agent-connection-view-model').ConnectionPresentation
 	): void {
 		const row = container.createDiv({ cls: 'tracekeeper-settings-client-row' });
 		const info = row.createDiv({ cls: 'tracekeeper-settings-client-row__info' });
@@ -583,12 +654,13 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			cls: `tracekeeper-badge ${presentation.state === 'connected' || presentation.state === 'used' || presentation.state === 'authorized' ? 'tracekeeper-badge--success' : presentation.state === 'revoked' || presentation.state === 'needs_update' ? 'tracekeeper-badge--warning' : 'tracekeeper-badge--muted'}`,
 		});
 		const meta = info.createDiv({ cls: 'tracekeeper-settings-client-row__meta' });
-		meta.createEl('span', { text: `${ui('授权方式', 'Auth mode')}: ${integration.authMode === 'oauth' ? 'OAuth' : 'Bearer'}` });
-		meta.createEl('span', { text: `${ui('MCP', 'MCP')}: ${this.mcpStateLabel(presentation.mcpState)}` });
-		meta.createEl('span', { text: `${ui('授权', 'Authorization')}: ${this.authorizationStateLabel(presentation.authorizationState)}` });
-		meta.createEl('span', { text: `${ui('使用', 'Usage')}: ${this.usageStateLabel(presentation.usageState)}` });
-		meta.createEl('span', { text: agent ? `${ui('最近连接', 'Last connected')} ${agent.connectedAt}` : ui('尚未连接', 'Not connected') });
-		meta.createEl('span', { text: agent?.lastUsedAt ? `${ui('最近使用', 'Last used')} ${agent.lastUsedAt}` : ui('尚未使用', 'Never used') });
+		const latestActivityAt = agent?.sortTimestamp ?? 0;
+		meta.createEl('span', {
+			text: ui(
+				`最近活动时间：${latestActivityAt > 0 ? this.plugin.formatDisplayTime(latestActivityAt) : '暂无活动'}`,
+				`Latest activity: ${latestActivityAt > 0 ? this.plugin.formatDisplayTime(latestActivityAt) : 'No activity'}`
+			),
+		});
 		const actions = row.createDiv({ cls: 'tracekeeper-settings-client-row__actions' });
 		const manage = actions.createEl('button', {
 			text: ui('管理 Agent', 'Manage Agent'),
@@ -602,7 +674,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				this.plugin,
 				config,
 				'manage',
-				() => this.display()
+				() => { void this.refreshAgentList(); }
 			).open();
 		});
 		renderClientSkillPrompt({
@@ -611,7 +683,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			container: row,
 			config,
 			onChanged: () => {
-				void this.renderSettings();
+				void this.refreshAgentList();
 			},
 		});
 	}
@@ -625,8 +697,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		info.createEl('p', { text: ui('已检测到 Skill，但尚无 MCP 集成卡片。', 'A Skill was detected, but no MCP integration card exists yet.'), cls: 'tracekeeper-view__description' });
 		const actions = row.createDiv({ cls: 'tracekeeper-settings-client-row__actions' });
 		const configure = actions.createEl('button', { text: ui('配置 MCP', 'Configure MCP'), cls: 'mod-cta' });
-		configure.addEventListener('click', () => new ConnectAiToolModal(this.app, this.plugin, config, 'add', () => this.display()).open());
-		renderClientSkillPrompt({ app: this.app, plugin: this.plugin, container: row, config, onChanged: () => { void this.renderSettings(); } });
+		configure.addEventListener('click', () => new ConnectAiToolModal(this.app, this.plugin, config, 'add', () => { void this.refreshAgentList(); }).open());
+		renderClientSkillPrompt({ app: this.app, plugin: this.plugin, container: row, config, onChanged: () => { void this.refreshAgentList(); } });
 	}
 
 	private connectionStateLabel(state: import('../client-config/agent-connection-view-model').ConnectionUiState): string {
@@ -636,42 +708,19 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			case 'pending_approval': return ui('待审批', 'Approval pending');
 			case 'authorized': return ui('已授权', 'Authorized');
 			case 'connected': return ui('已连接', 'Connected');
-			case 'used': return ui('已使用', 'Used');
+			case 'used': return ui('已连接', 'Connected');
 			case 'revoked': return ui('已撤销', 'Revoked');
 			case 'needs_update': return ui('需要更新配置', 'Setup update needed');
-			case 'manual': return ui('手工授权', 'Manual authorization');
+			case 'manual': return ui('手动访问令牌', 'Manual access token');
 			default: return ui('未配置', 'Not configured');
 		}
 	}
 
-	private mcpStateLabel(state: import('../client-config/agent-connection-view-model').McpConnectionState): string {
-		switch (state) {
-			case 'copied_unverified': return ui('配置未验证', 'Setup unverified');
-			case 'client_reached': return ui('客户端已触达', 'Client reached');
-			case 'connected': return ui('已连接', 'Connected');
-			case 'needs_update': return ui('需要更新配置', 'Setup update needed');
-			default: return ui('未开始', 'Not started');
-		}
-	}
-
-	private authorizationStateLabel(state: import('../client-config/agent-connection-view-model').AuthorizationState): string {
-		switch (state) {
-			case 'pending_approval': return ui('待审批', 'Approval pending');
-			case 'authorized': return ui('已授权', 'Authorized');
-			case 'revoked': return ui('已撤销', 'Revoked');
-			default: return ui('未授权', 'Not authorized');
-		}
-	}
-
-	private usageStateLabel(state: import('../client-config/agent-connection-view-model').UsageState): string {
-		return state === 'used' ? ui('已使用', 'Used') : ui('从未使用', 'Never used');
-	}
-
-	private createSection(container: HTMLElement, title: string, description: string): HTMLElement {
+	private createSection(container: HTMLElement, title: string, description?: string): HTMLElement {
 		const section = container.createDiv({ cls: 'tracekeeper-settings-section' });
 		const header = section.createDiv({ cls: 'tracekeeper-settings-section__header' });
 		header.createEl('h3', { text: title, cls: 'tracekeeper-settings-section__title' });
-		header.createEl('p', { text: description, cls: 'tracekeeper-settings-section__description' });
+		if (description) header.createEl('p', { text: description, cls: 'tracekeeper-settings-section__description' });
 		return section;
 	}
 

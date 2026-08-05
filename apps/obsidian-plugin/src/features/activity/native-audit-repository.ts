@@ -73,6 +73,7 @@ const OPTIONAL_AUDIT_FIELDS = [
 	'memory_closeout_status',
 	'bundle_hash',
 	'backup_created',
+	'install_method',
 ] as const;
 
 type OptionalAuditField = typeof OPTIONAL_AUDIT_FIELDS[number];

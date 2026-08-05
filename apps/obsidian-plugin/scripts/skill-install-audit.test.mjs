@@ -32,6 +32,7 @@ try {
 	assert.match(success, /client_id: codex/);
 	assert.match(success, new RegExp(`bundle_hash: ${hash}`));
 	assert.match(success, /backup_created: true/);
+	assert.match(success, /install_method: tracekeeper_install/);
 	assert.match(success, /result: success/);
 	assert.equal(success.includes('/Users/'), false);
 	assert.equal(success.includes('token='), false);
@@ -45,6 +46,17 @@ try {
 		timestamp: '2026-07-23T00:00:00.000Z',
 	});
 	assert.match(migration, /action: skill_migrate/);
+	const external = audit.buildSkillInstallAuditEntry({
+		action: 'verify_external',
+		clientId: 'cursor',
+		bundleHash: hash,
+		backupCreated: false,
+		result: 'success',
+		installMethod: 'external_verified',
+		timestamp: '2026-07-23T00:00:00.000Z',
+	});
+	assert.match(external, /action: skill_verify_external/);
+	assert.match(external, /install_method: external_verified/);
 	const partial = audit.buildSkillInstallAuditEntry({
 		action: 'install',
 		clientId: 'codex',

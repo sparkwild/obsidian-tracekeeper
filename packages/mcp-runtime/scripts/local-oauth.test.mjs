@@ -73,16 +73,36 @@ test('OAuth uses explicit approval, PKCE/resource binding, and per-integration c
   const port = status.port;
   const resource = `http://127.0.0.1:${port}/mcp`;
   const redirectUri = 'http://127.0.0.1:43127/callback';
+  const refreshOnlyRegistration = await request(port, 'POST', '/oauth/register', {
+    client_name: 'Unsupported refresh-only client',
+    redirect_uris: [redirectUri],
+    grant_types: ['refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+    scope: 'mcp',
+  }, { 'Content-Type': 'application/json' });
+  assert.equal(refreshOnlyRegistration.status, 400);
+  const unsupportedGrantRegistration = await request(port, 'POST', '/oauth/register', {
+    client_name: 'Unsupported client credentials client',
+    redirect_uris: [redirectUri],
+    grant_types: ['authorization_code', 'client_credentials'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+    scope: 'mcp',
+  }, { 'Content-Type': 'application/json' });
+  assert.equal(unsupportedGrantRegistration.status, 400);
   const registration = await request(port, 'POST', '/oauth/register', {
     client_name: 'Untrusted Codex claim',
     redirect_uris: [redirectUri],
-    grant_types: ['authorization_code'],
+    grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
     token_endpoint_auth_method: 'none',
     scope: 'mcp',
   }, { 'Content-Type': 'application/json' });
   assert.equal(registration.status, 201);
-  const clientId = JSON.parse(registration.body).client_id;
+  const registrationBody = JSON.parse(registration.body);
+  assert.deepEqual(registrationBody.grant_types, ['authorization_code']);
+  const clientId = registrationBody.client_id;
   const verifier = crypto.randomBytes(32).toString('base64url');
   const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
   const authorization = await request(port, 'GET', `/oauth/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=opaque-state&code_challenge=${challenge}&code_challenge_method=S256&resource=${encodeURIComponent(resource)}&scope=mcp`);

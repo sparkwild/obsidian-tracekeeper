@@ -190,8 +190,8 @@ record; any added or removed durable Tracekeeper inventory; preserved-setting
 drift; retained legacy credentials; invalid current access token; legacy-token
 reuse; memory-rule version mismatch; or candidate asset mismatch. The snapshots
 contain only boolean credential-state evidence, never token values. The after
-state must initialize onboarding, language, and managed-Skill receipt storage
-without claiming an Agent connection, Skill setup evidence, or Skill ownership.
+state must initialize onboarding, language, and Skill receipt storage without
+claiming an Agent connection, Skill prompt-copy evidence, or Skill ownership.
 Actual client configuration and legacy/current Skill-file interaction still
 requires the isolated real-Obsidian upgrade row.
 
@@ -254,7 +254,7 @@ model call, or untriggered 20k/full-scan row requires fresh authorization.
 
 - Keep changes focused and explain user-visible behavior.
 - Identify changes to Vault paths, MCP tools, capabilities, review states, client
-  configuration, or managed Skill installation.
+  configuration, or user-selected Skill installation and AI-assisted verification.
 - Report exact automated checks and manual Obsidian flows.
 - Use temporary fixtures; do not test against a real user Vault without explicit
   authorization.

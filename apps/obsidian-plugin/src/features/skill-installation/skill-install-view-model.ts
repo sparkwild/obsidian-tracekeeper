@@ -1,6 +1,6 @@
 import type { SkillInstallState } from '../../adapters/client-skill-adapter';
 
-export type SkillPromptAction = 'install' | 'update' | 'migrate' | 'copy' | null;
+export type SkillPromptAction = 'install' | 'update' | 'migrate' | null;
 export type SkillPromptTone = 'success' | 'warning' | 'muted';
 
 export interface SkillInstallPrompt {
@@ -11,17 +11,17 @@ export interface SkillInstallPrompt {
 	tone: SkillPromptTone;
 	action: SkillPromptAction;
 	actionLabel: string;
+	assistantLabel: string;
 }
 
 type Localize = (zh: string, en: string) => string;
 
 const currentVersionLabel = (state: SkillInstallState, localize: Localize): string => {
 	switch (state.state) {
+		case 'location_required':
+			return localize('尚未选择目录', 'Directory not selected');
 		case 'not_installed':
 			return localize('未安装', 'Not installed');
-		case 'copy_only':
-		case 'unavailable':
-			return localize('需在客户端确认', 'Confirm in client');
 		case 'location_conflict':
 			return localize('多个位置，无法确认', 'Multiple locations; unknown');
 		case 'modified':
@@ -35,9 +35,9 @@ const currentVersionLabel = (state: SkillInstallState, localize: Localize): stri
 		case 'installed':
 		case 'update_available':
 		case 'newer_than_bundled':
-			return state.installedVersion
-				? `v${state.installedVersion}`
-				: localize('无法验证', 'Unverified');
+			return state.installedVersion ? `v${state.installedVersion}` : localize('无法验证', 'Unverified');
+		case 'unavailable':
+			return localize('暂不可用', 'Unavailable');
 	}
 };
 
@@ -46,103 +46,91 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 		currentVersion: currentVersionLabel(state, localize),
 		bundledVersion: `v${state.expectedVersion}`,
 	};
+	const assistant = localize('AI 辅助安装', 'AI-assisted install');
 	switch (state.state) {
-		case 'installed':
-			return {
-				label: localize('使用指南已安装', 'Guide installed'),
-				detail: localize(
-					'文件已验证。是否被 Agent 实际采用仍需后续使用观察；若客户端未加载，再重启客户端。',
-					'Files are verified. Actual Agent adoption still requires later use observation; restart the client only if it did not load the guide.'
-				),
-				...versions,
-				tone: 'success',
-				action: null,
-				actionLabel: '',
-			};
+		case 'location_required':
 		case 'not_installed':
 			return {
 				label: localize('使用指南未安装', 'Guide not installed'),
 				detail: localize(
-					'安装会把记忆协作使用指南放到客户端约定位置，但不会增加访问权限；安装后仍需通过实际使用观察效果。',
-					'Installation places the memory collaboration guide in the client location, but does not add access permissions; observe the result during actual use.'
+					'请选择 Skills 根目录，Tracekeeper 会预览并在确认后写入 tracekeeper 子目录；也可以让 Agent 按提示词协助安装。',
+					'Select a Skills root directory. Tracekeeper previews the tracekeeper subdirectory before writing, or let the Agent assist from the supplied prompt.'
 				),
 				...versions,
 				tone: 'warning',
 				action: 'install',
-				actionLabel: localize('安装使用指南', 'Install guide'),
+				actionLabel: localize('选择目录安装', 'Choose directory'),
+				assistantLabel: assistant,
 			};
 		case 'update_available':
 			return {
 				label: localize('使用指南可更新', 'Guide update available'),
-				detail: localize(
-					'更新会替换为最新的记忆协作使用指南；是否被 Agent 采用仍需通过实际使用观察。',
-					'Updating installs the latest memory collaboration guide; observe actual use to determine whether the Agent adopts it.'
-				),
+				detail: localize('请选择目录确认更新；已有目录会先预览并备份，不会覆盖用户修改。', 'Choose a directory to preview an update. Existing files are backed up and local changes are never overwritten.'),
 				...versions,
 				tone: 'warning',
 				action: 'update',
-				actionLabel: localize('更新使用指南', 'Update guide'),
+				actionLabel: localize('选择目录更新', 'Choose directory to update'),
+				assistantLabel: localize('AI 辅助更新', 'AI-assisted update'),
 			};
 		case 'legacy_install':
 			return {
 				label: localize('使用指南位置待迁移', 'Guide location needs migration'),
-				detail: localize(
-					'迁移后可从官方位置继续接收 Skill 更新；不会删除旧目录。',
-					'Migrating enables future Skill updates from the official location without deleting the legacy directory.'
-				),
+				detail: localize('选择新 Skills 根目录可迁移并保留旧目录；也可以让 Agent 按提示词安装到确认的位置。', 'Choose a new Skills root to migrate while keeping the legacy directory, or let the Agent install from the supplied prompt.'),
 				...versions,
 				tone: 'warning',
 				action: 'migrate',
-				actionLabel: localize('迁移使用指南', 'Migrate guide'),
+				actionLabel: localize('选择目录迁移', 'Choose directory to migrate'),
+				assistantLabel: assistant,
+			};
+		case 'installed':
+			return {
+				label: localize('使用指南已安装', 'Guide installed'),
+				detail: localize(`文件已验证${state.targetDirectory ? `：${state.targetDirectory}` : ''}。如需更改位置，请重新选择目录；Agent 是否实际采用仍需后续使用观察。`, `Files are verified${state.targetDirectory ? ` at ${state.targetDirectory}` : ''}. Choose another directory to move the selected copy; actual Agent adoption still requires later use.`),
+				...versions,
+				tone: 'success',
+				action: 'install',
+				actionLabel: localize('更改目录', 'Change directory'),
+				assistantLabel: assistant,
 			};
 		case 'modified':
 			return {
 				label: localize('使用指南已被修改', 'Guide has local changes'),
-				detail: localize(
-					'保留用户修改，Tracekeeper 不会自动覆盖。',
-					'Local changes are preserved and Tracekeeper will not overwrite them.'
-				),
+				detail: localize('保留用户修改，Tracekeeper 不会自动覆盖。可让 Agent 协助检查，或选择新的空目录。', 'Local changes are preserved. Tracekeeper will not overwrite them; use AI assistance to inspect or choose a new empty directory.'),
 				...versions,
 				tone: 'warning',
 				action: null,
 				actionLabel: '',
+				assistantLabel: localize('AI 辅助检查', 'AI-assisted check'),
 			};
 		case 'newer_than_bundled':
 			return {
 				label: localize('使用指南版本较新', 'Guide is newer than bundled'),
-				detail: localize(
-					'当前版本高于插件内置版本，Tracekeeper 不会降级。',
-					'The current version is newer than the bundled version and will not be downgraded.'
-				),
+				detail: localize('当前目录高于插件内置版本，Tracekeeper 不会降级；可让 Agent 协助检查。', 'The selected directory is newer than the bundled version and will not be downgraded; use AI assistance to inspect it.'),
 				...versions,
 				tone: 'muted',
 				action: null,
 				actionLabel: '',
+				assistantLabel: localize('AI 辅助检查', 'AI-assisted check'),
 			};
 		case 'location_conflict':
 			return {
 				label: localize('使用指南目录冲突', 'Guide directory conflict'),
-				detail: localize(
-					'官方目录和旧目录同时存在，请先手动保留需要的版本并清理重复目录。',
-					'Official and legacy directories both exist. Keep the desired version and resolve the duplicate locations manually.'
-				),
+				detail: localize('检测到多个位置，Tracekeeper 不会自动覆盖；请选择新的空目录或让 Agent 协助检查。', 'Multiple locations were detected. Tracekeeper will not overwrite them; choose a new empty directory or use AI assistance to inspect.'),
 				...versions,
 				tone: 'warning',
 				action: null,
 				actionLabel: '',
+				assistantLabel: localize('AI 辅助检查', 'AI-assisted check'),
 			};
-		case 'copy_only':
 		case 'unavailable':
 			return {
-				label: localize('使用指南需手动设置', 'Guide requires manual setup'),
-				detail: localize(
-					'请按客户端方式手动保存使用指南；保存只提供工作流指导，不会增加访问权限，仍需通过实际使用观察效果。',
-					'Save the guide using the client workflow. It provides workflow guidance without adding access permissions; observe actual use to confirm the result.'
-				),
+				label: localize('无法读取使用指南目录', 'Skill directory unavailable'),
+				detail: state.detail,
 				...versions,
 				tone: 'warning',
-				action: 'copy',
-				actionLabel: localize('复制使用指南', 'Copy guide'),
+				action: null,
+				actionLabel: '',
+				assistantLabel: assistant,
 			};
 	}
 }

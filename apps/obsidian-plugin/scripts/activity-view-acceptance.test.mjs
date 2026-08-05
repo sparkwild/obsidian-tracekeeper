@@ -7,7 +7,7 @@ const runtimeStatusSource = fs.readFileSync('src/features/runtime/runtime-status
 const activityControllerSource = fs.readFileSync('src/features/activity/activity-data-controller.ts', 'utf8');
 
 const orderedCalls = [
-	'this.renderAgentActivitySection(contentEl, snapshot)',
+	'this.renderAgentActivitySection(contentEl, connections)',
 	'this.renderPrimaryAction(contentEl, snapshot, primaryAction)',
 	'this.renderLatestTaskSection(contentEl, snapshot)',
 	'this.renderMemoryLoopSection(contentEl, snapshot)',
@@ -24,19 +24,28 @@ for (const call of orderedCalls) {
 }
 
 assert.ok(activitySource.includes('selectActivityPrimaryAction'));
-assert.ok(activitySource.includes('buildActivityAgentSummary'));
+assert.ok(activitySource.includes('buildSuccessfullyUsedAgentSummary'));
 assert.ok(activitySource.includes("createEl('details'"));
 assert.ok(activitySource.includes("ui('高级诊断', 'Advanced diagnostics')"));
 assert.equal(activitySource.includes('tracekeeper-review-queue-button--action'), false);
 assert.equal((activitySource.match(/cls: 'mod-cta'/g) || []).length, 1);
-assert.ok(activitySource.includes("ui('Agent 活动', 'Agent activity')"));
-assert.ok(activitySource.includes('agentGroups'));
+assert.ok(activitySource.includes("ui('最近 Agent 使用', 'Recent Agent usage')"));
+assert.ok(activitySource.includes('最近活动时间'));
+assert.ok(activitySource.includes('Latest activity'));
 assert.ok(activitySource.includes('sessionCount'));
-assert.ok(activitySource.includes("ui('最近连接', 'Last connected')"));
-assert.ok(activitySource.includes("ui('最近成功使用', 'Last successful use')"));
-assert.ok(activitySource.includes('self-reported'));
-assert.ok(activitySource.includes('Manage Agent setup'));
-assert.ok(activitySource.includes('currently online'));
+assert.ok(activitySource.includes('Manage Agent configuration'));
+assert.ok(activitySource.includes("openSettingsTab('agent-configuration')"));
+assert.ok(activitySource.includes('successfully used a Tracekeeper tool'));
+assert.ok(activitySource.includes('loadAgentConnectionsSnapshot'));
+assert.equal(activitySource.includes("ui('当前 Agent 配置', 'Current Agent configuration')"), false);
+assert.equal(activitySource.includes("ui('历史活动', 'Historical activity')"), false);
+assert.equal(activitySource.includes("ui('配置已移除', 'Configuration removed')"), false);
+assert.equal(activitySource.includes('configuredAgents'), false);
+assert.equal(activitySource.includes('historicalAgentGroups'), false);
+assert.equal(activitySource.includes('buildAgentConfigurationViewModel'), false);
+assert.equal(activitySource.includes("ui('MCP', 'MCP')"), false);
+assert.equal(activitySource.includes("ui('授权', 'Authorization')"), false);
+assert.equal(activitySource.includes("ui('使用', 'Usage')"), false);
 assert.equal(activitySource.includes('credential-authenticated activities'), false);
 assert.equal(activitySource.includes('近期认证活动'), false);
 assert.ok(activitySource.includes("ui('最近事件', 'Recent events')"));
@@ -79,4 +88,4 @@ assert.equal(
 	false
 );
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 53 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 61 })}\n`);

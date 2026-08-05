@@ -93,6 +93,10 @@ try {
 	assert.match(mainSource, /writebackConfirmationSecret:\s*this\.settings\.runtimeSecuritySecret/);
 	assert.match(mainSource, /issueManualBearerCredential\(integrationId:\s*string\)/);
 	assert.match(mainSource, /decideOAuthRequest\(requestId:\s*string/);
+	assert.match(mainSource, /filter\(\(request\)\s*=>\s*!this\.pendingOAuthDecisions\.has\(request\.requestId\)\)/);
+	const decisionStart = mainSource.indexOf('async decideOAuthRequest');
+	const decisionEnd = mainSource.indexOf('private buildOAuthIntegrationPort', decisionStart);
+	assert.match(mainSource.slice(decisionStart, decisionEnd), /this\.scheduleAgentStateViewRefresh\(\)/);
 	assert.match(mainSource, /revokeAllAgentAccess\(\)/);
 	assert.match(mainSource, /buildGeneratedClientSetup\(profile,\s*this\.getMcpConnectionUrl\(\)\)/);
 	assert.doesNotMatch(mainSource, /readClientConfigStatus\(/);

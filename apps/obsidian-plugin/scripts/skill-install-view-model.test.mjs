@@ -14,7 +14,6 @@ const state = (overrides = {}) => ({
 	targetId: 'codex',
 	targetDirectory: '/tmp/codex/tracekeeper',
 	legacyTargetDirectories: [],
-	deliveryMode: 'managed',
 	activationMode: 'automatic_with_restart_fallback',
 	restartRequired: false,
 	state: 'installed',
@@ -40,51 +39,50 @@ try {
 
 	assert.deepEqual(buildSkillInstallPrompt(state(), localize), {
 		label: '使用指南已安装',
-		detail: '文件已验证。是否被 Agent 实际采用仍需后续使用观察；若客户端未加载，再重启客户端。',
+		detail: '文件已验证：/tmp/codex/tracekeeper。如需更改位置，请重新选择目录；Agent 是否实际采用仍需后续使用观察。',
 		currentVersion: 'v2.1.0',
 		bundledVersion: 'v2.1.0',
 		tone: 'success',
-		action: null,
-		actionLabel: '',
+		action: 'install',
+		actionLabel: '更改目录',
+		assistantLabel: 'AI 辅助安装',
 	});
 	const notInstalled = buildSkillInstallPrompt(state({ state: 'not_installed', installedVersion: '', fileVerified: false }), localize);
 	assert.equal(notInstalled.action, 'install');
 	assert.equal(notInstalled.label, '使用指南未安装');
-	assert.equal(notInstalled.actionLabel, '安装使用指南');
+	assert.equal(notInstalled.actionLabel, '选择目录安装');
+	assert.equal(notInstalled.assistantLabel, 'AI 辅助安装');
 	assert.equal(notInstalled.currentVersion, '未安装');
 	assert.equal(notInstalled.bundledVersion, 'v2.1.0');
-	assert.equal(notInstalled.detail, '安装会把记忆协作使用指南放到客户端约定位置，但不会增加访问权限；安装后仍需通过实际使用观察效果。');
+	assert.equal(notInstalled.detail, '请选择 Skills 根目录，Tracekeeper 会预览并在确认后写入 tracekeeper 子目录；也可以让 Agent 按提示词协助安装。');
 	const update = buildSkillInstallPrompt(state({ state: 'update_available', installedVersion: '2.0.0', expectedVersion: '2.2.0', updateAvailable: true, fileVerified: false }), localize);
 	assert.equal(update.action, 'update');
 	assert.equal(update.label, '使用指南可更新');
-	assert.equal(update.actionLabel, '更新使用指南');
+	assert.equal(update.actionLabel, '选择目录更新');
 	assert.equal(update.currentVersion, 'v2.0.0');
 	assert.equal(update.bundledVersion, 'v2.2.0');
-	assert.equal(update.detail, '更新会替换为最新的记忆协作使用指南；是否被 Agent 采用仍需通过实际使用观察。');
+	assert.equal(update.detail, '请选择目录确认更新；已有目录会先预览并备份，不会覆盖用户修改。');
 	const legacy = buildSkillInstallPrompt(state({ state: 'legacy_install', installedVersion: '2.0.0', fileVerified: false }), localize);
 	assert.equal(legacy.action, 'migrate');
 	assert.equal(legacy.label, '使用指南位置待迁移');
-	assert.equal(legacy.actionLabel, '迁移使用指南');
+	assert.equal(legacy.actionLabel, '选择目录迁移');
 	assert.equal(legacy.currentVersion, 'v2.0.0（旧位置）');
-	const copyOnly = buildSkillInstallPrompt(state({ state: 'copy_only', deliveryMode: 'copy_only', installedVersion: '', fileVerified: false }), localize);
-	assert.equal(copyOnly.action, 'copy');
-	assert.equal(copyOnly.label, '使用指南需手动设置');
-	assert.equal(copyOnly.actionLabel, '复制使用指南');
-	assert.equal(copyOnly.currentVersion, '需在客户端确认');
-	assert.equal(copyOnly.detail, '请按客户端方式手动保存使用指南；保存只提供工作流指导，不会增加访问权限，仍需通过实际使用观察效果。');
+	const locationRequired = buildSkillInstallPrompt(state({ state: 'location_required', installedVersion: '', fileVerified: false, targetDirectory: undefined }), localize);
+	assert.equal(locationRequired.action, 'install');
+	assert.equal(locationRequired.currentVersion, '尚未选择目录');
 	assert.equal(JSON.stringify([
 		buildSkillInstallPrompt(state(), localize),
 		notInstalled,
 		update,
-		copyOnly,
+		locationRequired,
 	]).includes('已能主动'), false);
 	assert.equal(JSON.stringify([
 		buildSkillInstallPrompt(state(), localize),
 		notInstalled,
 		update,
-		copyOnly,
+		locationRequired,
 	]).includes('start → recall → finish'), false);
-	assert.equal(buildSkillInstallPrompt(state({ state: 'unavailable', deliveryMode: 'copy_only', installedVersion: '', fileVerified: false }), localize).currentVersion, '需在客户端确认');
+	assert.equal(buildSkillInstallPrompt(state({ state: 'unavailable', installedVersion: '', fileVerified: false }), localize).currentVersion, '暂不可用');
 	const modified = buildSkillInstallPrompt(state({ state: 'modified', installedVersion: '2.1.0', fileVerified: false }), localize);
 	assert.equal(modified.action, null);
 	assert.equal(modified.currentVersion, 'v2.1.0（未验证）');

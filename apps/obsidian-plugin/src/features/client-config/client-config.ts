@@ -11,6 +11,7 @@ export interface ClientProfile {
 	setupUrl?: string;
 	buildSetupInstruction?: (connectionUrl: string) => string;
 	setupFollowup?: string;
+	reauthorizationInstruction?: string;
 }
 
 export interface GeneratedClientConfig {
@@ -23,6 +24,7 @@ export interface GeneratedClientConfig {
 	setupInstruction: string;
 	setupUrl?: string;
 	setupFollowup?: string;
+	reauthorizationInstruction?: string;
 }
 
 export interface GeneratedClientSetup {
@@ -31,6 +33,7 @@ export interface GeneratedClientSetup {
 	setupInstruction: string;
 	setupUrl?: string;
 	setupFollowup?: string;
+	reauthorizationInstruction?: string;
 }
 
 export const buildClientProfiles = (
@@ -49,9 +52,9 @@ export const buildClientProfiles = (
 		supportedAuthModes: ['oauth', 'bearer'],
 		buildSetupInstruction: (connectionUrl) =>
 			`codex mcp add tracekeeper --url ${connectionUrl}`,
-		setupFollowup: localize(
-			'如果已有 Tracekeeper 配置需要重新授权，请运行 codex mcp login tracekeeper --scopes mcp。',
-			'If an existing Tracekeeper configuration needs reauthorization, run codex mcp login tracekeeper --scopes mcp.'
+		reauthorizationInstruction: localize(
+			'codex mcp login tracekeeper --scopes mcp',
+			'codex mcp login tracekeeper --scopes mcp'
 		),
 	},
 	{
@@ -130,11 +133,11 @@ export const buildClientProfiles = (
 		id: 'custom',
 		displayName: localize('自定义 MCP 工具', 'Custom MCP tool'),
 		description: localize(
-			'仅当客户端支持 Streamable HTTP、MCP OAuth 发现、PKCE S256 和安全凭据存储时，才可手工使用本机端点。',
-			'Use the local endpoint manually only when the client supports Streamable HTTP, MCP OAuth discovery, PKCE S256, and secure credential storage.'
+			'仅当客户端支持 Streamable HTTP 和安全访问令牌存储时，才可手动使用本机端点。',
+			'Use the local endpoint manually only when the client supports Streamable HTTP and secure access-token storage.'
 		),
 		setupCapability: 'manual',
-		supportedAuthModes: ['oauth', 'bearer'],
+		supportedAuthModes: ['bearer'],
 	},
 ];
 
@@ -149,6 +152,7 @@ export const buildGeneratedClientSetup = (
 		setupInstruction: profile.buildSetupInstruction?.(endpoint) ?? endpoint,
 		setupUrl: profile.setupUrl,
 		setupFollowup: profile.setupFollowup,
+		reauthorizationInstruction: profile.reauthorizationInstruction,
 	};
 };
 

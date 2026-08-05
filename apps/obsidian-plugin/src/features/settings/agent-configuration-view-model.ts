@@ -27,6 +27,12 @@ export function buildAgentConfigurationViewModel(
 		const integration = integrationByClient.get(config.clientId);
 		if (!integration) return [];
 		const agent = recentAgents.find((candidate) => candidate.integrationId === integration.integrationId) ?? null;
+		const currentCredentialAgent = integration.credential
+			? recentAgents.find((candidate) =>
+				candidate.integrationId === integration.integrationId
+				&& candidate.credentialId === integration.credential?.credentialId
+			) ?? null
+			: null;
 		return [{
 			config,
 			integration,
@@ -37,7 +43,7 @@ export function buildAgentConfigurationViewModel(
 					hasCredential: Boolean(integration.credential),
 					hasPendingApproval: integration.authMode === 'oauth' && pendingOAuthRequests.length > 0,
 					clientReached: Boolean(agent?.connectedAt) || (integration.authMode === 'oauth' && Boolean(integration.lastAuthorizedAt)),
-				connected: Boolean(agent?.connectedAt),
+				connected: Boolean(currentCredentialAgent?.connectedAt),
 				used: Boolean(agent?.lastUsedAt),
 				revoked: Boolean(integration.lastRevokedAt) && !integration.credential,
 				needsUpdate: config.configState === 'needs_update',

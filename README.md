@@ -49,7 +49,7 @@ Tracekeeper treats every AI suggestion as a candidate memory proposal. You can i
 3. In **MCP Service**, start the Runtime and confirm that the credential-free loopback endpoint reports **Local access protected**.
 4. In **Agent Configuration**, choose **Add Agent** and one AI tool. The persistent card appears immediately. Run only the public, client-native command shown there; copy is explicit and remains unverified until the client reaches the endpoint.
 5. Use the card's default OAuth flow when the client supports it: the browser waits while Obsidian shows an explicit Allow/Deny approval. Choose manual Bearer only when the client can safely set `Authorization: Bearer`; the plaintext is shown once in the current modal and is never stored.
-6. Install the recommended companion Skill separately when available. Skill installation, authorization, connection, and usage remain independent; reload the AI tool if required and ask it to initialize Tracekeeper and call a `tracekeeper.*` tool.
+6. Install the companion Skill from the Agent card by explicitly selecting a Skills directory, or use the AI-assisted prompt with the exported local bundle. A copied prompt is not proof of installation; Tracekeeper verifies the final directory and bundle hash. Skill installation, authorization, connection, and usage remain independent; reload the AI tool if required and ask it to initialize Tracekeeper and call a `tracekeeper.*` tool.
 7. Review proposed memory, wiki, graph, or migration changes in **Knowledge Change Review**.
 8. Edit a change proposal, approve it, return it for revision, or do not accept it. An approved change still requires a preview and explicit apply confirmation before it enters the vault.
 
@@ -124,7 +124,7 @@ MCP writes are intentionally narrow:
 - every Session has a random identifier, every Session request revalidates its integration-bound credential, and request-size, session-count, stream, and idle-time limits remain enforced
 - delete, rename, bulk rewrite, and system command execution are not available MCP actions
 
-Normal Agent configuration is owned by each client's official OAuth/MCP entry; Tracekeeper does not read or write cross-platform client configuration paths. Confirmed managed Skill installation remains a recoverable Vault-outside write. Tokens, digests, authorization codes, PKCE verifiers, pending handles, token responses, and Authorization Headers never enter connection URLs, copied commands, AI instructions, Runtime logs, or Vault audit records.
+Normal Agent configuration is owned by each client's official OAuth/MCP entry; Tracekeeper does not read or write cross-platform client configuration paths. Skill installation is a user-selected, previewed, and recoverable Vault-outside write; AI-assisted installation only supplies a local source and instructions until the destination is externally verified. Tokens, digests, authorization codes, PKCE verifiers, pending handles, token responses, and Authorization Headers never enter connection URLs, copied commands, AI instructions, Runtime logs, or Vault audit records.
 
 ## Documentation
 

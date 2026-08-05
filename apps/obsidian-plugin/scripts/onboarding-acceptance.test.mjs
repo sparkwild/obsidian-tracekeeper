@@ -138,10 +138,23 @@ try {
 	assert.ok(settingsSource.includes('renderClientSkillPrompt'));
 	assert.ok(clientSkillPromptSource.includes('SkillInstallPreviewModal'));
 	assert.ok(clientSkillPromptSource.includes('buildSkillInstallPrompt'));
+	const directoryActionStart = clientSkillPromptSource.indexOf("const choose = actions.createEl('button'");
+	const directoryActionEnd = clientSkillPromptSource.indexOf('if (prompt.assistantLabel)', directoryActionStart);
+	assert.ok(directoryActionStart >= 0 && directoryActionEnd > directoryActionStart);
+	assert.match(
+		clientSkillPromptSource.slice(directoryActionStart, directoryActionEnd),
+		/\.finally\(\(\) => \{ choose\.disabled = false; \}\);/,
+		'the directory action must be re-enabled after the modal opens or opening fails'
+	);
 	assert.ok(settingsSource.includes('renderClientSkillPrompt'));
 	assert.ok(clientSkillPromptSource.includes('tracekeeper-settings-client-skill'));
+	assert.equal(clientSkillPromptSource.includes("ui('技术信息', 'Technical information')"), false);
+	assert.equal(clientSkillPromptSource.includes('tracekeeper-settings-client-skill__technical'), false);
 	assert.ok(settingsSource.includes('McpCapabilitiesModal'));
 	assert.ok(settingsSource.includes('View capabilities'));
+	assert.ok(settingsSource.includes("section.querySelector<HTMLElement>('.tracekeeper-settings-section__header')"));
+	assert.equal(settingsSource.includes('持久 Agent 卡片独立展示 MCP 配置、授权、连接、使用和 Skill 状态。'), false);
+	assert.equal(settingsSource.includes('Persistent Agent cards show MCP setup, authorization, connection, usage, and Skill state independently.'), false);
 	assert.equal(settingsSource.includes('renderOnboardingSection'), false);
 	assert.equal(settingsSource.includes('tracekeeper-onboarding-steps'), false);
 	assert.equal(settingsSource.includes("ui('首次接入引导', 'Onboarding')"), false);
@@ -154,7 +167,9 @@ try {
 	assert.ok(skillPromptSource.includes("case 'modified'"));
 	assert.ok(skillPromptSource.includes("case 'newer_than_bundled'"));
 	assert.ok(skillPromptSource.includes("case 'location_conflict'"));
-	assert.ok(skillPromptSource.includes("case 'copy_only'"));
+assert.ok(skillPromptSource.includes("case 'location_required'"));
+	assert.ok(clientSkillPromptSource.includes("setIcon(assistant, 'bot')"));
+	assert.ok(clientSkillPromptSource.includes('tracekeeper-copy-button'));
 	assert.ok(mainSource.includes("projectMemoryRule: 'review_queue'"));
 	assert.ok(mainSource.includes('normalizeMemoryRuleSettings(saved, DEFAULT_SETTINGS)'));
 	assert.equal(mainSource.includes('savedMemoryRulesVersion'), false);

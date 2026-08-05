@@ -1,8 +1,8 @@
 import { ItemView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
-import type { AgentActivitySnapshot, AgentTaskRecord } from './activity-model';
+import type { AgentActivitySnapshot, AgentConnectionsSnapshot, AgentTaskRecord } from './activity-model';
 import {
-	buildActivityAgentSummary,
+	buildSuccessfullyUsedAgentSummary,
 	selectActivityPrimaryAction,
 	type ActivityPrimaryAction,
 } from './activity-view-model';
@@ -54,7 +54,7 @@ export class TracekeeperActivityView extends ItemView {
 		await this.refresh();
 	}
 
-	private async render(snapshot: AgentActivitySnapshot): Promise<void> {
+	private async render(snapshot: AgentActivitySnapshot, connections: AgentConnectionsSnapshot): Promise<void> {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass('tracekeeper-view-root');
@@ -94,7 +94,7 @@ export class TracekeeperActivityView extends ItemView {
 				}
 			})();
 		});
-		this.renderAgentActivitySection(contentEl, snapshot);
+		this.renderAgentActivitySection(contentEl, connections);
 
 		const primaryAction = selectActivityPrimaryAction({
 			structureState: snapshot.structureStatus.state,
@@ -150,43 +150,40 @@ export class TracekeeperActivityView extends ItemView {
 		}
 	}
 
-	private renderAgentActivitySection(container: HTMLElement, snapshot: AgentActivitySnapshot): void {
-		const summary = buildActivityAgentSummary(snapshot.recentAgents);
+	private renderAgentActivitySection(
+		container: HTMLElement,
+		connections: AgentConnectionsSnapshot
+	): void {
+		const summary = buildSuccessfullyUsedAgentSummary(connections.recentAgents);
 		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-agent-activity-card' });
 		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
-		header.createEl('h3', { text: ui('Agent 活动', 'Agent activity') });
+		header.createEl('h3', { text: ui('最近 Agent 使用', 'Recent Agent usage') });
 		const headerActions = header.createDiv({ cls: 'tracekeeper-action-row' });
 		headerActions.createEl('span', {
-			text: summary.state === 'observed'
-				? ui(`已观察到 ${summary.observedAgentCount} 类 AI 工具`, `${summary.observedAgentCount} AI tool type${summary.observedAgentCount === 1 ? '' : 's'} observed`)
-				: ui('暂无活动记录', 'No activity observed'),
+			text: summary.observedAgentCount > 0
+				? ui(`最近使用 ${summary.observedAgentCount} 个 Agent`, `${summary.observedAgentCount} recently used Agent${summary.observedAgentCount === 1 ? '' : 's'}`)
+				: ui('暂无使用记录', 'No usage observed'),
 			cls: 'tracekeeper-badge tracekeeper-badge--muted',
 		});
 		const manageButton = headerActions.createEl('button', {
-			text: ui('管理 Agent 接入', 'Manage Agent setup'),
+			text: ui('管理 Agent 配置', 'Manage Agent configuration'),
 		});
 		manageButton.addEventListener('click', () => {
-			this.plugin.openSettingsTab();
+			this.plugin.openSettingsTab('agent-configuration');
 		});
 		card.createEl('p', {
-			text: summary.state === 'observed'
-				? ui(
-					'以下类型来自客户端自报名称，仅表示本地审计观察到的连接或成功使用，不代表这些工具当前仍在线。',
-					'Client types are inferred from self-reported names. Local audit evidence shows connections or successful use, not that these tools are currently online.'
-				)
-				: snapshot.runtimeStatus.state === 'running'
-					? ui(
-						'MCP 服务可用，但还没有观察到 Agent 使用有效凭据调用 Tracekeeper。请在设置中配置或验证 Agent。',
-						'The MCP service is available, but no Agent call with valid credentials has been observed. Configure or verify an Agent in Settings.'
-					)
-					: ui(
-						'尚未观察到 Agent 活动；请先恢复 MCP 服务，再在设置中完成 Agent 配置或验证。',
-						'No Agent activity has been observed. Recover the MCP service, then configure or verify an Agent in Settings.'
-					),
+			text: ui(
+				'这里只显示成功调用过 Tracekeeper 工具的 Agent 及其最近活动，不展示配置或授权状态。',
+				'Only Agents that successfully used a Tracekeeper tool appear here, with recent activity rather than configuration or authorization status.'
+			),
 			cls: 'tracekeeper-view__description',
 		});
-
-		if (summary.agentGroups.length === 0) {
+		if (summary.state === 'not_observed') {
+			this.renderEmptyState(
+				card,
+				ui('还没有 Agent 使用记录。', 'No Agent usage records yet.'),
+				ui('Agent 成功调用 Tracekeeper 工具后会显示在这里。', 'Agents appear here after successfully using a Tracekeeper tool.')
+			);
 			return;
 		}
 
@@ -197,20 +194,15 @@ export class TracekeeperActivityView extends ItemView {
 			identity.createEl('strong', { text: agent.displayName });
 			identity.createEl('span', {
 				text: ui(
-					`${ui('最近连接', 'Last connected')} ${agent.lastConnectedAt > 0 ? this.plugin.formatDisplayTime(agent.lastConnectedAt) : ui('未记录', 'Not recorded')} · ${agent.sessionCount} 个会话`,
-					`${ui('最近连接', 'Last connected')} ${agent.lastConnectedAt > 0 ? this.plugin.formatDisplayTime(agent.lastConnectedAt) : ui('未记录', 'Not recorded')} · ${agent.sessionCount} session${agent.sessionCount === 1 ? '' : 's'}`
+					`最近活动时间：${this.plugin.formatDisplayTime(agent.sortTimestamp)}`,
+					`Latest activity: ${this.plugin.formatDisplayTime(agent.sortTimestamp)}`
 				),
 			});
 			identity.createEl('span', {
-				text: agent.lastUsedAt > 0
-					? ui(
-						`${ui('最近成功使用', 'Last successful use')} ${this.plugin.formatDisplayTime(agent.lastUsedAt)}`,
-						`${ui('最近成功使用', 'Last successful use')} ${this.plugin.formatDisplayTime(agent.lastUsedAt)}`
-					)
-					: ui(
-						'尚无成功工具调用',
-						'No successful tool call observed'
-					),
+				text: ui(
+					`记录到 ${agent.sessionCount} 个会话`,
+					`${agent.sessionCount} recorded session${agent.sessionCount === 1 ? '' : 's'}`
+				),
 			});
 		}
 	}
@@ -800,7 +792,10 @@ export class TracekeeperActivityView extends ItemView {
 	}
 
 	async refresh(): Promise<void> {
-		const snapshot = await this.plugin.loadAgentActivitySnapshot();
-		await this.render(snapshot);
+		const [snapshot, connections] = await Promise.all([
+			this.plugin.loadAgentActivitySnapshot(),
+			this.plugin.loadAgentConnectionsSnapshot(),
+		]);
+		await this.render(snapshot, connections);
 	}
 }

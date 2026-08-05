@@ -1,11 +1,14 @@
 export type SkillInstallAuditResult = 'success' | 'partial' | 'failed';
+export type SkillInstallAuditAction = 'install' | 'update' | 'migrate' | 'verify_external';
+export type SkillInstallMethod = 'tracekeeper_install' | 'external_verified';
 
 export interface SkillInstallAuditInput {
-	action: 'install' | 'update' | 'migrate';
+	action: SkillInstallAuditAction;
 	clientId: string;
 	bundleHash: string;
 	backupCreated: boolean;
 	result: SkillInstallAuditResult;
+	installMethod?: SkillInstallMethod;
 	timestamp?: string;
 }
 
@@ -17,6 +20,7 @@ export function buildSkillInstallAuditEntry(input: SkillInstallAuditInput): stri
 		'actor: user\n' +
 		`client_id: ${safeValue(input.clientId, 'unknown')}\n` +
 		`bundle_hash: ${safeBundleHash(input.bundleHash)}\n` +
+		`install_method: ${input.installMethod ?? (input.action === 'verify_external' ? 'external_verified' : 'tracekeeper_install')}\n` +
 		`backup_created: ${input.backupCreated ? 'true' : 'false'}\n` +
 		`result: ${input.result}\n\n`
 	);

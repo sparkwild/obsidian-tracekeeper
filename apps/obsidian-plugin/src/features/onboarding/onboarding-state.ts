@@ -24,7 +24,7 @@ export interface OnboardingProgressContext {
 	connectionVerified: boolean;
 	firstRecallCompleted: boolean;
 	skillAvailable: boolean;
-	skillCopied: boolean;
+	skillAssistantPromptCopied: boolean;
 	skillUserConfirmed: boolean;
 	skillFileVerified: boolean;
 	skillUpdateAvailable: boolean;
@@ -39,7 +39,7 @@ export interface OnboardingSettingsState {
 	entryPromptVersion: number;
 	entryDeferredAt: string;
 	skillSetupCompletedAt: string;
-	skillCopiedAt: string;
+	skillAssistantPromptCopiedAt: string;
 	skillUserConfirmedAt: string;
 	skillFileVerifiedAt: string;
 	skillVerifiedBundleHash: string;
@@ -93,7 +93,7 @@ export const DEFAULT_ONBOARDING_SETTINGS: OnboardingSettingsState = {
 	entryPromptVersion: 0,
 	entryDeferredAt: '',
 	skillSetupCompletedAt: '',
-	skillCopiedAt: '',
+	skillAssistantPromptCopiedAt: '',
 	skillUserConfirmedAt: '',
 	skillFileVerifiedAt: '',
 	skillVerifiedBundleHash: '',
@@ -133,7 +133,7 @@ export const normalizeOnboardingSettingsState = (raw: unknown): OnboardingSettin
 		entryPromptVersion: asNonNegativeInteger(rawState.entryPromptVersion, DEFAULT_ONBOARDING_SETTINGS.entryPromptVersion),
 		entryDeferredAt: asTimestamp(rawState.entryDeferredAt),
 		skillSetupCompletedAt: legacySkillConfirmation || userConfirmation,
-		skillCopiedAt: asTimestamp(rawState.skillCopiedAt),
+		skillAssistantPromptCopiedAt: asTimestamp(rawState.skillAssistantPromptCopiedAt),
 		skillUserConfirmedAt: userConfirmation,
 		skillFileVerifiedAt: asTimestamp(rawState.skillFileVerifiedAt),
 		skillVerifiedBundleHash: asString(rawState.skillVerifiedBundleHash),
@@ -298,7 +298,7 @@ export const findOnboardingTrackedWorkflowEvidence = (
 	return null;
 };
 
-export const markSkillCopied = (state: OnboardingSettingsState): OnboardingSettingsState => timestamped(state, { skillCopiedAt: new Date().toISOString() });
+export const markSkillAssistantPromptCopied = (state: OnboardingSettingsState): OnboardingSettingsState => timestamped(state, { skillAssistantPromptCopiedAt: new Date().toISOString() });
 
 export const markSkillUserConfirmed = (state: OnboardingSettingsState): OnboardingSettingsState => {
 	const timestamp = new Date().toISOString();

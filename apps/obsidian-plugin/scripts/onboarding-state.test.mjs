@@ -40,8 +40,8 @@ try {
 	assert.equal(stateModule.shouldShowOnboardingEntryPrompt(migrated), false);
 
 	let state = stateModule.normalizeOnboardingSettingsState({ selectedClientId: 'codex' });
-	state = stateModule.markSkillCopied(state);
-	assert.ok(state.skillCopiedAt);
+	state = stateModule.markSkillAssistantPromptCopied(state);
+	assert.ok(state.skillAssistantPromptCopiedAt);
 	state = stateModule.markSkillUserConfirmed(state);
 	assert.ok(state.skillUserConfirmedAt);
 	assert.equal(state.skillFileVerifiedAt, '');

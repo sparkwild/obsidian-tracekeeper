@@ -467,7 +467,7 @@ export class LocalOAuthAuthorizationServer {
 
 	private validateRegistration(request: ClientRegistrationRequest): { clientName: string; redirectUris: string[] } | Error {
 		if (request.token_endpoint_auth_method !== undefined && request.token_endpoint_auth_method !== 'none') return new Error('Only public clients with token_endpoint_auth_method=none are supported.');
-		if (!matchesRegistrationGrantTypes(request.grant_types)) return new Error('Only authorization_code client metadata is accepted.');
+		if (!matchesRegistrationGrantTypes(request.grant_types)) return new Error('grant_types must include authorization_code and may also declare refresh_token.');
 		if (!matchesOptionalExactArray(request.response_types, ['code'])) return new Error('Only the code response type is supported.');
 		if (request.scope !== undefined && (typeof request.scope !== 'string' || request.scope.trim() !== OAUTH_SCOPE)) return new Error(`Only scope=${OAUTH_SCOPE} is supported.`);
 		if (!Array.isArray(request.redirect_uris) || request.redirect_uris.length === 0 || request.redirect_uris.length > 8) return new Error('redirect_uris must contain 1-8 loopback URLs.');
@@ -627,7 +627,11 @@ function matchesOptionalExactArray(value: unknown, expected: string[]): boolean 
 
 function matchesRegistrationGrantTypes(value: unknown): boolean {
 	if (value === undefined) return true;
-	return Array.isArray(value) && value.length === 1 && value[0] === 'authorization_code';
+	if (!Array.isArray(value) || value.length === 0 || value.length > 2 || !value.every((entry) => typeof entry === 'string')) return false;
+	const grantTypes = new Set(value);
+	return grantTypes.size === value.length
+		&& grantTypes.has('authorization_code')
+		&& [...grantTypes].every((entry) => entry === 'authorization_code' || entry === 'refresh_token');
 }
 
 function isRecordLike(value: unknown): value is Record<string, unknown> {

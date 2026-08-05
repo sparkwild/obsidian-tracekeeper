@@ -318,7 +318,7 @@
 .tracekeeper-settings-agent-actions {
 	display: flex;
 	justify-content: flex-end;
-	margin: 8px 0;
+	margin: 0;
 }
 
 .tracekeeper-settings-client-row {
@@ -385,20 +385,6 @@
 	min-width: 0;
 }
 
-.tracekeeper-settings-client-skill__versions {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px 16px;
-	font-size: 12px;
-}
-
-.tracekeeper-settings-client-skill__versions > span {
-	display: inline-flex;
-	align-items: baseline;
-	gap: 5px;
-}
-
-.tracekeeper-settings-client-skill__version-label,
 .tracekeeper-settings-client-skill__detail {
 	color: var(--text-muted);
 }
@@ -413,16 +399,86 @@
 	overflow-wrap: anywhere;
 }
 
-.tracekeeper-settings-client-skill__technical {
-	font-size: 12px;
-	color: var(--text-muted);
+.tracekeeper-settings-client-skill__actions {
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 6px;
+	flex: 0 0 auto;
 }
 
-.tracekeeper-settings-client-skill__technical summary {
-	cursor: pointer;
+.tracekeeper-settings-client-skill__actions button {
+	flex: 0 0 auto;
 }
 
-.tracekeeper-settings-client-skill > button {
+.tracekeeper-copy-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 6px;
+}
+
+.tracekeeper-copy-button svg {
+	width: 16px;
+	height: 16px;
+}
+
+.tracekeeper-copyable-command {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-width: 0;
+}
+
+.tracekeeper-copyable-command .tracekeeper-code-block {
+	flex: 1 1 auto;
+	width: auto;
+	min-width: 0;
+	overflow-x: auto;
+	overflow-y: hidden;
+	white-space: nowrap;
+	overflow-wrap: normal;
+	-webkit-user-select: text;
+	user-select: text;
+	cursor: text;
+}
+
+.tracekeeper-copyable-command .tracekeeper-copy-button {
+	flex: 0 0 auto;
+}
+
+.tracekeeper-skill-directory-recommendation {
+	display: grid;
+	gap: 6px;
+	margin: 12px 0;
+	padding: 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-left: 3px solid var(--interactive-accent);
+	border-radius: 8px;
+}
+
+.tracekeeper-skill-directory-recommendation code,
+.tracekeeper-skill-directory-recommendation small {
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-ai-skill-prompt {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 12px 0;
+}
+
+.tracekeeper-ai-skill-prompt .tracekeeper-code-block {
+	flex: 1 1 auto;
+	max-height: 320px;
+	overflow: auto;
+	white-space: pre-wrap;
+	user-select: text;
+}
+
+.tracekeeper-ai-skill-prompt .tracekeeper-copy-button {
 	flex: 0 0 auto;
 }
 
@@ -451,6 +507,64 @@
 	margin: 0;
 }
 
+.tracekeeper-connect-ai-tool-modal__pending {
+	display: grid;
+	gap: 10px;
+	margin: 4px 0 12px;
+	padding: 14px;
+	border: 1px solid var(--interactive-accent);
+	border-left-width: 4px;
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-heading {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--text-normal);
+	font-size: var(--font-ui-medium);
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-icon {
+	display: inline-flex;
+	color: var(--interactive-accent);
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-icon svg {
+	width: 20px;
+	height: 20px;
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-summary {
+	margin: 0;
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-details {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: 5px 12px;
+	padding: 10px 12px;
+	border-radius: 6px;
+	background: var(--background-primary);
+	font-size: var(--font-ui-small);
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-details span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-label {
+	color: var(--text-muted);
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
 .tracekeeper-connect-ai-tool-modal__actions {
 	flex-wrap: wrap;
 	margin-top: 14px;
@@ -477,6 +591,10 @@
 		grid-template-columns: minmax(0, 1fr);
 	}
 
+	.tracekeeper-connect-ai-tool-modal__pending-details {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
 	.tracekeeper-connect-ai-tool-modal__actions {
 		align-items: stretch;
 		flex-direction: column;
@@ -490,7 +608,12 @@
 		flex-direction: column;
 	}
 
-	.tracekeeper-settings-client-skill > button {
+	.tracekeeper-settings-client-skill__actions {
+		width: 100%;
+		justify-content: flex-start;
+	}
+
+	.tracekeeper-settings-client-skill__actions button {
 		width: 100%;
 	}
 }

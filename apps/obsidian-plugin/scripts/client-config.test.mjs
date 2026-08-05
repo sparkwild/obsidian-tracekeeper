@@ -34,7 +34,7 @@ try {
 		'zcode',
 		'custom',
 	]);
-	assert.equal(profiles.filter((profile) => profile.supportedAuthModes.includes('oauth')).length, 4);
+	assert.equal(profiles.filter((profile) => profile.supportedAuthModes.includes('oauth')).length, 3);
 	assert.equal(profiles.some((profile) => 'targetPath' in profile), false);
 	assert.equal(profiles.some((profile) => 'supportsAutoConfigure' in profile), false);
 	assert.equal(profiles.some((profile) => 'configFormat' in profile), false);
@@ -44,7 +44,8 @@ try {
 	assert.equal(codex.setupInstruction, `codex mcp add tracekeeper --url ${endpoint}`);
 	assert.deepEqual(codex.supportedAuthModes, ['oauth', 'bearer']);
 	assert.equal(codex.setupCapability, 'oauth-cli');
-	assert.match(codex.setupFollowup, /codex mcp login tracekeeper --scopes mcp/);
+	assert.equal(codex.setupFollowup, undefined);
+	assert.equal(codex.reauthorizationInstruction, 'codex mcp login tracekeeper --scopes mcp');
 
 	const claude = config.buildGeneratedClientSetup(byId('claude-code'), endpoint);
 	assert.equal(claude.setupInstruction, `claude mcp add --transport http --scope user tracekeeper ${endpoint}`);
@@ -53,7 +54,7 @@ try {
 	assert.equal(gemini.setupInstruction, `gemini mcp add --transport http --scope user tracekeeper ${endpoint}`);
 	assert.deepEqual(gemini.supportedAuthModes, ['oauth', 'bearer']);
 
-	for (const id of ['claude-desktop', 'cursor', 'grok', 'zcode']) {
+	for (const id of ['claude-desktop', 'cursor', 'grok', 'zcode', 'custom']) {
 		const setup = config.buildGeneratedClientSetup(byId(id), endpoint);
 		assert.equal(setup.setupInstruction, endpoint);
 		assert.deepEqual(setup.supportedAuthModes, ['bearer']);

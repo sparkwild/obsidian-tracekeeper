@@ -75,7 +75,7 @@ import {
 	markConnectionVerified,
 	markFirstRecallDone,
 	markMemoryPolicyConfirmed,
-	markSkillCopied,
+	markSkillAssistantPromptCopied,
 	markSkillFileVerified,
 	markSkillUserConfirmed,
 	markTrackedWorkflowObserved,
@@ -104,11 +104,15 @@ import {
 } from './adapters/client-skill-adapter';
 import { TRACEKEEPER_SKILL_BUNDLE } from './features/skill-installation/skill-bundle';
 import { buildSkillInstallAuditEntry } from './features/skill-installation/skill-install-audit';
+import { buildAiSkillAssistantPrompt, type AiSkillAssistantContext } from './features/skill-installation/skill-assistant-prompt';
+import { normalizeSkillDirectorySelection, type SkillDirectorySelection } from './features/skill-installation/skill-install-paths';
+import { exportEmbeddedTracekeeperSkillSource } from './features/skill-installation/skill-source-exporter';
 import {
 	normalizeSkillInstallReceipts,
 	recordSkillInstallReceipt,
 	type SkillInstallReceipts,
 } from './features/skill-installation/skill-install-receipts';
+import { legacySkillTargetDirectoryForId } from './adapters/client-skill-target-registry';
 import {
 	generateRuntimeSecuritySecret,
 	isRuntimeSecuritySecret,
@@ -431,6 +435,12 @@ interface DesktopNodeApi {
 	shell?: {
 		openPath(path: string): Promise<string>;
 	};
+	dialog?: {
+		showOpenDialog(options: { properties: readonly string[] }): Promise<{
+			canceled: boolean;
+			filePaths: string[];
+		}>;
+	};
 }
 
 type StreamableHttpRuntimeOptionsWithGraphProfile = ConstructorParameters<typeof StreamableHttpMcpRuntime>[0] & {
@@ -488,6 +498,7 @@ export default class TracekeeperPlugin extends Plugin {
 	private agentCredentialOperation: Promise<void> = Promise.resolve();
 	private readonly pendingOAuthDecisions = new Map<string, OAuthDecision>();
 	private readonly pendingOAuthRequests = new Map<string, PendingOAuthRequest>();
+	private readonly skillPlanActions = new Map<string, Extract<SkillInstallAction, 'install' | 'update' | 'migrate'>>();
 	private localToolExecutor!: LocalToolExecutor;
 	private vaultRepository!: ObsidianVaultRepository;
 	private knowledgeIndex: ObsidianKnowledgeIndexAdapter | null = null;
@@ -502,6 +513,8 @@ export default class TracekeeperPlugin extends Plugin {
 	private autoRefreshIntervalId: number | null = null;
 	private autoRefreshDebounceId: number | null = null;
 	private autoRefreshInFlight = false;
+	private agentStateViewRefreshQueued = false;
+	private settingTab: TracekeeperSettingTab | null = null;
 	private runtimeStatus: StreamableHttpRuntimeStatus = {
 		state: 'stopped',
 		host: DEFAULT_MCP_HOST,
@@ -756,7 +769,8 @@ export default class TracekeeperPlugin extends Plugin {
 			},
 		});
 
-		this.addSettingTab(new TracekeeperSettingTab(this.app, this));
+		this.settingTab = new TracekeeperSettingTab(this.app, this);
+		this.addSettingTab(this.settingTab);
 		this.restartAutoRefresh();
 		this.app.workspace.onLayoutReady(() => {
 			this.registerAutoRefreshEvents();
@@ -794,7 +808,14 @@ export default class TracekeeperPlugin extends Plugin {
 		next.onboarding = isHardMigration
 			? clearOnboardingRuntimeEvidence(normalizedOnboarding)
 			: normalizedOnboarding;
-		next.skillInstallReceipts = normalizeSkillInstallReceipts(saved.skillInstallReceipts);
+		const desktopApi = this.getDesktopNodeApi();
+		next.skillInstallReceipts = normalizeSkillInstallReceipts(saved.skillInstallReceipts, {
+			legacyTargetDirectory: (targetId) => legacySkillTargetDirectoryForId(
+				targetId,
+				desktopApi?.os.homedir(),
+				desktopApi?.path.join.bind(desktopApi.path) || ((...parts) => parts.join('/'))
+			),
+		});
 		const memoryRules = normalizeMemoryRuleSettings(saved, DEFAULT_SETTINGS);
 		next.memoryRulesVersion = memoryRules.memoryRulesVersion;
 		next.globalMemoryRule = memoryRules.globalMemoryRule;
@@ -1043,7 +1064,8 @@ export default class TracekeeperPlugin extends Plugin {
 
 	private hasAutoRefreshTargetViews(): boolean {
 		return this.app.workspace.getLeavesOfType(TRACEKEEPER_ACTIVITY_VIEW).length > 0
-			|| this.app.workspace.getLeavesOfType(TRACEKEEPER_REVIEW_QUEUE_VIEW).length > 0;
+			|| this.app.workspace.getLeavesOfType(TRACEKEEPER_REVIEW_QUEUE_VIEW).length > 0
+			|| Boolean(this.settingTab?.isAgentListVisible());
 	}
 
 	private isAutoRefreshRelevantPath(path: string): boolean {
@@ -1075,12 +1097,30 @@ export default class TracekeeperPlugin extends Plugin {
 			if (this.app.workspace.getLeavesOfType(TRACEKEEPER_REVIEW_QUEUE_VIEW).length > 0) {
 				tasks.push(this.refreshReviewQueueViews());
 			}
+			if (this.settingTab?.isAgentListVisible()) {
+				tasks.push(this.settingTab.refreshAgentList());
+			}
 			await Promise.all(tasks);
 		} catch (error) {
 			console.error('tracekeeper failed to auto-refresh views', error);
 		} finally {
 			this.autoRefreshInFlight = false;
 		}
+	}
+
+	private scheduleAgentStateViewRefresh(): void {
+		if (this.agentStateViewRefreshQueued) return;
+		this.agentStateViewRefreshQueued = true;
+		window.setTimeout(() => {
+			this.agentStateViewRefreshQueued = false;
+			const tasks: Array<Promise<void>> = [this.refreshActivityViews()];
+			if (this.settingTab?.isAgentListVisible()) {
+				tasks.push(this.settingTab.refreshAgentList());
+			}
+			void Promise.all(tasks).catch((error) => {
+				console.error('tracekeeper failed to refresh Agent state views', error);
+			});
+		}, 0);
 	}
 
 	private async startMcpRuntime(): Promise<void> {
@@ -2036,6 +2076,7 @@ export default class TracekeeperPlugin extends Plugin {
 				this.settings.agentIntegrations = previous;
 				throw error;
 			}
+			this.scheduleAgentStateViewRefresh();
 			return this.toAgentIntegrationSnapshot(integration);
 		});
 	}
@@ -2061,6 +2102,7 @@ export default class TracekeeperPlugin extends Plugin {
 				this.settings.agentIntegrations = previous;
 				throw error;
 			}
+			this.scheduleAgentStateViewRefresh();
 			return this.toAgentIntegrationSnapshot(next);
 		});
 	}
@@ -2078,6 +2120,7 @@ export default class TracekeeperPlugin extends Plugin {
 				this.settings.agentIntegrations = previous;
 				throw error;
 			}
+			this.scheduleAgentStateViewRefresh();
 			return this.toAgentIntegrationSnapshot(next);
 		});
 	}
@@ -2097,6 +2140,7 @@ export default class TracekeeperPlugin extends Plugin {
 				this.settings.agentIntegrations = previous;
 				throw error;
 			}
+			this.scheduleAgentStateViewRefresh();
 			return issued.plaintextToken;
 		});
 	}
@@ -2121,6 +2165,7 @@ export default class TracekeeperPlugin extends Plugin {
 				}
 			});
 			this.mcpRuntimeLifecycle.getRuntime()?.closeSessionsForIntegration?.(integrationId);
+			this.scheduleAgentStateViewRefresh();
 		});
 	}
 
@@ -2137,6 +2182,7 @@ export default class TracekeeperPlugin extends Plugin {
 				this.settings.agentIntegrations = previous;
 				throw error;
 			}
+			this.scheduleAgentStateViewRefresh();
 		});
 	}
 
@@ -2167,11 +2213,14 @@ export default class TracekeeperPlugin extends Plugin {
 			this.pendingOAuthRequests.clear();
 			const runtime = this.mcpRuntimeLifecycle.getRuntime();
 			for (const entry of next) runtime?.closeSessionsForIntegration?.(entry.integrationId);
+			this.scheduleAgentStateViewRefresh();
 		});
 	}
 
 	getPendingOAuthRequests(): PendingOAuthApproval[] {
-		return [...this.pendingOAuthRequests.values()].map((request) => ({
+		return [...this.pendingOAuthRequests.values()]
+			.filter((request) => !this.pendingOAuthDecisions.has(request.requestId))
+			.map((request) => ({
 			requestId: request.requestId,
 			clientNameClaim: request.clientNameClaim,
 			redirectUri: request.redirectUri,
@@ -2188,13 +2237,15 @@ export default class TracekeeperPlugin extends Plugin {
 			throw new Error('OAuth approval must target an existing Agent integration.');
 		}
 		this.pendingOAuthDecisions.set(requestId, decision);
+		this.scheduleAgentStateViewRefresh();
 	}
 
 	private buildOAuthIntegrationPort(): OAuthIntegrationPort {
 		return {
 			publishPendingRequest: async (request) => {
 				this.pendingOAuthRequests.set(request.requestId, request);
-				new Notice(ui('新的 MCP OAuth 请求待审批，请在 Agent 集成卡片中 Allow 或 Deny。', 'A new MCP OAuth request is waiting. Choose Allow or Deny on the Agent integration card.'));
+				this.scheduleAgentStateViewRefresh();
+				new Notice(ui('新的 MCP 连接请求正在等待授权，请打开对应 Agent 配置进行确认。', 'A new MCP connection request is waiting for authorization. Open the matching Agent configuration to review it.'));
 			},
 			readDecision: async (requestId) => {
 				if (!this.pendingOAuthRequests.has(requestId)) return { decision: 'deny' };
@@ -2202,6 +2253,7 @@ export default class TracekeeperPlugin extends Plugin {
 				if (decision) {
 					this.pendingOAuthDecisions.delete(requestId);
 					this.pendingOAuthRequests.delete(requestId);
+					this.scheduleAgentStateViewRefresh();
 				}
 				return decision ?? null;
 			},
@@ -2231,6 +2283,7 @@ export default class TracekeeperPlugin extends Plugin {
 					this.settings.agentIntegrations = previous;
 					throw error;
 				}
+				this.scheduleAgentStateViewRefresh();
 				return { integrationId: input.integrationId, credentialId: next.credential?.credentialId ?? input.credentialId, accessToken: input.accessToken };
 			}),
 			revokeOAuthCredential: async (input) => {
@@ -2399,19 +2452,11 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.persistOnboardingState();
 	}
 
-	async markOnboardingSkillCopied(): Promise<void> {
-		if (!this.settings.onboarding.skillCopiedAt) {
-			this.settings.onboarding = markSkillCopied(this.settings.onboarding);
+	async markOnboardingSkillAssistantPromptCopied(): Promise<void> {
+		if (!this.settings.onboarding.skillAssistantPromptCopiedAt) {
+			this.settings.onboarding = markSkillAssistantPromptCopied(this.settings.onboarding);
 			await this.persistOnboardingState();
 		}
-	}
-
-	async copyTracekeeperSkillFallback(): Promise<void> {
-		await this.copyToClipboard(
-			TRACEKEEPER_SKILL_BUNDLE.flattened,
-			ui('Tracekeeper 单文件使用指南已复制。', 'Tracekeeper flattened guide copied.')
-		);
-		await this.markOnboardingSkillCopied();
 	}
 
 	async markOnboardingAgentRestart(): Promise<void> {
@@ -2687,14 +2732,13 @@ export default class TracekeeperPlugin extends Plugin {
 				targetDirectory: profile.targetDirectory,
 				state: 'unavailable',
 				legacyTargetDirectories: profile.legacyTargetDirectories ?? [],
-				deliveryMode: profile.deliveryMode,
 				activationMode: profile.activationMode,
 				restartRequired: profile.restartRequired,
 				fileVerified: false,
 				updateAvailable: false,
 				installedVersion: '',
 				expectedVersion: TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version,
-				detail: ui('当前环境仅支持复制 Skill。', 'This environment supports copy-only Skill setup.'),
+				detail: ui('当前环境无法使用目录选择。', 'Directory selection is unavailable in this environment.'),
 			};
 		}
 		try {
@@ -2707,7 +2751,6 @@ export default class TracekeeperPlugin extends Plugin {
 				targetDirectory: profile.targetDirectory,
 				state: 'unavailable',
 				legacyTargetDirectories: profile.legacyTargetDirectories ?? [],
-				deliveryMode: profile.deliveryMode,
 				activationMode: profile.activationMode,
 				restartRequired: profile.restartRequired,
 				fileVerified: false,
@@ -2719,19 +2762,45 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 	}
 
-	prepareSkillInstall(clientId: string, action: Extract<SkillInstallAction, 'install' | 'update' | 'migrate'>): SkillInstallPlan {
-		const adapter = this.requireClientSkillAdapter();
-		const profile = this.getClientSkillProfile(clientId);
-		if (action === 'install') return adapter.previewInstall(profile);
-		if (action === 'update') return adapter.previewUpdate(profile);
-		return adapter.previewMigrate(profile);
+	getSkillDirectoryRecommendation(clientId: string) {
+		return this.getClientSkillProfile(clientId).recommendation;
 	}
 
-	async confirmSkillInstall(
-		planId: string,
-		action: Extract<SkillInstallAction, 'install' | 'update' | 'migrate'>,
-		clientId: string
-	): Promise<SkillInstallResult> {
+	async pickSkillDirectory(_clientId: string): Promise<SkillDirectorySelection | null> {
+		const desktopApi = this.getDesktopNodeApi();
+		if (!desktopApi?.dialog) {
+			throw new Error(ui('当前环境不支持目录选择。', 'Directory selection is unavailable in this environment.'));
+		}
+		const result = await desktopApi.dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
+		if (result.canceled || !result.filePaths[0]) return null;
+		return normalizeSkillDirectorySelection(result.filePaths[0], desktopApi.path.join.bind(desktopApi.path));
+	}
+
+	prepareSkillWrite(clientId: string, selectedDirectory: string): SkillInstallPlan {
+		const adapter = this.requireClientSkillAdapter();
+		const desktopApi = this.getDesktopNodeApi();
+		if (!desktopApi) throw new Error(ui('当前环境无法使用目录选择。', 'Directory selection is unavailable in this environment.'));
+		const selection = normalizeSkillDirectorySelection(selectedDirectory, desktopApi.path.join.bind(desktopApi.path));
+		const profile = this.getClientSkillProfile(clientId, selection.targetDirectory);
+		const detected = adapter.detect(profile);
+		if (detected.state === 'legacy_install') {
+			const plan = adapter.previewMigrate(profile);
+			if (plan.action === 'migrate') this.skillPlanActions.set(plan.planId, 'migrate');
+			return plan;
+		}
+		if (detected.state === 'update_available' || detected.state === 'modified' || detected.state === 'installed' || detected.state === 'newer_than_bundled') {
+			const plan = adapter.previewUpdate(profile);
+			if (plan.action === 'update') this.skillPlanActions.set(plan.planId, 'update');
+			return plan;
+		}
+		const plan = adapter.previewInstall(profile);
+		if (plan.action === 'install') this.skillPlanActions.set(plan.planId, 'install');
+		return plan;
+	}
+
+	async confirmSkillWrite(planId: string, clientId: string): Promise<SkillInstallResult> {
+		const action = this.skillPlanActions.get(planId);
+		if (!action) throw new ClientSkillPlanConflictError('Skill install plan is missing or no longer actionable.');
 		let result: SkillInstallResult;
 		try {
 			const adapter = this.requireClientSkillAdapter();
@@ -2741,6 +2810,7 @@ export default class TracekeeperPlugin extends Plugin {
 					? adapter.confirmUpdate(planId)
 					: adapter.confirmMigrate(planId);
 		} catch (error) {
+			this.skillPlanActions.delete(planId);
 			console.error('tracekeeper failed to install client Skill', error);
 			try {
 				await this.appendToAuditLog(buildSkillInstallAuditEntry({
@@ -2758,20 +2828,28 @@ export default class TracekeeperPlugin extends Plugin {
 				: ui('使用指南保存失败。', 'Failed to save the guide.'));
 			throw error;
 		}
+		this.skillPlanActions.delete(planId);
 
-		const profile = this.getClientSkillProfile(result.clientId);
+		const profile = this.getClientSkillProfile(result.clientId, result.targetDirectory);
 		let receiptPersisted = true;
+		const previousReceipts = this.settings.skillInstallReceipts;
+		const previousOnboarding = this.settings.onboarding;
 		try {
 			this.settings.skillInstallReceipts = recordSkillInstallReceipt(this.settings.skillInstallReceipts, {
+				schemaVersion: 2,
 				targetId: profile.targetId,
+				targetDirectory: result.targetDirectory,
 				bundleHash: result.bundleHash,
 				skillVersion: TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version,
 				installedAt: new Date().toISOString(),
+				provenance: 'tracekeeper_install',
 			});
 			this.settings.onboarding = markSkillFileVerified(this.settings.onboarding, result.bundleHash);
 			this.settings.onboarding = clearOnboardingAgentBehaviorEvidence(this.settings.onboarding);
 			await this.persistOnboardingState();
 		} catch (error) {
+			this.settings.skillInstallReceipts = previousReceipts;
+			this.settings.onboarding = previousOnboarding;
 			receiptPersisted = false;
 			console.error('tracekeeper installed client Skill but failed to persist its local receipt', error);
 		}
@@ -2784,6 +2862,7 @@ export default class TracekeeperPlugin extends Plugin {
 				bundleHash: result.bundleHash,
 				backupCreated: result.backupDirectory !== '',
 				result: receiptPersisted ? 'success' : 'partial',
+				installMethod: 'tracekeeper_install',
 			}));
 		} catch (error) {
 			auditRecorded = false;
@@ -2794,7 +2873,7 @@ export default class TracekeeperPlugin extends Plugin {
 			? ui('使用指南已安装。', 'Guide installed.')
 			: action === 'update'
 				? ui('使用指南已更新。', 'Guide updated.')
-				: ui('使用指南已复制到官方目录，旧目录保持不变。', 'Guide copied to the official directory. The legacy directory was kept unchanged.');
+				: ui('已迁移到新目录，旧目录保持不变。', 'Migrated to the selected directory. The legacy directory was kept unchanged.');
 		if (!receiptPersisted || !auditRecorded) {
 			new Notice(
 				`${actionLabel} ${ui(
@@ -2810,18 +2889,93 @@ export default class TracekeeperPlugin extends Plugin {
 		return result;
 	}
 
-	private getClientSkillProfile(clientId: string): ClientSkillProfile {
+	async prepareAiSkillAssistant(clientId: string): Promise<AiSkillAssistantContext> {
+		const desktopApi = this.getDesktopNodeApi();
+		if (!desktopApi) {
+			throw new Error(ui('当前环境无法导出 Skill 源目录。', 'Cannot export the Skill source in this environment.'));
+		}
+		const exported = exportEmbeddedTracekeeperSkillSource({
+			fs: desktopApi.fs,
+			path: desktopApi.path,
+			vaultRoot: this.getVaultRoot(),
+			configDir: this.app.vault.configDir,
+			pluginId: this.manifest.id,
+			bundle: TRACEKEEPER_SKILL_BUNDLE,
+		});
+		const profile = this.getClientSkillProfile(clientId);
+		return buildAiSkillAssistantPrompt({
+			clientId,
+			displayName: profile.displayName,
+			sourceDirectory: exported.sourceDirectory,
+			skillVersion: exported.skillVersion,
+			bundleHash: exported.bundleHash,
+			recommendation: profile.recommendation,
+		});
+	}
+
+	async verifyExternalSkill(clientId: string, selectedDirectory: string): Promise<SkillInstallResult> {
+		const adapter = this.requireClientSkillAdapter();
+		const desktopApi = this.getDesktopNodeApi();
+		if (!desktopApi) {
+			throw new Error(ui('当前环境无法验证 Skill 目录。', 'Cannot verify a Skill directory in this environment.'));
+		}
+		const selection = normalizeSkillDirectorySelection(selectedDirectory, desktopApi.path.join.bind(desktopApi.path));
+		const profile = this.getClientSkillProfile(clientId, selection.targetDirectory);
+		const detected = adapter.detect(profile);
+		if (detected.state !== 'installed') {
+			throw new Error(detected.detail || ui('目录中的 Skill 与当前版本不匹配。', 'The Skill in this directory does not match the bundled version.'));
+		}
+		const now = new Date().toISOString();
+		const previousReceipts = this.settings.skillInstallReceipts;
+		const previousOnboarding = this.settings.onboarding;
+		try {
+			this.settings.skillInstallReceipts = recordSkillInstallReceipt(this.settings.skillInstallReceipts, {
+				schemaVersion: 2,
+				targetId: profile.targetId,
+				targetDirectory: selection.targetDirectory,
+				bundleHash: TRACEKEEPER_SKILL_BUNDLE.manifest.bundle_hash,
+				skillVersion: TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version,
+				installedAt: now,
+				provenance: 'external_verified',
+			});
+			this.settings.onboarding = markSkillFileVerified(this.settings.onboarding, TRACEKEEPER_SKILL_BUNDLE.manifest.bundle_hash);
+			await this.persistOnboardingState();
+		} catch (error) {
+			this.settings.skillInstallReceipts = previousReceipts;
+			this.settings.onboarding = previousOnboarding;
+			throw error;
+		}
+		await this.appendToAuditLog(buildSkillInstallAuditEntry({
+			action: 'verify_external',
+			clientId,
+			bundleHash: TRACEKEEPER_SKILL_BUNDLE.manifest.bundle_hash,
+			backupCreated: false,
+			result: 'success',
+			installMethod: 'external_verified',
+		}));
+		return {
+			action: 'install',
+			clientId,
+			targetDirectory: selection.targetDirectory,
+			backupDirectory: '',
+			bundleHash: TRACEKEEPER_SKILL_BUNDLE.manifest.bundle_hash,
+		};
+	}
+
+	private getClientSkillProfile(clientId: string, targetDirectory?: string): ClientSkillProfile {
 		const desktopApi = this.getDesktopNodeApi();
 		const client = this.getClientProfiles().find((profile) => profile.id === clientId);
 		const profile = buildClientSkillProfile(
 			clientId,
 			client?.displayName || clientId,
 			desktopApi?.os.homedir(),
-			desktopApi?.path.join.bind(desktopApi.path) || ((...parts) => parts.join('/'))
+			desktopApi?.path.join.bind(desktopApi.path) || ((...parts) => parts.join('/')),
+			targetDirectory
 		);
 		const receipt = this.settings.skillInstallReceipts[profile.targetId];
 		return {
 			...profile,
+			targetDirectory: targetDirectory || receipt?.targetDirectory,
 			ownedBundleHash: receipt?.bundleHash,
 			ownedSkillVersion: receipt?.skillVersion,
 		};
@@ -2829,7 +2983,7 @@ export default class TracekeeperPlugin extends Plugin {
 
 	private requireClientSkillAdapter(): ClientSkillAdapter {
 		if (!this.clientSkillAdapter) {
-			throw new Error('Managed Skill installation is unavailable in this environment.');
+			throw new Error('Skill directory installation is unavailable in this environment.');
 		}
 		return this.clientSkillAdapter;
 	}
@@ -2859,12 +3013,18 @@ export default class TracekeeperPlugin extends Plugin {
 			return null;
 		}
 		const shell = this.isRecord(electron) && this.isDesktopShell(electron.shell) ? electron.shell : undefined;
+		const dialog = this.isRecord(electron) && this.isDesktopDialog(electron.dialog) ? electron.dialog : undefined;
 		return {
 			fs,
 			path: pathModule,
 			os,
 			shell,
+			dialog,
 		};
+	}
+
+	private isDesktopDialog(value: unknown): value is NonNullable<DesktopNodeApi['dialog']> {
+		return this.isRecord(value) && typeof value.showOpenDialog === 'function';
 	}
 
 
@@ -3003,7 +3163,7 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 	}
 
-	openSettingsTab(): void {
+	openSettingsTab(focus?: 'agent-configuration'): void {
 		const appWithSettings = this.app as App & {
 			setting?: {
 				open(): void;
@@ -3016,6 +3176,9 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 		appWithSettings.setting.open();
 		appWithSettings.setting.openTabById(this.manifest.id);
+		if (focus === 'agent-configuration') {
+			this.settingTab?.focusAgentConfiguration();
+		}
 	}
 
 	async saveSettings() {

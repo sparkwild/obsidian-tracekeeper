@@ -7,22 +7,24 @@ import {
 import {
 	buildClientSkillProfileFromRegistry,
 	type SkillActivationMode,
-	type SkillDeliveryMode,
+	type ClientSkillDirectoryRecommendation,
 } from './client-skill-target-registry';
 
-export type SkillInstallDetectionState = 'not_installed' | 'installed' | 'update_available' | 'newer_than_bundled' | 'modified' | 'legacy_install' | 'location_conflict' | 'copy_only' | 'unavailable';
-export type SkillInstallAction = 'install' | 'update' | 'migrate' | 'conflict' | 'copy_only' | 'none';
+export type SkillInstallDetectionState = 'location_required' | 'not_installed' | 'installed' | 'update_available' | 'newer_than_bundled' | 'modified' | 'legacy_install' | 'location_conflict' | 'unavailable';
+export type SkillInstallAction = 'install' | 'update' | 'migrate' | 'conflict' | 'none';
 export type SkillFileChange = 'create' | 'replace' | 'unchanged';
+
+export const hasDetectedSkillEvidence = (state: SkillInstallDetectionState): boolean =>
+	state !== 'location_required' && state !== 'not_installed' && state !== 'unavailable';
 
 export interface ClientSkillProfile {
 	id: string;
 	targetId: string;
 	displayName: string;
-	supportsManagedInstall: boolean;
+	recommendation: ClientSkillDirectoryRecommendation | null;
 	targetDirectory?: string;
 	restartRequired: boolean;
 	profileLabel: string;
-	deliveryMode: SkillDeliveryMode;
 	activationMode: SkillActivationMode;
 	legacyTargetDirectories?: readonly string[];
 	ownedBundleHash?: string;
@@ -34,7 +36,6 @@ export interface SkillInstallState {
 	targetId: string;
 	targetDirectory?: string;
 	legacyTargetDirectories: readonly string[];
-	deliveryMode: SkillDeliveryMode;
 	activationMode: SkillActivationMode;
 	restartRequired: boolean;
 	state: SkillInstallDetectionState;
@@ -126,17 +127,29 @@ export class ClientSkillAdapter {
 	}
 
 	detect(profile: ClientSkillProfile): SkillInstallState {
-		if (!profile.supportsManagedInstall || !profile.targetDirectory) {
-			return this.state(profile, 'copy_only', false, false, '', 'This client uses copy-only Skill guidance.');
-		}
-		this.assertNoSymbolicLinkSegments(profile.targetDirectory);
-
-		const primaryHasManagedFiles = this.hasManagedFiles(profile.targetDirectory);
 		const legacyTargetDirectories = profile.legacyTargetDirectories ?? [];
 		for (const legacyDirectory of legacyTargetDirectories) {
 			this.assertNoSymbolicLinkSegments(legacyDirectory);
 		}
-		const legacyWithManagedFiles = legacyTargetDirectories.filter((legacyDirectory) => this.hasManagedFiles(legacyDirectory));
+		const legacyWithManagedFiles = legacyTargetDirectories.filter((legacyDirectory) =>
+			legacyDirectory !== profile.targetDirectory && this.hasManagedFiles(legacyDirectory)
+		);
+		if (!profile.targetDirectory) {
+			if (legacyWithManagedFiles.length > 0) {
+				return this.state(
+					profile,
+					'legacy_install',
+					false,
+					false,
+					'',
+					`Found a legacy Tracekeeper Skill path at ${legacyWithManagedFiles[0]}. Select a destination to migrate it without deleting the legacy directory.`
+				);
+			}
+			return this.state(profile, 'location_required', false, false, '', 'Select a Skills directory before installing the Tracekeeper Skill.');
+		}
+		this.assertNoSymbolicLinkSegments(profile.targetDirectory);
+
+		const primaryHasManagedFiles = this.hasManagedFiles(profile.targetDirectory);
 
 		if (primaryHasManagedFiles && legacyWithManagedFiles.length > 0) {
 			return this.state(
@@ -194,11 +207,11 @@ export class ClientSkillAdapter {
 	private preview(profile: ClientSkillProfile, requestedAction: 'install' | 'update' | 'migrate'): SkillInstallPlan {
 		this.pruneExpiredPlans();
 		const detected = this.detect(profile);
-		if (!profile.supportsManagedInstall || !profile.targetDirectory) {
-			return this.publicPlan(profile, 'copy_only', [], false, 'Use the flattened compatibility Skill file.');
+		if (!profile.targetDirectory) {
+			return this.publicPlan(profile, 'conflict', [], false, detected.detail);
 		}
 		if (detected.state === 'location_conflict') {
-			return this.publicPlan(profile, 'conflict', this.planFiles(profile.targetDirectory), false, 'Primary and legacy managed Skill paths both exist; resolve manually.');
+			return this.publicPlan(profile, 'conflict', this.planFiles(profile.targetDirectory), false, 'Primary and legacy Skill paths both exist; resolve manually.');
 		}
 		if (detected.state === 'legacy_install') {
 			if (requestedAction !== 'migrate') {
@@ -215,13 +228,13 @@ export class ClientSkillAdapter {
 				files,
 				canConfirm: true,
 				expiresAt: new Date(createdAt.getTime() + this.planTtlMs).toISOString(),
-				detail: 'Copy the embedded Skill bundle from the legacy location into the managed profile location.',
+				detail: 'Copy the embedded Skill bundle from the legacy location into the selected destination.',
 				originalHashes: new Map(files.map((file) => [file.path, file.originalHash])),
 			};
 			this.plans.set(planId, plan);
 			return stripPrivatePlan(plan);
 		}
-		if (detected.state === 'modified' || detected.state === 'unavailable' || detected.state === 'copy_only') {
+		if (detected.state === 'modified' || detected.state === 'unavailable') {
 			return this.publicPlan(profile, 'conflict', this.planFiles(profile.targetDirectory), false, detected.detail);
 		}
 		if (detected.state === 'not_installed') {
@@ -260,7 +273,7 @@ export class ClientSkillAdapter {
 				files,
 				canConfirm: true,
 				expiresAt: new Date(createdAt.getTime() + this.planTtlMs).toISOString(),
-				detail: 'Update the verified official Skill bundle.',
+				detail: 'Update the verified embedded Skill bundle.',
 				originalHashes: new Map(files.map((file) => [file.path, file.originalHash])),
 			};
 			this.plans.set(planId, plan);
@@ -509,7 +522,7 @@ export class ClientSkillAdapter {
 			legacyAnalysis.fileVerified,
 			false,
 			legacyAnalysis.installedVersion,
-			`Found a legacy Tracekeeper Skill path at ${legacyDirectory}. A non-destructive migrate can copy the official bundle to ${profile.targetDirectory}.`
+			`Found a legacy Tracekeeper Skill path at ${legacyDirectory}. A non-destructive migrate can copy the embedded bundle to ${profile.targetDirectory}.`
 		);
 	}
 
@@ -603,7 +616,6 @@ export class ClientSkillAdapter {
 			targetId: profile.targetId,
 			targetDirectory: profile.targetDirectory,
 			legacyTargetDirectories: profile.legacyTargetDirectories ?? [],
-			deliveryMode: profile.deliveryMode,
 			activationMode: profile.activationMode,
 			restartRequired: profile.restartRequired,
 			state,
@@ -646,7 +658,8 @@ export function buildClientSkillProfile(
 	clientId: string,
 	displayName: string,
 	homeDirectory: string | undefined,
-	joinPath: (...parts: string[]) => string
+	joinPath: (...parts: string[]) => string,
+	targetDirectory?: string
 ): ClientSkillProfile {
 	const trimmedId = clientId.trim();
 	const resolved = buildClientSkillProfileFromRegistry(trimmedId, displayName || trimmedId, homeDirectory, joinPath);
@@ -654,11 +667,10 @@ export function buildClientSkillProfile(
 		id: trimmedId,
 		targetId: resolved.targetId,
 		displayName: resolved.displayName,
-		supportsManagedInstall: resolved.deliveryMode === 'managed' && Boolean(resolved.targetDirectory),
-		targetDirectory: resolved.targetDirectory,
+		recommendation: resolved.recommendation,
+		targetDirectory,
 		restartRequired: resolved.restartRequired,
 		profileLabel: resolved.profileLabel,
-		deliveryMode: resolved.deliveryMode,
 		activationMode: resolved.activationMode,
 		legacyTargetDirectories: resolved.legacyTargetDirectories,
 	};
