@@ -51,7 +51,7 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 		case 'location_required':
 		case 'not_installed':
 			return {
-				label: localize('使用指南未安装', 'Guide not installed'),
+				label: localize('强化技能未安装', 'Skill not installed'),
 				detail: localize(
 					'请选择 Skills 根目录，Tracekeeper 会预览并在确认后写入 tracekeeper 子目录；也可以让 Agent 按提示词协助安装。',
 					'Select a Skills root directory. Tracekeeper previews the tracekeeper subdirectory before writing, or let the Agent assist from the supplied prompt.'
@@ -64,7 +64,7 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			};
 		case 'update_available':
 			return {
-				label: localize('使用指南可更新', 'Guide update available'),
+				label: localize('强化技能可更新', 'Skill update available'),
 				detail: localize('请选择目录确认更新；已有目录会先预览并备份，不会覆盖用户修改。', 'Choose a directory to preview an update. Existing files are backed up and local changes are never overwritten.'),
 				...versions,
 				tone: 'warning',
@@ -74,7 +74,7 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			};
 		case 'legacy_install':
 			return {
-				label: localize('使用指南位置待迁移', 'Guide location needs migration'),
+				label: localize('强化技能位置待迁移', 'Skill location needs migration'),
 				detail: localize('选择新 Skills 根目录可迁移并保留旧目录；也可以让 Agent 按提示词安装到确认的位置。', 'Choose a new Skills root to migrate while keeping the legacy directory, or let the Agent install from the supplied prompt.'),
 				...versions,
 				tone: 'warning',
@@ -84,7 +84,7 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			};
 		case 'installed':
 			return {
-				label: localize('使用指南已安装', 'Guide installed'),
+				label: localize('强化技能已安装', 'Skill installed'),
 				detail: localize(`文件已验证${state.targetDirectory ? `：${state.targetDirectory}` : ''}。如需更改位置，请重新选择目录；Agent 是否实际采用仍需后续使用观察。`, `Files are verified${state.targetDirectory ? ` at ${state.targetDirectory}` : ''}. Choose another directory to move the selected copy; actual Agent adoption still requires later use.`),
 				...versions,
 				tone: 'success',
@@ -94,7 +94,7 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			};
 		case 'modified':
 			return {
-				label: localize('使用指南已被修改', 'Guide has local changes'),
+				label: localize('强化技能已被修改', 'Skill has local changes'),
 				detail: localize('保留用户修改，Tracekeeper 不会自动覆盖。可让 Agent 协助检查，或选择新的空目录。', 'Local changes are preserved. Tracekeeper will not overwrite them; use AI assistance to inspect or choose a new empty directory.'),
 				...versions,
 				tone: 'warning',
@@ -104,7 +104,7 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			};
 		case 'newer_than_bundled':
 			return {
-				label: localize('使用指南版本较新', 'Guide is newer than bundled'),
+				label: localize('强化技能版本较新', 'Skill is newer than bundled'),
 				detail: localize('当前目录高于插件内置版本，Tracekeeper 不会降级；可让 Agent 协助检查。', 'The selected directory is newer than the bundled version and will not be downgraded; use AI assistance to inspect it.'),
 				...versions,
 				tone: 'muted',
@@ -114,7 +114,7 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			};
 		case 'location_conflict':
 			return {
-				label: localize('使用指南目录冲突', 'Guide directory conflict'),
+				label: localize('强化技能目录冲突', 'Skill directory conflict'),
 				detail: localize('检测到多个位置，Tracekeeper 不会自动覆盖；请选择新的空目录或让 Agent 协助检查。', 'Multiple locations were detected. Tracekeeper will not overwrite them; choose a new empty directory or use AI assistance to inspect.'),
 				...versions,
 				tone: 'warning',
@@ -124,7 +124,7 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 			};
 		case 'unavailable':
 			return {
-				label: localize('无法读取使用指南目录', 'Skill directory unavailable'),
+				label: localize('无法读取强化技能目录', 'Skill directory unavailable'),
 				detail: state.detail,
 				...versions,
 				tone: 'warning',

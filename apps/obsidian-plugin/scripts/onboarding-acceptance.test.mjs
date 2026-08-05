@@ -148,6 +148,9 @@ try {
 	);
 	assert.ok(settingsSource.includes('renderClientSkillPrompt'));
 	assert.ok(clientSkillPromptSource.includes('tracekeeper-settings-client-skill'));
+	assert.equal(skillPromptSource.includes('使用指南'), false);
+	assert.equal(clientSkillPromptSource.includes('使用指南'), false);
+	assert.equal(mainSource.includes('使用指南'), false);
 	assert.equal(clientSkillPromptSource.includes("ui('技术信息', 'Technical information')"), false);
 	assert.equal(clientSkillPromptSource.includes('tracekeeper-settings-client-skill__technical'), false);
 	assert.ok(settingsSource.includes('McpCapabilitiesModal'));

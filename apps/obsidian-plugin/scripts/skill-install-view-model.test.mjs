@@ -38,7 +38,7 @@ try {
 	const localize = (zh) => zh;
 
 	assert.deepEqual(buildSkillInstallPrompt(state(), localize), {
-		label: '使用指南已安装',
+		label: '强化技能已安装',
 		detail: '文件已验证：/tmp/codex/tracekeeper。如需更改位置，请重新选择目录；Agent 是否实际采用仍需后续使用观察。',
 		currentVersion: 'v2.1.0',
 		bundledVersion: 'v2.1.0',
@@ -49,7 +49,7 @@ try {
 	});
 	const notInstalled = buildSkillInstallPrompt(state({ state: 'not_installed', installedVersion: '', fileVerified: false }), localize);
 	assert.equal(notInstalled.action, 'install');
-	assert.equal(notInstalled.label, '使用指南未安装');
+	assert.equal(notInstalled.label, '强化技能未安装');
 	assert.equal(notInstalled.actionLabel, '选择目录安装');
 	assert.equal(notInstalled.assistantLabel, 'AI 辅助安装');
 	assert.equal(notInstalled.currentVersion, '未安装');
@@ -57,14 +57,14 @@ try {
 	assert.equal(notInstalled.detail, '请选择 Skills 根目录，Tracekeeper 会预览并在确认后写入 tracekeeper 子目录；也可以让 Agent 按提示词协助安装。');
 	const update = buildSkillInstallPrompt(state({ state: 'update_available', installedVersion: '2.0.0', expectedVersion: '2.2.0', updateAvailable: true, fileVerified: false }), localize);
 	assert.equal(update.action, 'update');
-	assert.equal(update.label, '使用指南可更新');
+	assert.equal(update.label, '强化技能可更新');
 	assert.equal(update.actionLabel, '选择目录更新');
 	assert.equal(update.currentVersion, 'v2.0.0');
 	assert.equal(update.bundledVersion, 'v2.2.0');
 	assert.equal(update.detail, '请选择目录确认更新；已有目录会先预览并备份，不会覆盖用户修改。');
 	const legacy = buildSkillInstallPrompt(state({ state: 'legacy_install', installedVersion: '2.0.0', fileVerified: false }), localize);
 	assert.equal(legacy.action, 'migrate');
-	assert.equal(legacy.label, '使用指南位置待迁移');
+	assert.equal(legacy.label, '强化技能位置待迁移');
 	assert.equal(legacy.actionLabel, '选择目录迁移');
 	assert.equal(legacy.currentVersion, 'v2.0.0（旧位置）');
 	const locationRequired = buildSkillInstallPrompt(state({ state: 'location_required', installedVersion: '', fileVerified: false, targetDirectory: undefined }), localize);

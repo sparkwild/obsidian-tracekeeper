@@ -36,7 +36,7 @@ export function renderClientSkillPrompt({
 	const body = skill.createDiv({ cls: 'tracekeeper-settings-client-skill__body' });
 	if (presentation === 'optional') {
 		body.createEl('div', {
-			text: ui('使用指南帮助 Agent 在合适任务中查找相关记忆并正确收尾，不会增加访问权限。', 'The guide helps the Agent find relevant memories and close tasks correctly without adding access permissions.'),
+			text: ui('强化技能帮助 Agent 在合适任务中查找相关记忆并正确收尾，不会增加访问权限。', 'The Skill helps the Agent find relevant memories and close tasks correctly without adding access permissions.'),
 			cls: 'tracekeeper-settings-client-skill__benefit',
 		});
 	}

@@ -2824,8 +2824,8 @@ export default class TracekeeperPlugin extends Plugin {
 				console.error('tracekeeper failed to audit client Skill failure', auditError);
 			}
 			new Notice(error instanceof ClientSkillPlanConflictError
-				? ui('使用指南在预览后已变化，或包含用户修改。请重新检测和预览。', 'The guide changed after preview or contains local modifications. Detect and preview again.')
-				: ui('使用指南保存失败。', 'Failed to save the guide.'));
+				? ui('强化技能在预览后已变化，或包含用户修改。请重新检测和预览。', 'The Skill changed after preview or contains local modifications. Detect and preview again.')
+				: ui('强化技能保存失败。', 'Failed to save the Skill.'));
 			throw error;
 		}
 		this.skillPlanActions.delete(planId);
@@ -2870,15 +2870,15 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 
 		const actionLabel = action === 'install'
-			? ui('使用指南已安装。', 'Guide installed.')
+			? ui('强化技能已安装。', 'Skill installed.')
 			: action === 'update'
-				? ui('使用指南已更新。', 'Guide updated.')
+				? ui('强化技能已更新。', 'Skill updated.')
 				: ui('已迁移到新目录，旧目录保持不变。', 'Migrated to the selected directory. The legacy directory was kept unchanged.');
 		if (!receiptPersisted || !auditRecorded) {
 			new Notice(
 				`${actionLabel} ${ui(
-					'本地收据或审计记录未完整保存；使用指南文件已经写入，请重新检测状态，不要重复安装。',
-					'The local receipt or audit record was not fully saved. Guide files were written; detect the current state instead of installing again.'
+					'本地收据或审计记录未完整保存；强化技能文件已经写入，请重新检测状态，不要重复安装。',
+					'The local receipt or audit record was not fully saved. Skill files were written; detect the current state instead of installing again.'
 				)}`
 			);
 		} else {
