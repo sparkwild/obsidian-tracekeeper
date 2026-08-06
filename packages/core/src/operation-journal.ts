@@ -38,8 +38,8 @@ interface OperationProgressAnchor {
 
 export type OperationPhase = 'before_step' | 'after_step' | 'before_finalize' | 'after_finalize';
 
-export type OperationStatus = 'in_progress' | 'audit_pending' | 'completed' | 'conflicted' | 'failed';
-export type OperationFailureStatus = Extract<OperationStatus, 'audit_pending' | 'conflicted' | 'failed'>;
+export type OperationStatus = 'in_progress' | 'activity_pending' | 'completed' | 'conflicted' | 'failed';
+export type OperationFailureStatus = Extract<OperationStatus, 'activity_pending' | 'conflicted' | 'failed'>;
 
 export interface StepExecutionRecord {
 	name: string;
@@ -207,7 +207,8 @@ export class NodeFileOperationJournal implements OperationJournal {
 		if (typeof record.payload_hash !== 'string' || !record.payload_hash) {
 			throw new CorruptedOperationJournalError(filePath, 'payload_hash missing');
 		}
-		if (!isValidOperationStatus(record.status)) {
+		const normalizedStatus = normalizePersistedOperationStatus(record.status);
+		if (!isValidOperationStatus(normalizedStatus)) {
 			throw new CorruptedOperationJournalError(filePath, `invalid status: ${record.status}`);
 		}
 		if (typeof record.created_at !== 'string' || !record.created_at) {
@@ -244,7 +245,7 @@ export class NodeFileOperationJournal implements OperationJournal {
 			idempotency_key: record.idempotency_key,
 			payload_hash: record.payload_hash,
 			payload,
-			status: record.status,
+			status: normalizedStatus,
 			created_at: record.created_at,
 			updated_at: record.updated_at,
 			completed_steps: record.completed_steps.map(cloneStepExecutionRecord),
@@ -872,10 +873,10 @@ export class RecoverableOperationRunner<TPayload, TResult> {
 		return configured;
 	}
 
-	private markAuditPending(record: OperationRecord<TResult>): OperationRecord<TResult> {
+	private markActivityPending(record: OperationRecord<TResult>): OperationRecord<TResult> {
 		return {
 			...record,
-			status: 'audit_pending',
+			status: 'activity_pending',
 			error: undefined,
 			failed_at: undefined,
 			updated_at: this.now(),
@@ -1026,9 +1027,9 @@ export class RecoverableOperationRunner<TPayload, TResult> {
 				}
 
 				try {
-					if (step.failureStatus === 'audit_pending') {
-						failureStatus = 'audit_pending';
-						record = this.markAuditPending(record);
+					if (step.failureStatus === 'activity_pending') {
+						failureStatus = 'activity_pending';
+						record = this.markActivityPending(record);
 						await this.config.journal.save(record);
 					}
 					await this.withFailureContext(
@@ -1191,14 +1192,23 @@ function isOperationProgressAnchor(value: unknown): value is OperationProgressAn
 
 function isValidOperationStatus(value: unknown): value is OperationStatus {
 	return value === 'in_progress'
-		|| value === 'audit_pending'
+		|| value === 'activity_pending'
 		|| value === 'completed'
 		|| value === 'conflicted'
 		|| value === 'failed';
 }
 
+/**
+ * One-time on-read migration for records written before Agent activity was
+ * separated from user-facing operation receipts. The legacy spelling is not
+ * accepted for new writes and is normalized before all invariants run.
+ */
+function normalizePersistedOperationStatus(value: unknown): unknown {
+	return value === 'audit_pending' ? 'activity_pending' : value;
+}
+
 function isValidOperationFailureStatus(value: unknown): value is OperationFailureStatus {
-	return value === 'audit_pending' || value === 'conflicted' || value === 'failed';
+	return value === 'activity_pending' || value === 'conflicted' || value === 'failed';
 }
 
 function isStepExecutionRecord(value: unknown): value is StepExecutionRecord {
@@ -1268,10 +1278,10 @@ function validateParsedOperationRecordInvariants(
 			`${record.status} operation record requires error and failed_at`
 		);
 	}
-	if (record.status === 'audit_pending' && hasError !== hasFailedAt) {
+	if (record.status === 'activity_pending' && hasError !== hasFailedAt) {
 		throw new CorruptedOperationJournalError(
 			filePath,
-			'audit_pending failure metadata must be complete when present'
+			'activity_pending failure metadata must be complete when present'
 		);
 	}
 

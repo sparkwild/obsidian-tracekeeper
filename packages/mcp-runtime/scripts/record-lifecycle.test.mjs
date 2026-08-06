@@ -148,10 +148,10 @@ const auditSection = ({
 	source = 'fixture',
 }) => [
 	`## ${timestamp} ${source}`,
-	'- type: tool-call',
-	'- event: tool-call',
+	'- type: mcp.tool_call',
+	'- event: mcp.tool_call',
 	`- timestamp: ${timestamp}`,
-	`- audit_event_id: ${id}`,
+	`- activity_event_id: ${id}`,
 	`- action: ${action}`,
 	'- tool_name: tracekeeper.status',
 	'- result_status: success',
@@ -161,12 +161,13 @@ const auditSection = ({
 
 const auditShard = (day, sections) => [
 	'---',
-	'type: tracekeeper_audit_shard',
-	'audit_schema_version: 3',
-	`audit_date: ${day}`,
-	'audit_hub: 00_tracekeeper/control/audit/index.md',
+	'type: tracekeeper_agent_activity_shard',
+	'agent_activity_schema_version: 1',
+	`activity_date: ${day}`,
+	`activity_date_utc: ${day}`,
+	'agent_activity_hub: 00_tracekeeper/control/agent_activity/index.md',
 	'---',
-	`# Audit ${day}`,
+	`# Agent activity ${day}`,
 	'',
 	'[Audit hub](../index.md)',
 	'',
@@ -394,7 +395,7 @@ test('approved writeback refuses an id duplicated across active and archive hist
 	}
 });
 
-test('concurrent distinct and repeated audit events use one idempotent UTC shard', async () => {
+test('concurrent MCP Agent activity uses one idempotent UTC shard', async () => {
 	const fixture = createFixture();
 	try {
 		await withMutableClock('2026-07-30T23:59:59.000Z', async (setNow) => {
@@ -407,21 +408,21 @@ test('concurrent distinct and repeated audit events use one idempotent UTC shard
 					requestId: `record-lifecycle-request-${index}`,
 				}
 			)));
-			const dayOnePath = '00_tracekeeper/control/audit/2026/2026-07-30.md';
+			const dayOnePath = '00_tracekeeper/control/agent_activity/2026/2026-07-30.md';
 			const dayOne = fixture.read(dayOnePath);
-			const dayOneIds = [...dayOne.matchAll(/^- audit_event_id:\s*(.+)$/gm)]
+			const dayOneIds = [...dayOne.matchAll(/^- activity_event_id:\s*(.+)$/gm)]
 				.map((match) => match[1]);
 			assert.equal(new Set(dayOneIds).size, dayOneIds.length);
 			assert.equal(dayOneIds.length, 8);
 			assert.match(dayOne, /^---\n/);
-			assert.match(dayOne, /type:\s*tracekeeper_audit_shard/);
-			assert.match(dayOne, /audit_date:\s*2026-07-30/);
-			assert.match(dayOne, /audit_date_utc:\s*2026-07-30/);
-			assert.match(dayOne, /\[[^\]]*Audit[^\]]*\]\([^)]*audit[^)]*\)/i);
-			const auditHubPath = '00_tracekeeper/control/audit/index.md';
+			assert.match(dayOne, /type:\s*tracekeeper_agent_activity_shard/);
+			assert.match(dayOne, /activity_date:\s*2026-07-30/);
+			assert.match(dayOne, /activity_date_utc:\s*2026-07-30/);
+			assert.match(dayOne, /Agent activity hub/);
+			const auditHubPath = '00_tracekeeper/control/agent_activity/index.md';
 			const auditHub = fixture.read(auditHubPath);
-			assert.match(auditHub, /type:\s*tracekeeper_audit_hub/);
-			assert.match(auditHub, /^# Audit$/m);
+			assert.match(auditHub, /type:\s*tracekeeper_agent_activity_hub/);
+			assert.match(auditHub, /^# Agent activity$/m);
 
 			setNow('2026-07-31T00:00:00.000Z');
 			await invoke('tracekeeper.status', {}, {
@@ -429,9 +430,9 @@ test('concurrent distinct and repeated audit events use one idempotent UTC shard
 				sessionId: 'record-lifecycle-audit-next-day',
 				requestId: 'record-lifecycle-request-next-day',
 			});
-			const dayTwoPath = '00_tracekeeper/control/audit/2026/2026-07-31.md';
+			const dayTwoPath = '00_tracekeeper/control/agent_activity/2026/2026-07-31.md';
 			const dayTwo = fixture.read(dayTwoPath);
-			assert.match(dayTwo, /audit_date:\s*2026-07-31/);
+			assert.match(dayTwo, /activity_date:\s*2026-07-31/);
 			assert.equal(dayTwo.includes(dayOneIds[0]), false);
 
 			const task = await startTask(fixture, 'audit-retry');
@@ -451,8 +452,8 @@ test('concurrent distinct and repeated audit events use one idempotent UTC shard
 			});
 			const afterRetry = fixture.read(dayTwoPath);
 			assert.equal(
-				[...afterRetry.matchAll(/action: memory\.proposal\./g)].length,
-				1
+				[...afterRetry.matchAll(/action: tracekeeper\.propose_memory/g)].length,
+				2
 			);
 
 			const secretMarker = 'record-lifecycle-secret-marker';
@@ -547,10 +548,10 @@ test('reused JSON-RPC ids remain observations while every tools/call keeps a uni
 			}
 
 			const audit = fixture.read(
-				'00_tracekeeper/control/audit/2026/2026-07-30.md'
+				'00_tracekeeper/control/agent_activity/2026/2026-07-30.md'
 			);
 			const expectedCallCount = calls.length + rejectedCalls.length;
-			const eventIds = [...audit.matchAll(/^- audit_event_id:\s*(.+)$/gm)]
+			const eventIds = [...audit.matchAll(/^- activity_event_id:\s*(.+)$/gm)]
 				.map((match) => match[1]);
 			const invocationIds = [...audit.matchAll(/^- invocation_id:\s*(.+)$/gm)]
 				.map((match) => match[1]);
@@ -573,11 +574,11 @@ test('reused JSON-RPC ids remain observations while every tools/call keeps a uni
 	}
 });
 
-test('audit readers merge legacy and shards once with current source paths', async () => {
+test('Agent activity reader ignores legacy audit history and reads canonical shards', async () => {
 	const fixture = createFixture();
 	try {
 		const legacyPath = '00_tracekeeper/control/audit_log.md';
-		const shardPath = '00_tracekeeper/control/audit/2026/2026-07-30.md';
+		const shardPath = '00_tracekeeper/control/agent_activity/2026/2026-07-30.md';
 		fixture.write(legacyPath, [
 			'# Audit Log',
 			'',
@@ -607,15 +608,15 @@ test('audit readers merge legacy and shards once with current source paths', asy
 				action: 'shard-only',
 				source: 'shard-only',
 			}),
-		]).replace('type: tracekeeper_audit_shard', 'type: tracekeeper-audit-shard'));
+		]));
 
-		const recent = await invoke('tracekeeper.audit_recent', {
+		const recent = await invoke('tracekeeper.agent_activity_recent', {
 			max_items: 20,
 		}, fixture.context);
-		assert.equal(recent.total_sections, 3);
+		assert.equal(recent.total_sections, 2);
 		const serialized = JSON.stringify(recent.sections);
 		assert.equal((serialized.match(/audit-shared/g) || []).length, 1);
-		assert.match(serialized, /audit-legacy-only/);
+		assert.doesNotMatch(serialized, /audit-legacy-only/);
 		assert.match(serialized, /audit-shard-only/);
 		assert.match(serialized, new RegExp(shardPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 		assert.equal(recent.sections[0].source_path, shardPath);
@@ -638,13 +639,13 @@ test('audit readers merge legacy and shards once with current source paths', asy
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'resources/read',
-			params: { uri: 'tracekeeper://audit/recent' },
+			params: { uri: 'tracekeeper://agent-activity' },
 		}, state);
 		const resourceText = resource.result.contents[0].text;
 		assert.equal((resourceText.match(/audit-shared/g) || []).length, 1);
-		assert.match(resourceText, /audit-legacy-only/);
+		assert.doesNotMatch(resourceText, /audit-legacy-only/);
 		assert.match(resourceText, /audit-shard-only/);
-		assert.match(resourceText, /source_path:\s*00_tracekeeper\/control\/audit\/2026\/2026-07-30\.md/);
+		assert.match(resourceText, /source_path:\s*00_tracekeeper\/control\/agent_activity\/2026\/2026-07-30\.md/);
 	} finally {
 		fixture.cleanup();
 	}

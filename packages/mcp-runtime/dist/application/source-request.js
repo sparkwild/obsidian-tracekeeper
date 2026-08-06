@@ -281,7 +281,7 @@ class SourceRequestApplicationService {
                     linkTarget: proposalNote.path,
                 }));
             }
-            let auditPathForReturn = sourceNote.audit_path;
+            let auditPathForReturn = sourceNote.activity_path;
             if (input.updateRequestStatus) {
                 failureStatusAllowed = false;
                 await dependencies.updateRequestStatus(request.path, 'completed');
@@ -310,14 +310,14 @@ class SourceRequestApplicationService {
                 status: 'completed',
                 request_path: request.path,
                 mode,
-                source_note: { path: sourceNote.path, audit_path: sourceNote.audit_path },
-                report: { path: report.path, audit_path: report.audit_path },
+                source_note: { path: sourceNote.path, activity_path: sourceNote.activity_path },
+                report: { path: report.path, activity_path: report.activity_path },
                 proposals: proposals.map((proposal) => ({
                     proposal_id: proposal.proposalId,
                     path: proposal.path,
                     proposal_link_target: proposal.linkTarget,
                 })),
-                audit_path: auditPathForReturn,
+                activity_path: auditPathForReturn,
                 summary: analysis.summary,
                 warnings,
             };

@@ -105,17 +105,9 @@ const RESOURCES: ResourcesResource[] = [
 		uri: 'tracekeeper://agent-activity',
 		name: 'agent-activity',
 		title: 'Agent activity',
-		description: 'Recent agent-task and review traces.',
+		description: 'Recent MCP Agent connection, authentication, and tool-call activity.',
 		mimeType: 'text/markdown',
 		read: readAgentActivityResource,
-	},
-	{
-		uri: 'tracekeeper://audit/recent',
-		name: 'audit-recent',
-		title: 'Recent audit',
-		description: 'Recent audit log entries.',
-		mimeType: 'text/markdown',
-		read: readAuditRecentResource,
 	},
 ];
 
@@ -744,27 +736,10 @@ async function readAgentActivityResource(vaultRoot: string, context: ResourceRea
 			`## ${section.heading}`,
 			`source_path: ${section.source_path}`,
 			`source_kind: ${section.source_kind}`,
-			...(section.audit_event_id ? [`audit_event_id: ${section.audit_event_id}`] : []),
+			...(section.activity_event_id ? [`activity_event_id: ${section.activity_event_id}`] : []),
 			...section.body,
 		].join('\n'));
 	return boundResourceText(['# Agent Activity', ...rendered].join('\n\n'));
-}
-
-async function readAuditRecentResource(vaultRoot: string, context: ResourceReadContext): Promise<string> {
-	const sections = (await readMergedAuditSections(vaultRoot, context))
-		.slice(0, MAX_REVIEW_QUEUE_LINES);
-	if (sections.length === 0) {
-		return '# Recent Audit\nNo sections are available.';
-	}
-
-	const rendered = sections.map((section) => [
-		`## ${section.heading}`,
-		`source_path: ${section.source_path}`,
-		`source_kind: ${section.source_kind}`,
-		...(section.audit_event_id ? [`audit_event_id: ${section.audit_event_id}`] : []),
-		...section.body,
-	].join('\n'));
-	return boundResourceText(['# Recent Audit', ...rendered].join('\n\n'));
 }
 
 function readResourceText(relativePath: string, vaultRoot: string, context: ResourceReadContext): Promise<string> {

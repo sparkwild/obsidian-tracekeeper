@@ -24,7 +24,7 @@ export interface CaptureSourceOperationIdentity {
 
 export interface CaptureSourceNote {
 	path: string;
-	audit_path: string;
+	activity_path: string;
 	status: string;
 	warnings: string[];
 }
@@ -64,7 +64,7 @@ export interface CaptureSourceApplicationResult {
 	idempotency_key: string;
 	status: string;
 	path: string;
-	audit_path: string;
+	activity_path: string;
 	warnings: string[];
 	metadata: {
 		source: string;
@@ -211,7 +211,7 @@ export class CaptureSourceApplicationService {
 			idempotency_key: identity.idempotencyKey,
 			status: note.status,
 			path: note.path,
-			audit_path: note.audit_path,
+			activity_path: note.activity_path,
 			warnings,
 			metadata: { source, mode },
 		};

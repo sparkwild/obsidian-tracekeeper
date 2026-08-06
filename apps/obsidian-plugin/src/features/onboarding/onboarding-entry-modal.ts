@@ -26,8 +26,8 @@ export class OnboardingEntryModal extends Modal {
 		this.titleEl.setText(this.options.localize('开始接入 Tracekeeper', 'Start Tracekeeper onboarding'));
 		contentEl.createEl('p', {
 			text: this.options.localize(
-				'Tracekeeper 可将当前 Obsidian 仓库作为你的本地知识库。知识和审计记录保留在仓库中；连接 Agent 后，它只能在 Obsidian 开启时通过受控的本机服务访问这些知识。你可以现在开始连接，也可以稍后设置。',
-				'Tracekeeper can use the current Obsidian vault as your local knowledge base. Knowledge and audit records stay in the vault; after connecting an agent, it can access them only through the controlled local service while Obsidian is open. Start connecting now or set it up later.'
+				'Tracekeeper 可将当前 Obsidian 仓库作为你的本地知识库。知识和 Agent 活动记录保留在仓库中；连接 Agent 后，它只能在 Obsidian 开启时通过受控的本机服务访问这些知识。你可以现在开始连接，也可以稍后设置。',
+				'Tracekeeper can use the current Obsidian vault as your local knowledge base. Knowledge and Agent activity records stay in the vault; after connecting an agent, it can access them only through the controlled local service while Obsidian is open. Start connecting now or set it up later.',
 			),
 			cls: 'tracekeeper-view__description',
 		});

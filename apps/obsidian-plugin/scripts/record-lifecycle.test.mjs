@@ -859,23 +859,36 @@ const createActivityHarness = ({
 	};
 };
 
-const auditMarkdown = (...timestamps) => [
-	'# Audit Log',
-	'',
-	...timestamps.flatMap((timestamp, index) => [
-		`## ${timestamp}`,
-		`action: fixture.event.${index + 1}`,
-		`audit_event_id: fixture-${timestamp}-${index + 1}`,
-		`timestamp: ${timestamp}`,
+const auditMarkdown = (...timestamps) => {
+	const day = timestamps[0]?.slice(0, 10) || '2000-01-01';
+	return [
+		'---',
+		'type: tracekeeper_agent_activity_shard',
+		'agent_activity_schema_version: 1',
+		`activity_date_utc: ${day}`,
+		`created_at: ${timestamps[0] || `${day}T00:00:00.000Z`}`,
+		`updated_at: ${timestamps.at(-1) || `${day}T00:00:00.000Z`}`,
+		'---',
+		`# Agent activity ${day}`,
 		'',
-	]),
-].join('\n');
+		...timestamps.flatMap((timestamp, index) => [
+			`## ${timestamp}`,
+			'type: mcp.tool_call',
+			'event: mcp.tool_call',
+			`activity_event_id: fixture-${timestamp}-${index + 1}`,
+			`action: fixture.event.${index + 1}`,
+			`timestamp: ${timestamp}`,
+			'',
+		]),
+	].join('\n');
+};
 
 const auditEventSection = ({ id, timestamp, action }) => [
 	`## ${timestamp}`,
-	'type: tool-call',
-	'event: tool-call',
-	`audit_event_id: ${id}`,
+	'type: mcp.tool_call',
+	'event: mcp.tool_call',
+	'agent_activity_schema_version: 1',
+	`activity_event_id: ${id}`,
 	`action: ${action}`,
 	`timestamp: ${timestamp}`,
 	'',
@@ -920,8 +933,8 @@ test('archive entrypoint uses the native lifecycle and preserves managed history
 });
 
 test('cleanup retains mixed legacy content and trashes only wholly eligible shards', async () => {
-	const oldShard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
-	const newShard = '00_tracekeeper/control/audit/2999/2999-01-01.md';
+	const oldShard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
+	const newShard = '00_tracekeeper/control/agent_activity/2999/2999-01-01.md';
 	const legacy = '00_tracekeeper/control/audit_log.md';
 	const task = '00_tracekeeper/work/tasks/not-audit.md';
 	const harness = createActivityHarness({
@@ -1852,10 +1865,10 @@ test('archive restart suppresses duplicate audit after post-append interruption'
 		});
 	}
 	const stableShard =
-		auditHarness.read('00_tracekeeper/control/audit/2026/2026-07-30.md');
+			auditHarness.read('00_tracekeeper/control/agent_activity/2026/2026-07-30.md');
 	assert.equal((stableShard.match(/^action: memory\.proposal\.archive$/gm) || []).length, 1);
 	assert.equal(
-		auditHarness.exists('00_tracekeeper/control/audit/2026/2026-07-31.md'),
+		auditHarness.exists('00_tracekeeper/control/agent_activity/2026/2026-07-31.md'),
 		false
 	);
 	assert.equal(harness.calls.refresh, 1);
@@ -2004,9 +2017,9 @@ test('archive restart resumes a native move completed before receipt persistence
 	}
 });
 
-test('activity merges legacy and shard audit events once and prefers the shard source', async () => {
+test('activity ignores legacy audit history and reads canonical Agent activity shards', async () => {
 	const legacyPath = '00_tracekeeper/control/audit_log.md';
-	const shardPath = '00_tracekeeper/control/audit/2026/2026-07-30.md';
+	const shardPath = '00_tracekeeper/control/agent_activity/2026/2026-07-30.md';
 	const sharedId = 'audit-shared';
 	const sharedTimestamp = '2026-07-30T10:00:00.000Z';
 	const harness = createActivityHarness({
@@ -2027,11 +2040,11 @@ test('activity merges legacy and shard audit events once and prefers the shard s
 			].join('\n'),
 			[shardPath]: [
 				'---',
-				'type: tracekeeper_audit_shard',
-				'audit_schema_version: 3',
-				'audit_date_utc: 2026-07-30',
+					'type: tracekeeper_agent_activity_shard',
+					'agent_activity_schema_version: 1',
+					'activity_date_utc: 2026-07-30',
 				'---',
-				'# Audit 2026-07-30',
+					'# Agent activity 2026-07-30',
 				'',
 				'[Audit hub](../index.md)',
 				'',
@@ -2049,18 +2062,18 @@ test('activity merges legacy and shard audit events once and prefers the shard s
 		},
 	});
 
-	const events = await harness.createController().readRecentAuditEvents(20);
-	assert.equal(events.length, 3);
-	assert.equal(events[0].auditId, 'audit-shard-only');
-	const shared = events.filter((event) => event.auditId === sharedId);
-	assert.equal(shared.length, 1);
-	assert.equal(shared[0].path, shardPath);
-	assert.equal(shared[0].action, 'shard.shared');
-	assert.ok(events.some((event) => event.auditId === 'audit-legacy-only'));
+		const events = await harness.createController().readRecentAuditEvents(20);
+		assert.equal(events.length, 2);
+		assert.ok(events.every((event) => event.path === shardPath));
+		assert.equal(events[0].auditId, 'audit-shard-only');
+		const shared = events.filter((event) => event.auditId === sharedId);
+		assert.equal(shared.length, 1);
+		assert.equal(shared[0].action, 'shard.shared');
+		assert.equal(events.some((event) => event.auditId === 'audit-legacy-only'), false);
 });
 
 test('runtime log reads one bounded recent window before paging', async () => {
-	const shardPath = '00_tracekeeper/control/audit/2026/2026-07-30.md';
+	const shardPath = '00_tracekeeper/control/agent_activity/2026/2026-07-30.md';
 	const sections = Array.from({ length: RUNTIME_LOG_MAX_EVENTS + 2 }, (_, index) =>
 		auditEventSection({
 			id: `bounded-${index}`,
@@ -2072,11 +2085,11 @@ test('runtime log reads one bounded recent window before paging', async () => {
 		files: {
 			[shardPath]: [
 				'---',
-				'type: tracekeeper_audit_shard',
-				'audit_schema_version: 3',
-				'audit_date_utc: 2026-07-30',
+					'type: tracekeeper_agent_activity_shard',
+					'agent_activity_schema_version: 1',
+					'activity_date_utc: 2026-07-30',
 				'---',
-				'# Audit 2026-07-30',
+					'# Agent activity 2026-07-30',
 				'',
 				...sections,
 			].join('\n'),
@@ -2256,6 +2269,8 @@ test('native audit repository serializes bounded shards and suppresses exact ret
 	]);
 	const retryEvent = [
 		`## ${sameDayTimestamp}`,
+		'type: mcp.tool_call',
+		'event: mcp.tool_call',
 		'action: fixture.retry',
 		'target: /Users/example/private-config.json',
 		'reason: credential=/Users/example/secret',
@@ -2277,18 +2292,18 @@ test('native audit repository serializes bounded shards and suppresses exact ret
 		retryEvent,
 		{ operationId: 'exact-retry' }
 	);
-	const firstShardPath = '00_tracekeeper/control/audit/2026/2026-07-30.md';
-	const secondShardPath = '00_tracekeeper/control/audit/2026/2026-07-31.md';
+	const firstShardPath = '00_tracekeeper/control/agent_activity/2026/2026-07-30.md';
+	const secondShardPath = '00_tracekeeper/control/agent_activity/2026/2026-07-31.md';
 	const firstShard = harness.read(firstShardPath);
 	const secondShard = harness.read(secondShardPath);
 	assert.equal(harness.read(legacyPath), legacyContent);
 	assert.equal((firstShard.match(/^## /gm) || []).length, 7);
 	assert.equal((firstShard.match(/^action: fixture\.retry$/gm) || []).length, 1);
 	assert.equal((secondShard.match(/^## /gm) || []).length, 1);
-	assert.match(firstShard, /^type: tracekeeper_audit_shard$/m);
-	assert.match(firstShard, /^audit_date_utc: 2026-07-30$/m);
-	assert.match(firstShard, /^audit_event_id: audit-[a-f0-9]{32}$/m);
-	assert.match(firstShard, /^event: fixture\.retry$/m);
+	assert.match(firstShard, /^type: tracekeeper_agent_activity_shard$/m);
+	assert.match(firstShard, /^activity_date_utc: 2026-07-30$/m);
+	assert.match(firstShard, /^activity_event_id: audit-[a-f0-9]{32}$/m);
+	assert.match(firstShard, /^event: mcp\.tool_call$/m);
 	assert.match(firstShard, /^timestamp: 2026-07-30T10:00:00\.000Z$/m);
 	assert.equal(firstShard.includes('/Users/example'), false);
 	assert.equal(firstShard.includes('never-store-this-token'), false);
@@ -2300,7 +2315,7 @@ test('native audit repository serializes bounded shards and suppresses exact ret
 	assert.equal(firstShard.includes('never-store-refresh-token'), false);
 	assert.equal(firstShard.includes('never-store-cookie'), false);
 	assert.ok(firstShard.length < 16_000);
-	const hubPath = '00_tracekeeper/control/audit/index.md';
+	const hubPath = '00_tracekeeper/control/agent_activity/index.md';
 	assert.equal(harness.exists(hubPath), true);
 	assert.ok(firstShard.includes(harness.expectedGeneratedLink(hubPath, firstShardPath)));
 	assert.ok(secondShard.includes(harness.expectedGeneratedLink(hubPath, secondShardPath)));
@@ -2310,12 +2325,12 @@ test('native audit repository serializes bounded shards and suppresses exact ret
 		harness.app,
 		createActivityHost(harness)
 	).readRecentAuditEvents(20);
-	assert.equal(activityEvents.length, 9);
+	assert.equal(activityEvents.length, 8);
 	assert.equal(activityEvents.some((event) => event.path === hubPath), false);
 });
 
 test('native audit repository serializes hub creation across repository instances', async () => {
-	const hubPath = '00_tracekeeper/control/audit/index.md';
+	const hubPath = '00_tracekeeper/control/agent_activity/index.md';
 	let signalFirstHubCreate;
 	let releaseFirstHubCreate;
 	let hubCreateAttempts = 0;
@@ -2366,10 +2381,10 @@ test('native audit repository serializes hub creation across repository instance
 	]);
 	assert.equal(hubCreateAttempts, 1);
 	assert.deepEqual(firstResult.shardPaths, [
-		'00_tracekeeper/control/audit/2026/2026-07-30.md',
+		'00_tracekeeper/control/agent_activity/2026/2026-07-30.md',
 	]);
 	assert.deepEqual(secondResult.shardPaths, [
-		'00_tracekeeper/control/audit/2026/2026-07-31.md',
+		'00_tracekeeper/control/agent_activity/2026/2026-07-31.md',
 	]);
 	assert.match(
 		harness.read(firstResult.shardPaths[0]),
@@ -2382,8 +2397,8 @@ test('native audit repository serializes hub creation across repository instance
 });
 
 test('cleanup preview binds cutoff hashes and retains mixed-age files', async () => {
-	const oldShard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
-	const newShard = '00_tracekeeper/control/audit/2999/2999-01-01.md';
+	const oldShard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
+	const newShard = '00_tracekeeper/control/agent_activity/2999/2999-01-01.md';
 	const legacy = '00_tracekeeper/control/audit_log.md';
 	const task = '00_tracekeeper/work/tasks/not-audit.md';
 	const harness = createActivityHarness({
@@ -2405,11 +2420,7 @@ test('cleanup preview binds cutoff hashes and retains mixed-age files', async ()
 	assert.deepEqual(preview.eligibleFiles.map((row) => row.path), [oldShard]);
 	assert.deepEqual(
 		new Set(preview.retainedFiles.map((row) => row.path)),
-		new Set([legacy, newShard])
-	);
-	assert.equal(
-		preview.retainedFiles.find((row) => row.path === legacy)?.reason,
-		'mixed-age'
+		new Set([newShard])
 	);
 	assert.equal(preview.eligibleFiles.some((row) => row.path === task), false);
 	assert.match(preview.trashBehavior, /Obsidian|configured trash/i);
@@ -2420,7 +2431,7 @@ test('cleanup preview binds cutoff hashes and retains mixed-age files', async ()
 });
 
 test('cleanup rejects stale preview and trashes only wholly eligible audit files', async () => {
-	const oldShard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
+	const oldShard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
 	const legacy = '00_tracekeeper/control/audit_log.md';
 	const task = '00_tracekeeper/work/tasks/not-audit.md';
 	const stale = createActivityHarness({
@@ -2468,7 +2479,7 @@ test('cleanup rejects stale preview and trashes only wholly eligible audit files
 		'older-than-week'
 	);
 	added.write(
-		'00_tracekeeper/control/audit/2000/2000-01-02.md',
+		'00_tracekeeper/control/agent_activity/2000/2000-01-02.md',
 		auditMarkdown('2000-01-02T00:00:00.000Z')
 	);
 	await assert.rejects(
@@ -2518,14 +2529,14 @@ test('cleanup rejects stale preview and trashes only wholly eligible audit files
 	const clearPreview = await clearController.previewRuntimeLogCleanup('all');
 	assert.deepEqual(
 		new Set(clearPreview.eligibleFiles.map((row) => row.path)),
-		new Set([oldShard, legacy])
+		new Set([oldShard])
 	);
 	await clearController.commitRuntimeLogCleanup(
 		clearPreview,
 		clearPreview.confirmationToken
 	);
 	assert.equal(clearAll.exists(oldShard), false);
-	assert.equal(clearAll.exists(legacy), false);
+	assert.equal(clearAll.exists(legacy), true);
 	assert.equal(clearAll.exists(task), true);
 	const auditRepository = new ObsidianAuditShardRepository(clearAll.app, {
 		async ensureFolderExists() {},
@@ -2546,7 +2557,7 @@ test('cleanup rejects stale preview and trashes only wholly eligible audit files
 });
 
 test('cleanup revalidates public deletion behavior immediately before mutation', async () => {
-	const shard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
+	const shard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
 	const harness = createActivityHarness({
 		files: {
 			[shard]: auditMarkdown('2000-01-01T00:00:00.000Z'),
@@ -2568,7 +2579,7 @@ test('cleanup revalidates public deletion behavior immediately before mutation',
 });
 
 test('cleanup revalidates the target after durable intent persistence', async () => {
-	const shard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
+	const shard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
 	const harness = createActivityHarness({
 		files: {
 			[shard]: auditMarkdown('2000-01-01T00:00:00.000Z'),
@@ -2605,7 +2616,7 @@ test('cleanup revalidates the target after durable intent persistence', async ()
 });
 
 test('cleanup serializes trash with a same-shard native audit append', async () => {
-	const shard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
+	const shard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
 	let signalTrashEntered;
 	let releaseTrash;
 	const trashEntered = new Promise((resolve) => {
@@ -2661,8 +2672,8 @@ test('cleanup serializes trash with a same-shard native audit append', async () 
 });
 
 test('cleanup reports per-file partial failure and never selects non-audit records', async () => {
-	const firstShard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
-	const secondShard = '00_tracekeeper/control/audit/2000/2000-01-02.md';
+	const firstShard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
+	const secondShard = '00_tracekeeper/control/agent_activity/2000/2000-01-02.md';
 	const task = '00_tracekeeper/work/tasks/not-audit.md';
 	const harness = createActivityHarness({
 		files: {
@@ -2719,7 +2730,7 @@ test('cleanup reports per-file partial failure and never selects non-audit recor
 });
 
 test('cleanup resumes a persisted trash intent as outcome-unknown after receipt failure', async () => {
-	const shard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
+	const shard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
 	const harness = createActivityHarness({
 		files: {
 			[shard]: auditMarkdown('2000-01-01T00:00:00.000Z'),
@@ -2737,7 +2748,7 @@ test('cleanup resumes a persisted trash intent as outcome-unknown after receipt 
 	const controller = harness.createController();
 	const preview = await controller.previewRuntimeLogCleanup('older-than-week');
 	const receiptPath =
-		`00_tracekeeper/control/operations/${preview.operationId}.json`;
+		`00_tracekeeper/control/operations/agent-activity-cleanups/${preview.operationId}.json`;
 	await assert.rejects(
 		controller.commitRuntimeLogCleanup(
 			preview,
@@ -2772,8 +2783,8 @@ test('cleanup resumes a persisted trash intent as outcome-unknown after receipt 
 });
 
 test('cleanup records later-target drift without losing earlier trash progress', async () => {
-	const firstShard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
-	const secondShard = '00_tracekeeper/control/audit/2000/2000-01-02.md';
+	const firstShard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
+	const secondShard = '00_tracekeeper/control/agent_activity/2000/2000-01-02.md';
 	const harness = createActivityHarness({
 		files: {
 			[firstShard]: auditMarkdown('2000-01-01T00:00:00.000Z'),
@@ -2804,7 +2815,7 @@ test('cleanup records later-target drift without losing earlier trash progress',
 });
 
 test('cleanup restart and exact retry return one bounded receipt', async () => {
-	const shard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
+	const shard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
 	const harness = createActivityHarness({
 		files: {
 			[shard]: auditMarkdown('2000-01-01T00:00:00.000Z'),
@@ -2836,7 +2847,7 @@ test('cleanup restart and exact retry return one bounded receipt', async () => {
 });
 
 test('cleanup keeps a live durable intent owned across controller instances', async () => {
-	const shard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
+	const shard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
 	let signalTrashEntered;
 	let releaseTrash;
 	const trashEntered = new Promise((resolve) => {
@@ -2865,7 +2876,7 @@ test('cleanup keeps a live durable intent owned across controller instances', as
 	);
 	await trashEntered;
 	const receiptPath =
-		`00_tracekeeper/control/operations/${preview.operationId}.json`;
+		`00_tracekeeper/control/operations/agent-activity-cleanups/${preview.operationId}.json`;
 	const liveIntent = JSON.parse(harness.read(receiptPath));
 	assert.equal(liveIntent.status, 'in-progress');
 	assert.equal(liveIntent.attemptingPath, shard);
@@ -2887,7 +2898,7 @@ test('cleanup keeps a live durable intent owned across controller instances', as
 });
 
 test('cleanup receipt CAS rejects external tampering before any retry mutation', async () => {
-	const shard = '00_tracekeeper/control/audit/2000/2000-01-01.md';
+	const shard = '00_tracekeeper/control/agent_activity/2000/2000-01-01.md';
 	const harness = createActivityHarness({
 		files: {
 			[shard]: auditMarkdown('2000-01-01T00:00:00.000Z'),
@@ -2900,7 +2911,7 @@ test('cleanup receipt CAS rejects external tampering before any retry mutation',
 		preview.confirmationToken
 	);
 	const receiptPath =
-		`00_tracekeeper/control/operations/${preview.operationId}.json`;
+		`00_tracekeeper/control/operations/agent-activity-cleanups/${preview.operationId}.json`;
 	const tampered = JSON.parse(harness.read(receiptPath));
 	tampered.completedAt = '2001-01-01T00:00:00.000Z';
 	harness.write(receiptPath, `${JSON.stringify(tampered, null, 2)}\n`);

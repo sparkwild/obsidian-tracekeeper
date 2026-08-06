@@ -16,7 +16,7 @@ const config = (clientId, overrides = {}) => ({
 	configState: 'not_configured',
 	setupCapability: 'manual',
 	supportedAuthModes: ['oauth', 'bearer'],
-	setupInstruction: 'http://127.0.0.1:58437/mcp',
+	setupInstruction: 'http://127.0.0.1:51601/mcp',
 	...overrides,
 });
 
@@ -28,7 +28,7 @@ const integration = (clientProfileId, overrides = {}) => ({
 	createdAt: '2026-08-03T00:00:00.000Z',
 	updatedAt: '2026-08-03T00:00:00.000Z',
 	setupCommandCopiedAt: '',
-	lastPreparedEndpoint: 'http://127.0.0.1:58437/mcp',
+	lastPreparedEndpoint: 'http://127.0.0.1:51601/mcp',
 	lastAuthorizedAt: '',
 	lastRevokedAt: '',
 	credential: null,

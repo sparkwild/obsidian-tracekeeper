@@ -37,10 +37,10 @@ npm run typecheck
 npm run build
 npm run test
 export TRACEKEEPER_STANDALONE_BEARER='<32-byte-base64url-bearer>'
-node dist/server.js --vault-root <vault> --vault-config-dir <config-dir> --port 58437
+node dist/server.js --vault-root <vault> --vault-config-dir <config-dir> --port 51601
 ```
 
-The endpoint is `http://127.0.0.1:58437/mcp` by default. The standalone runtime reads its Bearer only from `TRACEKEEPER_STANDALONE_BEARER`, fails closed when the value is missing or invalid, and never accepts a plaintext `--token` argument. Clients send the credential as `Authorization: Bearer <token>`; the endpoint URL stays free of secrets. The standalone runtime uses the same explicit local-trust mode as the Obsidian-hosted runtime and refuses any bind address other than `127.0.0.1`.
+The endpoint is `http://127.0.0.1:51601/mcp` by default. The standalone runtime reads its Bearer only from `TRACEKEEPER_STANDALONE_BEARER`, fails closed when the value is missing or invalid, and never accepts a plaintext `--token` argument. Clients send the credential as `Authorization: Bearer <token>`; the endpoint URL stays free of secrets. The standalone runtime uses the same explicit local-trust mode as the Obsidian-hosted runtime and refuses any bind address other than `127.0.0.1`.
 
 ## Package Scripts
 

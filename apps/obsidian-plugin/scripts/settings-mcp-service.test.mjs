@@ -15,6 +15,7 @@ function methodBody(name, nextName) {
 }
 
 const serviceSection = methodBody('renderConnectionInfoSection', 'renderRuntimeEnabledSetting');
+const endpointSetting = methodBody('renderEndpointSetting', 'renderAccessProtectionSetting');
 const advancedSection = methodBody('renderAdvancedMaintenanceSection', 'renderPortSetting');
 
 assert.ok(serviceSection.includes('renderRuntimeEnabledSetting'));
@@ -27,6 +28,19 @@ assert.equal(serviceSection.includes('renderPortSetting'), false);
 
 assert.ok(source.includes("ui('本机访问已保护', 'Local access protected')"));
 assert.ok(source.includes("ui('MCP 端点', 'MCP endpoint')"));
+assert.ok(source.includes("setIcon('copy')"));
+assert.ok(source.includes("ui('复制 MCP 端点', 'Copy MCP endpoint')"));
+assert.ok(source.includes("ui('高级选项', 'Advanced options')"));
+assert.ok(source.includes("tracekeeper-settings-advanced"));
+assert.ok(endpointSetting.includes('tracekeeper-settings-endpoint-advanced'));
+assert.equal(endpointSetting.includes('scrollIntoView'), false);
+assert.ok(endpointSetting.includes('renderPortSetting'));
+assert.ok(endpointSetting.includes("focus({ preventScroll: true })"));
+assert.ok(endpointSetting.includes("setAttribute('aria-controls'"));
+assert.ok(source.includes("ui('端口号', 'Port')"));
+assert.ok(source.includes('DEFAULT_MCP_PORT'));
+assert.ok(source.includes('restartMcpRuntime'));
+assert.ok(source.includes("ui('应用并重启', 'Apply and restart')"));
 assert.ok(source.includes("ui('查看功能', 'View capabilities')"));
 assert.ok(source.includes('runtimeStatus.accessProtected'));
 assert.equal(source.includes('runtimeAccessToken'), false);
@@ -46,9 +60,9 @@ assert.equal(stylesSource.includes('.tracekeeper-capability-row__heading'), fals
 
 assert.ok(advancedSection.includes("createEl('details'"));
 assert.ok(advancedSection.includes("createEl('summary'"));
-assert.ok(advancedSection.includes('renderPortSetting'));
+assert.equal(advancedSection.includes('renderPortSetting'), false);
 assert.ok(advancedSection.includes("ui('重启服务', 'Restart service')"));
 assert.ok(advancedSection.includes("ui('撤销全部 Agent 访问', 'Revoke all Agent access')"));
-assert.ok(advancedSection.includes('TRACEKEEPER_RUNTIME_LOG_VIEW'));
+assert.ok(advancedSection.includes('TRACEKEEPER_ACTIVITY_VIEW'));
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 29 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 41 })}\n`);

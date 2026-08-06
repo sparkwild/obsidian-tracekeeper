@@ -110,7 +110,7 @@ class CaptureSourceApplicationService {
             idempotency_key: identity.idempotencyKey,
             status: note.status,
             path: note.path,
-            audit_path: note.audit_path,
+            activity_path: note.activity_path,
             warnings,
             metadata: { source, mode },
         };

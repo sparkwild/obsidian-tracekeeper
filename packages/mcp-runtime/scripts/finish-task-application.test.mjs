@@ -99,7 +99,7 @@ test('DistillSessionApplicationService owns note, proposal, and task-reference f
 		buildBody: (summary) => `# Distilled\n\n${summary}`,
 		writeSessionNote: async (input) => {
 			writes.push(input);
-			return { path: '00_tracekeeper/work/sessions/direct-session.md', audit_path: 'audit.jsonl' };
+			return { path: '00_tracekeeper/work/sessions/direct-session.md', activity_path: '00_tracekeeper/control/agent_activity/2026/2026-08-03.md' };
 		},
 		memoryProposalAllowed: (kind) => kind === 'distill_decisions',
 		createProposal: async () => ({

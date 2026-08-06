@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.GENERIC_TOOL_OUTPUT_SCHEMA = exports.FINISH_TASK_OUTPUT_SCHEMA = exports.PROJECT_MEMORY_OUTPUT_SCHEMA = exports.RECALL_OUTPUT_SCHEMA = exports.START_TASK_OUTPUT_SCHEMA = exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = exports.CAPTURE_SOURCE_OUTPUT_SCHEMA = exports.SOURCE_REQUEST_OUTPUT_SCHEMA = exports.APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA = exports.REVIEW_QUEUE_OUTPUT_SCHEMA = exports.BUILD_CONTEXT_PACK_OUTPUT_SCHEMA = exports.READ_NOTE_OUTPUT_SCHEMA = exports.LINT_OUTPUT_SCHEMA = exports.STATUS_OUTPUT_SCHEMA = exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA = exports.PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA = exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = exports.RECALL_SUCCESS_OUTPUT_SCHEMA = exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA = exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = exports.SCHEMA_VERSION = void 0;
+exports.AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA = exports.GENERIC_TOOL_OUTPUT_SCHEMA = exports.FINISH_TASK_OUTPUT_SCHEMA = exports.PROJECT_MEMORY_OUTPUT_SCHEMA = exports.RECALL_OUTPUT_SCHEMA = exports.START_TASK_OUTPUT_SCHEMA = exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = exports.CAPTURE_SOURCE_OUTPUT_SCHEMA = exports.SOURCE_REQUEST_OUTPUT_SCHEMA = exports.APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA = exports.REVIEW_QUEUE_OUTPUT_SCHEMA = exports.BUILD_CONTEXT_PACK_OUTPUT_SCHEMA = exports.READ_NOTE_OUTPUT_SCHEMA = exports.LINT_OUTPUT_SCHEMA = exports.STATUS_OUTPUT_SCHEMA = exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA = exports.PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA = exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = exports.RECALL_SUCCESS_OUTPUT_SCHEMA = exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA = exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = exports.SCHEMA_VERSION = void 0;
 const action_envelope_1 = require("./action-envelope");
 exports.SCHEMA_VERSION = 2;
 exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = {
@@ -64,7 +64,7 @@ exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = {
         'idempotency_key',
         'task_id',
         'path',
-        'audit_path',
+        'activity_path',
         'vault_root',
         'workflow',
         'recommended_recall',
@@ -79,7 +79,7 @@ exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = {
         idempotency_key: { type: 'string', minLength: 1 },
         task_id: { type: 'string', minLength: 1 },
         path: { type: 'string', minLength: 1 },
-        audit_path: { type: 'string', minLength: 1 },
+        activity_path: { type: 'string', minLength: 1 },
         client: { oneOf: [{ type: 'string' }, { type: 'null' }] },
         project_hint: { oneOf: [{ type: 'string' }, { type: 'null' }] },
         project_id: { oneOf: [{ type: 'string' }, { type: 'null' }] },
@@ -318,7 +318,7 @@ exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = {
         'task_id',
         'task_path',
         'path',
-        'audit_path',
+        'activity_path',
         'workflow',
         'memory',
         'memory_closeout_state',
@@ -334,7 +334,7 @@ exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = {
         task_id: { type: 'string', minLength: 1 },
         task_path: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
         path: { type: 'string', minLength: 1 },
-        audit_path: { type: 'string', minLength: 1 },
+        activity_path: { type: 'string', minLength: 1 },
         review_proposal_mode: { type: 'string', enum: ['off', 'suggest', 'review_queue', 'auto_propose'] },
         content_language: { type: 'string', minLength: 1 },
         content_language_source: { type: 'string', minLength: 1 },
@@ -625,7 +625,7 @@ exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA = {
         task_id: { type: 'string', minLength: 1 },
         task_path: { type: 'string', minLength: 1 },
         path: { type: 'string', minLength: 1 },
-        audit_path: { type: 'string', minLength: 1 },
+        activity_path: { type: 'string', minLength: 1 },
         proposal_id: { type: 'string', minLength: 1 },
         proposal_path: { type: 'string', minLength: 1 },
         target_note: { type: 'string', minLength: 1 },
@@ -789,8 +789,8 @@ exports.BUILD_CONTEXT_PACK_OUTPUT_SCHEMA = {
                 read_only: { const: false, type: 'boolean' },
                 artifact: {
                     type: 'object',
-                    required: ['path', 'audit_path'],
-                    properties: { path: { type: 'string', minLength: 1 }, audit_path: { type: 'string', minLength: 1 } },
+                    required: ['path', 'activity_path'],
+                    properties: { path: { type: 'string', minLength: 1 }, activity_path: { type: 'string', minLength: 1 } },
                     additionalProperties: false,
                 },
             },
@@ -897,7 +897,7 @@ exports.APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA = {
             type: 'object',
             required: [
                 'schema_version', 'ok', 'tool', 'read_only', 'permission_level', 'status',
-                'operation_id', 'proposal_id', 'proposal_path', 'target_note', 'touched_notes', 'audit_path',
+                'operation_id', 'proposal_id', 'proposal_path', 'target_note', 'touched_notes', 'activity_path',
             ],
             properties: {
                 schema_version: { const: exports.SCHEMA_VERSION, type: 'integer' },
@@ -911,7 +911,7 @@ exports.APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA = {
                 proposal_path: { type: 'string', minLength: 1 },
                 target_note: { type: 'string', minLength: 1 },
                 touched_notes: STRING_ARRAY_SCHEMA,
-                audit_path: { type: 'string', minLength: 1 },
+                activity_path: { type: 'string', minLength: 1 },
             },
             additionalProperties: false,
         },
@@ -971,7 +971,7 @@ exports.SOURCE_REQUEST_OUTPUT_SCHEMA = {
             type: 'object',
             required: [
                 'schema_version', 'ok', 'tool', 'action', 'read_only', 'status', 'vault_root', 'request_path',
-                'mode', 'source_note', 'report', 'proposals', 'audit_path', 'summary', 'warnings',
+                'mode', 'source_note', 'report', 'proposals', 'activity_path', 'summary', 'warnings',
             ],
             properties: {
                 schema_version: { const: exports.SCHEMA_VERSION, type: 'integer' },
@@ -985,18 +985,18 @@ exports.SOURCE_REQUEST_OUTPUT_SCHEMA = {
                 mode: { type: 'string', enum: ['external_reference', 'extracted_snapshot', 'local_copy'] },
                 source_note: {
                     type: 'object',
-                    required: ['path', 'audit_path'],
-                    properties: { path: { type: 'string', minLength: 1 }, audit_path: { type: 'string', minLength: 1 } },
+                    required: ['path', 'activity_path'],
+                    properties: { path: { type: 'string', minLength: 1 }, activity_path: { type: 'string', minLength: 1 } },
                     additionalProperties: false,
                 },
                 report: {
                     type: 'object',
-                    required: ['path', 'audit_path'],
-                    properties: { path: { type: 'string', minLength: 1 }, audit_path: { type: 'string', minLength: 1 } },
+                    required: ['path', 'activity_path'],
+                    properties: { path: { type: 'string', minLength: 1 }, activity_path: { type: 'string', minLength: 1 } },
                     additionalProperties: false,
                 },
                 proposals: { type: 'array', items: SOURCE_ANALYSIS_PROPOSAL_SCHEMA },
-                audit_path: { type: 'string', minLength: 1 },
+                activity_path: { type: 'string', minLength: 1 },
                 summary: { type: 'string' },
                 warnings: STRING_ARRAY_SCHEMA,
             },
@@ -1010,7 +1010,7 @@ exports.CAPTURE_SOURCE_OUTPUT_SCHEMA = {
     oneOf: [
         {
             type: 'object',
-            required: ['schema_version', 'ok', 'tool', 'operation_id', 'idempotency_key', 'status', 'path', 'audit_path', 'warnings', 'metadata'],
+            required: ['schema_version', 'ok', 'tool', 'operation_id', 'idempotency_key', 'status', 'path', 'activity_path', 'warnings', 'metadata'],
             properties: {
                 schema_version: { const: exports.SCHEMA_VERSION, type: 'integer' },
                 ok: { const: true, type: 'boolean' },
@@ -1019,7 +1019,7 @@ exports.CAPTURE_SOURCE_OUTPUT_SCHEMA = {
                 idempotency_key: { type: 'string', minLength: 1 },
                 status: { type: 'string' },
                 path: { type: 'string', minLength: 1 },
-                audit_path: { type: 'string', minLength: 1 },
+                activity_path: { type: 'string', minLength: 1 },
                 warnings: STRING_ARRAY_SCHEMA,
                 metadata: {
                     type: 'object',
@@ -1044,7 +1044,7 @@ const PROPOSE_MEMORY_COMMON_PROPERTIES = {
     idempotency_key: { type: 'string', minLength: 1 },
     status: { type: 'string' },
     path: { type: 'string', minLength: 1 },
-    audit_path: { type: 'string', minLength: 1 },
+    activity_path: { type: 'string', minLength: 1 },
     warnings: STRING_ARRAY_SCHEMA,
     auto_applied: { type: 'boolean' },
     duplicate: { type: 'boolean' },
@@ -1073,7 +1073,7 @@ exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = {
             type: 'object',
             required: [
                 'schema_version', 'ok', 'tool', 'operation_id', 'idempotency_key', 'status', 'path',
-                'audit_path', 'warnings', 'auto_applied', 'duplicate', 'memory_rule', 'memory_scope',
+                'activity_path', 'warnings', 'auto_applied', 'duplicate', 'memory_rule', 'memory_scope',
                 'project_hint', 'related_wiki', 'related_sources', 'missing_related_sources',
                 'architecture_status', 'missing_graph_bridges', 'missing_wiki_bridge', 'proposal_id', 'proposal_path',
             ],
@@ -1084,7 +1084,7 @@ exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = {
             type: 'object',
             required: [
                 'schema_version', 'ok', 'tool', 'operation_id', 'idempotency_key', 'status', 'path',
-                'audit_path', 'warnings', 'auto_applied', 'duplicate', 'proposal_id', 'proposal_path',
+                'activity_path', 'warnings', 'auto_applied', 'duplicate', 'proposal_id', 'proposal_path',
                 'proposal_link_target', 'memory_rule', 'memory_scope', 'project_hint', 'related_wiki',
                 'related_sources', 'missing_related_sources', 'architecture_status', 'missing_graph_bridges',
                 'missing_wiki_bridge',
@@ -1114,4 +1114,57 @@ exports.FINISH_TASK_OUTPUT_SCHEMA = {
 exports.GENERIC_TOOL_OUTPUT_SCHEMA = {
     type: 'object',
     oneOf: [exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA, exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA],
+};
+const AGENT_ACTIVITY_SECTION_SCHEMA = {
+    type: 'object',
+    required: [
+        'heading',
+        'body',
+        'at_line',
+        'activity_event_id',
+        'timestamp',
+        'source_path',
+        'source_kind',
+        'action',
+    ],
+    properties: {
+        heading: { type: 'string', minLength: 1 },
+        body: { type: 'array', items: { type: 'string' } },
+        at_line: { type: 'integer', minimum: 1 },
+        activity_event_id: { type: 'string', minLength: 1 },
+        timestamp: { type: 'string', minLength: 1 },
+        source_path: { type: 'string', minLength: 1 },
+        source_kind: { const: 'shard', type: 'string' },
+        action: { type: 'string', minLength: 1 },
+    },
+    additionalProperties: false,
+};
+exports.AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA = {
+    type: 'object',
+    oneOf: [
+        {
+            type: 'object',
+            required: [
+                'schema_version',
+                'ok',
+                'tool',
+                'read_only',
+                'activity_path',
+                'total_sections',
+                'sections',
+            ],
+            properties: {
+                schema_version: { const: exports.SCHEMA_VERSION, type: 'integer' },
+                ok: { const: true, type: 'boolean' },
+                tool: { const: 'tracekeeper.agent_activity_recent', type: 'string' },
+                read_only: { const: true, type: 'boolean' },
+                vault_root: { type: 'string', minLength: 1 },
+                activity_path: { type: 'string', minLength: 1 },
+                total_sections: { type: 'integer', minimum: 0 },
+                sections: { type: 'array', items: AGENT_ACTIVITY_SECTION_SCHEMA },
+            },
+            additionalProperties: false,
+        },
+        exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
+    ],
 };

@@ -9,9 +9,9 @@ const require = createRequire(import.meta.url);
 const { callTool } = require('@tracekeeper/mcp-runtime');
 const { NodeFileOperationJournal, NodeFsVaultRepository } = require('@tracekeeper/core');
 
-const AUDIT_DIR = '00_tracekeeper/control/audit';
-const AUDIT_SHARD_PATH_PATTERN =
-	/^00_tracekeeper\/control\/audit\/\d{4}\/\d{4}-\d{2}-\d{2}\.md$/;
+const AGENT_ACTIVITY_DIR = '00_tracekeeper/control/agent_activity';
+const AGENT_ACTIVITY_SHARD_PATH_PATTERN =
+	/^00_tracekeeper\/control\/agent_activity\/\d{4}\/\d{4}-\d{2}-\d{2}\.md$/;
 
 function writeNote(vaultRoot, relativePath, content) {
 	const target = path.join(vaultRoot, relativePath);
@@ -48,7 +48,7 @@ class RecordingVaultRepository {
 
 	async replaceText(relativePath, expectedVersion, content) {
 		this.calls.push({ method: 'replaceText', path: relativePath });
-		if (AUDIT_SHARD_PATH_PATTERN.test(relativePath) && this.auditConflictPending) {
+		if (AGENT_ACTIVITY_SHARD_PATH_PATTERN.test(relativePath) && this.auditConflictPending) {
 			this.auditConflictPending = false;
 			const current = await this.delegate.readText(relativePath);
 			assert.ok(current, 'audit shard should exist before conflict injection');
@@ -83,7 +83,7 @@ function assertCallUnder(calls, method, expectedPrefix) {
 
 function assertAuditShardCall(calls, method) {
 	assert.ok(
-		calls.some((call) => call.method === method && AUDIT_SHARD_PATH_PATTERN.test(call.path)),
+		calls.some((call) => call.method === method && AGENT_ACTIVITY_SHARD_PATH_PATTERN.test(call.path)),
 		`expected ${method} through VaultRepository for a native audit shard`
 	);
 }
@@ -94,8 +94,8 @@ function countToolAuditSections(content, toolName) {
 		.filter(
 			(section) =>
 				(
-					section.includes('- type: tool-call')
-					|| section.includes('- type: "tool-call"')
+					section.includes('- type: mcp.tool_call')
+					|| section.includes('- type: "mcp.tool_call"')
 				)
 				&& section.includes(toolName)
 		)
@@ -103,7 +103,7 @@ function countToolAuditSections(content, toolName) {
 }
 
 function readAuditShards(vaultRoot) {
-	const auditRoot = path.join(vaultRoot, AUDIT_DIR);
+	const auditRoot = path.join(vaultRoot, AGENT_ACTIVITY_DIR);
 	const documents = [];
 	const visit = (directory) => {
 		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -113,7 +113,7 @@ function readAuditShards(vaultRoot) {
 				continue;
 			}
 			const relativePath = path.relative(vaultRoot, absolutePath).replaceAll(path.sep, '/');
-			if (entry.isFile() && AUDIT_SHARD_PATH_PATTERN.test(relativePath)) {
+			if (entry.isFile() && AGENT_ACTIVITY_SHARD_PATH_PATTERN.test(relativePath)) {
 				documents.push(fs.readFileSync(absolutePath, 'utf8'));
 			}
 		}
@@ -145,7 +145,7 @@ async function main() {
 	fs.mkdirSync(vaultRoot, { recursive: true });
 
 	writeNote(vaultRoot, '00_tracekeeper/control/system.md', '# Tracekeeper System\n');
-	writeNote(vaultRoot, '00_tracekeeper/control/audit_log.md', '# Audit Log\n');
+	writeNote(vaultRoot, '00_tracekeeper/control/agent_activity/index.md', '# Agent activity\n');
 	writeNote(vaultRoot, '01_knowledge/index.md', '# Knowledge Index\n');
 	writeNote(vaultRoot, '01_knowledge/sources/repository-source.md', '# Repository Source\n\nRepository-backed source text.\n');
 	writeNote(vaultRoot, '01_knowledge/wiki/repository-hub.md', '# Repository Hub\n');
@@ -323,7 +323,7 @@ async function main() {
 		calls = vaultRepository.takeCalls();
 		assert.ok(
 			calls.filter(
-				(call) => call.method === 'replaceText' && AUDIT_SHARD_PATH_PATTERN.test(call.path)
+				(call) => call.method === 'replaceText' && AGENT_ACTIVITY_SHARD_PATH_PATTERN.test(call.path)
 			).length >= 2,
 			'audit append should retry after a CAS conflict'
 		);
@@ -342,10 +342,10 @@ async function main() {
 		);
 		vaultRepository.takeCalls();
 
-		await invoke('tracekeeper.audit_recent', { max_items: 5 }, context);
+		await invoke('tracekeeper.agent_activity_recent', { max_items: 5 }, context);
 		calls = vaultRepository.takeCalls();
-		assertCall(calls, 'readText', '00_tracekeeper/control/audit_log.md');
-		assertCall(calls, 'listMarkdown', AUDIT_DIR);
+		assertCallUnder(calls, 'readText', `${AGENT_ACTIVITY_DIR}/`);
+		assertCall(calls, 'listMarkdown', AGENT_ACTIVITY_DIR);
 		assertAuditShardCall(calls, 'readText');
 		assertAuditShardCall(calls, 'replaceText');
 

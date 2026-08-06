@@ -35,7 +35,7 @@ test('SourceRequestApplicationService owns analysis, generated notes, and task r
 			};
 			return {
 				path: pathByKind[input.kind],
-				audit_path: '00_tracekeeper/audit/events.jsonl',
+				activity_path: '00_tracekeeper/control/agent_activity/2026/2026-08-03.md',
 				status: 'written',
 				warnings: [],
 			};

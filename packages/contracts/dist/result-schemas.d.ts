@@ -24,3 +24,4 @@ export declare const RECALL_OUTPUT_SCHEMA: JsonSchema2020;
 export declare const PROJECT_MEMORY_OUTPUT_SCHEMA: JsonSchema2020;
 export declare const FINISH_TASK_OUTPUT_SCHEMA: JsonSchema2020;
 export declare const GENERIC_TOOL_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA: JsonSchema2020;

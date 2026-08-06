@@ -7,13 +7,13 @@ import {
 	type ActivityPrimaryAction,
 } from './activity-view-model';
 import { MemoryRecallPreviewModal } from '../recall/memory-recall-preview-modal';
+import { AgentActivityDetailsModal, RuntimeLogCleanupModal } from '../runtime/runtime-log-view';
 import { pluginDisplayName, ui } from '../../ui/localization';
 import { trimText } from '../shared/markdown-record-parser';
 import { TRACEKEEPER_SKILL_BUNDLE } from '../skill-installation/skill-bundle';
 import {
 	TRACEKEEPER_ACTIVITY_VIEW,
 	TRACEKEEPER_REVIEW_QUEUE_VIEW,
-	TRACEKEEPER_RUNTIME_LOG_VIEW,
 	TRACEKEEPER_RUNTIME_STATUS_VIEW,
 } from '../../ui/view-types';
 
@@ -51,6 +51,7 @@ export class TracekeeperActivityView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
+		this.containerEl.addClass('tracekeeper-activity-view');
 		await this.refresh();
 	}
 
@@ -78,6 +79,14 @@ export class TracekeeperActivityView extends ItemView {
 		});
 		const refreshButton = actions.createEl('button', {
 			text: ui('刷新', 'Refresh'),
+		});
+		const cleanupButton = actions.createEl('button', {
+			text: ui('清理活动', 'Clear activity'),
+		});
+		cleanupButton.addEventListener('click', () => {
+			new RuntimeLogCleanupModal(this.app, this.plugin, async () => {
+				await this.refresh();
+			}).open();
 		});
 		refreshButton.addEventListener('click', () => {
 			void (async () => {
@@ -132,15 +141,16 @@ export class TracekeeperActivityView extends ItemView {
 		const viewAllButton = timelineHeader.createEl('button', {
 			text: ui('查看全部', 'View all'),
 		});
+		viewAllButton.setText(ui('查看全部 Agent 活动', 'View all Agent activity'));
 		viewAllButton.addEventListener('click', () => {
-			void this.plugin.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);
+			new AgentActivityDetailsModal(this.app, this.plugin).open();
 		});
 		const timelineItems = snapshot.timelineItems;
 		if (timelineItems.length === 0) {
 			this.renderEmptyState(
 				timeline,
 				ui('还没有最近事件。', 'No recent events yet.'),
-				ui('最近的工具调用、配置变化和错误会显示在这里。', 'Recent tool calls, configuration changes, and errors appear here.')
+				ui('最近的 MCP 连接、认证拒绝和工具调用会显示在这里。', 'Recent MCP connections, authentication rejections, and tool calls appear here.')
 			);
 		} else {
 			const list = timeline.createDiv({ cls: 'tracekeeper-timeline' });
@@ -264,8 +274,8 @@ export class TracekeeperActivityView extends ItemView {
 				);
 			case 'inspect_diagnostics':
 				return ui(
-					'本地审计发现超时工作流或权限拒绝；展开高级诊断查看观察到的证据。',
-					'The local audit found an aged workflow or permission denial. Open advanced diagnostics to inspect the observed evidence.'
+					'Agent 活动发现超时工作流或权限拒绝；展开高级诊断查看观察到的证据。',
+					'Agent activity shows an aged workflow or permission denial. Open advanced diagnostics to inspect the observed evidence.'
 				);
 			case 'none':
 			default:
@@ -490,7 +500,7 @@ export class TracekeeperActivityView extends ItemView {
 				: `${diagnostics.durationP50Ms}ms / ${diagnostics.durationP95Ms}ms`,
 			diagnostics.durationP50Ms === null || diagnostics.durationP95Ms === null
 				? ui('无可用耗时样本', 'No duration samples')
-				: ui('基于最近审计事件', 'From recent audit events')
+				: ui('基于最近 Agent 活动', 'From recent Agent activity')
 		);
 
 		const evalRow = body.createDiv({ cls: 'tracekeeper-action-row' });
@@ -516,8 +526,8 @@ export class TracekeeperActivityView extends ItemView {
 
 		body.createEl('p', {
 			text: ui(
-				'仅统计真实调用 Tracekeeper 的本地审计事件，不能代表漏调用率；清理审计会缩短历史。数据不会上传，这些指标只用于诊断，不用于用户绩效评分。',
-				'Only locally audited Tracekeeper calls are counted, so this is not a missed-call rate. Audit cleanup shortens history. Nothing is uploaded, and these diagnostics are not user performance scoring.'
+				'仅统计真实调用 Tracekeeper 的本地 Agent 活动，不能代表漏调用率；清理活动会缩短历史。数据不会上传，这些指标只用于诊断，不用于用户绩效评分。',
+				'Only locally recorded Tracekeeper Agent activity is counted, so this is not a missed-call rate. Activity cleanup shortens history. Nothing is uploaded, and these diagnostics are not user performance scoring.'
 			),
 			cls: 'tracekeeper-view__description',
 		});

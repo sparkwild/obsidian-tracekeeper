@@ -55,7 +55,7 @@ const RECALL_CALLS = [
 ];
 
 function auditSections(vaultRoot) {
-	const auditRoot = path.join(vaultRoot, '00_tracekeeper', 'control', 'audit');
+	const auditRoot = path.join(vaultRoot, '00_tracekeeper', 'control', 'agent_activity');
 	const documents = [];
 	if (fs.existsSync(auditRoot)) {
 		for (const year of fs.readdirSync(auditRoot, { withFileTypes: true })) {

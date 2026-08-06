@@ -1,7 +1,7 @@
 import { ItemView, Notice, WorkspaceLeaf } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import { ui } from '../../ui/localization';
-import { TRACEKEEPER_RUNTIME_LOG_VIEW, TRACEKEEPER_RUNTIME_STATUS_VIEW } from '../../ui/view-types';
+import { TRACEKEEPER_ACTIVITY_VIEW, TRACEKEEPER_RUNTIME_STATUS_VIEW } from '../../ui/view-types';
 import type { AgentConnectionRecord } from '../activity/activity-model';
 import { runtimeViewModel } from './runtime-view-model';
 
@@ -120,9 +120,9 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 			});
 		}
 		if (runtime.canOpenLogs) {
-			const logs = actions.createEl('button', { text: ui('查看运行日志', 'Open runtime log') });
+			const logs = actions.createEl('button', { text: ui('查看 Agent 活动', 'Open Agent activity') });
 			logs.addEventListener('click', () => {
-				void this.plugin.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);
+				void this.plugin.openPluginView(TRACEKEEPER_ACTIVITY_VIEW);
 			});
 		}
 		const settings = actions.createEl('button', { text: ui('打开设置', 'Open settings') });
@@ -152,8 +152,8 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 		card.createEl('p', {
 			text: latestAgent
 				? ui(
-					'本地审计记录了通过凭据认证的 Agent 调用。此处显示最近观察时间，不推断客户端当前仍在线。',
-					'The local audit contains credential-authenticated Agent calls. This shows the last observed time without inferring that the client is still online.'
+					'本地 Agent 活动记录了通过凭据认证的调用。此处显示最近观察时间，不推断客户端当前仍在线。',
+					'Local Agent activity contains credential-authenticated calls. This shows the last observed time without inferring that the client is still online.'
 				)
 				: ui(
 					'MCP 服务状态只表示本机端点是否可用。尚无认证调用证据，因此 Tracekeeper 不会把所选或已配置的 Agent 标记为已连接。',

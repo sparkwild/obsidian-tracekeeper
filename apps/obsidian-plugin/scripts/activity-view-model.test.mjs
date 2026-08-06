@@ -12,7 +12,7 @@ const output = path.join(tempRoot, 'activity-view-model.mjs');
 const runtimeStatus = (overrides = {}) => ({
 	enabled: true,
 	state: 'running',
-	port: 58437,
+	port: 51601,
 	lastError: '',
 	...overrides,
 });

@@ -96,7 +96,7 @@ test('CaptureSourceApplicationService owns the runner and injected write ports',
 			writes.push(input);
 			return {
 				path: 'knowledge/sources/captured.md',
-				audit_path: '00_tracekeeper/audit/events.jsonl',
+			activity_path: '00_tracekeeper/control/agent_activity/2026/2026-08-03.md',
 				status: 'written',
 				warnings: [],
 			};
@@ -126,7 +126,7 @@ test('CaptureSourceApplicationService owns the runner and injected write ports',
 		idempotency_key: 'direct-idempotency',
 		status: 'written',
 		path: 'knowledge/sources/captured.md',
-		audit_path: '00_tracekeeper/audit/events.jsonl',
+		activity_path: '00_tracekeeper/control/agent_activity/2026/2026-08-03.md',
 		warnings: [],
 		metadata: {
 			source: 'direct-source',

@@ -1,6 +1,6 @@
 export type OperationPhase = 'before_step' | 'after_step' | 'before_finalize' | 'after_finalize';
-export type OperationStatus = 'in_progress' | 'audit_pending' | 'completed' | 'conflicted' | 'failed';
-export type OperationFailureStatus = Extract<OperationStatus, 'audit_pending' | 'conflicted' | 'failed'>;
+export type OperationStatus = 'in_progress' | 'activity_pending' | 'completed' | 'conflicted' | 'failed';
+export type OperationFailureStatus = Extract<OperationStatus, 'activity_pending' | 'conflicted' | 'failed'>;
 export interface StepExecutionRecord {
     name: string;
     completed_at: string;
@@ -117,7 +117,7 @@ export declare class RecoverableOperationRunner<TPayload, TResult> {
     private markCompleted;
     private markStepCompleted;
     private failureStatusForStep;
-    private markAuditPending;
+    private markActivityPending;
     private validateRecordForRun;
     private throwIfTerminalConflict;
     private markRunning;

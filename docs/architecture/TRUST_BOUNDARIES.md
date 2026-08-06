@@ -130,8 +130,8 @@ higher-priority instructions.
 - Apply requires a fresh opaque confirmation token that is authenticated,
   expiring, and bound to the approved proposal revision, semantic content and
   complete file hash, target, optional task, complete touched-note set, and
-  bounded audit context.
-- Proposal, target, task, touched-note, audit-context, token, or expiry drift
+  bounded activity context.
+- Proposal, target, task, touched-note, activity-context, token, or expiry drift
   fails before a new write begins. A confirmation token cannot authorize a
   different preview or proposal.
 - Graph and migration findings remain advisory until a user acts.
@@ -142,7 +142,7 @@ higher-priority instructions.
   shows the exact source-to-destination moves and managed-reference set, gives
   cancel initial focus, and commits only the confirmation bound to that
   displayed preview.
-- Runtime-log cleanup shows the exact eligible and retained audit files, event
+- Agent activity cleanup shows the exact eligible and retained activity shards, event
   counts, cutoff, and configured Obsidian trash behavior. A changed file set,
   content hash, cutoff, trash behavior, expiry, or confirmation fails before a
   new trash effect.
@@ -150,7 +150,7 @@ higher-priority instructions.
   user's unsaved draft remains available, the conflict is announced to
   assistive technology, and focus returns to the relevant control.
 
-## Recovery And Audit
+## Recovery And Agent Activity
 
 Coordinated writes use stable operation identity, payload hashes, atomic journal
 claims, optimistic replacement, and roll-forward recovery. Concurrent runtimes
@@ -163,7 +163,7 @@ terminal status so replacing the JSON record with a shorter valid prefix cannot
 silently replay a completed effect.
 
 Approved writeback records each target append, optional task link, proposal
-transition, and audit append as a separate journaled step. The proposal
+transition, and Agent activity append as a separate journaled step. The proposal
 transition stores a bounded committed receipt rather than proposal content.
 When a later proposal transition conflicts, Tracekeeper removes only the exact
 target and task effects owned by that operation; it never rewinds unrelated or
@@ -171,10 +171,11 @@ later user edits. If safe task compensation cannot be proven, target
 compensation is still attempted and the operation becomes a terminal conflict
 that requires a fresh preview.
 
-The audit step is journaled before its external effect. An interruption after
-the proposal transition enters the explicit `audit_pending` state, and recovery
-uses the committed transition receipt to append the same bounded audit event at
-most once, even if the proposal file is no longer present. Terminal conflicts
+The Agent activity step is journaled before its external effect. An interruption
+after the proposal transition enters the explicit `activity_pending` state, and
+recovery uses the committed transition receipt to append the same bounded Agent
+activity event at most once, even if the proposal file is no longer present.
+Terminal conflicts
 are not replayed. Legacy recovery records that contain note bodies are
 quarantined instead of being replayed.
 
@@ -187,28 +188,29 @@ at the destination. The owning operation can roll forward after restart, but
 source-and-destination ambiguity, identity drift, managed-reference drift, an
 occupied destination, claim drift, or receipt-integrity failure stops the
 operation. It never overwrites a destination or deletes either copy.
-Archive audit uses the persisted intent start time rather than a retry time;
-restart across a UTC shard boundary therefore cannot append the same operation
-to a second daily shard.
+Human archive actions do not create Agent activity events. The persisted intent
+start time remains bound to the archive receipt so restart and exact retry do not
+change operation identity.
 An expired archive confirmation can resume only when at least one persisted
 in-progress target claim proves the same operation and preview, and every
 existing claim still matches its target, source hash, start time, and binding.
 Missing claims from the same interrupted operation may then be acquired; without
 that durable proof the expired preview remains stale.
 
-Audit shards use stable event identity and Vault-scoped path serialization.
-Same-shard writers cannot replace one another, and exact retries do not append a
-second event. Audit hub and parent-folder creation share the same path-lock
-domain as Runtime repository writes. This coordination is process-local and
+Agent activity shards use stable event identity and Vault-scoped path
+serialization. Same-shard writers cannot replace one another, and exact retries
+do not append a second event. The Agent Activity hub and parent-folder creation
+share the same path-lock domain as Runtime repository writes. This coordination
+is process-local and
 does not prevent direct user edits or writes by another plugin; optimistic
 validation still treats those as external changes.
-Operation effects derive their stable event identity from the operation id.
-Every `tools/call`, including a request rejected before tool execution, instead
-receives a server-generated invocation id; the client JSON-RPC request id is
-retained only as bounded observational evidence and cannot suppress another
-call's audit event when a client reuses it.
+Operation effects derive their stable activity identity from the operation id.
+Every `tools/call`, including a request rejected before tool execution, receives
+a server-generated invocation id; the client JSON-RPC request id is retained
+only as bounded observational evidence and cannot suppress another call's Agent
+activity event when a client reuses it.
 
-Runtime-log cleanup persists a receipt revision and the currently attempted
+Agent activity cleanup persists a receipt revision and the currently attempted
 path before calling configured Obsidian trash. It revalidates the target again
 inside the shared path lock. If the process stops after the intent but before a
 durable result, restart reports that path as outcome-unknown instead of retrying
@@ -218,8 +220,8 @@ trashed, failed, stale, and retained paths. No cleanup route calls
 
 A Source Request may move from pending to either completed or failed. After the
 completed transition has been attempted or observed, a later task-reference or
-audit failure must remain a separate downstream failure and must not relabel the
-terminal request as failed.
+activity-projection failure must remain a separate downstream failure and must
+not relabel the terminal request as failed.
 
 Legacy migration serializes the whole same-migration operation in process, not
 only individual paths. Immediately after the durable move or cleanup intent it
@@ -227,7 +229,8 @@ re-resolves the bounded path and rechecks source identity, target absence, or
 empty-root eligibility before the native effect. Drift after confirmation is a
 conflict and never inherits the old preview's authority.
 
-Audit records may contain operation identity, the fixed execution-domain label,
+Agent activity records may contain operation identity, the fixed execution-domain
+label,
 trusted integration and credential identifiers, auth mode, untrusted
 client/Session claims, bounded target paths, result summary, duration, risk, and
 bounded workflow metadata. They must not persist plaintext credentials, token
@@ -250,8 +253,8 @@ create a security boundary against the Vault owner, another plugin, or another
 process running with the same filesystem authority, which can also access or
 replace the adjacent key material.
 
-Local Activity diagnostics are derived from retained audit records and are never
-uploaded by Tracekeeper. They describe observed Tracekeeper calls only.
+Local Activity diagnostics are derived from retained Agent activity records and
+are never uploaded by Tracekeeper. They describe observed MCP calls only.
 
 ## Data Handling And User Responsibility
 

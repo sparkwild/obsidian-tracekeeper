@@ -37,13 +37,13 @@ export interface AuditRecentSection {
     heading: string;
     body: string[];
     at_line: number;
-    audit_event_id: string;
+    activity_event_id: string;
     timestamp: string;
     source_path: string;
-    source_kind: 'legacy' | 'shard';
+    source_kind: 'shard';
     action: string;
 }
-export declare const auditLogPath = "00_tracekeeper/control/audit_log.md";
+export declare const agentActivityPath = "00_tracekeeper/control/agent_activity/index.md";
 export declare function projectArgumentsForAudit(toolName: string, args: Record<string, unknown>): Record<string, unknown>;
 export declare function summarizeForAudit(args: Record<string, unknown>, limit?: number): string;
 export declare function collectAuditTargetsFromArgs(_toolName: string, args: Record<string, unknown>): string[];

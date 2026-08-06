@@ -438,6 +438,7 @@ const fixtureSettings = () => ({
 	memoryRulesVersion: 3,
 	defaultAgentScope: 'vault',
 	mcpRuntimeEnabled: false,
+	// 保留 0.2.3 夹具的历史端口，用于验证升级不会改写旧设置。
 	mcpPort: 58_439,
 	runtimeToken: stableSyntheticLegacyToken(),
 	runtimeTokenCreatedAt: FIXTURE_TIME,

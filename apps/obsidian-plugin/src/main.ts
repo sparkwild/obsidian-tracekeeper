@@ -34,8 +34,8 @@ import {
 	KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
 	KNOWLEDGE_WIKI_INDEX_PATH,
 	TRACEKEEPER_AGENT_REQUESTS_DIR,
-	TRACEKEEPER_AUDIT_DIR,
-	TRACEKEEPER_AUDIT_LOG_PATH,
+	TRACEKEEPER_AGENT_ACTIVITY_DIR,
+	TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
 	TRACEKEEPER_CONTEXT_PACKS_DIR,
 	TRACEKEEPER_CONTROL_DIR,
 	TRACEKEEPER_MEMORY_POLICY_PATH,
@@ -107,7 +107,6 @@ import {
 	type SkillInstallState,
 } from './adapters/client-skill-adapter';
 import { TRACEKEEPER_SKILL_BUNDLE } from './features/skill-installation/skill-bundle';
-import { buildSkillInstallAuditEntry } from './features/skill-installation/skill-install-audit';
 import { buildAiSkillAssistantPrompt, type AiSkillAssistantContext } from './features/skill-installation/skill-assistant-prompt';
 import { normalizeSkillDirectorySelection, type SkillDirectorySelection } from './features/skill-installation/skill-install-paths';
 import { exportEmbeddedTracekeeperSkillSource } from './features/skill-installation/skill-source-exporter';
@@ -240,7 +239,6 @@ import {
 	trimText,
 } from './features/shared/markdown-record-parser';
 import { ActivityRecordRepository } from './features/activity/activity-record-repository';
-import { ObsidianAuditShardRepository } from './features/activity/native-audit-repository';
 import { GraphHealthController } from './features/graph/graph-health-controller';
 import type { GraphHealthSnapshot } from './features/graph/graph-health-model';
 import {
@@ -279,8 +277,8 @@ const KNOWLEDGE_ENTRY_FILE_PATHS = [
 ] as const;
 const CONTROL_PATHS = {
 	root: TRACEKEEPER_CONTROL_DIR,
-	auditLog: TRACEKEEPER_AUDIT_LOG_PATH,
-	auditDir: TRACEKEEPER_AUDIT_DIR,
+	agentActivityHub: TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
+	agentActivityDir: TRACEKEEPER_AGENT_ACTIVITY_DIR,
 };
 const ARCHIVE_TARGET_CLAIMS_DIR =
 	`${TRACEKEEPER_OPERATIONS_DIR}/archive-target-claims`;
@@ -289,6 +287,7 @@ const ARCHIVE_TARGET_CLAIMS_DIR =
 const vaultParentFolder = (path: string): string => path.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
 const BASE_STRUCTURE_FOLDERS: string[] = [
 	CONTROL_PATHS.root,
+	CONTROL_PATHS.agentActivityDir,
 	REVIEW_QUEUE_PATH,
 	TRACEKEEPER_WORK_DIR,
 	ARCHIVE_ROOT,
@@ -505,7 +504,6 @@ export default class TracekeeperPlugin extends Plugin {
 	private legacyMigrationController!: LegacyMigrationController;
 	private activityDataController!: ActivityDataController;
 	private activityRecordRepository!: ActivityRecordRepository;
-	private auditShardRepository!: ObsidianAuditShardRepository;
 	private graphHealthController!: GraphHealthController;
 	private reviewQueueController!: ReviewQueueController;
 	private proposalTransitionAdapter!: ObsidianProposalTransitionAdapter;
@@ -533,18 +531,13 @@ export default class TracekeeperPlugin extends Plugin {
 
 	async onload() {
 		this.settings = this.normalizeSettings(await this.loadData());
-		this.auditShardRepository = new ObsidianAuditShardRepository(this.app, {
-			ensureFolderExists: (path) => this.ensureFolderExists(path),
-		});
 		this.legacyMigrationController = new LegacyMigrationController(this.app, {
 			initializeMemoryStructure: (plan) => this.initializeMemoryStructure(plan),
 			ensureFolderExists: (path) => this.ensureFolderExists(path),
 			ensureFileDoesNotExist: (path, content) => this.ensureFileDoesNotExist(path, content),
 			normalizeVaultPath: (path) => this.normalizeVaultPath(path),
 			appendToAuditLog: (entry) => this.appendToAuditLog(entry),
-			appendOperationAuditEvent: async (operationId, entry) => {
-				await this.auditShardRepository.appendRawEvents(entry, { operationId });
-			},
+			appendOperationAuditEvent: async () => undefined,
 			refreshGovernanceViews: () => this.refreshGovernanceViews(),
 			loadKnowledgeSnapshot: async () => {
 				if (!this.knowledgeIndex) {
@@ -606,7 +599,6 @@ export default class TracekeeperPlugin extends Plugin {
 			timestampFromFilename: (filename) => timestampFromFilename(filename),
 			snippetFromText: (text, fallback) => snippetFromText(text, fallback),
 			trimText: (value, maxLength) => trimText(value, maxLength),
-			buildAuditLogHeader: () => this.buildAuditLogHeader(),
 			ensureFolderExists: (path) => this.ensureFolderExists(path),
 			getConfiguredTrashDescription: () =>
 				this.getConfiguredTrashDescription(),
@@ -701,14 +693,6 @@ export default class TracekeeperPlugin extends Plugin {
 			name: ui('打开来源状态', 'Open source status'),
 			callback: () => {
 				void this.openSourceStatus();
-			},
-		});
-
-		this.addCommand({
-			id: 'open-runtime-log',
-			name: ui('打开运行日志', 'Open runtime log'),
-			callback: () => {
-				void this.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);
 			},
 		});
 
@@ -1075,11 +1059,11 @@ export default class TracekeeperPlugin extends Plugin {
 			TRACEKEEPER_SESSIONS_DIR,
 			TRACEKEEPER_CONTEXT_PACKS_DIR,
 			TRACEKEEPER_AGENT_REQUESTS_DIR,
-			TRACEKEEPER_AUDIT_DIR,
+			TRACEKEEPER_AGENT_ACTIVITY_DIR,
 			KNOWLEDGE_GLOBAL_MEMORY_DIR,
 			KNOWLEDGE_PROJECTS_MEMORY_DIR,
 		];
-		return normalized === TRACEKEEPER_AUDIT_LOG_PATH
+		return normalized === TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH
 			|| relevantDirs.some((dir) => normalized === dir || normalized.startsWith(`${dir}/`));
 	}
 
@@ -1279,8 +1263,8 @@ export default class TracekeeperPlugin extends Plugin {
 			(path) => this.app.vault.getAbstractFileByPath(path) === null
 		);
 
-		const missingAuditLog =
-			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditLog) === null;
+		const missingAgentActivityHub =
+			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.agentActivityHub) === null;
 
 		const filesToCreate: string[] = [];
 		for (const filePath of [...CONTROL_FILE_PATHS, ...KNOWLEDGE_ENTRY_FILE_PATHS]) {
@@ -1288,14 +1272,14 @@ export default class TracekeeperPlugin extends Plugin {
 				filesToCreate.push(filePath);
 			}
 		}
-		if (missingAuditLog && !filesToCreate.includes(CONTROL_PATHS.auditLog)) {
-			filesToCreate.push(CONTROL_PATHS.auditLog);
+		if (missingAgentActivityHub && !filesToCreate.includes(CONTROL_PATHS.agentActivityHub)) {
+			filesToCreate.push(CONTROL_PATHS.agentActivityHub);
 		}
 
 		return {
 			foldersToCreate: missingFolders,
 			filesToCreate,
-			missingAuditLog,
+			missingAgentActivityHub,
 		};
 	}
 
@@ -1304,7 +1288,7 @@ export default class TracekeeperPlugin extends Plugin {
 		const plan = this.buildInitializationPlan();
 		const totalFolders = this.getNormalizedFolderPlan().length;
 		const expectedFiles = new Set<string>([...CONTROL_FILE_PATHS, ...KNOWLEDGE_ENTRY_FILE_PATHS]);
-		expectedFiles.add(CONTROL_PATHS.auditLog);
+		expectedFiles.add(CONTROL_PATHS.agentActivityHub);
 		const missingCount = plan.foldersToCreate.length + plan.filesToCreate.length;
 		const totalCount = totalFolders + expectedFiles.size;
 		const rootExists = this.app.vault.getAbstractFileByPath(CONTROL_PATHS.root) !== null;
@@ -1644,10 +1628,10 @@ export default class TracekeeperPlugin extends Plugin {
 				await this.ensureFileDoesNotExist(controlFile.path, controlFile.content);
 			}
 
-			if (plan.missingAuditLog) {
+			if (plan.missingAgentActivityHub) {
 				await this.ensureFileDoesNotExist(
-					CONTROL_PATHS.auditLog,
-					this.buildAuditLogHeader()
+					CONTROL_PATHS.agentActivityHub,
+					this.buildAgentActivityHubHeader()
 				);
 			}
 
@@ -1677,8 +1661,20 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 
-	private buildAuditLogHeader(): string {
-		return noteContentText(this.resolveNoteContentLanguage().language, '# 审计日志\n\n', '# Audit Log\n\n');
+	private buildAgentActivityHubHeader(): string {
+		const timestamp = new Date().toISOString();
+		return [
+			'---',
+			'type: tracekeeper_agent_activity_hub',
+			'agent_activity_schema_version: 1',
+			`created_at: ${timestamp}`,
+			`updated_at: ${timestamp}`,
+			'---',
+			'# Agent activity',
+			'',
+			'Daily MCP Agent activity shards link back to this hub.',
+			'',
+		].join('\n');
 	}
 
 	private getConfiguredTrashDescription(): string {
@@ -1686,9 +1682,7 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private async appendAuditEvent(plan: MemoryInitializationPlan): Promise<void> {
-		const now = new Date().toISOString();
-		const event = this.renderAuditEvent(now, plan.foldersToCreate.length, plan.filesToCreate.length);
-		await this.appendToAuditLog(event);
+		void plan;
 	}
 
 	private renderAuditEvent(timestamp: string, folderCount: number, fileCount: number): string {
@@ -1700,7 +1694,7 @@ export default class TracekeeperPlugin extends Plugin {
 
 
 	private async appendToAuditLog(rawEvent: string): Promise<void> {
-		await this.auditShardRepository.appendRawEvents(rawEvent);
+		void rawEvent;
 	}
 
 	private async appendArchiveAuditEvent(
@@ -1708,9 +1702,7 @@ export default class TracekeeperPlugin extends Plugin {
 		rawEvent: string
 	): Promise<void> {
 		this.archiveReceiptPath(operationId);
-		await this.auditShardRepository.appendRawEvents(rawEvent, {
-			operationId,
-		});
+		void rawEvent;
 	}
 
 	private async refreshActivityViews(): Promise<void> {
@@ -1914,10 +1906,10 @@ export default class TracekeeperPlugin extends Plugin {
 
 
 	async loadAgentConnectionsSnapshot(): Promise<AgentConnectionsSnapshot> {
-		const auditLogMissing =
-			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditLog) === null;
-		const auditDirMissing =
-			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.auditDir) === null;
+		const agentActivityHubMissing =
+			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.agentActivityHub) === null;
+		const agentActivityDirMissing =
+			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.agentActivityDir) === null;
 		const auditEvents = await this.activityDataController.readRecentAuditEvents(80);
 		const toolCalls = auditEvents
 			.filter((event) => this.activityDataController.isToolCallAuditEvent(event))
@@ -1942,7 +1934,7 @@ export default class TracekeeperPlugin extends Plugin {
 			activeSessions: this.mcpRuntimeLifecycle.getRuntime()?.getSessionSnapshot?.() ?? [],
 			recentAgents,
 			recentToolCalls: toolCalls,
-			missingAuditSources: auditLogMissing && auditDirMissing,
+			missingAuditSources: agentActivityHubMissing || agentActivityDirMissing,
 			updatedAt: new Date().toISOString(),
 		};
 	}
@@ -2810,17 +2802,6 @@ export default class TracekeeperPlugin extends Plugin {
 		} catch (error) {
 			this.skillPlanActions.delete(planId);
 			console.error('tracekeeper failed to install client Skill', error);
-			try {
-				await this.appendToAuditLog(buildSkillInstallAuditEntry({
-					action,
-					clientId,
-					bundleHash: TRACEKEEPER_SKILL_BUNDLE.manifest.bundle_hash,
-					backupCreated: false,
-					result: 'failed',
-				}));
-			} catch (auditError) {
-				console.error('tracekeeper failed to audit client Skill failure', auditError);
-			}
 			new Notice(error instanceof ClientSkillPlanConflictError
 				? ui('强化技能在预览后已变化，或包含用户修改。请重新检测和预览。', 'The Skill changed after preview or contains local modifications. Detect and preview again.')
 				: ui('强化技能保存失败。', 'Failed to save the Skill.'));
@@ -2852,31 +2833,16 @@ export default class TracekeeperPlugin extends Plugin {
 			console.error('tracekeeper installed client Skill but failed to persist its local receipt', error);
 		}
 
-		let auditRecorded = true;
-		try {
-			await this.appendToAuditLog(buildSkillInstallAuditEntry({
-				action,
-				clientId: result.clientId,
-				bundleHash: result.bundleHash,
-				backupCreated: result.backupDirectory !== '',
-				result: receiptPersisted ? 'success' : 'partial',
-				installMethod: 'tracekeeper_install',
-			}));
-		} catch (error) {
-			auditRecorded = false;
-			console.error('tracekeeper installed client Skill but failed to record its audit event', error);
-		}
-
 		const actionLabel = action === 'install'
 			? ui('强化技能已安装。', 'Skill installed.')
 			: action === 'update'
 				? ui('强化技能已更新。', 'Skill updated.')
 				: ui('已迁移到新目录，旧目录保持不变。', 'Migrated to the selected directory. The legacy directory was kept unchanged.');
-		if (!receiptPersisted || !auditRecorded) {
+		if (!receiptPersisted) {
 			new Notice(
 				`${actionLabel} ${ui(
-					'本地收据或审计记录未完整保存；强化技能文件已经写入，请重新检测状态，不要重复安装。',
-					'The local receipt or audit record was not fully saved. Skill files were written; detect the current state instead of installing again.'
+					'本地收据未完整保存；强化技能文件已经写入，请重新检测状态，不要重复安装。',
+					'The local receipt was not fully saved. Skill files were written; detect the current state instead of installing again.'
 				)}`
 			);
 		} else {
@@ -2943,14 +2909,6 @@ export default class TracekeeperPlugin extends Plugin {
 			this.settings.onboarding = previousOnboarding;
 			throw error;
 		}
-		await this.appendToAuditLog(buildSkillInstallAuditEntry({
-			action: 'verify_external',
-			clientId,
-			bundleHash: TRACEKEEPER_SKILL_BUNDLE.manifest.bundle_hash,
-			backupCreated: false,
-			result: 'success',
-			installMethod: 'external_verified',
-		}));
 		return {
 			action: 'install',
 			clientId,
@@ -3219,7 +3177,7 @@ export default class TracekeeperPlugin extends Plugin {
 			list_review_queue: ui('查看待审核的知识变更', 'List knowledge changes to review'),
 			list_source_requests: ui('查看资料请求', 'Review material requests'),
 			list_approved_writebacks: ui('查看待写入内容', 'Review ready-to-apply changes'),
-			audit_recent: ui('查看最近记录', 'Review recent activity'),
+			agent_activity_recent: ui('查看 Agent 活动', 'Review Agent activity'),
 			source_request: ui('处理资料请求', 'Handle source requests'),
 			build_context_pack: ui('整理上下文材料', 'Prepare context material'),
 			lint: ui('检查笔记结构', 'Check note structure'),

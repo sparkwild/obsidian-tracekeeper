@@ -8,7 +8,7 @@ Vault and coordinates bounded writes without creating a second knowledge store.
 Tracekeeper uses three top-level roots:
 
 ```text
-00_tracekeeper/   operational control, inbox, work records, audit, and journals
+00_tracekeeper/   operational control, inbox, work records, Agent activity, and journals
 01_knowledge/     durable Memory, Wiki, and Sources owned by the user
 02_archive/       inactive or completed artifacts
 ```
@@ -89,7 +89,7 @@ operations use:
   step prefix and terminal status across record replacement;
 - optimistic file replacement and stable content markers;
 - per-step journal progress and startup roll-forward recovery;
-- bounded, redacted audit projections.
+- bounded, redacted Agent activity projections.
 
 Retries return the first compatible result. Reusing a key for a changed payload
 or another tool fails closed. Recovery never rolls user-visible Markdown back
@@ -122,8 +122,9 @@ Archiving an eligible proposal is a separate human-confirmed operation:
 An expired preview cannot start a new archive. Once a valid confirmation has
 persisted its intent, restart may roll that exact operation forward; changed
 claim, receipt, source, destination, identity, or reference state fails closed.
-The persisted operation start time is also the archive audit event time, so a
-retry after UTC day rollover remains in the same shard and keeps one event id.
+The persisted operation start time remains the archive receipt timestamp. Human
+archive actions do not create Agent activity events, so retries do not affect
+the activity timeline.
 
 Legacy-structure migration uses a separate Vault-local journal under
 `00_tracekeeper/control/operations/legacy-migrations/`. Its immutable identity
@@ -145,24 +146,26 @@ temporary folder through `Vault.createFolder()`, generates the link with
 native index. Only the invocation that atomically created that folder may send
 it to configured trash. User files then advance monotonically through
 `planned`, `preflight_passed`, `moved`, `enriched`, and `verified`; uncertainty
-is retained as bounded blocked or failed state. Reports and audit events are
-projections of persisted journal state and may be refreshed after recovery.
+is retained as bounded blocked or failed state. Reports and Agent activity
+projections (when an operation was initiated through MCP) derive from persisted
+journal state and may be refreshed after recovery.
 Empty legacy roots have their own preview-bound cleanup attempt state and use
 `FileManager.trashFile()` only after all planned descendants are verified.
 
-New audit events append to UTC daily Markdown shards through `Vault.process()`.
-Stable event ids suppress exact retries, Vault-scoped path locks coordinate
-plugin and Runtime writers, and a generated link from each shard to the audit
-hub keeps Backlinks useful. The legacy monolith remains readable but receives no
-new events; readers merge both sources deterministically by event identity.
+New Agent activity events append to canonical UTC daily Markdown shards under
+`00_tracekeeper/control/agent_activity/` through `Vault.process()`. Stable
+activity ids suppress exact retries, Vault-scoped path locks coordinate plugin
+and Runtime writers, and a generated link from each shard to the Agent Activity
+hub keeps Backlinks useful. Legacy audit history is retained only for explicit
+cleanup and is not read or migrated by the activity reader.
 
-Runtime-log cleanup is also preview-bound. It classifies every current audit
-file from fresh content, retains mixed-age or conflicted files, persists bounded
-progress before each external effect, and sends only wholly eligible files
-through `FileManager.trashFile()`. Receipt revisions distinguish completed,
-partial, stale, and outcome-unknown results so restart never guesses whether an
-interrupted trash effect occurred. The next audit append may recreate a removed
-daily shard.
+Agent activity cleanup is preview-bound. It classifies every current canonical
+shard from fresh content, retains mixed-age or conflicted files, persists
+bounded progress before each external effect, and sends only wholly eligible
+files through `FileManager.trashFile()`. Receipt revisions distinguish
+completed, partial, stale, and outcome-unknown results so restart never guesses
+whether an interrupted trash effect occurred. The next MCP activity append may
+recreate a removed daily shard.
 
 ## Vault-Outside Integration
 
@@ -186,15 +189,16 @@ Every direct Skill change:
 5. preserves unrelated content;
 6. creates a backup and stages replacement;
 7. rolls back partial installation failure where possible;
-8. records a bounded local audit result without credentials, authorization
-   Headers, credential hashes, or absolute target paths.
+8. records a bounded local receipt without credentials, authorization Headers,
+   credential hashes, or absolute target paths; human Skill actions do not create
+   Agent activity events.
 
 Every existing physical path segment from the selected Skill target through its
 parent chain is checked with `lstat`; a symbolic-link segment blocks detection,
 preview, backup, staging, and replacement. Successful file commit is the
-durable boundary. If local receipt persistence or audit append fails afterward,
-the result is reported as partial with the files already installed; the user is
-directed to detect current state instead of repeating the write.
+durable boundary. If local receipt persistence fails afterward, the result is
+reported as partial with the files already installed; the user is directed to
+detect current state instead of repeating the write.
 
 Unknown, conflicting, newer, or user-modified Skill installations are never
 silently overwritten. An installed and hash-verified Skill proves only file

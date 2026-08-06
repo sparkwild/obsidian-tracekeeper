@@ -52,14 +52,10 @@ function decodeResponse(line) {
 	}
 }
 
-function readAuditLog(vaultRoot) {
+function readAgentActivity(vaultRoot) {
 	const documents = [];
-	const legacyPath = path.join(vaultRoot, '00_tracekeeper/control/audit_log.md');
-	if (fs.existsSync(legacyPath)) {
-		documents.push(fs.readFileSync(legacyPath, 'utf8'));
-	}
-	const auditRoot = path.join(vaultRoot, '00_tracekeeper/control/audit');
-	if (fs.existsSync(auditRoot)) {
+	const activityRoot = path.join(vaultRoot, '00_tracekeeper/control/agent_activity');
+	if (fs.existsSync(activityRoot)) {
 		const visit = (directory) => {
 			for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
 				const absolutePath = path.join(directory, entry.name);
@@ -70,16 +66,19 @@ function readAuditLog(vaultRoot) {
 				const relativePath = path.relative(vaultRoot, absolutePath).replaceAll(path.sep, '/');
 				if (
 					entry.isFile()
-					&& /^00_tracekeeper\/control\/audit\/\d{4}\/\d{4}-\d{2}-\d{2}\.md$/.test(relativePath)
+					&& /^00_tracekeeper\/control\/agent_activity\/\d{4}\/\d{4}-\d{2}-\d{2}\.md$/.test(relativePath)
 				) {
 					documents.push(fs.readFileSync(absolutePath, 'utf8'));
 				}
 			}
 		};
-		visit(auditRoot);
+		visit(activityRoot);
 	}
 	return documents.join('\n');
 }
+
+// Keep the helper alias local to this smoke script; the public runtime surface is Agent Activity.
+const readAuditLog = readAgentActivity;
 
 function countReviewQueueFiles(vaultRoot) {
 	const queuePath = path.join(vaultRoot, '00_tracekeeper', 'inbox', 'review_queue');
@@ -117,7 +116,7 @@ function managedWorkflowArtifactSnapshot(vaultRoot) {
 	return files.sort();
 }
 
-function includesAuditNeedle(content, needle) {
+function includesActivityNeedle(content, needle) {
 	if (content.includes(needle)) {
 		return true;
 	}
@@ -128,14 +127,14 @@ function includesAuditNeedle(content, needle) {
 }
 
 function hasSectionWithValues(log, linesToMatch) {
-	return linesToMatch.every((needle) => includesAuditNeedle(log, needle));
+	return linesToMatch.every((needle) => includesActivityNeedle(log, needle));
 }
 
 function findSectionWithValues(log, linesToMatch) {
 	return log
 		.split('\n## ')
 		.map((entry) => entry.trim())
-		.find((section) => linesToMatch.every((needle) => includesAuditNeedle(section, needle))) || '';
+		.find((section) => linesToMatch.every((needle) => includesActivityNeedle(section, needle))) || '';
 }
 
 function assertToolCallEvent(log, toolName, status) {
@@ -152,7 +151,7 @@ function hasToolCallSection(log, toolName, status, extraNeedles = []) {
 			continue;
 		}
 		const hasType =
-			section.includes('- type: tool-call') || section.includes('- type: "tool-call"');
+			section.includes('- type: mcp.tool_call') || section.includes('- type: "mcp.tool_call"');
 		const hasTool =
 			section.includes(`- tool_name: ${toolName}`) || section.includes(`- tool_name: ${quotedToolName}`);
 		const hasStatus =
@@ -167,7 +166,7 @@ function hasToolCallSection(log, toolName, status, extraNeedles = []) {
 
 function assertContainsNoSensitiveText(log, values) {
 	for (const value of values) {
-		assert.ok(!log.includes(value), `sensitive value should not appear in audit: ${value}`);
+		assert.ok(!log.includes(value), `sensitive value should not appear in Agent activity: ${value}`);
 	}
 }
 
@@ -597,7 +596,7 @@ async function main() {
 		writeNote(externalVaultRoot, 'outside-secret.md', '# Outside secret\n\nThis content must never cross the active Vault boundary.');
 		writeNote(vaultRoot, `${vaultConfigDir}/config.md`, '# Config\n');
 		writeNote(vaultRoot, '00_tracekeeper/control/system.md', '# System\n');
-		writeNote(vaultRoot, '00_tracekeeper/control/audit_log.md', '# Audit Log\n');
+		writeNote(vaultRoot, '00_tracekeeper/control/agent_activity/index.md', '# Agent activity\n');
 		writeNote(vaultRoot, '01_knowledge/index.md', '# Knowledge Index\n\n- [[memory/index]]\n- [[wiki/index]]\n- [[sources/index]]\n');
 		writeNote(vaultRoot, '01_knowledge/memory/index.md', '# Memory Index\n\n- [[projects/index]]\n');
 		writeNote(vaultRoot, '01_knowledge/memory/projects/index.md', '# Project Memory Index\n\n- [[demo/index]]\n');
@@ -977,7 +976,7 @@ async function main() {
 			authorization: `Bearer ${WRONG_BEARER}`,
 			status: 401,
 		});
-		const initAudit = readAuditLog(vaultRoot);
+		const initAudit = readAgentActivity(vaultRoot);
 		for (const response of [
 			missingSessionBearer,
 			wrongSessionBearer,
@@ -999,17 +998,17 @@ async function main() {
 			STANDALONE_BEARER_DIGEST,
 			client.authorization,
 		]);
-		assert.ok(hasSectionWithValues(initAudit, ['- type: connection', '- event: connection', '- agent_id:']));
+		assert.ok(hasSectionWithValues(initAudit, ['- type: "mcp.connection"', '- event: "mcp.connection"', '- agent_id:']));
 		assert.ok(hasSectionWithValues(initAudit, [`- principal_id: "${LOCAL_TRUST_PRINCIPAL_ID}"`]));
 		assert.ok(hasSectionWithValues(initAudit, ['- session_id:']));
 		assert.ok(hasSectionWithValues(initAudit, ['- timestamp:']));
 		assert.ok(hasSectionWithValues(initAudit, ['- transport: "streamable-http"']));
 		const connectionAudit = findSectionWithValues(initAudit, [
-			'- type: connection',
+			'- type: "mcp.connection"',
 			'- client_name: "tracekeeper-smoke"',
 		]);
 		assert.ok(connectionAudit);
-		assert.ok(connectionAudit.includes('- audit_schema_version: 2'));
+		assert.ok(connectionAudit.includes('- agent_activity_schema_version: 1'));
 		assert.ok(connectionAudit.includes('- observed_client_name_raw: "tracekeeper-smoke"'));
 		assert.ok(connectionAudit.includes('- observed_client_type: "custom"'));
 		assert.ok(connectionAudit.includes('- observed_client_version: "0.2.3"'));
@@ -1019,7 +1018,7 @@ async function main() {
 		assert.equal(connectionAudit.includes('- last_successful_tool:'), false);
 		for (const reason of ['auth_missing', 'auth_invalid', 'query_token_rejected']) {
 			assert.ok(findSectionWithValues(initAudit, [
-				'- type: runtime-diagnostic',
+				'- type: "mcp.authentication_rejected"',
 				`- diagnostic_reason: "${reason}"`,
 				'- result_status: "failed"',
 			]));
@@ -1028,6 +1027,7 @@ async function main() {
 		const tools = await client.call('tools/list');
 		const listedTools = ensureToolNames(tools, [
 			'tracekeeper.status',
+			'tracekeeper.agent_activity_recent',
 			'tracekeeper.lint',
 			'tracekeeper.recall',
 			'tracekeeper.project_memory',
@@ -1046,7 +1046,7 @@ async function main() {
 				`${definition.name} must not expose a caller-selected Vault root`,
 			);
 		}
-		assert.equal(listedTools.length, 11, 'tools/list should expose the fixed local trust toolset');
+		assert.equal(listedTools.length, 12, 'tools/list should expose the fixed local trust toolset');
 		assert.equal(listedTools.includes('tracekeeper.review_queue'), false);
 		assert.equal(listedTools.includes('tracekeeper.apply_approved_writeback'), false);
 		for (const hiddenTool of [
@@ -1056,7 +1056,6 @@ async function main() {
 			'tracekeeper.list_review_queue',
 			'tracekeeper.list_source_requests',
 			'tracekeeper.list_approved_writebacks',
-			'tracekeeper.audit_recent',
 			'tracekeeper.distill_session',
 			'tracekeeper.write_context_pack',
 			'tracekeeper.write_session_note',
@@ -1073,7 +1072,7 @@ async function main() {
 		assert.ok(resourceUris.includes('tracekeeper://active-context'), 'resources/list should include active-context');
 		assert.ok(resourceUris.includes('tracekeeper://review-queue'), 'resources/list should include review-queue');
 		assert.ok(resourceUris.includes('tracekeeper://agent-activity'), 'resources/list should include agent-activity');
-		assert.ok(resourceUris.includes('tracekeeper://audit/recent'), 'resources/list should include audit/recent');
+		assert.equal(resourceUris.includes('tracekeeper://audit/recent'), false, 'legacy audit resource must be removed');
 
 		const systemResource = buildStructured(await client.call('resources/read', { uri: 'tracekeeper://system' }));
 		assert.equal((systemResource.contents || []).length, 1, 'resources/read should return one content item for system');
@@ -1097,10 +1096,11 @@ async function main() {
 		assert.equal(agentActivityResource.contents[0].mimeType, 'text/markdown');
 		assert.ok(typeof agentActivityResource.contents[0].text === 'string');
 
-		const auditRecentResource = buildStructured(await client.call('resources/read', { uri: 'tracekeeper://audit/recent' }));
-		assert.equal(auditRecentResource.contents[0].uri, 'tracekeeper://audit/recent');
-		assert.equal(auditRecentResource.contents[0].mimeType, 'text/markdown');
-		assert.ok(typeof auditRecentResource.contents[0].text === 'string');
+		await assert.rejects(
+			() => client.call('resources/read', { uri: 'tracekeeper://audit/recent' }),
+			/Unknown resource URI/,
+			'legacy audit resource must no longer be readable'
+		);
 
 		await assert.rejects(
 			() => client.call('resources/read', { uri: 'tracekeeper://missing-resource' }),
@@ -1172,7 +1172,7 @@ async function main() {
 		assert.equal(status.content_language, 'en');
 		assert.equal(status.content_language_source, 'fallback');
 		const statusAudit = findSectionWithValues(readAuditLog(vaultRoot), [
-			'- type: tool-call',
+			'- type: "mcp.tool_call"',
 			'- tool_name: "tracekeeper.status"',
 			'- result_status: "success"',
 		]);
@@ -1298,7 +1298,7 @@ async function main() {
 			'should reject reads from the configured Obsidian settings directory'
 		);
 		const failedReadAudit = findSectionWithValues(readAuditLog(vaultRoot), [
-			'- type: tool-call',
+			'- type: "mcp.tool_call"',
 			'- tool_name: "tracekeeper.read_note"',
 			'- result_status: "failed"',
 		]);

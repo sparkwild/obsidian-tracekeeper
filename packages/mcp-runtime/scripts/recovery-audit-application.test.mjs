@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { AuditRecentApplicationService } from '../dist/application/audit.js';
+import { AgentActivityRecentApplicationService } from '../dist/application/audit.js';
 import { RuntimeRecoveryController } from '../dist/application/recovery.js';
 
 function record(operationId, payload = {}) {
@@ -65,9 +65,9 @@ test('RuntimeRecoveryController separates recovered, failed, and skipped records
 	assert.equal(saved[0].status, 'conflicted');
 });
 
-test('AuditRecentApplicationService owns section limiting and audit path selection', async () => {
-	const service = new AuditRecentApplicationService({
-		auditLogPath: '00_tracekeeper/audit/events.jsonl',
+test('AgentActivityRecentApplicationService owns section limiting and activity path selection', async () => {
+	const service = new AgentActivityRecentApplicationService({
+		agentActivityPath: '00_tracekeeper/control/agent_activity/index.md',
 		readSections: async () => [
 			{ source_path: '00_tracekeeper/audit/events-2026-08-03.jsonl', id: 1 },
 			{ source_path: 'legacy.jsonl', id: 2 },
@@ -77,7 +77,7 @@ test('AuditRecentApplicationService owns section limiting and audit path selecti
 	assert.deepEqual(await service.execute(1), {
 		ok: true,
 		read_only: true,
-		audit_log: '00_tracekeeper/audit/events-2026-08-03.jsonl',
+		activity_path: '00_tracekeeper/audit/events-2026-08-03.jsonl',
 		total_sections: 2,
 		sections: [{ source_path: '00_tracekeeper/audit/events-2026-08-03.jsonl', id: 1 }],
 	});

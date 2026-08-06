@@ -148,7 +148,7 @@ class DistillSessionApplicationService {
             read_only: false,
             task_id: taskId,
             path: note.path,
-            audit_path: note.audit_path,
+            activity_path: note.activity_path,
             proposals: proposals.map((proposal) => ({
                 proposal_id: proposal.proposalId,
                 path: proposal.path,

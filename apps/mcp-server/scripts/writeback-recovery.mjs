@@ -52,7 +52,7 @@ function countOccurrences(content, needle) {
 }
 
 function readAuditShards(vaultRoot) {
-	const auditRoot = path.join(vaultRoot, '00_tracekeeper/control/audit');
+	const auditRoot = path.join(vaultRoot, '00_tracekeeper/control/agent_activity');
 	const documents = [];
 	const visit = (directory) => {
 		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -64,7 +64,7 @@ function readAuditShards(vaultRoot) {
 			const relativePath = path.relative(vaultRoot, absolutePath).replaceAll(path.sep, '/');
 			if (
 				entry.isFile()
-				&& /^00_tracekeeper\/control\/audit\/\d{4}\/\d{4}-\d{2}-\d{2}\.md$/.test(relativePath)
+				&& /^00_tracekeeper\/control\/agent_activity\/\d{4}\/\d{4}-\d{2}-\d{2}\.md$/.test(relativePath)
 			) {
 				documents.push(fs.readFileSync(absolutePath, 'utf8'));
 			}
@@ -263,7 +263,7 @@ async function verifyCompletedRetryWithoutProposal(tempRoot) {
 }
 
 async function verifyAuditPendingRecoveryWithoutProposal(tempRoot) {
-	const fixture = createFixture(tempRoot, 'audit-pending-vault');
+	const fixture = createFixture(tempRoot, 'activity-pending-vault');
 	const previewResult = await preview(fixture);
 	const confirmationToken = previewResult.structuredContent.confirmation_token;
 	let injected = false;
@@ -273,9 +273,9 @@ async function verifyAuditPendingRecoveryWithoutProposal(tempRoot) {
 		{
 			...fixture.context,
 			operationFailureInjection(context) {
-				if (!injected && context.phase === 'before_step' && context.stepName === 'append_audit') {
+				if (!injected && context.phase === 'before_step' && context.stepName === 'append_agent_activity') {
 					injected = true;
-					throw new Error('simulated writeback audit interruption');
+					throw new Error('simulated writeback Agent activity interruption');
 				}
 			},
 		}
@@ -288,7 +288,7 @@ async function verifyAuditPendingRecoveryWithoutProposal(tempRoot) {
 	assert.equal(injected, true);
 
 	const pending = operationRecord(fixture);
-	assert.equal(pending.status, 'audit_pending');
+	assert.equal(pending.status, 'activity_pending');
 	assert.deepEqual(pending.completed_steps.map((step) => step.name), [
 		'apply_target',
 		'link_task',
@@ -311,7 +311,7 @@ async function verifyAuditPendingRecoveryWithoutProposal(tempRoot) {
 		'apply_target',
 		'link_task',
 		'mark_proposal_applied',
-		'append_audit',
+		'append_agent_activity',
 	]);
 	assert.deepEqual(
 		completed.completed_steps.find((step) => step.name === 'mark_proposal_applied').result,

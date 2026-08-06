@@ -218,7 +218,7 @@ function runtimeOwnershipReasons(root, relativeFile, content) {
 		'new FinishTaskApplicationService',
 		'new DistillSessionApplicationService',
 		'new RuntimeRecoveryController',
-		'new AuditRecentApplicationService',
+		'new AgentActivityRecentApplicationService',
 		'new VaultRecordAdapter',
 	];
 	for (const marker of requiredOwnerMarkers) {

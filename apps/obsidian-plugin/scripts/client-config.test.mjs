@@ -20,7 +20,7 @@ try {
 	});
 	const config = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 	const localize = (_zh, en) => en;
-	const endpoint = 'http://127.0.0.1:58437/mcp';
+	const endpoint = 'http://127.0.0.1:51601/mcp';
 	const profiles = config.buildClientProfiles('/home/test', localize, path.join);
 
 	assert.equal(profiles.length, 8);
@@ -80,13 +80,13 @@ try {
 	}
 
 	for (const invalid of [
-		'https://127.0.0.1:58437/mcp',
-		'http://localhost:58437/mcp',
-		'http://127.0.0.1:58437/other',
+		'https://127.0.0.1:51601/mcp',
+		'http://localhost:51601/mcp',
+		'http://127.0.0.1:51601/other',
 		'http://127.0.0.1/mcp',
-		'http://user@127.0.0.1:58437/mcp',
-		'http://127.0.0.1:58437/mcp?token=secret',
-		'http://127.0.0.1:58437/mcp#fragment',
+		'http://user@127.0.0.1:51601/mcp',
+		'http://127.0.0.1:51601/mcp?token=secret',
+		'http://127.0.0.1:51601/mcp#fragment',
 		'not-a-url',
 	]) {
 		assert.throws(

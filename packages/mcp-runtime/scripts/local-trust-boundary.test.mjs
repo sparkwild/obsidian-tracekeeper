@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
 	LOCAL_TRUST_CAPABILITIES,
 	LOCAL_TRUST_PRINCIPAL_ID,
+	DEFAULT_MCP_PORT,
 	McpJsonRpcHandler,
 	StreamableHttpMcpRuntime,
 	toolDefinitions,
@@ -14,6 +15,7 @@ import {
 
 const ACCEPTED_LOCAL_TRUST_TOOLS = [
 	'tracekeeper.status',
+	'tracekeeper.agent_activity_recent',
 	'tracekeeper.lint',
 	'tracekeeper.recall',
 	'tracekeeper.project_memory',
@@ -70,7 +72,7 @@ async function initializeAndList(handler, clientName, clientVersion, sessionId) 
 }
 
 function auditSections(vaultRoot) {
-	const auditRoot = path.join(vaultRoot, '00_tracekeeper', 'control', 'audit');
+	const auditRoot = path.join(vaultRoot, '00_tracekeeper', 'control', 'agent_activity');
 	const documents = [];
 	if (fs.existsSync(auditRoot)) {
 		for (const year of fs.readdirSync(auditRoot, { withFileTypes: true })) {
@@ -108,6 +110,10 @@ test('accepted local trust capabilities expose the exact fixed eleven-tool surfa
 	assert.equal(toolNames.includes('tracekeeper.apply_approved_writeback'), false);
 });
 
+test('local MCP runtime keeps the shared default port in the 516xx namespace', () => {
+	assert.equal(DEFAULT_MCP_PORT, 51601);
+});
+
 test('clientInfo remains an observation claim and cannot change the fixed tool surface', async () => {
 	const handler = new McpJsonRpcHandler();
 	const codex = await initializeAndList(handler, 'Codex', '9.9.9', 'session-codex');
@@ -143,9 +149,9 @@ test('observed-client audit timestamps only successful initialize and tool use',
 		const handler = new McpJsonRpcHandler({ defaultVaultRoot: vaultRoot });
 		const { state } = await initializeAndList(handler, 'Codex CLI', '9.9.9', 'session-observed');
 		let sections = auditSections(vaultRoot);
-		const connection = sections.find((section) => section.includes('- type: "connection"'));
+		const connection = sections.find((section) => section.includes('- type: "mcp.connection"'));
 		assert.ok(connection);
-		assert.match(connection, /- audit_schema_version: 2/);
+		assert.match(connection, /- agent_activity_schema_version: 1/);
 		assert.match(connection, /- observed_client_name_raw: "Codex CLI"/);
 		assert.match(connection, /- observed_client_type: "codex"/);
 		assert.match(connection, /- observed_client_version: "9.9.9"/);
@@ -215,7 +221,7 @@ test('observed-client audit timestamps only successful initialize and tool use',
 		assert.doesNotMatch(failedUse, /- last_successful_tool:/);
 		for (const reason of ['tool_call_unknown', 'tool_call_invalid_arguments']) {
 			const rejectedUse = sections.find(
-				(section) => section.includes('- type: "tool-call"')
+				(section) => section.includes('- type: "mcp.tool_call"')
 					&& section.includes(`- diagnostic_reason: "${reason}"`)
 			);
 			assert.ok(rejectedUse);

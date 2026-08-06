@@ -17,13 +17,13 @@ Changes require focused security review when they affect:
   history resolution, or archive receipts;
 - legacy-structure mapping, native-link preflight, migration preview or
   journal, graph convergence, conflict review, or empty-root cleanup;
-- audit event identity, shard or hub creation, concurrent append, legacy/shard
+- Agent activity identity, shard or hub creation, concurrent append, legacy cleanup
   merge, retention classification, configured trash, or cleanup receipts;
 - client-native setup guidance, observed connection evidence, or any proposal
   to reintroduce client-configuration filesystem access;
 - Skill bundle identity, target resolution, installation, backup, rollback, or
   update ownership;
-- operation journals, recovery, audit payloads, redaction, or error reporting.
+- operation journals, recovery, Agent activity payloads, redaction, or error reporting.
 
 ## Required Evidence
 
@@ -37,7 +37,7 @@ The review must identify:
    requests, protocol and Session validation, then tool capability and input
    validation;
 4. failure, retry, conflict, and recovery semantics;
-5. audit fields and proof that tokens, digests, authorization codes, PKCE
+5. Agent activity fields and proof that tokens, digests, authorization codes, PKCE
   verifiers, pending handles, and the `Authorization` Header are redacted;
 6. focused tests for rejection paths and zero unintended side effects.
 
@@ -47,15 +47,15 @@ For approved writeback, the evidence must additionally prove:
   hash;
 - the opaque confirmation token is authenticated, canonical, expiring, and
   bound to the proposal revision, semantic content and complete file hash,
-  target, optional task, complete touched-note set, and bounded audit context;
+  target, optional task, complete touched-note set, and bounded activity context;
 - missing, malformed, tampered, expired, replayed, or drifted confirmation
   state is rejected before any new write;
 - target and task compensation removes only effects owned by the operation and
   never overwrites later user edits;
-- `audit_pending` recovery reuses a bounded committed transition receipt,
-  appends the audit effect at most once, and does not replay terminal conflicts
+- `activity_pending` recovery reuses a bounded committed transition receipt,
+  appends the Agent activity effect at most once, and does not replay terminal conflicts
   or legacy body-bearing records;
-- audit contains neither confirmation tokens nor their hashes, while operation
+- Agent activity contains neither confirmation tokens nor their hashes, while operation
   journal JSON contains no plaintext token, note body, recovery payload, or
   completed result;
 - normalized recovery payloads and completed results retained for exact retry
@@ -72,8 +72,8 @@ For approved writeback, the evidence must additionally prove:
   unsaved draft, announce the conflict through an assistive live status, and
   restore keyboard focus to an actionable control.
 
-For proposal archive, legacy-structure migration, audit shards, or Runtime-log
-cleanup, the evidence must additionally prove:
+For proposal archive, legacy-structure migration, Agent activity shards, or
+Agent activity cleanup, the evidence must additionally prove:
 
 - the displayed preview and confirmation cover the exact bounded path, identity,
   hash/version, destination, retained-file, managed-reference, cutoff, and
@@ -98,10 +98,10 @@ cleanup, the evidence must additionally prove:
 - native move uses `FileManager.renameFile()`, generated links use
   `FileManager.generateMarkdownLink()`, shard append uses `Vault.process()`, and
   cleanup uses `FileManager.trashFile()` with zero reachable `Vault.delete()`;
-- stable proposal and audit identities make restart and exact retry
+- stable proposal and Agent activity identities make restart and exact retry
   duplicate-safe, while both/neither-path ambiguity and post-trash intent are
   reported as conflict or outcome-unknown rather than guessed;
-- bounded previews, receipts, audit fields, UI notices, and recovery errors
+- bounded previews, receipts, Agent activity fields, UI notices, and recovery errors
   exclude note bodies, credentials, tokens, absolute external paths, and
   unbounded arguments.
 

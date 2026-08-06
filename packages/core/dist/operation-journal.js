@@ -93,7 +93,8 @@ class NodeFileOperationJournal {
         if (typeof record.payload_hash !== 'string' || !record.payload_hash) {
             throw new CorruptedOperationJournalError(filePath, 'payload_hash missing');
         }
-        if (!isValidOperationStatus(record.status)) {
+        const normalizedStatus = normalizePersistedOperationStatus(record.status);
+        if (!isValidOperationStatus(normalizedStatus)) {
             throw new CorruptedOperationJournalError(filePath, `invalid status: ${record.status}`);
         }
         if (typeof record.created_at !== 'string' || !record.created_at) {
@@ -128,7 +129,7 @@ class NodeFileOperationJournal {
             idempotency_key: record.idempotency_key,
             payload_hash: record.payload_hash,
             payload,
-            status: record.status,
+            status: normalizedStatus,
             created_at: record.created_at,
             updated_at: record.updated_at,
             completed_steps: record.completed_steps.map(cloneStepExecutionRecord),
@@ -673,10 +674,10 @@ class RecoverableOperationRunner {
         }
         return configured;
     }
-    markAuditPending(record) {
+    markActivityPending(record) {
         return {
             ...record,
-            status: 'audit_pending',
+            status: 'activity_pending',
             error: undefined,
             failed_at: undefined,
             updated_at: this.now(),
@@ -795,9 +796,9 @@ class RecoverableOperationRunner {
                     continue;
                 }
                 try {
-                    if (step.failureStatus === 'audit_pending') {
-                        failureStatus = 'audit_pending';
-                        record = this.markAuditPending(record);
+                    if (step.failureStatus === 'activity_pending') {
+                        failureStatus = 'activity_pending';
+                        record = this.markActivityPending(record);
                         await this.config.journal.save(record);
                     }
                     await this.withFailureContext('before_step', step.name, record.operation_id, payloadHash, async () => Promise.resolve());
@@ -915,13 +916,21 @@ function isOperationProgressAnchor(value) {
 }
 function isValidOperationStatus(value) {
     return value === 'in_progress'
-        || value === 'audit_pending'
+        || value === 'activity_pending'
         || value === 'completed'
         || value === 'conflicted'
         || value === 'failed';
 }
+/**
+ * One-time on-read migration for records written before Agent activity was
+ * separated from user-facing operation receipts. The legacy spelling is not
+ * accepted for new writes and is normalized before all invariants run.
+ */
+function normalizePersistedOperationStatus(value) {
+    return value === 'audit_pending' ? 'activity_pending' : value;
+}
 function isValidOperationFailureStatus(value) {
-    return value === 'audit_pending' || value === 'conflicted' || value === 'failed';
+    return value === 'activity_pending' || value === 'conflicted' || value === 'failed';
 }
 function isStepExecutionRecord(value) {
     if (!isPlainObject(value)) {
@@ -971,8 +980,8 @@ function validateParsedOperationRecordInvariants(record, filePath) {
             || !record.failed_at)) {
         throw new CorruptedOperationJournalError(filePath, `${record.status} operation record requires error and failed_at`);
     }
-    if (record.status === 'audit_pending' && hasError !== hasFailedAt) {
-        throw new CorruptedOperationJournalError(filePath, 'audit_pending failure metadata must be complete when present');
+    if (record.status === 'activity_pending' && hasError !== hasFailedAt) {
+        throw new CorruptedOperationJournalError(filePath, 'activity_pending failure metadata must be complete when present');
     }
     const completedSteps = record.completed_steps;
     const completedNames = new Set();

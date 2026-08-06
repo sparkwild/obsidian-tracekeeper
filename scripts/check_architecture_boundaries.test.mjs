@@ -218,7 +218,7 @@ test('accepts the Runtime edge owner composition after stateful extraction', () 
 			'new FinishTaskApplicationService();',
 			'new DistillSessionApplicationService();',
 			'new RuntimeRecoveryController();',
-			'new AuditRecentApplicationService();',
+			'new AgentActivityRecentApplicationService();',
 			'new VaultRecordAdapter();',
 			'',
 		].join('\n'));
@@ -240,7 +240,7 @@ test('rejects migrated audit declarations from the Runtime edge', () => {
 			'new FinishTaskApplicationService();',
 			'new DistillSessionApplicationService();',
 			'new RuntimeRecoveryController();',
-			'new AuditRecentApplicationService();',
+			'new AgentActivityRecentApplicationService();',
 			'new VaultRecordAdapter();',
 			'function parseAuditSections() {}',
 			'',

@@ -106,19 +106,19 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 		},
 		category: { zh: '审核', en: 'Review' },
 	},
-	'tracekeeper.audit_recent': {
-		title: { zh: '查看审计记录', en: 'Read audit log' },
+	'tracekeeper.agent_activity_recent': {
+		title: { zh: '查看 Agent 活动', en: 'Read Agent activity' },
 		description: {
-			zh: '读取最近的连接、工具调用、配置写入和错误记录，便于排查 Agent 使用情况。',
-			en: 'Reads recent connection, tool-call, config-write, and error records for troubleshooting agent activity.',
+			zh: '读取按 UTC 日期分片保存的 MCP 连接、认证拒绝和工具调用活动；不记录用户界面操作。',
+			en: 'Reads daily UTC-sharded MCP connection, authentication-rejection, and tool-call activity; user interface operations are excluded.',
 		},
-		category: { zh: '日志', en: 'Log' },
+		category: { zh: 'Agent 活动', en: 'Agent activity' },
 	},
 	'tracekeeper.analyze_source_request': {
 		title: { zh: '分析资料请求', en: 'Analyze source request' },
 		description: {
-			zh: '处理一条资料请求，生成来源笔记、分析输出、审核提案和审计记录。',
-			en: 'Processes one source request and writes source notes, analysis output, review proposals, and audit entries.',
+			zh: '处理一条资料请求，生成来源笔记、分析输出或审核提案；MCP 调用会形成 Agent 活动。',
+			en: 'Processes one source request and writes source notes, analysis output, or review proposals; the MCP call is recorded as Agent activity.',
 		},
 		category: { zh: '资料', en: 'Source' },
 	},
@@ -173,8 +173,8 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 	'tracekeeper.write_context_pack': {
 		title: { zh: '写入上下文包', en: 'Write context pack' },
 		description: {
-			zh: '把已生成的上下文内容写入 Tracekeeper 工作区，便于后续复用和审计。',
-			en: 'Writes generated context content under the Tracekeeper workspace for reuse and auditability.',
+			zh: '把已生成的上下文内容写入 Tracekeeper 工作区，便于后续复用；MCP 调用会形成 Agent 活动。',
+			en: 'Writes generated context content under the Tracekeeper workspace for reuse; the MCP call is recorded as Agent activity.',
 		},
 		category: { zh: '上下文', en: 'Context' },
 	},

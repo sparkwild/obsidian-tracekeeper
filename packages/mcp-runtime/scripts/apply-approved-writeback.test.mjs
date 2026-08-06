@@ -56,11 +56,7 @@ function writeNote(vaultRoot, relativePath, content) {
 
 function readAuditText(vaultRoot) {
 	const documents = [];
-	const legacyPath = path.join(vaultRoot, '00_tracekeeper', 'control', 'audit_log.md');
-	if (fs.existsSync(legacyPath)) {
-		documents.push(legacyPath);
-	}
-	const shardRoot = path.join(vaultRoot, '00_tracekeeper', 'control', 'audit');
+	const shardRoot = path.join(vaultRoot, '00_tracekeeper', 'control', 'agent_activity');
 	if (fs.existsSync(shardRoot)) {
 		for (const year of fs.readdirSync(shardRoot, { withFileTypes: true })) {
 			if (!year.isDirectory() || !/^\d{4}$/.test(year.name)) {
@@ -405,14 +401,14 @@ function createDirectServiceFixture(t, overrides = {}) {
 			'01_knowledge/memory/projects/demo/memory.md',
 			'00_tracekeeper/inbox/review_queue/service.md',
 			'00_tracekeeper/work/tasks/service-task.md',
-			'00_tracekeeper/control/audit_log.md',
+			'00_tracekeeper/control/agent_activity/index.md',
 		],
 		confirmationTokenHash: 'service-confirmation-token-hash',
 		confirmationExpiresAt: '2026-07-30T00:01:00.000Z',
-		auditPath: '00_tracekeeper/control/audit_log.md',
-		auditAgentId: 'service-test-agent',
-		auditSessionId: 'service-test-session',
-		auditClientName: 'service-test-client',
+		activityPath: '00_tracekeeper/control/agent_activity/index.md',
+		activityAgentId: 'service-test-agent',
+		activitySessionId: 'service-test-session',
+		activityClientName: 'service-test-client',
 	};
 	const transitionReceipt = transitionProposal(
 		approved.state,
@@ -473,7 +469,7 @@ function createDirectServiceFixture(t, overrides = {}) {
 			}
 			await overrides.afterTaskRollbackEffect?.({ currentPayload, operationId, receipt });
 		},
-		async appendAudit(currentPayload, operationId, receipt) {
+		async appendAgentActivity(currentPayload, operationId, receipt) {
 			auditReceipts.push(receipt);
 			if (!committed.has('audit')) {
 				committed.add('audit');
@@ -1056,8 +1052,8 @@ for (const injection of [
 	{ phase: 'after_step', stepName: 'link_task' },
 	{ phase: 'before_step', stepName: 'mark_proposal_applied' },
 	{ phase: 'after_step', stepName: 'mark_proposal_applied' },
-	{ phase: 'before_step', stepName: 'append_audit', auditPending: true },
-	{ phase: 'after_step', stepName: 'append_audit' },
+	{ phase: 'before_step', stepName: 'append_agent_activity', activityPending: true },
+	{ phase: 'after_step', stepName: 'append_agent_activity' },
 	{ phase: 'before_finalize' },
 ]) {
 	const label = injection.stepName
@@ -1083,10 +1079,10 @@ for (const injection of [
 		assert.equal(interrupted.isError, true);
 		assert.equal(injected, true);
 		const beforeRecovery = await operationRecord(fixture);
-		if (injection.auditPending) {
+		if (injection.activityPending) {
 			assert.equal(
 				beforeRecovery.status,
-				'audit_pending',
+				'activity_pending',
 				'proposal-committed operation awaiting audit must have an explicit recovery state'
 			);
 		}
@@ -1103,7 +1099,7 @@ for (const injection of [
 			'apply_target',
 			'link_task',
 			'mark_proposal_applied',
-			'append_audit',
+			'append_agent_activity',
 		]);
 		assertBoundedTaskLinkStep(completed, fixture, token, DEFAULT_WRITEBACK);
 		assertBoundedTransitionStep(completed, fixture, token, DEFAULT_WRITEBACK);
@@ -1127,7 +1123,7 @@ test('a tampered journal proposal receipt is replaced by the authenticated progr
 	const token = tokenFrom(previewResult);
 	let injected = false;
 	fixture.context.operationFailureInjection = (context) => {
-		if (!injected && context.phase === 'before_step' && context.stepName === 'append_audit') {
+		if (!injected && context.phase === 'before_step' && context.stepName === 'append_agent_activity') {
 			injected = true;
 			throw new Error('interrupt before audit receipt validation');
 		}
@@ -1136,7 +1132,7 @@ test('a tampered journal proposal receipt is replaced by the authenticated progr
 	const interrupted = await apply(fixture, token);
 	assert.equal(interrupted.isError, true);
 	const pending = await operationRecord(fixture);
-	assert.equal(pending.status, 'audit_pending');
+	assert.equal(pending.status, 'activity_pending');
 	assertBoundedTaskLinkStep(pending, fixture, token, DEFAULT_WRITEBACK);
 	assertBoundedTransitionStep(pending, fixture, token, DEFAULT_WRITEBACK);
 	const rawPending = rawOperationRecord(fixture);
@@ -1167,14 +1163,14 @@ test('a tampered journal proposal receipt is replaced by the authenticated progr
 	);
 });
 
-test('audit_pending recovery uses the journaled transition receipt after proposal deletion', async (t) => {
+test('activity_pending recovery uses the journaled transition receipt after proposal deletion', async (t) => {
 	const secretBody = '- JOURNALED-AUDIT-RECEIPT-BODY';
 	const fixture = createFixture(t, { writeback: secretBody });
 	const previewResult = await preview(fixture);
 	const token = tokenFrom(previewResult);
 	let injected = false;
 	fixture.context.operationFailureInjection = (context) => {
-		if (!injected && context.phase === 'before_step' && context.stepName === 'append_audit') {
+		if (!injected && context.phase === 'before_step' && context.stepName === 'append_agent_activity') {
 			injected = true;
 			throw new Error('interrupt before the dedicated audit append');
 		}
@@ -1183,7 +1179,7 @@ test('audit_pending recovery uses the journaled transition receipt after proposa
 	assert.equal(interrupted.isError, true);
 	assert.equal(injected, true);
 	const pending = await operationRecord(fixture);
-	assert.equal(pending.status, 'audit_pending');
+	assert.equal(pending.status, 'activity_pending');
 	const pendingReceipt = assertBoundedTransitionStep(
 		pending,
 		fixture,
@@ -1225,7 +1221,7 @@ test('audit_pending recovery uses the journaled transition receipt after proposa
 	assert.ok(auditText.includes(pendingReceipt.committedRevision));
 	assert.ok(auditText.includes(pendingReceipt.previousContentHash));
 	assert.ok(auditText.includes(pendingReceipt.committedContentHash));
-	assert.ok(auditText.includes(pending.payload.auditAgentId));
+	assert.ok(auditText.includes(pending.payload.activityAgentId));
 
 	assert.deepEqual(
 		await recoverPendingOperations(fixture.vaultRoot, fixture.context),
@@ -1394,7 +1390,7 @@ test('proposal conflict still compensates the target when task compensation cann
 	});
 });
 
-test('audit effect survives a crash before its checkpoint as audit_pending and appends once', async (t) => {
+test('Agent activity effect survives a crash before its checkpoint as activity_pending and appends once', async (t) => {
 	let failAfterEffect = true;
 	const fixture = createDirectServiceFixture(t, {
 		afterAuditEffect() {
@@ -1409,7 +1405,7 @@ test('audit effect survives a crash before its checkpoint as audit_pending and a
 		/crash after audit effect/
 	);
 	const pending = await fixture.journal.loadById(fixture.command.operationId);
-	assert.equal(pending.status, 'audit_pending');
+	assert.equal(pending.status, 'activity_pending');
 	assert.deepEqual(pending.completed_steps.map((step) => step.name), [
 		'apply_target',
 		'link_task',
@@ -1493,7 +1489,7 @@ test('journal, errors, and receipts do not expose writeback bodies or absolute p
 	const previewResult = await preview(fixture);
 	const token = tokenFrom(previewResult);
 	fixture.context.operationFailureInjection = (context) => {
-		if (context.phase === 'before_step' && context.stepName === 'append_audit') {
+		if (context.phase === 'before_step' && context.stepName === 'append_agent_activity') {
 			throw new Error('bounded audit interruption');
 		}
 	};

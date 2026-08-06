@@ -65,6 +65,8 @@ interface RuntimeSession extends McpConnectionState {
     lastSeenAt: number;
     streams: Set<ServerResponse>;
 }
+/** MCP 服务的共享默认监听端口。 */
+export declare const DEFAULT_MCP_PORT = 51601;
 export declare class StreamableHttpMcpRuntime {
     private host;
     private port;

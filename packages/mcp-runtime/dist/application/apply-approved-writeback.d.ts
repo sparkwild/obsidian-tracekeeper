@@ -24,10 +24,10 @@ export interface ApplyApprovedWritebackPayload {
     touchedNotes: string[];
     confirmationTokenHash: string;
     confirmationExpiresAt: string;
-    auditPath: string;
-    auditAgentId: string;
-    auditSessionId: string;
-    auditClientName: string;
+    activityPath: string;
+    activityAgentId: string;
+    activitySessionId: string;
+    activityClientName: string;
 }
 export interface ApplyApprovedWritebackCommand {
     operationId: string;
@@ -45,7 +45,7 @@ export interface ApplyApprovedWritebackResult {
     proposal_path: string;
     target_note: string;
     touched_notes: string[];
-    audit_path: string;
+    activity_path: string;
 }
 export interface ApplyApprovedWritebackTaskLinkReceipt {
     taskPath: string | null;
@@ -58,7 +58,7 @@ export interface ApplyApprovedWritebackPort {
     markProposalApplied(payload: ApplyApprovedWritebackPayload, operationId: string): Promise<ProposalTransitionReceipt> | ProposalTransitionReceipt;
     linkTask(payload: ApplyApprovedWritebackPayload, operationId: string): Promise<ApplyApprovedWritebackTaskLinkReceipt> | ApplyApprovedWritebackTaskLinkReceipt;
     rollbackTask(payload: ApplyApprovedWritebackPayload, operationId: string, receipt: ApplyApprovedWritebackTaskLinkReceipt): Promise<void> | void;
-    appendAudit(payload: ApplyApprovedWritebackPayload, operationId: string, receipt: ProposalTransitionReceipt): Promise<void> | void;
+    appendAgentActivity(payload: ApplyApprovedWritebackPayload, operationId: string, receipt: ProposalTransitionReceipt): Promise<void> | void;
 }
 export interface ApplyApprovedWritebackServiceOptions {
     journal: OperationJournal;

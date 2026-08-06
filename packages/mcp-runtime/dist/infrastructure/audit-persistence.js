@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.auditLogPath = void 0;
+exports.agentActivityPath = void 0;
 exports.projectArgumentsForAudit = projectArgumentsForAudit;
 exports.summarizeForAudit = summarizeForAudit;
 exports.collectAuditTargetsFromArgs = collectAuditTargetsFromArgs;
@@ -47,10 +47,9 @@ const path = __importStar(require("node:path"));
 const core_1 = require("@tracekeeper/core");
 const safety_1 = require("../safety");
 const protocol_1 = require("../protocol");
-const AUDIT_LOG_PATH = core_1.TRACEKEEPER_AUDIT_LOG_PATH;
-const AUDIT_DIR = core_1.TRACEKEEPER_AUDIT_DIR;
-const AUDIT_HUB_PATH = `${core_1.TRACEKEEPER_AUDIT_DIR}/index.md`;
-const AUDIT_SCHEMA_VERSION = 3;
+const AGENT_ACTIVITY_DIR = core_1.TRACEKEEPER_AGENT_ACTIVITY_DIR;
+const AGENT_ACTIVITY_HUB_PATH = core_1.TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH;
+const AGENT_ACTIVITY_SCHEMA_VERSION = 1;
 const MAX_AUDIT_SCALAR_LENGTH = 240;
 const MAX_AUDIT_ARRAY_ITEMS = 12;
 const MAX_AUDIT_METADATA_FIELDS = 32;
@@ -65,7 +64,7 @@ const SENSITIVE_KEY_PATTERNS = [
     /access[_-]?token/i,
     /refresh[_-]?token/i,
 ];
-exports.auditLogPath = AUDIT_LOG_PATH;
+exports.agentActivityPath = AGENT_ACTIVITY_HUB_PATH;
 function stripYamlQuotes(value) {
     if (value.length >= 2) {
         const first = value[0];
@@ -336,7 +335,7 @@ function collectAuditTargetsFromResult(toolName, args, resultPayload) {
             'target_note',
             'proposal_path',
             'request_path',
-            'audit_path',
+            'activity_path',
             'source_note',
             'report',
         ];
@@ -399,7 +398,7 @@ function parseAuditSections(content, sourcePath, sourceKind) {
             heading: currentHeading,
             body: currentBody,
             atLine: currentLine,
-            auditEventId: auditSectionField(currentBody, 'audit_event_id') || undefined,
+            auditEventId: auditSectionField(currentBody, 'activity_event_id') || undefined,
             timestamp,
             sourcePath,
             sourceKind,
@@ -429,9 +428,9 @@ function parseAuditSections(content, sourcePath, sourceKind) {
     }
     return sections;
 }
-const isAuditShardRecordPath = (relativePath) => new RegExp(`^${AUDIT_DIR.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')}/\\d{4}/\\d{4}-\\d{2}-\\d{2}\\.md$`).test(relativePath);
-function directAuditShardPaths(vaultRoot) {
-    const normalizedDirectory = (0, safety_1.normalizeNotePath)(AUDIT_DIR);
+const isAgentActivityShardRecordPath = (relativePath) => new RegExp(`^${AGENT_ACTIVITY_DIR.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')}/\\d{4}/\\d{4}-\\d{2}-\\d{2}\\.md$`).test(relativePath);
+function directAgentActivityShardPaths(vaultRoot) {
+    const normalizedDirectory = (0, safety_1.normalizeNotePath)(AGENT_ACTIVITY_DIR);
     const absoluteDirectory = path.resolve(vaultRoot, normalizedDirectory);
     (0, safety_1.relativeFromAbsolute)(vaultRoot, absoluteDirectory);
     (0, safety_1.assertNoSymlinkSegments)(vaultRoot, absoluteDirectory);
@@ -440,14 +439,14 @@ function directAuditShardPaths(vaultRoot) {
     }
     const rootState = fs.lstatSync(absoluteDirectory);
     if (!rootState.isDirectory()) {
-        throw new core_1.VaultPathError('Audit shard path is not a directory.');
+        throw new core_1.VaultPathError('Agent activity shard path is not a directory.');
     }
     const paths = [];
     const visit = (directory) => {
         for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
             const absolute = path.join(directory, entry.name);
             if (entry.isSymbolicLink()) {
-                throw new core_1.VaultPathError('Audit shard path contains a symbolic link.');
+                throw new core_1.VaultPathError('Agent activity shard path contains a symbolic link.');
             }
             if (entry.isDirectory()) {
                 visit(absolute);
@@ -457,7 +456,7 @@ function directAuditShardPaths(vaultRoot) {
                 continue;
             }
             const relative = (0, safety_1.relativeFromAbsolute)(vaultRoot, absolute);
-            if (isAuditShardRecordPath(relative)) {
+            if (isAgentActivityShardRecordPath(relative)) {
                 paths.push(relative);
             }
         }
@@ -468,17 +467,9 @@ function directAuditShardPaths(vaultRoot) {
 async function readMergedAuditSections(vaultRoot, context) {
     const documents = [];
     if (context.vaultRepository) {
-        const legacy = await context.vaultRepository.readText(AUDIT_LOG_PATH);
-        if (legacy) {
-            documents.push({
-                path: legacy.path,
-                content: legacy.content,
-                sourceKind: 'legacy',
-            });
-        }
-        const metadata = await context.vaultRepository.listMarkdown(AUDIT_DIR);
+        const metadata = await context.vaultRepository.listMarkdown(AGENT_ACTIVITY_DIR);
         for (const item of [...metadata].sort((left, right) => left.path.localeCompare(right.path))) {
-            if (!isAuditShardRecordPath(item.path)) {
+            if (!isAgentActivityShardRecordPath(item.path)) {
                 continue;
             }
             const file = await context.vaultRepository.readText(item.path);
@@ -492,20 +483,7 @@ async function readMergedAuditSections(vaultRoot, context) {
         }
     }
     else {
-        try {
-            const absoluteLegacy = (0, safety_1.resolveSafeNotePath)(vaultRoot, AUDIT_LOG_PATH, { vaultConfigDir: context.vaultConfigDir });
-            documents.push({
-                path: (0, safety_1.relativeFromAbsolute)(vaultRoot, absoluteLegacy),
-                content: fs.readFileSync(absoluteLegacy, 'utf8'),
-                sourceKind: 'legacy',
-            });
-        }
-        catch (error) {
-            if (!(error instanceof safety_1.ToolInputError || error instanceof core_1.VaultPathError)) {
-                throw error;
-            }
-        }
-        for (const shardPath of directAuditShardPaths(vaultRoot)) {
+        for (const shardPath of directAgentActivityShardPaths(vaultRoot)) {
             const absolute = path.resolve(vaultRoot, shardPath);
             (0, safety_1.assertNoSymlinkSegments)(vaultRoot, absolute);
             documents.push({
@@ -518,12 +496,12 @@ async function readMergedAuditSections(vaultRoot, context) {
     const merged = (0, core_1.mergeAuditEvents)(documents.flatMap((document) => parseAuditSections(document.content, document.path, document.sourceKind)));
     return merged.map((section) => ({
         heading: section.heading,
-        body: section.body.filter((line) => !/^\s*-?\s*audit_event_id:\s*/.test(line)),
+        body: section.body.filter((line) => !/^\s*-?\s*activity_event_id:\s*/.test(line)),
         at_line: section.atLine,
-        audit_event_id: section.auditEventId || '',
+        activity_event_id: section.auditEventId || '',
         timestamp: section.timestamp,
         source_path: section.sourcePath,
-        source_kind: section.sourceKind,
+        source_kind: 'shard',
         action: section.action,
     }));
 }
@@ -539,7 +517,7 @@ function auditShardFile(vaultRoot, timestamp) {
     return { absolute, relative };
 }
 function auditHubFile(vaultRoot) {
-    const relative = (0, safety_1.normalizeNotePath)(AUDIT_HUB_PATH);
+    const relative = (0, safety_1.normalizeNotePath)(AGENT_ACTIVITY_HUB_PATH);
     const absolute = path.resolve(vaultRoot, relative);
     (0, safety_1.relativeFromAbsolute)(vaultRoot, absolute);
     (0, safety_1.assertNoSymlinkSegments)(vaultRoot, absolute);
@@ -583,7 +561,7 @@ function prepareAuditEvent(input) {
         `- type: ${auditYamlValue('type', eventName)}`,
         `- event: ${auditYamlValue('event', eventType)}`,
         `- timestamp: ${auditYamlValue('timestamp', timestamp)}`,
-        `- audit_event_id: ${auditYamlValue('audit_event_id', auditEventId)}`,
+        `- activity_event_id: ${auditYamlValue('activity_event_id', auditEventId)}`,
     ];
     if (operationId) {
         eventLines.push(`- operation_id: ${auditYamlValue('operation_id', operationId)}`);
@@ -671,30 +649,30 @@ function auditShardHeader(timestamp) {
     const day = new Date(timestamp).toISOString().slice(0, 10);
     return [
         '---',
-        'type: tracekeeper_audit_shard',
-        `audit_schema_version: ${AUDIT_SCHEMA_VERSION}`,
-        `audit_date: ${day}`,
-        `audit_date_utc: ${day}`,
+        'type: tracekeeper_agent_activity_shard',
+        `agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
+        `activity_date: ${day}`,
+        `activity_date_utc: ${day}`,
         `created_at: ${timestamp}`,
         `updated_at: ${timestamp}`,
-        `audit_hub: ${AUDIT_HUB_PATH}`,
+        `agent_activity_hub: ${AGENT_ACTIVITY_HUB_PATH}`,
         '---',
-        `# Audit ${day}`,
+        `# Agent activity ${day}`,
         '',
-        '[Audit hub](../index.md#audit)',
+        '[Agent activity hub](../index.md#agent-activity)',
         '',
     ].join('\n');
 }
 function auditHubContent(timestamp) {
     return [
         '---',
-        'type: tracekeeper_audit_hub',
-        `audit_schema_version: ${AUDIT_SCHEMA_VERSION}`,
+        'type: tracekeeper_agent_activity_hub',
+        `agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
         `created_at: ${timestamp}`,
         '---',
-        '# Audit',
+        '# Agent activity',
         '',
-        'Daily audit shards link back to this hub.',
+        'Daily Agent activity shards link back to this hub.',
         '',
     ].join('\n');
 }
@@ -719,28 +697,28 @@ function ensureDirectAuditHub(vaultRoot, timestamp) {
     }
 }
 async function ensureRepositoryAuditHub(repository, timestamp) {
-    await withRepositoryAuditLock(repository, AUDIT_HUB_PATH, async () => {
-        if (await repository.readText(AUDIT_HUB_PATH)) {
+    await withRepositoryAuditLock(repository, AGENT_ACTIVITY_HUB_PATH, async () => {
+        if (await repository.readText(AGENT_ACTIVITY_HUB_PATH)) {
             return;
         }
         try {
-            await repository.createText(AUDIT_HUB_PATH, auditHubContent(timestamp));
+            await repository.createText(AGENT_ACTIVITY_HUB_PATH, auditHubContent(timestamp));
         }
         catch (error) {
-            if (!(await repository.readText(AUDIT_HUB_PATH))) {
+            if (!(await repository.readText(AGENT_ACTIVITY_HUB_PATH))) {
                 throw error;
             }
         }
     });
 }
 function appendPreparedAuditEvent(current, event) {
-    const marker = `- audit_event_id: ${auditYamlValue('audit_event_id', event.auditEventId)}`;
+    const marker = `- activity_event_id: ${auditYamlValue('activity_event_id', event.auditEventId)}`;
     if (current?.includes(marker)) {
         return { content: current, duplicate: true };
     }
     if (current
-        && !/^---\n[\s\S]*?^type:\s*(?:tracekeeper_audit_shard|tracekeeper-audit-shard)\s*$/m.test(current)) {
-        throw new core_1.OperationConflictError(`Audit shard has an invalid record type: ${event.shardPath}`);
+        && !/^---\n[\s\S]*?^type:\s*(?:tracekeeper_agent_activity_shard|tracekeeper-agent-activity-shard)\s*$/m.test(current)) {
+        throw new core_1.OperationConflictError(`Agent activity shard has an invalid record type: ${event.shardPath}`);
     }
     const base = current
         ? current.replace(/^updated_at:\s*.*$/m, `updated_at: ${event.timestamp}`)
@@ -752,6 +730,9 @@ function appendPreparedAuditEvent(current, event) {
 }
 function appendAuditEvent(vaultRoot, input) {
     const event = prepareAuditEvent(input);
+    if (!isAgentActivityEventInput(input)) {
+        return { path: event.shardPath };
+    }
     ensureDirectAuditHub(vaultRoot, event.timestamp);
     const shard = auditShardFile(vaultRoot, event.timestamp);
     const current = fs.existsSync(shard.absolute)
@@ -773,6 +754,9 @@ async function appendAuditEventAsync(vaultRoot, input, context) {
         return appendAuditEvent(vaultRoot, input);
     }
     const event = prepareAuditEvent(input);
+    if (!isAgentActivityEventInput(input)) {
+        return { path: event.shardPath };
+    }
     await ensureRepositoryAuditHub(context.vaultRepository, event.timestamp);
     await withRepositoryAuditLock(context.vaultRepository, event.shardPath, async () => {
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -798,6 +782,9 @@ async function appendAuditEventAsync(vaultRoot, input, context) {
         }
     });
     return { path: event.shardPath };
+}
+function isAgentActivityEventInput(input) {
+    return typeof input.type === 'string' && input.type.startsWith('mcp.');
 }
 const repositoryAuditLocks = new WeakMap();
 async function withRepositoryAuditLock(repository, shardPath, execute) {

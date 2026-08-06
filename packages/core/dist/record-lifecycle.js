@@ -18,7 +18,7 @@ function auditShardPath(timestamp) {
         throw new Error('Audit event timestamp must be a valid date.');
     }
     const day = parsed.toISOString().slice(0, 10);
-    return `${knowledge_architecture_1.TRACEKEEPER_AUDIT_DIR}/${day.slice(0, 4)}/${day}.md`;
+    return `${knowledge_architecture_1.TRACEKEEPER_AGENT_ACTIVITY_DIR}/${day.slice(0, 4)}/${day}.md`;
 }
 function buildStableAuditEventId(event) {
     const { timestamp: _timestamp, auditEventId: _auditEventId, audit_event_id: _auditEventIdSnake, createdAt: _createdAt, created_at: _createdAtSnake, updatedAt: _updatedAt, updated_at: _updatedAtSnake, ...identity } = event;
@@ -256,10 +256,10 @@ const normalizeAuditCleanupEventTimes = (eventTimes) => {
     return normalized.sort();
 };
 const auditCleanupSourceKind = (filePath) => {
-    if (filePath === knowledge_architecture_1.TRACEKEEPER_AUDIT_LOG_PATH) {
+    if (filePath === knowledge_architecture_1.LEGACY_TRACEKEEPER_AUDIT_LOG_PATH) {
         return 'legacy';
     }
-    const escapedDirectory = knowledge_architecture_1.TRACEKEEPER_AUDIT_DIR.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedDirectory = knowledge_architecture_1.TRACEKEEPER_AGENT_ACTIVITY_DIR.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const match = filePath.match(new RegExp(`^${escapedDirectory}/(\\d{4})/(\\d{4}-\\d{2}-\\d{2})\\.md$`));
     if (!match || match[1] !== match[2]?.slice(0, 4)) {
         return null;

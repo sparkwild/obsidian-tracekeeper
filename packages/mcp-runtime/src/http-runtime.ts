@@ -97,6 +97,8 @@ interface RuntimeSession extends McpConnectionState {
 }
 
 const DEFAULT_HOST = '127.0.0.1';
+/** MCP 服务的共享默认监听端口。 */
+export const DEFAULT_MCP_PORT = 51601;
 const DEFAULT_PATH = '/mcp';
 const DEFAULT_MAX_REQUEST_BYTES = 1024 * 1024;
 const DEFAULT_MAX_SESSIONS = 32;
@@ -145,7 +147,7 @@ export class StreamableHttpMcpRuntime {
 		if (this.host !== DEFAULT_HOST) {
 			throw new Error(`MCP Runtime local trust requires host ${DEFAULT_HOST}.`);
 		}
-		this.port = options.port ?? 58437;
+		this.port = options.port ?? DEFAULT_MCP_PORT;
 		this.path = options.path || DEFAULT_PATH;
 		this.credentialVerifier = options.credentialVerifier;
 		this.maxRequestBytes = normalizePositiveLimit(

@@ -1,5 +1,6 @@
 import {
 	APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA,
+	AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA,
 	BUILD_CONTEXT_PACK_OUTPUT_SCHEMA,
 	CAPTURE_SOURCE_OUTPUT_SCHEMA,
 	GENERIC_TOOL_OUTPUT_SCHEMA,
@@ -79,7 +80,7 @@ export type TracekeeperToolName =
 	| 'tracekeeper.list_review_queue'
 	| 'tracekeeper.list_source_requests'
 	| 'tracekeeper.list_approved_writebacks'
-	| 'tracekeeper.audit_recent'
+	| 'tracekeeper.agent_activity_recent'
 	| 'tracekeeper.source_request'
 	| 'tracekeeper.analyze_source_request'
 	| 'tracekeeper.apply_approved_writeback'
@@ -110,6 +111,7 @@ function withToolInput(properties: Record<string, unknown>, required: string[] =
 
 export const PUBLIC_TOOL_NAME_ORDER = [
 	'tracekeeper.status',
+	'tracekeeper.agent_activity_recent',
 	'tracekeeper.lint',
 	'tracekeeper.recall',
 	'tracekeeper.project_memory',
@@ -159,11 +161,6 @@ const compatibilityFallbackTools: ReadonlyArray<{ name: TracekeeperToolName; rep
 		replacement: 'tracekeeper.review_queue with action="list_approved"',
 		description:
 			'[deprecated] Use tracekeeper.review_queue with action="list_approved". Compatibility tool, read-only.',
-	},
-	{
-		name: 'tracekeeper.audit_recent',
-		replacement: 'Obsidian runtime log view',
-		description: '[deprecated] Prefer the Obsidian runtime log view. Compatibility tool, read-only.',
 	},
 	{
 		name: 'tracekeeper.analyze_source_request',
@@ -511,24 +508,21 @@ export const toolContracts = [
 		},
 	},
 	{
-		name: 'tracekeeper.audit_recent',
-		version: 2,
-		visibility: 'compatibility',
+		name: 'tracekeeper.agent_activity_recent',
+		version: 1,
+		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
 		effect: 'read',
 		idempotency: 'natural',
 		world: 'closed',
 		workflowRole: 'observe',
-		useCase: 'audit_recent',
-		description: '[deprecated] Prefer the Obsidian runtime log view. Compatibility tool, read-only.',
+		useCase: 'agent_activity_recent',
+		description: '[read-only] Read recent MCP Agent activity from daily UTC shards. User interface operations are excluded.',
 		inputSchema: withToolInput({
-			max_items: { type: 'integer', description: 'Maximum number of parsed sections.' },
+			max_items: { type: 'integer', description: 'Maximum number of activity sections.' },
 		}),
-		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
-		deprecated: {
-			replacement: 'Obsidian runtime log view',
-		},
+		...withResultSchema(AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.source_request',

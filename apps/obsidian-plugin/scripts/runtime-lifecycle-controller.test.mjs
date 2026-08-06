@@ -72,20 +72,20 @@ try {
 
 	const events = [];
 	const controller = new McpRuntimeLifecycleController();
-	const firstRuntime = fakeRuntime('first', 58437, events);
+	const firstRuntime = fakeRuntime('first', 51601, events);
 	let duplicateFactoryCalls = 0;
 	const firstStart = controller.start(() => firstRuntime);
 	const duplicateStart = controller.start(() => {
 		duplicateFactoryCalls += 1;
-		return fakeRuntime('duplicate', 58438, events);
+		return fakeRuntime('duplicate', 51602, events);
 	});
 	assert.equal((await firstStart)?.state, 'running');
 	assert.equal(controller.getRuntime(), firstRuntime);
-	assert.equal((await duplicateStart)?.port, 58437);
+	assert.equal((await duplicateStart)?.port, 51601);
 	assert.equal(duplicateFactoryCalls, 0);
 
-	const secondRuntime = fakeRuntime('second', 58438, events);
-	assert.equal((await controller.restart(() => secondRuntime))?.port, 58438);
+	const secondRuntime = fakeRuntime('second', 51602, events);
+	assert.equal((await controller.restart(() => secondRuntime))?.port, 51602);
 	assert.equal(controller.getRuntime(), secondRuntime);
 	assert.deepEqual(events.slice(0, 3), ['first:start', 'first:stop', 'second:start']);
 	assert.equal((await controller.stop())?.state, 'stopped');
@@ -94,7 +94,7 @@ try {
 	const delayedEvents = [];
 	const startGate = deferred();
 	const closingController = new McpRuntimeLifecycleController();
-	const delayedRuntime = fakeRuntime('delayed', 58439, delayedEvents, startGate);
+	const delayedRuntime = fakeRuntime('delayed', 51603, delayedEvents, startGate);
 	const delayedStart = closingController.start(() => delayedRuntime);
 	await Promise.resolve();
 	const close = closingController.close();
@@ -107,7 +107,7 @@ try {
 	let postCloseFactoryCalls = 0;
 	assert.equal(await closingController.start(() => {
 		postCloseFactoryCalls += 1;
-		return fakeRuntime('post-close', 58440, delayedEvents);
+		return fakeRuntime('post-close', 51604, delayedEvents);
 	}), null);
 	assert.equal(postCloseFactoryCalls, 0);
 

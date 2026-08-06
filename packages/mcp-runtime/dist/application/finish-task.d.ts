@@ -48,7 +48,7 @@ export interface DistillSessionProposal {
 }
 export interface DistillSessionNote {
     path: string;
-    audit_path: string;
+    activity_path: string;
 }
 export interface DistillSessionApplicationDependencies {
     resolveProjectHint(taskId: string, explicitProjectHint: string): Promise<string>;
@@ -88,7 +88,7 @@ export declare class DistillSessionApplicationService {
         read_only: boolean;
         task_id: string;
         path: string;
-        audit_path: string;
+        activity_path: string;
         proposals: {
             proposal_id: string;
             path: string;

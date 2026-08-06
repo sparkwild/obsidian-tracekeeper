@@ -31,10 +31,10 @@ function boundedWritebackPayload(payload) {
         'writebackMarker',
         'confirmationTokenHash',
         'confirmationExpiresAt',
-        'auditPath',
-        'auditAgentId',
-        'auditSessionId',
-        'auditClientName',
+        'activityPath',
+        'activityAgentId',
+        'activitySessionId',
+        'activityClientName',
     ];
     if (payload.schemaVersion !== 1
         || requiredStrings.some((key) => typeof payload[key] !== 'string')
@@ -78,7 +78,7 @@ function boundedWritebackPayload(payload) {
         || payload.writebackBlockHash.length === 0
         || payload.writebackMarker.length === 0
         || payload.confirmationTokenHash.length === 0
-        || payload.auditPath.length === 0
+        || payload.activityPath.length === 0
         || Number.isNaN(Date.parse(payload.confirmationExpiresAt))) {
         throw new Error('Approved writeback operation payload is invalid.');
     }
@@ -111,10 +111,10 @@ function boundedWritebackPayload(payload) {
         touchedNotes: payload.touchedNotes.slice(),
         confirmationTokenHash: payload.confirmationTokenHash,
         confirmationExpiresAt: payload.confirmationExpiresAt,
-        auditPath: payload.auditPath,
-        auditAgentId: payload.auditAgentId,
-        auditSessionId: payload.auditSessionId,
-        auditClientName: payload.auditClientName,
+        activityPath: payload.activityPath,
+        activityAgentId: payload.activityAgentId,
+        activitySessionId: payload.activitySessionId,
+        activityClientName: payload.activityClientName,
     };
 }
 function isWritebackBoundaryConflict(error) {
@@ -127,10 +127,10 @@ function failureStatusForWritebackBoundary(error) {
         ? 'conflicted'
         : 'failed';
 }
-function failureStatusForAuditWrite(error) {
+function failureStatusForActivityWrite(error) {
     return isWritebackBoundaryConflict(error)
         ? 'conflicted'
-        : 'audit_pending';
+        : 'activity_pending';
 }
 function isProposalTransitionFailure(error) {
     return error instanceof core_1.OperationConflictError
@@ -333,13 +333,13 @@ class ApplyApprovedWritebackService {
                     failureStatus: failureStatusForWritebackBoundary,
                 },
                 {
-                    name: 'append_audit',
+                    name: 'append_agent_activity',
                     execute: (payload, context) => {
                         const transitionStep = context.completedSteps.find((step) => step.name === 'mark_proposal_applied');
                         const receipt = proposalTransitionReceiptFromStep(transitionStep?.result, payload, command.operationId);
-                        return this.options.port.appendAudit(payload, command.operationId, receipt);
+                        return this.options.port.appendAgentActivity(payload, command.operationId, receipt);
                     },
-                    failureStatus: failureStatusForAuditWrite,
+                    failureStatus: failureStatusForActivityWrite,
                 },
             ],
             finalize: (payload) => ({
@@ -354,9 +354,9 @@ class ApplyApprovedWritebackService {
                 touched_notes: payload.touchedNotes || [
                     payload.targetPath,
                     payload.proposalPath,
-                    payload.auditPath,
+                    payload.activityPath,
                 ],
-                audit_path: payload.auditPath,
+                activity_path: payload.activityPath,
             }),
         });
         return runner.run();

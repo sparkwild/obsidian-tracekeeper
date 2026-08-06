@@ -69,7 +69,7 @@ test('ProposeMemoryApplicationService owns normalization, journaling, and propos
 			writes.push(input);
 			return {
 				path: '00_tracekeeper/review_queue/direct-proposal.md',
-				audit_path: '00_tracekeeper/audit/events.jsonl',
+				activity_path: '00_tracekeeper/control/agent_activity/2026/2026-08-03.md',
 				status: 'written',
 				warnings: [],
 			};

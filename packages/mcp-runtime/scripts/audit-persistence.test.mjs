@@ -35,25 +35,25 @@ test('audit persistence appends idempotent UTC shards and reads merged sections'
 	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-audit-persistence-'));
 	try {
 		const input = {
-			type: 'tool-call',
-			event: 'tool-call',
-			action: 'tool-call',
+			type: 'mcp.tool_call',
+			event: 'mcp.tool_call',
+			action: 'tracekeeper.agent_activity_recent',
 			operationId: 'audit-persistence-operation',
-			tool: 'tracekeeper.audit_recent',
+			tool: 'tracekeeper.agent_activity_recent',
 			resultStatus: 'success',
 			timestamp: '2026-08-03T12:00:00.000Z',
 			argsSummary: '{"query":"[redacted]"}',
 		};
 		const first = appendAuditEvent(vaultRoot, input);
 		const second = appendAuditEvent(vaultRoot, input);
-		assert.equal(first.path, '00_tracekeeper/control/audit/2026/2026-08-03.md');
+		assert.equal(first.path, '00_tracekeeper/control/agent_activity/2026/2026-08-03.md');
 		assert.deepEqual(second, first);
 
 		const shardPath = path.join(vaultRoot, first.path);
 		const shard = fs.readFileSync(shardPath, 'utf8');
-		assert.equal((shard.match(/audit_event_id:/g) || []).length, 1);
-		assert.match(shard, /type: tracekeeper_audit_shard/);
-		assert.equal(fs.existsSync(path.join(vaultRoot, '00_tracekeeper/control/audit/index.md')), true);
+		assert.equal((shard.match(/activity_event_id:/g) || []).length, 1);
+		assert.match(shard, /type: tracekeeper_agent_activity_shard/);
+		assert.equal(fs.existsSync(path.join(vaultRoot, '00_tracekeeper/control/agent_activity/index.md')), true);
 
 		const sections = await readMergedAuditSections(vaultRoot, {});
 		assert.equal(sections.length, 1);

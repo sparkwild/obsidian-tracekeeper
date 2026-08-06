@@ -23,6 +23,11 @@
 	color: var(--text-normal);
 }
 
+.tracekeeper-activity-view .view-header-title,
+.tracekeeper-activity-view .view-header-title-container {
+	display: none;
+}
+
 .tracekeeper-view__title {
 	margin: 0 0 4px;
 	font-size: 18px;

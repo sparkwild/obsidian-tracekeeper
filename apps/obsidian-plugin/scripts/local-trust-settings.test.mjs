@@ -51,7 +51,7 @@ try {
 
 	const sanitized = settings.stripLegacyConnectionSettings({
 		runtimeEnabled: true,
-		runtimePort: 58437,
+		runtimePort: 51601,
 		runtimeToken: stableSecret,
 		runtimeTokenCreatedAt: '2026-07-01T00:00:00.000Z',
 		runtimeCredentials: [
@@ -66,7 +66,7 @@ try {
 
 	assert.deepEqual(sanitized, {
 		runtimeEnabled: true,
-		runtimePort: 58437,
+		runtimePort: 51601,
 		customSetting: 'preserved',
 	});
 	assert.equal(JSON.stringify(sanitized).includes(stableSecret), false);

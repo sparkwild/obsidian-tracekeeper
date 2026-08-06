@@ -1441,13 +1441,13 @@ async function run() {
 			journal: auditCheckpointJournal,
 			steps: [{
 				name: 'append_audit',
-				failureStatus: 'audit_pending',
+				failureStatus: 'activity_pending',
 				execute: async () => {
 					auditCheckpointAttempts += 1;
 					const checkpoint = await auditCheckpointJournal.loadById('op-audit-checkpoint');
-					assert.equal(checkpoint?.status, 'audit_pending');
+					assert.equal(checkpoint?.status, 'activity_pending');
 					if (auditCheckpointAttempts === 1) {
-						throw new Error('audit effect interrupted before step checkpoint');
+						throw new Error('activity effect interrupted before step checkpoint');
 					}
 				},
 			}],
@@ -1455,10 +1455,10 @@ async function run() {
 		};
 		await assert.rejects(
 			() => new operationJournalModule.RecoverableOperationRunner(auditCheckpointConfig).run(),
-			/audit effect interrupted/
+			/activity effect interrupted/
 		);
 		const pendingAuditCheckpoint = await auditCheckpointJournal.loadById('op-audit-checkpoint');
-		assert.equal(pendingAuditCheckpoint?.status, 'audit_pending');
+		assert.equal(pendingAuditCheckpoint?.status, 'activity_pending');
 		assert.deepEqual(pendingAuditCheckpoint?.completed_steps, []);
 		const auditCheckpointOutcome = await new operationJournalModule.RecoverableOperationRunner({
 			...auditCheckpointConfig,
@@ -3310,7 +3310,7 @@ async function run() {
 				const lifecycle = await loadRecordLifecycle();
 				assert.equal(
 					lifecycle.auditShardPath('2026-07-30T23:59:59.000Z'),
-					'00_tracekeeper/control/audit/2026/2026-07-30.md'
+					'00_tracekeeper/control/agent_activity/2026/2026-07-30.md'
 				);
 				const event = {
 					operationId: 'operation-one',
@@ -3326,7 +3326,7 @@ async function run() {
 				);
 				assert.equal(
 					lifecycle.auditShardPath('2026-07-31T00:00:00.000Z'),
-					'00_tracekeeper/control/audit/2026/2026-07-31.md'
+					'00_tracekeeper/control/agent_activity/2026/2026-07-31.md'
 				);
 				assert.notEqual(
 					lifecycle.buildStableAuditEventId(event),
@@ -3435,7 +3435,7 @@ async function run() {
 					cutoff: '2026-07-30T12:00:00.000Z',
 					files: [
 						{
-							path: '00_tracekeeper/control/audit/2026/2026-07-29.md',
+							path: '00_tracekeeper/control/agent_activity/2026/2026-07-29.md',
 							contentHash: 'old',
 							version: 'old-version',
 							eventTimes: ['2026-07-29T01:00:00.000Z'],
@@ -3450,7 +3450,7 @@ async function run() {
 							],
 						},
 						{
-							path: '00_tracekeeper/control/audit/2026/2026-07-30.md',
+							path: '00_tracekeeper/control/agent_activity/2026/2026-07-30.md',
 							contentHash: 'equal-cutoff',
 							version: 'equal-cutoff-version',
 							eventTimes: ['2026-07-30T12:00:00.000Z'],
@@ -3458,12 +3458,12 @@ async function run() {
 					],
 				});
 				assert.deepEqual(preview.eligiblePaths, [
-					'00_tracekeeper/control/audit/2026/2026-07-29.md',
+					'00_tracekeeper/control/agent_activity/2026/2026-07-29.md',
 				]);
 				assert.deepEqual(preview.retained.map((row) => [row.path, row.reason]), [
 					['00_tracekeeper/control/audit_log.md', 'mixed-age'],
 					[
-						'00_tracekeeper/control/audit/2026/2026-07-30.md',
+						'00_tracekeeper/control/agent_activity/2026/2026-07-30.md',
 						'too-new',
 					],
 				]);
@@ -3474,7 +3474,7 @@ async function run() {
 					cutoff: null,
 					files: [
 						{
-							path: '00_tracekeeper/control/audit/2026/2026-07-30.md',
+							path: '00_tracekeeper/control/agent_activity/2026/2026-07-30.md',
 							contentHash: 'shard',
 							version: 'shard-version',
 							eventTimes: ['2026-07-30T01:00:00.000Z'],
@@ -3497,7 +3497,7 @@ async function run() {
 					],
 				});
 				assert.deepEqual(preview.eligiblePaths, [
-					'00_tracekeeper/control/audit/2026/2026-07-30.md',
+					'00_tracekeeper/control/agent_activity/2026/2026-07-30.md',
 					'00_tracekeeper/control/audit_log.md',
 				]);
 				assert.deepEqual(preview.retained.map((row) => [row.path, row.reason]), [

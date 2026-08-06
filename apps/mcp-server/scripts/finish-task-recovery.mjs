@@ -25,7 +25,7 @@ function countOccurrences(content, needle) {
 }
 
 function readAuditShards(vaultRoot) {
-	const auditRoot = path.join(vaultRoot, '00_tracekeeper/control/audit');
+	const auditRoot = path.join(vaultRoot, '00_tracekeeper/control/agent_activity');
 	const documents = [];
 	const visit = (directory) => {
 		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -37,7 +37,7 @@ function readAuditShards(vaultRoot) {
 			const relativePath = path.relative(vaultRoot, absolutePath).replaceAll(path.sep, '/');
 			if (
 				entry.isFile()
-				&& /^00_tracekeeper\/control\/audit\/\d{4}\/\d{4}-\d{2}-\d{2}\.md$/.test(relativePath)
+				&& /^00_tracekeeper\/control\/agent_activity\/\d{4}\/\d{4}-\d{2}-\d{2}\.md$/.test(relativePath)
 			) {
 				documents.push(fs.readFileSync(absolutePath, 'utf8'));
 			}
@@ -341,21 +341,18 @@ async function main() {
 			legacyProjectMemory
 		);
 		const auditText = readAuditShards(vaultRoot);
-		assert.equal(countOccurrences(auditText, `operation_id: "${failedOperation.operation_id}"`), 2);
-		assert.equal(countOccurrences(auditText, `operation_id: "${autoWrite.structuredContent.operation_id}"`), 2);
 		const operationAuditSections = auditText
 			.split('\n## ')
 			.filter(
 				(section) =>
-					section.includes(`operation_id: "${failedOperation.operation_id}"`)
-					|| section.includes(`operation_id: "${autoWrite.structuredContent.operation_id}"`)
+					section.includes('- tool_name: "tracekeeper.finish_task"')
 			);
-		assert.equal(operationAuditSections.length, 4);
+		assert.equal(operationAuditSections.length, 7);
 		const operationAuditEventIds = operationAuditSections.map(
-			(section) => section.match(/^- audit_event_id: "([^"]+)"$/m)?.[1] || ''
+			(section) => section.match(/^- activity_event_id: "([^"]+)"$/m)?.[1] || ''
 		);
 		assert.equal(operationAuditEventIds.every(Boolean), true);
-		assert.equal(new Set(operationAuditEventIds).size, 4);
+		assert.equal(new Set(operationAuditEventIds).size, operationAuditSections.length);
 
 		const operationFiles = fs.readdirSync(operationDir).filter((entry) => entry.startsWith('finish-task-') && entry.endsWith('.json'));
 		assert.equal(operationFiles.length, 2);

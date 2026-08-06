@@ -533,8 +533,8 @@ export class ReviewQueueArchiveModal extends Modal {
 					'Archive is disabled while conflicts remain. Close this dialog, resolve them, and prepare a new preview.'
 				)
 				: ui(
-					'预览已就绪。归档会保留稳定提案标识、历史关联和审计记录。',
-					'Preview ready. Archive preserves stable proposal identity, history associations, and audit records.'
+					'预览已就绪。归档会保留稳定提案标识和历史关联；用户归档操作不写入 Agent 活动。',
+					'Preview ready. Archive preserves stable proposal identity and history associations; human archive actions do not create Agent activity.'
 				),
 			cls: 'tracekeeper-view__description',
 		});

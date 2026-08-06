@@ -29,7 +29,7 @@ export interface SourceRequestManagedProposal {
 
 export interface SourceRequestNote {
 	path: string;
-	audit_path: string;
+	activity_path: string;
 	status: string;
 	warnings: string[];
 }
@@ -91,14 +91,14 @@ export interface SourceRequestApplicationResult {
 	status: 'completed';
 	request_path: string;
 	mode: 'external_reference' | 'local_copy' | 'extracted_snapshot';
-	source_note: { path: string; audit_path: string };
-	report: { path: string; audit_path: string };
+	source_note: { path: string; activity_path: string };
+	report: { path: string; activity_path: string };
 	proposals: Array<{
 		proposal_id: string;
 		path: string;
 		proposal_link_target: string;
 	}>;
-	audit_path: string;
+	activity_path: string;
 	summary: string;
 	warnings: string[];
 }
@@ -438,7 +438,7 @@ export class SourceRequestApplicationService {
 				}));
 			}
 
-			let auditPathForReturn = sourceNote.audit_path;
+			let auditPathForReturn = sourceNote.activity_path;
 			if (input.updateRequestStatus) {
 				failureStatusAllowed = false;
 				await dependencies.updateRequestStatus(request.path, 'completed');
@@ -473,14 +473,14 @@ export class SourceRequestApplicationService {
 				status: 'completed',
 				request_path: request.path,
 				mode,
-				source_note: { path: sourceNote.path, audit_path: sourceNote.audit_path },
-				report: { path: report.path, audit_path: report.audit_path },
+				source_note: { path: sourceNote.path, activity_path: sourceNote.activity_path },
+				report: { path: report.path, activity_path: report.activity_path },
 				proposals: proposals.map((proposal) => ({
 					proposal_id: proposal.proposalId,
 					path: proposal.path,
 					proposal_link_target: proposal.linkTarget,
 				})),
-				audit_path: auditPathForReturn,
+				activity_path: auditPathForReturn,
 				summary: analysis.summary,
 				warnings,
 			};

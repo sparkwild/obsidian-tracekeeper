@@ -567,7 +567,7 @@ function assertSingleCodexFinishEntry(fixture, project, operation) {
 }
 
 function readAuditText(fixture) {
-	const auditRoot = path.join(fixture.vaultRoot, '00_tracekeeper', 'control', 'audit');
+	const auditRoot = path.join(fixture.vaultRoot, '00_tracekeeper', 'control', 'agent_activity');
 	if (!fs.existsSync(auditRoot)) {
 		return '';
 	}

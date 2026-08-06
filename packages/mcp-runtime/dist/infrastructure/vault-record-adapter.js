@@ -90,7 +90,7 @@ class VaultRecordAdapter {
         });
         return {
             path: resolved.relativePath,
-            audit_path: audit.path,
+            activity_path: audit.path,
             status: 'written',
             warnings: [],
         };
@@ -123,7 +123,7 @@ class VaultRecordAdapter {
         }, context);
         return {
             path: targetPath,
-            audit_path: audit.path,
+            activity_path: audit.path,
             status: 'written',
             warnings: [],
         };
@@ -145,7 +145,7 @@ class VaultRecordAdapter {
         }
         return {
             path: relativePath,
-            audit_path: this.dependencies.auditLogPath,
+            activity_path: this.dependencies.agentActivityPath,
             status: 'skipped',
             warnings: [],
         };
@@ -166,7 +166,7 @@ class VaultRecordAdapter {
             }
             return {
                 path: relativePath,
-                audit_path: this.dependencies.auditLogPath,
+                activity_path: this.dependencies.agentActivityPath,
                 status: 'skipped',
                 warnings: [],
             };

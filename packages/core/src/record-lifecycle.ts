@@ -1,7 +1,7 @@
 import {
 	ARCHIVE_REVIEW_QUEUE_DIR,
-	TRACEKEEPER_AUDIT_DIR,
-	TRACEKEEPER_AUDIT_LOG_PATH,
+	TRACEKEEPER_AGENT_ACTIVITY_DIR,
+	LEGACY_TRACEKEEPER_AUDIT_LOG_PATH,
 	TRACEKEEPER_REVIEW_QUEUE_DIR,
 	normalizeKnowledgePath,
 	startsWithPathPrefix,
@@ -145,7 +145,7 @@ export function auditShardPath(timestamp: string): string {
 		throw new Error('Audit event timestamp must be a valid date.');
 	}
 	const day = parsed.toISOString().slice(0, 10);
-	return `${TRACEKEEPER_AUDIT_DIR}/${day.slice(0, 4)}/${day}.md`;
+	return `${TRACEKEEPER_AGENT_ACTIVITY_DIR}/${day.slice(0, 4)}/${day}.md`;
 }
 
 export function buildStableAuditEventId(
@@ -436,10 +436,10 @@ const normalizeAuditCleanupEventTimes = (
 const auditCleanupSourceKind = (
 	filePath: string
 ): AuditEventSourceKind | null => {
-	if (filePath === TRACEKEEPER_AUDIT_LOG_PATH) {
+	if (filePath === LEGACY_TRACEKEEPER_AUDIT_LOG_PATH) {
 		return 'legacy';
 	}
-	const escapedDirectory = TRACEKEEPER_AUDIT_DIR.replace(
+	const escapedDirectory = TRACEKEEPER_AGENT_ACTIVITY_DIR.replace(
 		/[.*+?^${}()|[\]\\]/g,
 		'\\$&'
 	);

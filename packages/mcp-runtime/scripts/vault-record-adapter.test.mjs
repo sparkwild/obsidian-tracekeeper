@@ -9,7 +9,7 @@ import { VaultRecordAdapter } from '../dist/infrastructure/vault-record-adapter.
 test('VaultRecordAdapter owns safe generated-note writes and operation ownership checks', () => {
 	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-record-adapter-'));
 	const adapter = new VaultRecordAdapter({
-		auditLogPath: '00_tracekeeper/control/audit_log.md',
+		agentActivityPath: '00_tracekeeper/control/agent_activity/index.md',
 		buildMarkdownNote: (frontmatter, body) => [
 			'---',
 			...Object.entries(frontmatter).map(([key, value]) => `${key}: ${JSON.stringify(value)}`),

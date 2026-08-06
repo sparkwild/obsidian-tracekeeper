@@ -58,7 +58,7 @@ export interface ProposeMemoryProjectIdentity {
 }
 export interface ProposeMemoryNote {
     path: string;
-    audit_path: string;
+    activity_path: string;
     status: string;
     warnings: string[];
     duplicate?: boolean;
@@ -82,7 +82,7 @@ export type ProposeMemoryImmutableWriteResult = {
 } | {
     status: 'created' | 'exact_retry';
     path: string;
-    audit_path: string;
+    activity_path: string;
     project_id: string;
     project_hub: string;
     agent_type: string;
@@ -169,7 +169,7 @@ export declare class ProposeMemoryApplicationService {
         idempotency_key: string;
         status: string;
         path: string;
-        audit_path: string;
+        activity_path: string;
         warnings: string[];
         auto_applied: boolean;
         duplicate: boolean;
@@ -193,7 +193,7 @@ export declare class ProposeMemoryApplicationService {
         status: "written" | "skipped";
         path: string;
         target_note: string;
-        audit_path: string;
+        activity_path: string;
         warnings: never[];
         auto_applied: boolean;
         duplicate: boolean;
@@ -220,7 +220,7 @@ export declare class ProposeMemoryApplicationService {
         status: string;
         path: string;
         target_note: string;
-        audit_path: string;
+        activity_path: string;
         warnings: string[];
         auto_applied: boolean;
         duplicate: boolean;

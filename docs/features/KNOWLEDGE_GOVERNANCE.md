@@ -51,7 +51,7 @@ Approval commits a receipt that binds the exact proposal revision and content
 hash reviewed by the user. The apply preview produces an opaque, expiring
 confirmation token bound to that approved proposal's revision, semantic content
 and complete file state, its target and optional task state, the complete
-touched-note set, and the bounded audit context. A token cannot be reused for a
+touched-note set, and the bounded activity context. A token cannot be reused for a
 different proposal or after any bound content changes. The token is an
 implementation credential for the confirmed preview and must not be displayed,
 logged, or stored in review notes.
@@ -97,7 +97,7 @@ destination paths plus every managed task/session reference. Any duplicate id,
 occupied destination, changed source or reference, or unresolved association
 blocks confirmation. A successful move preserves proposal history and updates
 Tracekeeper-owned links; it does not rewrite unrelated notes or historical
-audit text. Confirmation persists operation ownership before the move. If the
+Agent activity text. Confirmation persists operation ownership before the move. If the
 operation is interrupted, the same operation may resume from its bounded
 receipt; a newly generated archive operation cannot take over those claimed
 targets and instead reports a recoverable conflict.
@@ -110,12 +110,12 @@ The plugin provides native Obsidian surfaces for:
 - Memory inspection and opening the underlying Markdown;
 - Source status and source-to-proposal traceability;
 - Knowledge Change Review;
-- Runtime status and local logs;
+- Runtime status and Agent activity;
 - Memory and persistence policy;
 - graph health and structure migration;
 - client and memory settings.
 
-Archive and Runtime-log cleanup are destructive-or-relocating surfaces and
+Archive and Agent activity cleanup are destructive-or-relocating surfaces and
 therefore show their bound preview before confirmation. Cleanup distinguishes
 eligible from retained files, explains the configured Obsidian trash behavior,
 and never presents mixed-age retention as deletion. Both dialogs start on the
@@ -132,11 +132,12 @@ aggregate lifecycle metrics remain available as advanced local diagnostics.
 Metrics cover only calls that reached Tracekeeper and are never a missed-call
 denominator.
 
-The Runtime Log display reads only the latest 2,000 retained events and states
-when older rows are omitted. This is a presentation window, not a retention or
-cleanup boundary: cleanup independently enumerates and freshly reads the full
-current set of legacy and sharded audit files before producing its bound
-preview.
+The Agent Activity display reads only the latest 2,000 retained MCP activity
+events and states when older rows are omitted. This is a presentation window,
+not a retention or cleanup boundary: cleanup independently enumerates and
+freshly reads the full current set of canonical daily activity shards before
+producing its bound preview. Legacy audit history is not migrated or read by
+the activity reader.
 
 ## Lint, Graph, And Migration
 
@@ -173,9 +174,10 @@ and never permanently deletes a user file.
 
 MCP may report legacy structure but never moves or deletes it.
 
-Audit retention follows the same human-governed rule. Activity reads both the
-legacy audit log and bounded UTC daily shards, merging exact duplicate events.
-Cleanup previews every current audit file from fresh content and sends only
-wholly eligible files to the configured Obsidian system trash. Partial,
+Agent activity retention follows the same human-governed rule. Activity reads
+only canonical UTC daily shards under the Agent Activity hub; legacy audit
+history is not migrated or read. Cleanup previews every current activity shard
+from fresh content and sends only wholly eligible files to the configured
+Obsidian system trash. Partial,
 changed, failed, or outcome-unknown paths remain explicitly reported; cleanup
 never rewrites selected sections or permanently deletes through `Vault.delete()`.

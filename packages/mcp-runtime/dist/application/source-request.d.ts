@@ -21,7 +21,7 @@ export interface SourceRequestManagedProposal {
 }
 export interface SourceRequestNote {
     path: string;
-    audit_path: string;
+    activity_path: string;
     status: string;
     warnings: string[];
 }
@@ -79,18 +79,18 @@ export interface SourceRequestApplicationResult {
     mode: 'external_reference' | 'local_copy' | 'extracted_snapshot';
     source_note: {
         path: string;
-        audit_path: string;
+        activity_path: string;
     };
     report: {
         path: string;
-        audit_path: string;
+        activity_path: string;
     };
     proposals: Array<{
         proposal_id: string;
         path: string;
         proposal_link_target: string;
     }>;
-    audit_path: string;
+    activity_path: string;
     summary: string;
     warnings: string[];
 }

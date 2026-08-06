@@ -15,7 +15,7 @@ import {
 	buildContextPack,
 	buildContextPackFromScan,
 	TRACEKEEPER_ROOT,
-	TRACEKEEPER_AUDIT_LOG_PATH,
+	TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
 	TRACEKEEPER_AGENT_REQUESTS_DIR,
 	TRACEKEEPER_CONTEXT_PACKS_DIR,
 	TRACEKEEPER_OPERATIONS_DIR,
@@ -140,7 +140,7 @@ import {
 	type FinishTaskRunnerStep,
 } from './application/finish-task';
 import {
-	AuditRecentApplicationService,
+	AgentActivityRecentApplicationService,
 } from './application/audit';
 import {
 	appendAuditEvent,
@@ -173,7 +173,7 @@ export const LOCAL_TRUST_CAPABILITIES = [
 ] as const satisfies readonly ToolCapability[];
 
 const REVIEW_QUEUE_PREFIX = TRACEKEEPER_REVIEW_QUEUE_DIR;
-const AUDIT_LOG_PATH = TRACEKEEPER_AUDIT_LOG_PATH;
+const AGENT_ACTIVITY_PATH = TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH;
 const MAX_LIST_QUEUE_ITEMS = 20;
 const MAX_AUDIT_ITEMS = 20;
 const MAX_APPROVED_WRITEBACKS = 20;
@@ -555,7 +555,7 @@ interface ListReviewQueueArgs extends ToolArgs {
 	max_items?: unknown;
 }
 
-interface AuditRecentArgs extends ToolArgs {
+interface AgentActivityRecentArgs extends ToolArgs {
 	max_items?: unknown;
 }
 
@@ -1289,7 +1289,7 @@ function validateToolResult(
 		'task_id',
 		'task_path',
 		'path',
-		'audit_path',
+		'activity_path',
 		'proposal_id',
 		'proposal_path',
 		'target_note',
@@ -2962,7 +2962,7 @@ function buildMarkdownNote(frontmatter: Record<string, unknown>, body: string): 
 }
 
 const vaultRecordAdapter = new VaultRecordAdapter({
-	auditLogPath: AUDIT_LOG_PATH,
+	agentActivityPath: AGENT_ACTIVITY_PATH,
 	buildMarkdownNote,
 });
 
@@ -3390,9 +3390,9 @@ interface WritebackConfirmationBinding {
 	writebackBlockHash: string;
 	writebackMarker: string;
 	touchedNotes: string[];
-	auditAgentId: string;
-	auditSessionId: string;
-	auditClientName: string;
+	activityAgentId: string;
+	activitySessionId: string;
+	activityClientName: string;
 	issuedAt: number;
 	expiresAt: number;
 }
@@ -3694,9 +3694,9 @@ function isWritebackConfirmationBinding(value: unknown): value is WritebackConfi
 		'writebackContentHash',
 		'writebackBlockHash',
 		'writebackMarker',
-		'auditAgentId',
-		'auditSessionId',
-		'auditClientName',
+		'activityAgentId',
+		'activitySessionId',
+		'activityClientName',
 	] as const;
 	const hasStableProposalReferenceFlags =
 		typeof value.taskHadProposalIdReference === 'boolean'
@@ -4013,7 +4013,7 @@ async function prepareWritebackConfirmation(
 		targetPath,
 		proposal.path,
 		...(taskPath ? [taskPath] : []),
-		AUDIT_LOG_PATH,
+		AGENT_ACTIVITY_PATH,
 	];
 	return {
 		binding: {
@@ -4042,9 +4042,9 @@ async function prepareWritebackConfirmation(
 			writebackBlockHash: hashText(writeback.block),
 			writebackMarker: writeback.marker,
 			touchedNotes,
-			auditAgentId: context.agentId || 'unknown session id',
-			auditSessionId: context.sessionId || '',
-			auditClientName: context.clientName || '',
+			activityAgentId: context.agentId || 'unknown session id',
+			activitySessionId: context.sessionId || '',
+			activityClientName: context.clientName || '',
 			issuedAt,
 			expiresAt,
 		},
@@ -4086,10 +4086,10 @@ function writebackBindingPayload(
 		touchedNotes: binding.touchedNotes.slice(),
 		confirmationTokenHash: hashText(confirmationToken),
 		confirmationExpiresAt: new Date(binding.expiresAt).toISOString(),
-		auditPath: AUDIT_LOG_PATH,
-		auditAgentId: binding.auditAgentId,
-		auditSessionId: binding.auditSessionId,
-		auditClientName: binding.auditClientName,
+		activityPath: AGENT_ACTIVITY_PATH,
+		activityAgentId: binding.activityAgentId,
+		activitySessionId: binding.activitySessionId,
+		activityClientName: binding.activityClientName,
 	};
 }
 
@@ -4116,10 +4116,10 @@ function isApplyApprovedWritebackPayload(
 		'writebackMarker',
 		'confirmationTokenHash',
 		'confirmationExpiresAt',
-		'auditPath',
-		'auditAgentId',
-		'auditSessionId',
-		'auditClientName',
+		'activityPath',
+		'activityAgentId',
+		'activitySessionId',
+		'activityClientName',
 	] as const;
 	const hasStableProposalReferenceFlags =
 		typeof value.taskHadProposalIdReference === 'boolean'
@@ -4142,7 +4142,7 @@ function isApplyApprovedWritebackPayload(
 		&& (value.writebackBlockHash as string).length > 0
 		&& (value.writebackMarker as string).length > 0
 		&& (value.confirmationTokenHash as string).length > 0
-		&& (value.auditPath as string).length > 0
+		&& (value.activityPath as string).length > 0
 		&& !Number.isNaN(Date.parse(value.confirmationExpiresAt as string))
 		&& (value.taskId === null || typeof value.taskId === 'string')
 		&& (value.taskId === null || value.taskId.length <= 512)
@@ -4773,7 +4773,7 @@ function buildAutoMemoryWriteBlock(input: AutoMemoryWriteInput, signature: strin
 function appendAutoMemoryWrite(
 	vaultRoot: string,
 	input: AutoMemoryWriteInput
-): { path: string; audit_path: string; status: 'written' | 'skipped'; warnings: string[]; duplicate: boolean } {
+): { path: string; activity_path: string; status: 'written' | 'skipped'; warnings: string[]; duplicate: boolean } {
 	assertNoSensitiveText([
 		{ label: 'content', value: input.content },
 		{ label: 'target_note', value: input.targetNote },
@@ -4813,7 +4813,7 @@ function appendAutoMemoryWrite(
 			});
 			return {
 				path: target.relativePath,
-				audit_path: audit.path,
+				activity_path: audit.path,
 				status: 'skipped',
 				warnings: [],
 				duplicate: true,
@@ -4857,7 +4857,7 @@ function appendAutoMemoryWrite(
 
 	return {
 		path: target.relativePath,
-		audit_path: audit.path,
+		activity_path: audit.path,
 		status: 'written',
 		warnings: [],
 		duplicate: false,
@@ -4867,7 +4867,7 @@ function appendAutoMemoryWrite(
 async function appendAutoMemoryWriteAsync(
 	vaultRoot: string,
 	input: AutoMemoryWriteInput
-): Promise<{ path: string; audit_path: string; status: 'written' | 'skipped'; warnings: string[]; duplicate: boolean }> {
+): Promise<{ path: string; activity_path: string; status: 'written' | 'skipped'; warnings: string[]; duplicate: boolean }> {
 	assertNoSensitiveText([
 		{ label: 'content', value: input.content },
 		{ label: 'target_note', value: input.targetNote },
@@ -4915,7 +4915,7 @@ async function appendAutoMemoryWriteAsync(
 			}, input.context);
 			return {
 				path: targetPath,
-				audit_path: audit.path,
+				activity_path: audit.path,
 				status: 'skipped',
 				warnings: [],
 				duplicate: true,
@@ -4959,7 +4959,7 @@ async function appendAutoMemoryWriteAsync(
 
 	return {
 		path: targetPath,
-		audit_path: audit.path,
+		activity_path: audit.path,
 		status: 'written',
 		warnings: [],
 		duplicate: false,
@@ -4987,7 +4987,7 @@ type ImmutableProjectMemoryWriteReceipt = Extract<
 	ProjectMemoryEntryWriteResult,
 	{ status: 'created' | 'exact_retry' }
 > & {
-	audit_path: string;
+	activity_path: string;
 	write_status: 'written' | 'skipped';
 	duplicate: boolean;
 };
@@ -5041,7 +5041,7 @@ async function writeImmutableProjectMemory(
 	}, input.context);
 	return {
 		...result,
-		audit_path: audit.path,
+		activity_path: audit.path,
 		write_status: duplicate ? 'skipped' : 'written',
 		duplicate,
 	};
@@ -5678,7 +5678,7 @@ async function createAgentTaskRecord(
 		contextPack: ContextPack;
 		operationId: string;
 	}
-): Promise<{ path: string; audit_path: string; status: string; warnings: string[] }> {
+): Promise<{ path: string; activity_path: string; status: string; warnings: string[] }> {
 	const taskPath = buildTaskNotePath(input.taskId);
 	const taskAuditMetadata = {
 		target_type: 'agent_task',
@@ -5693,7 +5693,7 @@ async function createAgentTaskRecord(
 			taskId: input.taskId,
 			metadata: taskAuditMetadata,
 		}, input.context);
-		return { path: taskPath, audit_path: audit.path, status: 'skipped', warnings: [] };
+		return { path: taskPath, activity_path: audit.path, status: 'skipped', warnings: [] };
 	};
 	const existingTask = input.context.vaultRepository
 		? await input.context.vaultRepository.readText(taskPath)
@@ -5807,7 +5807,7 @@ const TOOL_HANDLERS: Record<ToolName, ToolInvocationHandler> = {
 	'tracekeeper.list_source_requests': (rawArgs, context) => handleListSourceRequests(rawArgs as ListSourceRequestsArgs, context),
 	'tracekeeper.list_approved_writebacks': (rawArgs, context) =>
 		handleListApprovedWritebacks(rawArgs as ListApprovedWritebacksArgs, context),
-	'tracekeeper.audit_recent': (rawArgs, context) => handleAuditRecent(rawArgs as AuditRecentArgs, context),
+	'tracekeeper.agent_activity_recent': (rawArgs, context) => handleAgentActivityRecent(rawArgs as AgentActivityRecentArgs, context),
 	'tracekeeper.source_request': (rawArgs, context) => handleSourceRequest(rawArgs as SourceRequestArgs, context),
 	'tracekeeper.analyze_source_request': (rawArgs, context) =>
 		handleAnalyzeSourceRequest(rawArgs as AnalyzeSourceRequestArgs, context),
@@ -5867,11 +5867,10 @@ function isToolResultFailure(result: McpStructuredToolResult): boolean {
 export function appendConnectionAuditEvent(vaultRoot: string, input: ConnectionAuditEventInput): { path: string } {
 	const now = new Date().toISOString();
 	return appendAuditEvent(vaultRoot, {
-		type: 'connection',
-		event: 'connection',
-		action: 'connection',
-		actor: input.agentId,
-	timestamp: now,
+		type: 'mcp.connection',
+		event: 'mcp.connection',
+		action: 'mcp.connection',
+		timestamp: now,
 		principalId: input.principalId,
 		agentId: input.agentId,
 		sessionId: input.sessionId,
@@ -5880,7 +5879,7 @@ export function appendConnectionAuditEvent(vaultRoot: string, input: ConnectionA
 		transport: input.transport,
 		runtimeVersion: input.runtimeVersion,
 		metadata: {
-			audit_schema_version: 2,
+			agent_activity_schema_version: 1,
 			integration_id: input.integrationId,
 			credential_id: input.credentialId,
 			auth_mode: input.authMode,
@@ -5897,14 +5896,13 @@ export function appendRuntimeDiagnosticAuditEvent(
 	reason: 'auth_missing' | 'auth_invalid' | 'query_token_rejected'
 ): { path: string } {
 	return appendAuditEvent(vaultRoot, {
-		type: 'runtime-diagnostic',
-		event: 'runtime-diagnostic',
-		action: 'mcp.request_rejected',
-		actor: 'tracekeeper-runtime',
+		type: 'mcp.authentication_rejected',
+		event: 'mcp.authentication_rejected',
+		action: 'mcp.authentication_rejected',
 		resultStatus: 'failed',
 		transport: 'streamable-http',
 		metadata: {
-			audit_schema_version: 2,
+			agent_activity_schema_version: 1,
 			diagnostic_reason: reason,
 		},
 	});
@@ -5915,10 +5913,9 @@ export function recordToolCallAuditEvent(vaultRoot: string, input: ToolCallAudit
 	const invocationId = input.invocationId?.trim()
 		|| `invocation-${crypto.randomUUID()}`;
 	return appendAuditEvent(vaultRoot, {
-		type: 'tool-call',
-		event: 'tool-call',
-		action: 'tool-call',
-		actor: input.agentId,
+		type: 'mcp.tool_call',
+		event: 'mcp.tool_call',
+		action: input.toolName,
 		timestamp: now,
 		invocationId,
 		requestId: input.requestId,
@@ -5935,7 +5932,7 @@ export function recordToolCallAuditEvent(vaultRoot: string, input: ToolCallAudit
 		runtimeVersion: input.runtimeVersion,
 		argsSummary: input.argsSummary,
 		metadata: {
-			audit_schema_version: 2,
+			agent_activity_schema_version: 1,
 			integration_id: input.integrationId,
 			credential_id: input.credentialId,
 			auth_mode: input.authMode,
@@ -5964,10 +5961,9 @@ async function recordToolCallAuditEventAsync(
 	const invocationId = input.invocationId?.trim()
 		|| `invocation-${crypto.randomUUID()}`;
 	return appendAuditEventAsync(vaultRoot, {
-		type: 'tool-call',
-		event: 'tool-call',
-		action: 'tool-call',
-		actor: input.agentId,
+		type: 'mcp.tool_call',
+		event: 'mcp.tool_call',
+		action: input.toolName,
 		timestamp: now,
 		invocationId,
 		requestId: input.requestId || context.requestId,
@@ -5984,7 +5980,7 @@ async function recordToolCallAuditEventAsync(
 		runtimeVersion: input.runtimeVersion,
 		argsSummary: input.argsSummary,
 		metadata: {
-			audit_schema_version: 2,
+			agent_activity_schema_version: 1,
 			integration_id: input.integrationId,
 			credential_id: input.credentialId,
 			auth_mode: input.authMode,
@@ -6009,7 +6005,7 @@ export async function recordRejectedToolCallAuditEvent(
 		| 'tool_call_unknown'
 ): Promise<void> {
 	const vaultRoot = resolveAuditVaultRoot(context);
-	if (!vaultRoot) {
+	if (!vaultRoot || !isAgentActivityTransport(context)) {
 		return;
 	}
 	try {
@@ -6047,7 +6043,7 @@ function makeToolResultForWrite(tool: string, payload: ReturnType<typeof buildAn
 		tool,
 		status: payload.status,
 		path: payload.path,
-		audit_path: payload.audit_path,
+		activity_path: payload.activity_path,
 		warnings: payload.warnings,
 	};
 }
@@ -6264,7 +6260,7 @@ export async function callTool(
 		toolResult = validateToolResult(requestName, toolResult);
 		status = 'failed';
 	} finally {
-		if (auditVaultRoot) {
+		if (auditVaultRoot && isAgentActivityTransport(context)) {
 			try {
 				await recordToolCallAuditEventAsync(auditVaultRoot, {
 					invocationId,
@@ -6303,6 +6299,10 @@ export async function callTool(
 	}
 
 	return toolResult;
+}
+
+function isAgentActivityTransport(context: Pick<ToolInvocationContext, 'transport'>): boolean {
+	return context.transport !== 'obsidian-direct';
 }
 
 export type { OperationRecoveryReport };
@@ -6573,7 +6573,7 @@ async function handleStartTask(rawArgs: StartTaskArgs, context: ToolInvocationCo
 				idempotency_key: operationIdentity.idempotencyKey,
 				task_id: taskId,
 				path: task.path,
-				audit_path: task.audit_path,
+				activity_path: task.activity_path,
 				client: client || null,
 				project_hint: projectHint || null,
 				vault_root: vaultRoot,
@@ -7087,7 +7087,7 @@ async function currentWritebackEffect(
 		payload.targetPath,
 		payload.proposalPath,
 		...(payload.taskPath ? [payload.taskPath] : []),
-		payload.auditPath,
+		payload.activityPath,
 	];
 	if (computePayloadHash(touchedNotes) !== computePayloadHash(payload.touchedNotes)) {
 		throw new OperationConflictError('Writeback confirmation touched-note plan changed.');
@@ -7487,17 +7487,20 @@ async function handleApplyApprovedWriteback(rawArgs: ApplyApprovedWritebackArgs,
 					context
 				);
 			},
-			async appendAudit(currentPayload, operationId, receipt) {
+			async appendAgentActivity(currentPayload, operationId, receipt) {
 				await appendAuditEventAsync(vaultRoot, {
 					operationId,
 					tool: 'tracekeeper.apply_approved_writeback',
+					type: 'mcp.tool_call',
+					event: 'mcp.tool_call',
+					action: 'tracekeeper.apply_approved_writeback',
 					targetPath: currentPayload.targetPath,
 					status: 'written',
 					taskId: currentPayload.taskId,
 					timestamp: receipt.committedAt,
-					agentId: currentPayload.auditAgentId,
-					sessionId: currentPayload.auditSessionId || undefined,
-					clientName: currentPayload.auditClientName || undefined,
+					agentId: currentPayload.activityAgentId,
+					sessionId: currentPayload.activitySessionId || undefined,
+					clientName: currentPayload.activityClientName || undefined,
 					metadata: {
 						action: 'writeback.apply',
 						proposal_id: currentPayload.proposalId,
@@ -7524,11 +7527,11 @@ async function handleApplyApprovedWriteback(rawArgs: ApplyApprovedWritebackArgs,
 	});
 }
 
-async function handleAuditRecent(rawArgs: AuditRecentArgs, context: ToolContext) {
+async function handleAgentActivityRecent(rawArgs: AgentActivityRecentArgs, context: ToolContext) {
 	const vaultRoot = configuredVaultRoot(context);
 	const maxItems = coercePositiveInt(rawArgs.max_items, MAX_AUDIT_ITEMS, 1, 100);
-	const application = new AuditRecentApplicationService({
-		auditLogPath: AUDIT_LOG_PATH,
+	const application = new AgentActivityRecentApplicationService({
+		agentActivityPath: AGENT_ACTIVITY_PATH,
 		readSections: () => readMergedAuditSections(vaultRoot, context),
 	});
 	return {
@@ -7640,7 +7643,7 @@ async function handleCaptureSource(rawArgs: CaptureSourceArgs, context: ToolInvo
 			return note
 				? {
 					path: note.path,
-					audit_path: note.audit_path,
+					activity_path: note.activity_path,
 					status: note.status,
 					warnings: note.warnings,
 				}
@@ -7903,7 +7906,7 @@ async function handleBuildContextPack(rawArgs: BuildContextPackArgs, context: To
 		context_pack: contextPack,
 		artifact: {
 			path: note.path,
-			audit_path: note.audit_path,
+			activity_path: note.activity_path,
 		},
 	};
 }
@@ -9033,7 +9036,7 @@ async function executeFinishTaskOperation(
 		task_id: string;
 		task_path: string | null;
 		path: string;
-		audit_path: string;
+		activity_path: string;
 		review_proposal_mode: ReviewProposalMode;
 		content_language: ContentLanguage;
 		content_language_source: ContentLanguageSource;
@@ -9074,7 +9077,7 @@ async function executeFinishTaskOperation(
 		task_id: input.taskId,
 		task_path: buildTaskNotePath(input.taskId),
 		path: sessionNote.path,
-		audit_path: sessionNote.audit_path,
+		activity_path: sessionNote.activity_path,
 		review_proposal_mode: input.reviewProposalMode,
 		content_language: input.contentLanguage,
 		content_language_source: contentLanguageSourceFromContext(context),

@@ -3,9 +3,9 @@ import { ui } from '../../ui/localization';
 export const RUNTIME_LOG_PAGE_SIZE = 20;
 export const RUNTIME_LOG_MAX_EVENTS = 2000;
 
-export type RuntimeLogFilter = 'all' | 'connection' | 'tool' | 'config' | 'error';
+export type RuntimeLogFilter = 'all' | 'connection' | 'tool' | 'error';
 
-export type RuntimeLogCategory = 'connection' | 'tool' | 'config' | 'record';
+export type RuntimeLogCategory = 'connection' | 'tool' | 'record';
 
 export type RuntimeLogCleanupScope = 'older-than-week' | 'older-than-month' | 'older-than-three-months' | 'all';
 
@@ -95,7 +95,6 @@ export const RUNTIME_LOG_FILTERS: RuntimeLogFilter[] = [
 	'all',
 	'connection',
 	'tool',
-	'config',
 	'error',
 ];
 

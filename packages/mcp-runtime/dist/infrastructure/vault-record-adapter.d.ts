@@ -6,12 +6,12 @@ export interface VaultRecordAdapterContext {
 }
 export interface VaultRecordWriteResult {
     path: string;
-    audit_path: string;
+    activity_path: string;
     status: string;
     warnings: string[];
 }
 export interface VaultRecordAdapterDependencies {
-    auditLogPath: string;
+    agentActivityPath: string;
     buildMarkdownNote(frontmatter: Record<string, unknown>, body: string): string;
 }
 export declare class VaultRecordAdapter {

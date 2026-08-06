@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.StreamableHttpMcpRuntime = void 0;
+exports.StreamableHttpMcpRuntime = exports.DEFAULT_MCP_PORT = void 0;
 const node_buffer_1 = require("node:buffer");
 const node_http_1 = require("node:http");
 const crypto = __importStar(require("node:crypto"));
@@ -42,6 +42,8 @@ const tools_1 = require("./tools");
 const handler_1 = require("./handler");
 const local_oauth_1 = require("./local-oauth");
 const DEFAULT_HOST = '127.0.0.1';
+/** MCP 服务的共享默认监听端口。 */
+exports.DEFAULT_MCP_PORT = 51601;
 const DEFAULT_PATH = '/mcp';
 const DEFAULT_MAX_REQUEST_BYTES = 1024 * 1024;
 const DEFAULT_MAX_SESSIONS = 32;
@@ -74,7 +76,7 @@ class StreamableHttpMcpRuntime {
         if (this.host !== DEFAULT_HOST) {
             throw new Error(`MCP Runtime local trust requires host ${DEFAULT_HOST}.`);
         }
-        this.port = options.port ?? 58437;
+        this.port = options.port ?? exports.DEFAULT_MCP_PORT;
         this.path = options.path || DEFAULT_PATH;
         this.credentialVerifier = options.credentialVerifier;
         this.maxRequestBytes = normalizePositiveLimit(options.maxRequestBytes, DEFAULT_MAX_REQUEST_BYTES, 'maxRequestBytes');

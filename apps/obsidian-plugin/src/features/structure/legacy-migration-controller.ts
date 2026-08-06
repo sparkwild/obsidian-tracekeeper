@@ -47,7 +47,7 @@ const legacyMigrationOperationQueues = new WeakMap<
 export interface MemoryInitializationPlan {
 	foldersToCreate: string[];
 	filesToCreate: string[];
-	missingAuditLog: boolean;
+	missingAgentActivityHub: boolean;
 }
 
 export type StructureState = 'initialized' | 'partial' | 'missing' | 'legacy_detected';

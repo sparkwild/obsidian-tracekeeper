@@ -27,13 +27,13 @@ export interface VaultRecordAdapterContext {
 
 export interface VaultRecordWriteResult {
 	path: string;
-	audit_path: string;
+	activity_path: string;
 	status: string;
 	warnings: string[];
 }
 
 export interface VaultRecordAdapterDependencies {
-	auditLogPath: string;
+	agentActivityPath: string;
 	buildMarkdownNote(frontmatter: Record<string, unknown>, body: string): string;
 }
 
@@ -108,7 +108,7 @@ export class VaultRecordAdapter {
 
 		return {
 			path: resolved.relativePath,
-			audit_path: audit.path,
+			activity_path: audit.path,
 			status: 'written',
 			warnings: [],
 		};
@@ -167,7 +167,7 @@ export class VaultRecordAdapter {
 
 		return {
 			path: targetPath,
-			audit_path: audit.path,
+			activity_path: audit.path,
 			status: 'written',
 			warnings: [],
 		};
@@ -199,7 +199,7 @@ export class VaultRecordAdapter {
 		}
 		return {
 			path: relativePath,
-			audit_path: this.dependencies.auditLogPath,
+			activity_path: this.dependencies.agentActivityPath,
 			status: 'skipped',
 			warnings: [],
 		};
@@ -231,7 +231,7 @@ export class VaultRecordAdapter {
 			}
 			return {
 				path: relativePath,
-				audit_path: this.dependencies.auditLogPath,
+				activity_path: this.dependencies.agentActivityPath,
 				status: 'skipped',
 				warnings: [],
 			};

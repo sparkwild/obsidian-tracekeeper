@@ -5,6 +5,7 @@ import fs from 'node:fs';
 const activitySource = fs.readFileSync('src/features/activity/activity-view.ts', 'utf8');
 const runtimeStatusSource = fs.readFileSync('src/features/runtime/runtime-status-view.ts', 'utf8');
 const activityControllerSource = fs.readFileSync('src/features/activity/activity-data-controller.ts', 'utf8');
+const stylesSource = fs.readFileSync('styles.css', 'utf8');
 
 const orderedCalls = [
 	'this.renderAgentActivitySection(contentEl, connections)',
@@ -37,6 +38,8 @@ assert.ok(activitySource.includes('Manage Agent configuration'));
 assert.ok(activitySource.includes("openSettingsTab('agent-configuration')"));
 assert.ok(activitySource.includes('successfully used a Tracekeeper tool'));
 assert.ok(activitySource.includes('loadAgentConnectionsSnapshot'));
+assert.ok(activitySource.includes("this.containerEl.addClass('tracekeeper-activity-view')"));
+assert.match(stylesSource, /\.tracekeeper-activity-view\s+\.view-header-title[\s\S]*?display:\s*none;/);
 assert.equal(activitySource.includes("ui('当前 Agent 配置', 'Current Agent configuration')"), false);
 assert.equal(activitySource.includes("ui('历史活动', 'Historical activity')"), false);
 assert.equal(activitySource.includes("ui('配置已移除', 'Configuration removed')"), false);
@@ -51,7 +54,7 @@ assert.equal(activitySource.includes('近期认证活动'), false);
 assert.ok(activitySource.includes("ui('最近事件', 'Recent events')"));
 assert.ok(activitySource.includes('immutable project-memory entries saved'));
 assert.ok(activitySource.includes("ui('查看全部', 'View all')"));
-assert.ok(activitySource.includes('TRACEKEEPER_RUNTIME_LOG_VIEW'));
+assert.ok(activitySource.includes('AgentActivityDetailsModal'));
 assert.equal(activitySource.includes('continue_onboarding'), false);
 assert.equal(activitySource.includes('onboardingComplete'), false);
 assert.equal(activitySource.includes("ui('认证 Agent', 'Authenticated Agent')"), false);
@@ -73,7 +76,7 @@ assert.ok(runtimeStatusSource.includes('loadAgentConnectionsSnapshot'));
 assert.ok(runtimeStatusSource.includes('recentAgents'));
 assert.ok(runtimeStatusSource.includes('未观察到认证活动'));
 assert.ok(runtimeStatusSource.includes('does not label a selected or configured Agent as connected'));
-assert.ok(runtimeStatusSource.includes('TRACEKEEPER_RUNTIME_LOG_VIEW'));
+assert.ok(runtimeStatusSource.includes('TRACEKEEPER_ACTIVITY_VIEW'));
 assert.ok(runtimeStatusSource.includes('ensureMcpRuntimeRunning'));
 assert.ok(runtimeStatusSource.includes('openSettingsTab'));
 

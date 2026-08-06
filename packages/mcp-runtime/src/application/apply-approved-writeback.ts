@@ -34,10 +34,10 @@ export interface ApplyApprovedWritebackPayload {
 	touchedNotes: string[];
 	confirmationTokenHash: string;
 	confirmationExpiresAt: string;
-	auditPath: string;
-	auditAgentId: string;
-	auditSessionId: string;
-	auditClientName: string;
+	activityPath: string;
+	activityAgentId: string;
+	activitySessionId: string;
+	activityClientName: string;
 }
 
 export interface ApplyApprovedWritebackCommand {
@@ -57,7 +57,7 @@ export interface ApplyApprovedWritebackResult {
 	proposal_path: string;
 	target_note: string;
 	touched_notes: string[];
-	audit_path: string;
+	activity_path: string;
 }
 
 export interface ApplyApprovedWritebackTaskLinkReceipt {
@@ -82,7 +82,7 @@ export interface ApplyApprovedWritebackPort {
 		operationId: string,
 		receipt: ApplyApprovedWritebackTaskLinkReceipt
 	): Promise<void> | void;
-	appendAudit(
+	appendAgentActivity(
 		payload: ApplyApprovedWritebackPayload,
 		operationId: string,
 		receipt: ProposalTransitionReceipt
@@ -128,10 +128,10 @@ function boundedWritebackPayload(
 		'writebackMarker',
 		'confirmationTokenHash',
 		'confirmationExpiresAt',
-		'auditPath',
-		'auditAgentId',
-		'auditSessionId',
-		'auditClientName',
+		'activityPath',
+		'activityAgentId',
+		'activitySessionId',
+		'activityClientName',
 	];
 	if (
 		payload.schemaVersion !== 1
@@ -184,7 +184,7 @@ function boundedWritebackPayload(
 		|| payload.writebackBlockHash.length === 0
 		|| payload.writebackMarker.length === 0
 		|| payload.confirmationTokenHash.length === 0
-		|| payload.auditPath.length === 0
+		|| payload.activityPath.length === 0
 		|| Number.isNaN(Date.parse(payload.confirmationExpiresAt))
 	) {
 		throw new Error('Approved writeback operation payload is invalid.');
@@ -218,10 +218,10 @@ function boundedWritebackPayload(
 		touchedNotes: payload.touchedNotes.slice(),
 		confirmationTokenHash: payload.confirmationTokenHash,
 		confirmationExpiresAt: payload.confirmationExpiresAt,
-		auditPath: payload.auditPath,
-		auditAgentId: payload.auditAgentId,
-		auditSessionId: payload.auditSessionId,
-		auditClientName: payload.auditClientName,
+		activityPath: payload.activityPath,
+		activityAgentId: payload.activityAgentId,
+		activitySessionId: payload.activitySessionId,
+		activityClientName: payload.activityClientName,
 	};
 }
 
@@ -237,10 +237,10 @@ function failureStatusForWritebackBoundary(error: unknown): 'conflicted' | 'fail
 		: 'failed';
 }
 
-function failureStatusForAuditWrite(error: unknown): 'conflicted' | 'audit_pending' {
+function failureStatusForActivityWrite(error: unknown): 'conflicted' | 'activity_pending' {
 	return isWritebackBoundaryConflict(error)
 		? 'conflicted'
-		: 'audit_pending';
+		: 'activity_pending';
 }
 
 function isProposalTransitionFailure(error: unknown): boolean {
@@ -497,7 +497,7 @@ export class ApplyApprovedWritebackService {
 					failureStatus: failureStatusForWritebackBoundary,
 				},
 				{
-					name: 'append_audit',
+					name: 'append_agent_activity',
 					execute: (payload, context) => {
 						const transitionStep = context.completedSteps.find(
 							(step) => step.name === 'mark_proposal_applied'
@@ -507,9 +507,9 @@ export class ApplyApprovedWritebackService {
 							payload,
 							command.operationId
 						);
-						return this.options.port.appendAudit(payload, command.operationId, receipt);
+						return this.options.port.appendAgentActivity(payload, command.operationId, receipt);
 					},
-					failureStatus: failureStatusForAuditWrite,
+					failureStatus: failureStatusForActivityWrite,
 				},
 			],
 			finalize: (payload) => ({
@@ -524,9 +524,9 @@ export class ApplyApprovedWritebackService {
 				touched_notes: payload.touchedNotes || [
 					payload.targetPath,
 					payload.proposalPath,
-					payload.auditPath,
+					payload.activityPath,
 				],
-				audit_path: payload.auditPath,
+				activity_path: payload.activityPath,
 			}),
 		});
 

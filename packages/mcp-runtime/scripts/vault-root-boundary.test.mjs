@@ -41,7 +41,7 @@ function managedWorkflowArtifacts(vaultRoot) {
 }
 
 function auditText(vaultRoot) {
-	const auditRoot = path.join(vaultRoot, '00_tracekeeper', 'control', 'audit');
+	const auditRoot = path.join(vaultRoot, '00_tracekeeper', 'control', 'agent_activity');
 	if (!fs.existsSync(auditRoot)) {
 		return '';
 	}

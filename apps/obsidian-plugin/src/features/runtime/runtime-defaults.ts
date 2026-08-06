@@ -1,6 +1,6 @@
+import { DEFAULT_MCP_PORT as RUNTIME_DEFAULT_MCP_PORT } from '@tracekeeper/mcp-runtime';
 
-
-export const DEFAULT_MCP_PORT = 58437;
+export const DEFAULT_MCP_PORT = RUNTIME_DEFAULT_MCP_PORT;
 
 export const DEFAULT_MCP_HOST = '127.0.0.1';
 

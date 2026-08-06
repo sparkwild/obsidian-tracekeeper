@@ -62,8 +62,8 @@ integration is removed.
 
 Each client profile has at most one integration and each integration has at most
 one active credential. OAuth and manual Bearer credentials share the same
-constant-time digest verifier, revocation path, Session binding, and audit
-fields. Credentials remain valid until replacement or revocation; Tracekeeper
+constant-time digest verifier, revocation path, Session binding, and Agent
+activity fields. Credentials remain valid until replacement or revocation; Tracekeeper
 does not issue refresh tokens or advertise expiry.
 
 Every request revalidates the Bearer. A Session is bound to its original

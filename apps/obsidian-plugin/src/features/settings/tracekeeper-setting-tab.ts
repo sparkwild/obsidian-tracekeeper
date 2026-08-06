@@ -21,7 +21,7 @@ import {
 	taskMemoryProposalModeLabel,
 } from './settings-model';
 import { ui } from '../../ui/localization';
-import { TRACEKEEPER_RUNTIME_LOG_VIEW } from '../../ui/view-types';
+import { TRACEKEEPER_ACTIVITY_VIEW } from '../../ui/view-types';
 import { renderClientSkillPrompt } from '../skill-installation/client-skill-prompt';
 import { buildAgentConfigurationViewModel } from './agent-configuration-view-model';
 import { hasDetectedSkillEvidence } from '../../adapters/client-skill-adapter';
@@ -282,12 +282,52 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	private renderEndpointSetting(container: HTMLElement, endpoint: string): void {
 		const setting = new Setting(container)
 			.setName(ui('MCP 端点', 'MCP endpoint'));
+		const advanced = container.createDiv({
+			cls: 'tracekeeper-settings-endpoint-advanced',
+			attr: {
+				id: 'tracekeeper-mcp-endpoint-advanced',
+				'aria-label': ui('MCP 端点高级选项', 'MCP endpoint advanced options'),
+			},
+		});
+		advanced.hidden = true;
+		this.renderPortSetting(advanced, endpoint);
 		setting.descEl.createEl('code', {
 			text: endpoint,
 			attr: {
 				'aria-label': ui('本机 MCP 端点', 'Local MCP endpoint'),
 			},
 		});
+		setting
+			.addExtraButton((button) =>
+				button
+					.setIcon('copy')
+					.setTooltip(ui('复制 MCP 端点', 'Copy MCP endpoint'))
+					.onClick(() => {
+						void this.plugin.copyToClipboard(
+							endpoint,
+							ui('MCP 端点已复制。', 'MCP endpoint copied.')
+						).catch((error) => {
+							console.error('tracekeeper failed to copy MCP endpoint', error);
+							new Notice(ui('复制 MCP 端点失败。', 'Failed to copy MCP endpoint.'));
+						});
+					})
+			)
+			.addButton((button) => {
+				button.buttonEl.setAttribute('aria-controls', advanced.id);
+				button.buttonEl.setAttribute('aria-expanded', 'false');
+				button
+					.setButtonText(ui('高级选项', 'Advanced options'))
+					.onClick(() => {
+						advanced.hidden = !advanced.hidden;
+						button.buttonEl.setAttribute('aria-expanded', String(!advanced.hidden));
+						button.setButtonText(advanced.hidden
+							? ui('高级选项', 'Advanced options')
+							: ui('收起选项', 'Hide options'));
+						if (!advanced.hidden) {
+							advanced.querySelector('input')?.focus({ preventScroll: true });
+						}
+					});
+			});
 	}
 
 	private renderAccessProtectionSetting(
@@ -481,19 +521,19 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		const section = details.createDiv({ cls: 'tracekeeper-settings-advanced__body' });
 		section.createEl('p', {
 			text: ui(
-				'调整端口、重启诊断、运行记录和全局访问保护。',
-				'Manage the port, restart diagnostics, runtime records, and global access protection.'
+				'管理重启诊断、Agent 活动和全局访问保护。',
+				'Manage restart diagnostics, Agent activity, and global access protection.'
 			),
 			cls: 'tracekeeper-settings-section__description',
 		});
 		new Setting(section)
-			.setName(ui('运行日志', 'Runtime log'))
-			.setDesc(ui('查看 Agent 连接、工具调用、配置写入和错误记录。', 'Review agent connections, tool calls, config writes, and errors.'))
+			.setName(ui('Agent 活动', 'Agent activity'))
+			.setDesc(ui('查看 MCP 连接、认证结果、工具调用和错误记录。', 'Review MCP connections, authentication results, tool calls, and errors.'))
 			.addButton((button) =>
 				button
-					.setButtonText(ui('打开日志', 'Open log'))
+					.setButtonText(ui('打开活动', 'Open activity'))
 					.onClick(() => {
-						void this.plugin.openPluginView(TRACEKEEPER_RUNTIME_LOG_VIEW);
+						void this.plugin.openPluginView(TRACEKEEPER_ACTIVITY_VIEW);
 					})
 			)
 			.addButton((button) =>
@@ -525,7 +565,6 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 							});
 					})
 			);
-		this.renderPortSetting(section, snapshot.runtimeStatus.endpoint);
 		new Setting(section)
 			.setName(ui('召回预览', 'Recall preview'))
 			.setDesc(ui('输入关键词，查看 Agent 可能读取到的记忆。', 'Enter keywords to see which memories an agent may read.'))
@@ -579,7 +618,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		let draftPort = String(this.plugin.settings.mcpPort);
 		let applyButton: HTMLButtonElement | null = null;
 		const setting = new Setting(container)
-			.setName(ui('MCP 端点', 'MCP endpoint'))
+			.setName(ui('端口号', 'Port'))
 			.setDesc(ui(
 				`端点：${connectionUrl}。修改端口后需要点击“应用并重启”。`,
 				`Endpoint: ${connectionUrl}. Select “Apply and restart” after changing the port.`

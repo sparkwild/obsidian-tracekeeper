@@ -181,7 +181,7 @@ The tool never downloads release assets or starts Obsidian. `create` accepts
 only the immutable published `0.2.3` sizes and SHA-256 values, writes a new
 synthetic disposable Vault, and refuses an existing output path. The fixture
 contains sixteen task, session, context, memory, Wiki, source, review, legacy,
-Agent-observation, and audit records plus two unrelated protected files. The
+Agent-observation, Agent activity, and receipt records plus two unrelated protected files. The
 external operator records the `before` snapshot, replaces only the three plugin
 assets, runs the candidate and required restarts, then records `after`.
 `qualified-assets.json` contains `bytes` and `sha256` for each retained T03
@@ -349,8 +349,9 @@ Before submission or update, confirm:
 - the current-stable temporary-Vault row passed for each changed native Vault
   lifecycle, and any minimum-version or previous-package upgrade row selected
   by the change-impact map passed;
-- archive/history and audit/cleanup checks found no lost or duplicate proposal,
-  association, or audit identity, and every partial or outcome-unknown result
+- archive/history and Agent activity cleanup checks found no lost or duplicate
+  proposal, association, or activity identity, and every partial or
+  outcome-unknown result
   remained recoverable;
 - affected dialogs passed theme, keyboard, focus, live-announcement, localized
   copy, and explicit-recovery review without multiplying unrelated platform,

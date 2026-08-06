@@ -38,7 +38,7 @@ export class RuntimeLogCleanupModal extends Modal {
 	private render(): void {
 		const { contentEl } = this;
 		contentEl.empty();
-		this.titleEl.setText(ui('清理运行日志', 'Clear runtime log'));
+		this.titleEl.setText(ui('清理 Agent 活动', 'Clear Agent activity'));
 
 		if (this.preview) {
 			this.renderPreview(this.preview);
@@ -47,15 +47,15 @@ export class RuntimeLogCleanupModal extends Modal {
 
 		contentEl.createEl('p', {
 			text: ui(
-				'先预览将按 Obsidian 当前“删除的文件”设置整体处理的审计文件。任务、记忆、审核项和含有新旧混合事件的文件不会被改写。',
-				'Preview the whole audit files that will be handled through Obsidian current deleted-files setting. Tasks, memories, review items, and files containing mixed old and new events are not rewritten.'
+				'先预览将按 Obsidian 当前“删除的文件”设置整体处理的 Agent 活动分片。任务、记忆、审核项和含有新旧混合事件的文件不会被改写。',
+				'Preview the whole Agent activity shards that will be handled through Obsidian current deleted-files setting. Tasks, memories, review items, and files containing mixed old and new events are not rewritten.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
 
 		new Setting(contentEl)
 			.setName(ui('清理范围', 'Range'))
-			.setDesc(ui('按日志时间清理旧记录。', 'Clear old records by log time.'))
+			.setDesc(ui('按活动时间清理旧分片。', 'Clear old activity shards by event time.'))
 			.addDropdown((dropdown) => {
 				for (const scope of RUNTIME_LOG_CLEANUP_OPTIONS) {
 					dropdown.addOption(scope, runtimeLogCleanupScopeLabel(scope));
@@ -110,8 +110,8 @@ export class RuntimeLogCleanupModal extends Modal {
 		const { contentEl } = this;
 		contentEl.createEl('p', {
 			text: ui(
-				`预览将按当前删除设置整体处理 ${preview.eligibleFiles.length} 个审计文件；保留 ${preview.retainedFiles.length} 个文件。不会重写文件内的部分事件。`,
-				`This preview handles ${preview.eligibleFiles.length} whole audit file(s) through the current deletion setting and retains ${preview.retainedFiles.length}. Individual events inside files are never rewritten.`
+				`预览将按当前删除设置整体处理 ${preview.eligibleFiles.length} 个 Agent 活动分片；保留 ${preview.retainedFiles.length} 个文件。不会重写文件内的部分事件。`,
+				`This preview handles ${preview.eligibleFiles.length} whole Agent activity shard(s) through the current deletion setting and retains ${preview.retainedFiles.length}. Individual events inside files are never rewritten.`
 			),
 			cls: 'tracekeeper-view__description',
 		});
@@ -173,8 +173,8 @@ export class RuntimeLogCleanupModal extends Modal {
 							`Confirmed ${result.trashedPaths.length} file(s) handled; ${result.failed.length} failed and ${result.stale.length} changed, disappeared, or have an unknown outcome. Unconfirmed files are not retried automatically; close and build a new preview.`
 						));
 						new Notice(ui(
-							'日志清理部分完成；请检查失败、漂移或结果未知的文件。',
-							'Runtime log cleanup partially completed; review failed, stale, or outcome-unknown files.'
+							'Agent 活动清理部分完成；请检查失败、漂移或结果未知的文件。',
+							'Agent activity cleanup partially completed; review failed, stale, or outcome-unknown files.'
 						));
 						cancel.disabled = false;
 						cancel.setText(ui('关闭', 'Close'));
@@ -182,8 +182,8 @@ export class RuntimeLogCleanupModal extends Modal {
 						return;
 					}
 					new Notice(ui(
-						`已按 Obsidian 当前删除设置处理 ${result.trashedPaths.length} 个审计文件。`,
-						`Handled ${result.trashedPaths.length} audit file(s) through Obsidian current deleted-files setting.`
+						`已按 Obsidian 当前删除设置处理 ${result.trashedPaths.length} 个 Agent 活动分片。`,
+						`Handled ${result.trashedPaths.length} Agent activity shard(s) through Obsidian current deleted-files setting.`
 					));
 					this.close();
 				} catch (error) {
@@ -265,7 +265,7 @@ export class TracekeeperRuntimeLogView extends ItemView {
 	}
 
 	getDisplayText() {
-		return ui('运行日志', 'Runtime log');
+		return ui('Agent 活动详情', 'Agent activity details');
 	}
 
 	getViewData() {
@@ -303,13 +303,13 @@ export class TracekeeperRuntimeLogView extends ItemView {
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
 		const heading = header.createDiv();
 		heading.createEl('h2', {
-			text: ui('运行日志', 'Runtime log'),
+			text: ui('Agent 活动详情', 'Agent activity details'),
 			cls: 'tracekeeper-view__title',
 		});
 		heading.createEl('p', {
 			text: ui(
-				'查看连接、工具调用、配置写入和错误记录。',
-				'Review connection, tool call, config, and error records.'
+				'查看 MCP 连接、认证拒绝和工具调用活动；不记录用户界面操作。',
+				'Review MCP connection, authentication-rejection, and tool-call activity; user interface operations are excluded.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
@@ -346,8 +346,8 @@ export class TracekeeperRuntimeLogView extends ItemView {
 		if (snapshot.items.length === 0) {
 			this.renderEmptyState(
 				contentEl,
-				ui('还没有可展示的运行记录。', 'No runtime records yet.'),
-				ui('AI 工具连接或使用 Tracekeeper 后，这里会显示记录。', 'Runtime records appear after an AI tool connects to or uses Tracekeeper.')
+				ui('还没有可展示的 Agent 活动。', 'No Agent activity yet.'),
+				ui('AI 工具连接或使用 Tracekeeper 后，这里会显示活动。', 'Agent activity appears after an AI tool connects to or uses Tracekeeper.')
 			);
 			return;
 		}
@@ -383,7 +383,7 @@ export class TracekeeperRuntimeLogView extends ItemView {
 		});
 		const body = row.createDiv({ cls: 'tracekeeper-runtime-log-row__body' });
 		body.createEl('strong', {
-			text: `${item.title || ui('运行记录', 'Runtime record')} • ${this.plugin.formatDisplayTime(item.time)}`,
+				text: `${item.title || ui('Agent 活动', 'Agent activity')} • ${this.plugin.formatDisplayTime(item.time)}`,
 		});
 		if (item.meta) {
 			body.createEl('div', { text: item.meta, cls: 'tracekeeper-view__description' });
@@ -425,8 +425,6 @@ export class TracekeeperRuntimeLogView extends ItemView {
 				return ui('连接', 'Connections');
 			case 'tool':
 				return ui('工具调用', 'Tool calls');
-			case 'config':
-				return ui('配置', 'Config');
 			case 'error':
 				return ui('错误', 'Errors');
 			case 'all':
@@ -441,11 +439,9 @@ export class TracekeeperRuntimeLogView extends ItemView {
 				return ui('连接', 'Connection');
 			case 'tool':
 				return ui('工具调用', 'Tool call');
-			case 'config':
-				return ui('配置', 'Config');
 			case 'record':
 			default:
-				return ui('记录', 'Record');
+				return ui('活动', 'Activity');
 		}
 	}
 
@@ -453,5 +449,70 @@ export class TracekeeperRuntimeLogView extends ItemView {
 		const state = container.createDiv({ cls: 'tracekeeper-empty-state' });
 		state.createEl('strong', { text: title });
 		state.createEl('p', { text: detail });
+	}
+}
+
+/**
+ * Detail view owned by the AI Assistant Activity surface. Keeping this in a
+ * modal avoids exposing a second top-level log entry while preserving the
+ * bounded pagination and explicit cleanup workflow for power users.
+ */
+export class AgentActivityDetailsModal extends Modal {
+	constructor(
+		app: App,
+		private plugin: TracekeeperPlugin,
+	) {
+		super(app);
+	}
+
+	async onOpen(): Promise<void> {
+		this.titleEl.setText(ui('Agent 活动详情', 'Agent activity details'));
+		this.contentEl.addClass('tracekeeper-view-root');
+		try {
+			const snapshot = await this.plugin.loadRuntimeLogSnapshot(1, 'all', RUNTIME_LOG_MAX_EVENTS);
+			const header = this.contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
+			header.createEl('p', {
+				text: ui(
+					'这里只展示 MCP 连接、认证拒绝和工具调用活动，不记录用户界面操作。',
+					'Only MCP connection, authentication-rejection, and tool-call activity is shown here; user interface operations are excluded.'
+				),
+				cls: 'tracekeeper-view__description',
+			});
+			const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
+			const cleanupButton = actions.createEl('button', { text: ui('清理活动', 'Clear activity') });
+			cleanupButton.addEventListener('click', () => {
+				new RuntimeLogCleanupModal(this.app, this.plugin, async () => {
+					this.close();
+				}).open();
+			});
+			const list = this.contentEl.createDiv({ cls: 'tracekeeper-runtime-log-list' });
+			if (snapshot.items.length === 0) {
+				list.createEl('p', { text: ui('还没有 Agent 活动。', 'No Agent activity yet.'), cls: 'tracekeeper-view__description' });
+				return;
+			}
+			for (const item of snapshot.items) {
+				const row = list.createDiv({ cls: 'tracekeeper-runtime-log-row' });
+				row.createEl('div', { text: this.categoryLabel(item.category), cls: 'tracekeeper-runtime-log-row__badge tracekeeper-badge' });
+				const body = row.createDiv({ cls: 'tracekeeper-runtime-log-row__body' });
+				body.createEl('strong', { text: `${item.title || ui('Agent 活动', 'Agent activity')} • ${this.plugin.formatDisplayTime(item.time)}` });
+				if (item.meta) body.createEl('div', { text: item.meta, cls: 'tracekeeper-view__description' });
+				if (item.body) body.createEl('div', { text: trimText(item.body, 240) });
+				if (item.path) body.createEl('small', { text: item.path });
+			}
+		} catch (error) {
+			this.contentEl.createEl('p', { text: ui('读取 Agent 活动失败。', 'Failed to read Agent activity.') });
+			console.error('tracekeeper failed to render Agent activity details', error);
+		}
+	}
+
+	private categoryLabel(category: RuntimeLogCategory): string {
+		switch (category) {
+			case 'connection':
+				return ui('连接', 'Connection');
+			case 'tool':
+				return ui('工具调用', 'Tool call');
+			default:
+				return ui('活动', 'Activity');
+		}
 	}
 }

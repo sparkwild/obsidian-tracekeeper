@@ -37,8 +37,8 @@ export interface ToolContract<Name extends string = string> {
     readonly deprecated?: ToolDeprecation;
     readonly description?: string;
 }
-export type TracekeeperToolName = 'tracekeeper.status' | 'tracekeeper.graph_health' | 'tracekeeper.start_task' | 'tracekeeper.recall' | 'tracekeeper.project_memory' | 'tracekeeper.project_context' | 'tracekeeper.project_history' | 'tracekeeper.read_note' | 'tracekeeper.review_queue' | 'tracekeeper.list_review_queue' | 'tracekeeper.list_source_requests' | 'tracekeeper.list_approved_writebacks' | 'tracekeeper.audit_recent' | 'tracekeeper.source_request' | 'tracekeeper.analyze_source_request' | 'tracekeeper.apply_approved_writeback' | 'tracekeeper.build_context_pack' | 'tracekeeper.lint' | 'tracekeeper.finish_task' | 'tracekeeper.distill_session' | 'tracekeeper.write_context_pack' | 'tracekeeper.write_session_note' | 'tracekeeper.capture_source' | 'tracekeeper.propose_memory';
-export declare const PUBLIC_TOOL_NAME_ORDER: readonly ["tracekeeper.status", "tracekeeper.lint", "tracekeeper.recall", "tracekeeper.project_memory", "tracekeeper.read_note", "tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.build_context_pack", "tracekeeper.review_queue", "tracekeeper.apply_approved_writeback", "tracekeeper.source_request", "tracekeeper.capture_source", "tracekeeper.propose_memory"];
+export type TracekeeperToolName = 'tracekeeper.status' | 'tracekeeper.graph_health' | 'tracekeeper.start_task' | 'tracekeeper.recall' | 'tracekeeper.project_memory' | 'tracekeeper.project_context' | 'tracekeeper.project_history' | 'tracekeeper.read_note' | 'tracekeeper.review_queue' | 'tracekeeper.list_review_queue' | 'tracekeeper.list_source_requests' | 'tracekeeper.list_approved_writebacks' | 'tracekeeper.agent_activity_recent' | 'tracekeeper.source_request' | 'tracekeeper.analyze_source_request' | 'tracekeeper.apply_approved_writeback' | 'tracekeeper.build_context_pack' | 'tracekeeper.lint' | 'tracekeeper.finish_task' | 'tracekeeper.distill_session' | 'tracekeeper.write_context_pack' | 'tracekeeper.write_session_note' | 'tracekeeper.capture_source' | 'tracekeeper.propose_memory';
+export declare const PUBLIC_TOOL_NAME_ORDER: readonly ["tracekeeper.status", "tracekeeper.agent_activity_recent", "tracekeeper.lint", "tracekeeper.recall", "tracekeeper.project_memory", "tracekeeper.read_note", "tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.build_context_pack", "tracekeeper.review_queue", "tracekeeper.apply_approved_writeback", "tracekeeper.source_request", "tracekeeper.capture_source", "tracekeeper.propose_memory"];
 type PublicToolName = (typeof PUBLIC_TOOL_NAME_ORDER)[number];
 export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
@@ -239,22 +239,19 @@ export declare const toolContracts: readonly [{
     readonly description: "[deprecated] Use tracekeeper.review_queue with action=\"list_approved\". Compatibility tool, read-only.";
     readonly inputSchema: ToolInputSchema;
 }, {
-    readonly deprecated: {
-        readonly replacement: "Obsidian runtime log view";
-    };
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
-    readonly name: "tracekeeper.audit_recent";
-    readonly version: 2;
-    readonly visibility: "compatibility";
+    readonly name: "tracekeeper.agent_activity_recent";
+    readonly version: 1;
+    readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
     readonly effect: "read";
     readonly idempotency: "natural";
     readonly world: "closed";
     readonly workflowRole: "observe";
-    readonly useCase: "audit_recent";
-    readonly description: "[deprecated] Prefer the Obsidian runtime log view. Compatibility tool, read-only.";
+    readonly useCase: "agent_activity_recent";
+    readonly description: "[read-only] Read recent MCP Agent activity from daily UTC shards. User interface operations are excluded.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly outputSchema: ToolOutputSchema;

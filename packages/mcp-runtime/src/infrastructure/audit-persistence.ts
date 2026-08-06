@@ -7,8 +7,8 @@ import {
 	buildStableAuditEventId,
 	mergeAuditEvents,
 	OperationConflictError,
-	TRACEKEEPER_AUDIT_DIR,
-	TRACEKEEPER_AUDIT_LOG_PATH,
+	TRACEKEEPER_AGENT_ACTIVITY_DIR,
+	TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
 	VaultPathError,
 	type VaultRepository,
 } from '@tracekeeper/core';
@@ -17,15 +17,13 @@ import {
 	assertNoSymlinkSegments,
 	normalizeNotePath,
 	relativeFromAbsolute,
-	resolveSafeNotePath,
 	ToolInputError,
 } from '../safety';
 import { isRecord } from '../protocol';
 
-const AUDIT_LOG_PATH = TRACEKEEPER_AUDIT_LOG_PATH;
-const AUDIT_DIR = TRACEKEEPER_AUDIT_DIR;
-const AUDIT_HUB_PATH = `${TRACEKEEPER_AUDIT_DIR}/index.md`;
-const AUDIT_SCHEMA_VERSION = 3;
+const AGENT_ACTIVITY_DIR = TRACEKEEPER_AGENT_ACTIVITY_DIR;
+const AGENT_ACTIVITY_HUB_PATH = TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH;
+const AGENT_ACTIVITY_SCHEMA_VERSION = 1;
 const MAX_AUDIT_SCALAR_LENGTH = 240;
 const MAX_AUDIT_ARRAY_ITEMS = 12;
 const MAX_AUDIT_METADATA_FIELDS = 32;
@@ -83,14 +81,14 @@ export interface AuditRecentSection {
 	heading: string;
 	body: string[];
 	at_line: number;
-	audit_event_id: string;
+	activity_event_id: string;
 	timestamp: string;
 	source_path: string;
-	source_kind: 'legacy' | 'shard';
+	source_kind: 'shard';
 	action: string;
 }
 
-export const auditLogPath = AUDIT_LOG_PATH;
+export const agentActivityPath = AGENT_ACTIVITY_HUB_PATH;
 
 function stripYamlQuotes(value: string): string {
 	if (value.length >= 2) {
@@ -408,7 +406,7 @@ export function collectAuditTargetsFromResult(
 			'target_note',
 			'proposal_path',
 			'request_path',
-			'audit_path',
+			'activity_path',
 			'source_note',
 			'report',
 		];
@@ -490,7 +488,7 @@ function parseAuditSections(
 			heading: currentHeading,
 			body: currentBody,
 			atLine: currentLine,
-			auditEventId: auditSectionField(currentBody, 'audit_event_id') || undefined,
+			auditEventId: auditSectionField(currentBody, 'activity_event_id') || undefined,
 			timestamp,
 			sourcePath,
 			sourceKind,
@@ -524,13 +522,13 @@ function parseAuditSections(
 	return sections;
 }
 
-const isAuditShardRecordPath = (relativePath: string): boolean =>
+const isAgentActivityShardRecordPath = (relativePath: string): boolean =>
 	new RegExp(
-		`^${AUDIT_DIR.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')}/\\d{4}/\\d{4}-\\d{2}-\\d{2}\\.md$`
+		`^${AGENT_ACTIVITY_DIR.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')}/\\d{4}/\\d{4}-\\d{2}-\\d{2}\\.md$`
 	).test(relativePath);
 
-function directAuditShardPaths(vaultRoot: string): string[] {
-	const normalizedDirectory = normalizeNotePath(AUDIT_DIR);
+function directAgentActivityShardPaths(vaultRoot: string): string[] {
+	const normalizedDirectory = normalizeNotePath(AGENT_ACTIVITY_DIR);
 	const absoluteDirectory = path.resolve(vaultRoot, normalizedDirectory);
 	relativeFromAbsolute(vaultRoot, absoluteDirectory);
 	assertNoSymlinkSegments(vaultRoot, absoluteDirectory);
@@ -539,14 +537,14 @@ function directAuditShardPaths(vaultRoot: string): string[] {
 	}
 	const rootState = fs.lstatSync(absoluteDirectory);
 	if (!rootState.isDirectory()) {
-		throw new VaultPathError('Audit shard path is not a directory.');
+		throw new VaultPathError('Agent activity shard path is not a directory.');
 	}
 	const paths: string[] = [];
 	const visit = (directory: string): void => {
 		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
 			const absolute = path.join(directory, entry.name);
 			if (entry.isSymbolicLink()) {
-				throw new VaultPathError('Audit shard path contains a symbolic link.');
+				throw new VaultPathError('Agent activity shard path contains a symbolic link.');
 			}
 			if (entry.isDirectory()) {
 				visit(absolute);
@@ -556,7 +554,7 @@ function directAuditShardPaths(vaultRoot: string): string[] {
 				continue;
 			}
 			const relative = relativeFromAbsolute(vaultRoot, absolute);
-			if (isAuditShardRecordPath(relative)) {
+			if (isAgentActivityShardRecordPath(relative)) {
 				paths.push(relative);
 			}
 		}
@@ -572,20 +570,12 @@ export async function readMergedAuditSections(
 	const documents: Array<{
 		path: string;
 		content: string;
-		sourceKind: 'legacy' | 'shard';
+		sourceKind: 'shard';
 	}> = [];
 	if (context.vaultRepository) {
-		const legacy = await context.vaultRepository.readText(AUDIT_LOG_PATH);
-		if (legacy) {
-			documents.push({
-				path: legacy.path,
-				content: legacy.content,
-				sourceKind: 'legacy',
-			});
-		}
-		const metadata = await context.vaultRepository.listMarkdown(AUDIT_DIR);
+		const metadata = await context.vaultRepository.listMarkdown(AGENT_ACTIVITY_DIR);
 		for (const item of [...metadata].sort((left, right) => left.path.localeCompare(right.path))) {
-			if (!isAuditShardRecordPath(item.path)) {
+			if (!isAgentActivityShardRecordPath(item.path)) {
 				continue;
 			}
 			const file = await context.vaultRepository.readText(item.path);
@@ -598,23 +588,7 @@ export async function readMergedAuditSections(
 			}
 		}
 	} else {
-		try {
-			const absoluteLegacy = resolveSafeNotePath(
-				vaultRoot,
-				AUDIT_LOG_PATH,
-				{ vaultConfigDir: context.vaultConfigDir }
-			);
-			documents.push({
-				path: relativeFromAbsolute(vaultRoot, absoluteLegacy),
-				content: fs.readFileSync(absoluteLegacy, 'utf8'),
-				sourceKind: 'legacy',
-			});
-		} catch (error) {
-			if (!(error instanceof ToolInputError || error instanceof VaultPathError)) {
-				throw error;
-			}
-		}
-		for (const shardPath of directAuditShardPaths(vaultRoot)) {
+		for (const shardPath of directAgentActivityShardPaths(vaultRoot)) {
 			const absolute = path.resolve(vaultRoot, shardPath);
 			assertNoSymlinkSegments(vaultRoot, absolute);
 			documents.push({
@@ -632,12 +606,12 @@ export async function readMergedAuditSections(
 	);
 	return merged.map((section) => ({
 		heading: section.heading,
-		body: section.body.filter((line) => !/^\s*-?\s*audit_event_id:\s*/.test(line)),
+		body: section.body.filter((line) => !/^\s*-?\s*activity_event_id:\s*/.test(line)),
 		at_line: section.atLine,
-		audit_event_id: section.auditEventId || '',
+		activity_event_id: section.auditEventId || '',
 		timestamp: section.timestamp,
 		source_path: section.sourcePath,
-		source_kind: section.sourceKind,
+		source_kind: 'shard',
 		action: section.action,
 	}));
 }
@@ -668,7 +642,7 @@ function auditHubFile(vaultRoot: string): {
 	absolute: string;
 	relative: string;
 } {
-	const relative = normalizeNotePath(AUDIT_HUB_PATH);
+	const relative = normalizeNotePath(AGENT_ACTIVITY_HUB_PATH);
 	const absolute = path.resolve(vaultRoot, relative);
 	relativeFromAbsolute(vaultRoot, absolute);
 	assertNoSymlinkSegments(vaultRoot, absolute);
@@ -717,7 +691,7 @@ function prepareAuditEvent(input: AuditEventInput): PreparedAuditEvent {
 		`- type: ${auditYamlValue('type', eventName)}`,
 		`- event: ${auditYamlValue('event', eventType)}`,
 		`- timestamp: ${auditYamlValue('timestamp', timestamp)}`,
-		`- audit_event_id: ${auditYamlValue('audit_event_id', auditEventId)}`,
+		`- activity_event_id: ${auditYamlValue('activity_event_id', auditEventId)}`,
 	];
 
 	if (operationId) {
@@ -807,17 +781,17 @@ function auditShardHeader(timestamp: string): string {
 	const day = new Date(timestamp).toISOString().slice(0, 10);
 	return [
 		'---',
-		'type: tracekeeper_audit_shard',
-		`audit_schema_version: ${AUDIT_SCHEMA_VERSION}`,
-		`audit_date: ${day}`,
-		`audit_date_utc: ${day}`,
+		'type: tracekeeper_agent_activity_shard',
+		`agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
+		`activity_date: ${day}`,
+		`activity_date_utc: ${day}`,
 		`created_at: ${timestamp}`,
 		`updated_at: ${timestamp}`,
-		`audit_hub: ${AUDIT_HUB_PATH}`,
+		`agent_activity_hub: ${AGENT_ACTIVITY_HUB_PATH}`,
 		'---',
-		`# Audit ${day}`,
+		`# Agent activity ${day}`,
 		'',
-		'[Audit hub](../index.md#audit)',
+		'[Agent activity hub](../index.md#agent-activity)',
 		'',
 	].join('\n');
 }
@@ -825,13 +799,13 @@ function auditShardHeader(timestamp: string): string {
 function auditHubContent(timestamp: string): string {
 	return [
 		'---',
-		'type: tracekeeper_audit_hub',
-		`audit_schema_version: ${AUDIT_SCHEMA_VERSION}`,
+		'type: tracekeeper_agent_activity_hub',
+		`agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
 		`created_at: ${timestamp}`,
 		'---',
-		'# Audit',
+		'# Agent activity',
 		'',
-		'Daily audit shards link back to this hub.',
+		'Daily Agent activity shards link back to this hub.',
 		'',
 	].join('\n');
 }
@@ -857,14 +831,14 @@ function ensureDirectAuditHub(vaultRoot: string, timestamp: string): void {
 }
 
 async function ensureRepositoryAuditHub(repository: VaultRepository, timestamp: string): Promise<void> {
-	await withRepositoryAuditLock(repository, AUDIT_HUB_PATH, async () => {
-		if (await repository.readText(AUDIT_HUB_PATH)) {
+	await withRepositoryAuditLock(repository, AGENT_ACTIVITY_HUB_PATH, async () => {
+		if (await repository.readText(AGENT_ACTIVITY_HUB_PATH)) {
 			return;
 		}
 		try {
-			await repository.createText(AUDIT_HUB_PATH, auditHubContent(timestamp));
+			await repository.createText(AGENT_ACTIVITY_HUB_PATH, auditHubContent(timestamp));
 		} catch (error) {
-			if (!(await repository.readText(AUDIT_HUB_PATH))) {
+			if (!(await repository.readText(AGENT_ACTIVITY_HUB_PATH))) {
 				throw error;
 			}
 		}
@@ -875,15 +849,15 @@ function appendPreparedAuditEvent(
 	current: string | null,
 	event: PreparedAuditEvent
 ): { content: string; duplicate: boolean } {
-	const marker = `- audit_event_id: ${auditYamlValue('audit_event_id', event.auditEventId)}`;
+	const marker = `- activity_event_id: ${auditYamlValue('activity_event_id', event.auditEventId)}`;
 	if (current?.includes(marker)) {
 		return { content: current, duplicate: true };
 	}
 	if (
 		current
-		&& !/^---\n[\s\S]*?^type:\s*(?:tracekeeper_audit_shard|tracekeeper-audit-shard)\s*$/m.test(current)
+		&& !/^---\n[\s\S]*?^type:\s*(?:tracekeeper_agent_activity_shard|tracekeeper-agent-activity-shard)\s*$/m.test(current)
 	) {
-		throw new OperationConflictError(`Audit shard has an invalid record type: ${event.shardPath}`);
+		throw new OperationConflictError(`Agent activity shard has an invalid record type: ${event.shardPath}`);
 	}
 	const base = current
 		? current.replace(/^updated_at:\s*.*$/m, `updated_at: ${event.timestamp}`)
@@ -896,6 +870,9 @@ function appendPreparedAuditEvent(
 
 export function appendAuditEvent(vaultRoot: string, input: AuditEventInput): AuditEventOutput {
 	const event = prepareAuditEvent(input);
+	if (!isAgentActivityEventInput(input)) {
+		return { path: event.shardPath };
+	}
 	ensureDirectAuditHub(vaultRoot, event.timestamp);
 	const shard = auditShardFile(vaultRoot, event.timestamp);
 	const current = fs.existsSync(shard.absolute)
@@ -921,6 +898,9 @@ export async function appendAuditEventAsync(
 		return appendAuditEvent(vaultRoot, input);
 	}
 	const event = prepareAuditEvent(input);
+	if (!isAgentActivityEventInput(input)) {
+		return { path: event.shardPath };
+	}
 	await ensureRepositoryAuditHub(context.vaultRepository, event.timestamp);
 	await withRepositoryAuditLock(context.vaultRepository, event.shardPath, async () => {
 		for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -944,6 +924,10 @@ export async function appendAuditEventAsync(
 		}
 	});
 	return { path: event.shardPath };
+}
+
+function isAgentActivityEventInput(input: AuditEventInput): boolean {
+	return typeof input.type === 'string' && input.type.startsWith('mcp.');
 }
 
 const repositoryAuditLocks = new WeakMap<VaultRepository, Map<string, Promise<void>>>();

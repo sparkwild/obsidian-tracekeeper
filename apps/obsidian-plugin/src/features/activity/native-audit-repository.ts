@@ -1,15 +1,16 @@
 import { App, TFile, TFolder } from 'obsidian';
 import {
-	TRACEKEEPER_AUDIT_DIR,
+	TRACEKEEPER_AGENT_ACTIVITY_DIR,
+	TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
 	auditShardPath,
 	buildStableAuditEventId,
 } from '@tracekeeper/core';
 import { withObsidianVaultPathLock } from '../../adapters/obsidian-vault-path-lock';
 
-const AUDIT_SCHEMA_VERSION = 3;
-const AUDIT_HUB_PATH = `${TRACEKEEPER_AUDIT_DIR}/index.md`;
-const MAX_AUDIT_VALUE_LENGTH = 320;
-const MAX_AUDIT_EVENT_LENGTH = 4096;
+const AGENT_ACTIVITY_SCHEMA_VERSION = 1;
+const AGENT_ACTIVITY_HUB_PATH = TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH;
+const MAX_ACTIVITY_VALUE_LENGTH = 320;
+const MAX_ACTIVITY_EVENT_LENGTH = 4096;
 
 const OPTIONAL_AUDIT_FIELDS = [
 	'operation_id',
@@ -217,7 +218,7 @@ export class ObsidianAuditShardRepository {
 		} else if (requestId) {
 			optionalFields.request_id = requestId;
 		}
-		const suppliedEventId = this.normalizeEventId(section.fields.audit_event_id);
+		const suppliedEventId = this.normalizeEventId(section.fields.activity_event_id);
 		const auditEventId = suppliedEventId || buildStableAuditEventId({
 			...stableIdentity,
 			type: eventType,
@@ -304,7 +305,7 @@ export class ObsidianAuditShardRepository {
 		) {
 			normalized = '[redacted]';
 		}
-		return normalized.slice(0, MAX_AUDIT_VALUE_LENGTH);
+		return normalized.slice(0, MAX_ACTIVITY_VALUE_LENGTH);
 	}
 
 	private renderEvent(input: {
@@ -319,8 +320,8 @@ export class ObsidianAuditShardRepository {
 			`## ${input.timestamp}`,
 			`type: ${input.eventType}`,
 			`event: ${input.eventName}`,
-			`audit_schema_version: ${AUDIT_SCHEMA_VERSION}`,
-			`audit_event_id: ${input.auditEventId}`,
+			`agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
+			`activity_event_id: ${input.auditEventId}`,
 			`action: ${input.action}`,
 		];
 		for (const key of OPTIONAL_AUDIT_FIELDS) {
@@ -330,15 +331,15 @@ export class ObsidianAuditShardRepository {
 			}
 			const candidate = `${key}: ${value}`;
 			if ([...lines, candidate, `timestamp: ${input.timestamp}`, ''].join('\n').length >
-				MAX_AUDIT_EVENT_LENGTH) {
+				MAX_ACTIVITY_EVENT_LENGTH) {
 				break;
 			}
 			lines.push(candidate);
 		}
 		lines.push(`timestamp: ${input.timestamp}`, '');
 		const rendered = `${lines.join('\n')}\n`;
-		if (rendered.length > MAX_AUDIT_EVENT_LENGTH) {
-			throw new Error('Audit event exceeds the bounded record size.');
+		if (rendered.length > MAX_ACTIVITY_EVENT_LENGTH) {
+			throw new Error('Agent activity event exceeds the bounded record size.');
 		}
 		return rendered;
 	}
@@ -376,7 +377,7 @@ export class ObsidianAuditShardRepository {
 		await this.app.vault.process(shard, (current) => {
 			this.validateShard(current, shardPath);
 			const existingIds = new Set(
-				[...current.matchAll(/^audit_event_id:\s*([A-Za-z0-9._:-]+)\s*$/gm)]
+				[...current.matchAll(/^activity_event_id:\s*([A-Za-z0-9._:-]+)\s*$/gm)]
 					.map((match) => match[1])
 			);
 			const pending = events.filter((event) => !existingIds.has(event.auditEventId));
@@ -402,34 +403,34 @@ export class ObsidianAuditShardRepository {
 		return this.serialize('audit-hub', async () => {
 			return withObsidianVaultPathLock(
 				this.app.vault,
-				AUDIT_HUB_PATH,
+				AGENT_ACTIVITY_HUB_PATH,
 				async () => {
-					await this.host.ensureFolderExists(TRACEKEEPER_AUDIT_DIR);
-					let hub = this.app.vault.getAbstractFileByPath(AUDIT_HUB_PATH);
+					await this.host.ensureFolderExists(TRACEKEEPER_AGENT_ACTIVITY_DIR);
+				let hub = this.app.vault.getAbstractFileByPath(AGENT_ACTIVITY_HUB_PATH);
 					if (!hub) {
 						const createdAt = new Date().toISOString();
 						await this.app.vault.create(
-							AUDIT_HUB_PATH,
+							AGENT_ACTIVITY_HUB_PATH,
 							[
 								'---',
-								'type: tracekeeper_audit_hub',
-								`audit_schema_version: ${AUDIT_SCHEMA_VERSION}`,
+							'type: tracekeeper_agent_activity_hub',
+							`agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
 								`created_at: ${createdAt}`,
 								`updated_at: ${createdAt}`,
 								'---',
-								'# Audit',
+							'# Agent activity',
 								'',
-								'Daily audit shards link back to this hub and remain discoverable through Backlinks.',
+							'Daily Agent activity shards link back to this hub and remain discoverable through Backlinks.',
 								'',
 							].join('\n')
 						);
-						hub = this.app.vault.getAbstractFileByPath(AUDIT_HUB_PATH);
+						hub = this.app.vault.getAbstractFileByPath(AGENT_ACTIVITY_HUB_PATH);
 					}
 					if (hub instanceof TFolder) {
-						throw new Error(`Audit hub path is a folder: ${AUDIT_HUB_PATH}.`);
+					throw new Error(`Agent activity hub path is a folder: ${AGENT_ACTIVITY_HUB_PATH}.`);
 					}
 					if (!(hub instanceof TFile)) {
-						throw new Error(`Audit hub is unavailable: ${AUDIT_HUB_PATH}.`);
+					throw new Error(`Agent activity hub is unavailable: ${AGENT_ACTIVITY_HUB_PATH}.`);
 					}
 					return hub;
 				}
@@ -445,13 +446,13 @@ export class ObsidianAuditShardRepository {
 		const day = shardPath.slice(shardPath.lastIndexOf('/') + 1, -3);
 		return [
 			'---',
-			'type: tracekeeper_audit_shard',
-			`audit_schema_version: ${AUDIT_SCHEMA_VERSION}`,
-			`audit_date_utc: ${day}`,
+			'type: tracekeeper_agent_activity_shard',
+			`agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
+			`activity_date_utc: ${day}`,
 			`created_at: ${timestamp}`,
 			`updated_at: ${timestamp}`,
 			'---',
-			`# Audit ${day}`,
+			`# Agent activity ${day}`,
 			'',
 			hubLink,
 			'',
@@ -461,11 +462,11 @@ export class ObsidianAuditShardRepository {
 	private validateShard(content: string, shardPath: string): void {
 		const day = shardPath.slice(shardPath.lastIndexOf('/') + 1, -3);
 		if (
-			!/^type:\s*tracekeeper_audit_shard\s*$/m.test(content)
-			|| !new RegExp(`^audit_date_utc:\\s*${day}\\s*$`, 'm').test(content)
+			!/^type:\s*tracekeeper_agent_activity_shard\s*$/m.test(content)
+			|| !new RegExp(`^activity_date_utc:\\s*${day}\\s*$`, 'm').test(content)
 			|| !/^updated_at:\s*\S+\s*$/m.test(content)
 		) {
-			throw new Error(`Audit shard metadata is invalid: ${shardPath}.`);
+			throw new Error(`Agent activity shard metadata is invalid: ${shardPath}.`);
 		}
 	}
 

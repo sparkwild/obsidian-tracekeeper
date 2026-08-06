@@ -1,14 +1,13 @@
 import { App, TFile, TFolder } from 'obsidian';
 import {
-	TRACEKEEPER_AUDIT_DIR,
-	TRACEKEEPER_AUDIT_LOG_PATH,
+	TRACEKEEPER_AGENT_ACTIVITY_DIR,
+	TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
 	TRACEKEEPER_OPERATIONS_DIR,
 	buildAuditCleanupPreview,
 	computePayloadHash,
 	hashVaultContent,
 	mergeAuditEvents,
 	validateAuditCleanupPreview,
-	type AuditEventSourceKind,
 } from '@tracekeeper/core';
 import {
 	getReviewProposalAttentionState,
@@ -83,7 +82,6 @@ export interface ActivityDataControllerHost {
 	timestampFromFilename(filename: string): string;
 	snippetFromText(text: string, fallback?: string): string;
 	trimText(value: string, maxLength?: number): string;
-	buildAuditLogHeader(): string;
 	ensureFolderExists(path: string): Promise<void>;
 	getConfiguredTrashDescription(): string;
 	formatAgentDisplayName(clientName: string, agentId: string): string;
@@ -158,10 +156,10 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 		const structureStatus = this.host.getStructureStatus();
 		const taskFolderMissing =
 			this.app.vault.getAbstractFileByPath(AGENT_TASKS_PATH) === null;
-		const auditLogMissing =
-			this.app.vault.getAbstractFileByPath(TRACEKEEPER_AUDIT_LOG_PATH) === null;
-		const auditDirMissing =
-			this.app.vault.getAbstractFileByPath(TRACEKEEPER_AUDIT_DIR) === null;
+		const activityHubMissing =
+			this.app.vault.getAbstractFileByPath(TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH) === null;
+		const activityDirMissing =
+			this.app.vault.getAbstractFileByPath(TRACEKEEPER_AGENT_ACTIVITY_DIR) === null;
 		const recentToolCallRecords = recentAuditEvents
 			.filter((event) => this.isToolCallAuditEvent(event))
 			.map((event) => this.toAgentToolCallRecord(event));
@@ -198,7 +196,7 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			recentAgentCount: recentAgents.length,
 			recentToolCallCount: recentToolCallRecords.length,
 			missingTaskFolder: taskFolderMissing,
-			missingAuditSources: auditLogMissing && auditDirMissing,
+			missingAuditSources: activityHubMissing || activityDirMissing,
 			updatedAt: new Date().toISOString(),
 		};
 	}
@@ -735,25 +733,15 @@ private async readRuntimeLogCleanupRows(
 		return { eligibleFiles, retainedFiles };
 	}
 
-private async readRuntimeLogCleanupInputs(): Promise<Array<{
+	private async readRuntimeLogCleanupInputs(): Promise<Array<{
 		path: string;
 		contentHash: string;
 		version: string;
 		eventTimes: string[];
 	}>> {
 		const files = new Map<string, TFile>();
-		const legacy = this.app.vault.getAbstractFileByPath(
-			TRACEKEEPER_AUDIT_LOG_PATH
-		);
-		if (legacy instanceof TFile) {
-			files.set(legacy.path, legacy);
-		} else if (legacy) {
-			throw new Error(
-				`Runtime log cleanup audit path is not a file: ${TRACEKEEPER_AUDIT_LOG_PATH}.`
-			);
-		}
 		const auditFolder = this.app.vault.getAbstractFileByPath(
-			TRACEKEEPER_AUDIT_DIR
+			TRACEKEEPER_AGENT_ACTIVITY_DIR
 		);
 		if (auditFolder instanceof TFolder) {
 			for (const file of this.collectMarkdownFiles(auditFolder)) {
@@ -763,7 +751,7 @@ private async readRuntimeLogCleanupInputs(): Promise<Array<{
 			}
 		} else if (auditFolder) {
 			throw new Error(
-				`Runtime log cleanup audit directory is not a folder: ${TRACEKEEPER_AUDIT_DIR}.`
+				`Agent activity cleanup directory is not a folder: ${TRACEKEEPER_AGENT_ACTIVITY_DIR}.`
 			);
 		}
 
@@ -847,10 +835,7 @@ private runtimeLogCleanupFileVersion(file: TFile): string {
 	}
 
 	private isRuntimeLogCleanupPath(path: string): boolean {
-		if (path === TRACEKEEPER_AUDIT_LOG_PATH) {
-			return true;
-		}
-		const escapedDirectory = TRACEKEEPER_AUDIT_DIR.replace(
+		const escapedDirectory = TRACEKEEPER_AGENT_ACTIVITY_DIR.replace(
 			/[.*+?^${}()|[\]\\]/g,
 			'\\$&'
 		);
@@ -867,13 +852,11 @@ private runtimeLogCleanupFileVersion(file: TFile): string {
 			&& parsed.toISOString().slice(0, 10) === match[2];
 	}
 
-private runtimeLogCleanupSourceKind(
-		path: string
-	): AuditEventSourceKind | null {
+private runtimeLogCleanupSourceKind(path: string): 'shard' | null {
 		if (!this.isRuntimeLogCleanupPath(path)) {
 			return null;
 		}
-		return path === TRACEKEEPER_AUDIT_LOG_PATH ? 'legacy' : 'shard';
+		return 'shard';
 	}
 
 	private async validateRuntimeLogCleanupState(
@@ -1139,7 +1122,7 @@ private runtimeLogCleanupReceiptPath(operationId: string): string {
 		if (!/^cleanup-[A-Za-z0-9_-]{1,160}$/.test(operationId)) {
 			throw new Error('Runtime log cleanup operation id is invalid.');
 		}
-		return `${TRACEKEEPER_OPERATIONS_DIR}/${operationId}.json`;
+		return `${TRACEKEEPER_OPERATIONS_DIR}/agent-activity-cleanups/${operationId}.json`;
 	}
 
 	private async readRuntimeLogCleanupReceipt(
@@ -1196,7 +1179,7 @@ private runtimeLogCleanupReceiptPath(operationId: string): string {
 		if (content.length > RUNTIME_LOG_CLEANUP_RECEIPT_MAX_LENGTH) {
 			throw new Error('Runtime log cleanup receipt exceeds the bounded size.');
 		}
-		await this.host.ensureFolderExists(TRACEKEEPER_OPERATIONS_DIR);
+		await this.host.ensureFolderExists(`${TRACEKEEPER_OPERATIONS_DIR}/agent-activity-cleanups`);
 		const existing = this.app.vault.getAbstractFileByPath(path);
 		if (receipt.revision === 0) {
 			if (existing) {
@@ -1386,12 +1369,11 @@ private countRuntimeLogItems(items: RuntimeLogItem[]): Record<RuntimeLogFilter, 
 			all: 0,
 			connection: 0,
 			tool: 0,
-			config: 0,
 			error: 0,
 		};
 		for (const item of items) {
 			counts.all += 1;
-			if (item.category === 'connection' || item.category === 'tool' || item.category === 'config') {
+			if (item.category === 'connection' || item.category === 'tool') {
 				counts[item.category] += 1;
 			}
 			if (this.isRuntimeLogError(item)) {
@@ -1446,9 +1428,6 @@ private runtimeLogCategory(event: AuditEventRecord): RuntimeLogCategory {
 		if (this.isConnectionAuditEvent(event)) {
 			return 'connection';
 		}
-		if (event.action.startsWith('client_config_')) {
-			return 'config';
-		}
 		if (this.isToolCallAuditEvent(event)) {
 			return 'tool';
 		}
@@ -1462,28 +1441,7 @@ private runtimeLogTitle(event: AuditEventRecord, category: RuntimeLogCategory): 
 		if (category === 'tool') {
 			return this.host.formatToolDisplayName(event.toolName || event.action);
 		}
-		if (category === 'config') {
-			switch (event.action) {
-				case 'client_config_applied':
-					return ui('写入连接配置', 'Connection config written');
-				case 'client_config_removed':
-					return ui('移除连接配置', 'Connection config removed');
-				case 'client_config_failed':
-					return ui('连接配置失败', 'Connection config failed');
-				default:
-					return ui('连接配置变更', 'Connection config change');
-			}
-		}
-		if (event.action === 'structure.repair') {
-			return ui('补齐基础结构', 'Repair base structure');
-		}
-		if (event.action === 'legacy_structure.migrate') {
-			return ui('原生迁移旧目录', 'Move legacy structure');
-		}
-		if (event.action === 'legacy_structure.cleanup') {
-			return ui('清理旧目录', 'Clean legacy folders');
-		}
-		return event.action || ui('运行记录', 'Runtime record');
+		return event.action || ui('Agent 活动', 'Agent activity');
 	}
 
 private buildActivityTimelineItems(input: {
@@ -1563,14 +1521,14 @@ private toActivityTimelineAuditItem(event: AuditEventRecord): ActivityTimelineIt
 		};
 	}
 
-isToolCallAuditEvent(event: AuditEventRecord): boolean {
-		return event.eventType === 'tool-call'
-			|| event.eventType === 'agent-tool-call'
-			|| (Boolean(event.toolName) && !this.isConnectionAuditEvent(event));
+	isToolCallAuditEvent(event: AuditEventRecord): boolean {
+		const eventType = event.eventType.trim().toLowerCase().replace(/_/g, '-');
+		return eventType === 'mcp.tool-call';
 	}
 
-isConnectionAuditEvent(event: AuditEventRecord): boolean {
-		return event.eventType === 'connection' || event.eventType === 'agent-connection-event' || event.action === 'connection' || event.action === 'mcp.initialize';
+	isConnectionAuditEvent(event: AuditEventRecord): boolean {
+		const eventType = event.eventType.trim().toLowerCase().replace(/_/g, '-');
+		return eventType === 'mcp.connection';
 	}
 
 private readAgentAuthMode(values: ParsedRecord): 'oauth' | 'bearer' | '' {
@@ -1580,11 +1538,7 @@ private readAgentAuthMode(values: ParsedRecord): 'oauth' | 'bearer' | '' {
 
 private normalizeAuditToolName(eventType: string, action: string, toolName: string): string {
 		const normalizedTool = toolName.trim();
-		const isConnection =
-			eventType === 'connection' ||
-			eventType === 'agent-connection-event' ||
-			action === 'connection' ||
-			action === 'mcp.initialize';
+		const isConnection = eventType.trim().toLowerCase().replace(/_/g, '-') === 'mcp.connection';
 		if (isConnection && normalizedTool.toLowerCase() === 'unknown') {
 			return '';
 		}
@@ -1633,16 +1587,13 @@ async readRecentAuditEvents(limit: number): Promise<AuditEventRecord[]> {
 		if (safeLimit === 0) {
 			return [];
 		}
-		const [auditLogRecords, folderRecords] = await Promise.all([
-			this.readAuditLogFile(safeLimit),
-			this.readAuditFolderEvents(safeLimit),
-		]);
+		const folderRecords = await this.readAuditFolderEvents(safeLimit);
 		const merged = mergeAuditEvents(
-			[...auditLogRecords, ...folderRecords].map(({ path, auditId, ...event }) => ({
+			folderRecords.map(({ path, auditId, ...event }) => ({
 				...event,
 				auditEventId: auditId,
 				sourcePath: path,
-				sourceKind: this.auditSourceKind(path),
+				sourceKind: 'shard',
 			}))
 		).map(({ sourcePath, auditEventId, sourceKind: _sourceKind, ...event }) => ({
 			...event,
@@ -1650,33 +1601,25 @@ async readRecentAuditEvents(limit: number): Promise<AuditEventRecord[]> {
 			auditId: auditEventId || '',
 		}));
 		return merged
+			.filter((event) => this.isAgentActivityEvent(event))
 			.slice(0, safeLimit);
 	}
 
-private async readAuditLogFile(limit: number): Promise<AuditEventRecord[]> {
-		const file = this.app.vault.getAbstractFileByPath(TRACEKEEPER_AUDIT_LOG_PATH);
-		if (!(file instanceof TFile)) {
-			return [];
-		}
-
-		let content = '';
-		try {
-			content = await this.app.vault.cachedRead(file);
-		} catch (error) {
-			console.error('tracekeeper failed to read audit log', error);
-			return [];
-		}
-
-		return this.parseAuditLogSections(content, file.path, limit);
+	private isAgentActivityEvent(event: AuditEventRecord): boolean {
+		const eventType = event.eventType.trim().toLowerCase().replace(/_/g, '-');
+		return eventType === 'mcp.connection'
+			|| eventType === 'mcp.authentication-rejected'
+			|| eventType === 'mcp.tool-call';
 	}
 
 private async readAuditFolderEvents(limit: number): Promise<AuditEventRecord[]> {
-		const folder = this.app.vault.getAbstractFileByPath(TRACEKEEPER_AUDIT_DIR);
+		const folder = this.app.vault.getAbstractFileByPath(TRACEKEEPER_AGENT_ACTIVITY_DIR);
 		if (!(folder instanceof TFolder)) {
 			return [];
 		}
 
 		const files = this.collectMarkdownFiles(folder)
+			.filter((file) => this.isRuntimeLogCleanupPath(file.path))
 			.sort((left, right) => right.path.localeCompare(left.path));
 		const events: AuditEventRecord[] = [];
 		for (const file of files) {
@@ -1704,11 +1647,11 @@ private async readAuditMarkdownFile(file: TFile, limit: number): Promise<AuditEv
 		const recordType = this.host.firstString(data, ['type'])
 			.toLowerCase()
 			.replace(/_/g, '-');
-		if (recordType === 'tracekeeper-audit-hub') {
+		if (recordType === 'tracekeeper-agent-activity-hub') {
 			return [];
 		}
 		if (
-			recordType === 'tracekeeper-audit-shard'
+			recordType === 'tracekeeper-agent-activity-shard'
 		) {
 			return this.parseAuditLogSections(parsed.body, file.path, limit);
 		}
@@ -1728,7 +1671,7 @@ private async readAuditMarkdownFile(file: TFile, limit: number): Promise<AuditEv
 				{
 					path: file.path,
 					auditId: this.host.firstString(data, [
-						'audit_event_id',
+						'activity_event_id',
 						'auditEventId',
 						'audit_id',
 						'auditId',
@@ -1750,7 +1693,7 @@ private async readAuditMarkdownFile(file: TFile, limit: number): Promise<AuditEv
 					agentId: this.host.firstString(data, ['agent_id', 'agentId', 'session_id', 'sessionId']),
 					sessionId: this.host.firstString(data, ['session_id', 'sessionId']),
 					clientName: this.host.firstString(data, ['client_name', 'clientName', 'client']),
-					auditSchemaVersion: this.host.firstString(data, ['audit_schema_version', 'auditSchemaVersion']),
+					auditSchemaVersion: this.host.firstString(data, ['agent_activity_schema_version', 'audit_schema_version', 'auditSchemaVersion']),
 					observedClientNameRaw: this.host.firstString(data, ['observed_client_name_raw', 'observedClientNameRaw']),
 					observedClientType: this.host.firstString(data, ['observed_client_type', 'observedClientType']),
 					observedClientVersion: this.host.firstString(data, ['observed_client_version', 'observedClientVersion']),
@@ -1831,7 +1774,7 @@ private parseAuditLogSections(
 			events.push({
 				path: sourcePath,
 				auditId: this.host.firstString(row, [
-					'audit_event_id',
+					'activity_event_id',
 					'auditEventId',
 					'audit_id',
 					'auditId',
@@ -1856,7 +1799,7 @@ private parseAuditLogSections(
 				agentId: this.host.firstString(row, ['agent_id', 'agentId', 'session_id', 'sessionId']),
 				sessionId: this.host.firstString(row, ['session_id', 'sessionId']),
 				clientName: this.host.firstString(row, ['client_name', 'clientName', 'client']),
-				auditSchemaVersion: this.host.firstString(row, ['audit_schema_version', 'auditSchemaVersion']),
+					auditSchemaVersion: this.host.firstString(row, ['agent_activity_schema_version', 'audit_schema_version', 'auditSchemaVersion']),
 				observedClientNameRaw: this.host.firstString(row, ['observed_client_name_raw', 'observedClientNameRaw']),
 				observedClientType: this.host.firstString(row, ['observed_client_type', 'observedClientType']),
 				observedClientVersion: this.host.firstString(row, ['observed_client_version', 'observedClientVersion']),
@@ -1892,10 +1835,6 @@ private parseAuditLogSections(
 		}
 
 		return events;
-	}
-
-	private auditSourceKind(path: string): AuditEventSourceKind {
-		return path === TRACEKEEPER_AUDIT_LOG_PATH ? 'legacy' : 'shard';
 	}
 
 private collectMarkdownFiles(folder: TFolder): TFile[] {
