@@ -38,6 +38,7 @@ export interface ApplyApprovedWritebackPayload {
 	activityAgentId: string;
 	activitySessionId: string;
 	activityClientName: string;
+	effectKind?: 'append' | 'create_memory_record';
 }
 
 export interface ApplyApprovedWritebackCommand {
@@ -143,6 +144,9 @@ function boundedWritebackPayload(
 		|| (payload.taskPath !== null && payload.taskPath.length > 2048)
 		|| typeof payload.taskHadTargetReference !== 'boolean'
 		|| typeof payload.taskHadProposalReference !== 'boolean'
+		|| (payload.effectKind !== undefined
+			&& payload.effectKind !== 'append'
+			&& payload.effectKind !== 'create_memory_record')
 		|| (hasPartialStableProposalReferenceFlags && !hasStableProposalReferenceFlags)
 		|| (
 			payload.taskId === null
@@ -222,6 +226,7 @@ function boundedWritebackPayload(
 		activityAgentId: payload.activityAgentId,
 		activitySessionId: payload.activitySessionId,
 		activityClientName: payload.activityClientName,
+		...(payload.effectKind ? { effectKind: payload.effectKind } : {}),
 	};
 }
 

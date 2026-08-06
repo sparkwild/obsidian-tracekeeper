@@ -42,11 +42,12 @@ const REQUIRED_PATHS = Object.freeze([
 const ALLOWED_SKILL_TOOL_NAMES = new Set([
 	'tracekeeper.start_task',
 	'tracekeeper.recall',
-	'tracekeeper.project_memory',
+	'tracekeeper.memory',
 	'tracekeeper.read_note',
 	'tracekeeper.finish_task',
 	'tracekeeper.capture_source',
 	'tracekeeper.propose_memory',
+	'tracekeeper.lint',
 ]);
 
 function isSafeRelativePath(relativePath) {
@@ -120,14 +121,50 @@ function checkWorkflowSemantics(contract, skill, flattened, errors) {
 		requirePattern(content, /required:\s*true|required actions/i, `${owner} does not describe required action semantics`, errors);
 		requirePattern(
 			content,
-			/tracekeeper\.project_memory/,
-			`${owner} does not define complete project-memory enumeration`,
+			/tracekeeper\.memory/,
+			`${owner} does not define complete Memory enumeration`,
+			errors,
+		);
+		if (/tracekeeper\.project_memory/.test(content)) {
+			errors.push(`${owner} restores the retired public project_memory alias`);
+		}
+		requirePattern(
+			content,
+			/Recall[\s\S]{0,180}relevance-ranked[\s\S]{0,240}(?:not exhaustive|exhaustive (?:project-)?Memory enumeration)/i,
+			`${owner} does not distinguish relevance-ranked Recall from complete Memory enumeration`,
 			errors,
 		);
 		requirePattern(
 			content,
-			/Recall[\s\S]{0,180}relevance-ranked[\s\S]{0,240}(?:not exhaustive|exhaustive project-memory enumeration)/i,
-			`${owner} does not distinguish relevance-ranked Recall from complete project-memory enumeration`,
+			/tracekeeper\.memory[\s\S]{0,360}scope:[\s]*["'`]?project["'`]?[\s\S]{0,360}scope:[\s]*["'`]?global["'`]?|tracekeeper\.memory[\s\S]{0,360}scope:[\s]*["'`]?global["'`]?[\s\S]{0,360}scope:[\s]*["'`]?project["'`]?/i,
+			`${owner} does not define global and project Memory catalog scopes`,
+			errors,
+		);
+		for (const view of ['current', 'history', 'conflicts', 'all']) {
+			requirePattern(
+				content,
+				new RegExp(`\\b${view}\\b`, 'i'),
+				`${owner} does not define the ${view} Memory lifecycle view`,
+				errors,
+			);
+		}
+		requirePattern(content, /MemoryRecord v2/i, `${owner} does not define MemoryRecord v2`, errors);
+		requirePattern(
+			content,
+			/web[\s\S]{0,100}file[\s\S]{0,100}transcript[\s\S]{0,300}Source index/i,
+			`${owner} does not define typed Source ownership and index relations`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/tracekeeper\.lint[\s\S]{0,80}(?:v3[\s\S]{0,80})?read-only Doctor/i,
+			`${owner} does not define the read-only Lint v3 Doctor`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/preview-bound promotion[\s\S]{0,220}(?:pending review proposal)[\s\S]{0,180}(?:never rewrites|without rewriting)/i,
+			`${owner} does not preserve preview-bound legacy Memory promotion`,
 			errors,
 		);
 		requirePattern(

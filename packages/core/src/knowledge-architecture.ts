@@ -27,6 +27,7 @@ export const KNOWLEDGE_INDEX_PATH = `${KNOWLEDGE_ROOT}/index.md`;
 export const KNOWLEDGE_MEMORY_DIR = `${KNOWLEDGE_ROOT}/memory`;
 export const KNOWLEDGE_MEMORY_INDEX_PATH = `${KNOWLEDGE_MEMORY_DIR}/index.md`;
 export const KNOWLEDGE_GLOBAL_MEMORY_DIR = `${KNOWLEDGE_MEMORY_DIR}/global`;
+export const KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH = `${KNOWLEDGE_GLOBAL_MEMORY_DIR}/index.md`;
 export const KNOWLEDGE_PROJECTS_MEMORY_DIR = `${KNOWLEDGE_MEMORY_DIR}/projects`;
 export const KNOWLEDGE_PROJECTS_INDEX_PATH = `${KNOWLEDGE_PROJECTS_MEMORY_DIR}/index.md`;
 export const KNOWLEDGE_WIKI_DIR = `${KNOWLEDGE_ROOT}/wiki`;
@@ -105,6 +106,7 @@ export const REQUIRED_KNOWLEDGE_DIRECTORIES = [
 export const REQUIRED_KNOWLEDGE_FILES = [
 	KNOWLEDGE_INDEX_PATH,
 	KNOWLEDGE_MEMORY_INDEX_PATH,
+	KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
 	KNOWLEDGE_PROJECTS_INDEX_PATH,
 	KNOWLEDGE_WIKI_INDEX_PATH,
 	KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
@@ -114,6 +116,7 @@ export const REQUIRED_KNOWLEDGE_FILES = [
 export const GRAPH_RECOMMENDED_ENTRY = KNOWLEDGE_INDEX_PATH;
 export const GRAPH_RECOMMENDED_HUBS = [
 	KNOWLEDGE_MEMORY_INDEX_PATH,
+	KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
 	KNOWLEDGE_PROJECTS_INDEX_PATH,
 	KNOWLEDGE_WIKI_INDEX_PATH,
 	KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
@@ -122,7 +125,15 @@ export const GRAPH_RECOMMENDED_HUBS = [
 
 export const KNW_RELATED_WIKI_KEYS = ['related_wiki', 'related_wiki_notes', 'wiki_topics'] as const;
 export const KNW_RELATED_MEMORY_KEYS = ['related_memory', 'related_memory_notes'] as const;
-export const YAML_RELATION_KEYS = ['related', 'sources', ...KNW_RELATED_WIKI_KEYS, ...KNW_RELATED_MEMORY_KEYS] as const;
+export const KNW_RELATED_SOURCE_KEYS = ['related_sources', 'related_source_notes', 'sources'] as const;
+export const KNW_MEMORY_HUB_KEYS = ['project_hub', 'global_hub', 'parent_hub'] as const;
+export const YAML_RELATION_KEYS = [
+	'related',
+	...KNW_RELATED_WIKI_KEYS,
+	...KNW_RELATED_MEMORY_KEYS,
+	...KNW_RELATED_SOURCE_KEYS,
+	...KNW_MEMORY_HUB_KEYS,
+] as const;
 
 export interface ArchitecturePathCandidate {
 	path: string;
@@ -137,6 +148,9 @@ export const REQUIRED_ARCHITECTURE_ENTRIES: readonly ArchitecturePathCandidate[]
 	{
 		path: KNOWLEDGE_MEMORY_INDEX_PATH,
 		legacyPaths: ['04_memory/index.md', '05_memory/index.md'],
+	},
+	{
+		path: KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
 	},
 	{
 		path: KNOWLEDGE_PROJECTS_INDEX_PATH,

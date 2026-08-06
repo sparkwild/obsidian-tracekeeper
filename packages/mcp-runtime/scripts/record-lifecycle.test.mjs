@@ -182,6 +182,12 @@ test('new proposals persist and return a path-independent proposal id', async ()
 			task_id: task.task_id,
 			proposal_kind: 'decision',
 			content: 'Persist stable proposal identity.',
+			claim_key: 'global:stable-proposal-identity',
+			proposed_authority: 'user',
+			proposed_confidence: 'verified',
+			declared_state: 'active',
+			observed_at: '2026-08-06T00:00:00.000Z',
+			evidence: ['01_knowledge/wiki/proposal-identity.md'],
 			idempotency_key: 'record-lifecycle-proposal-id',
 		};
 		const proposal = await invoke('tracekeeper.propose_memory', args, fixture.context);
@@ -199,6 +205,16 @@ test('new proposals persist and return a path-independent proposal id', async ()
 		});
 		assert.equal(restarted.proposal_id, proposal.proposal_id);
 		assert.equal(restarted.proposal_path, proposal.proposal_path);
+		const queue = await invoke('tracekeeper.review_queue', {
+			action: 'list_pending',
+		}, { ...fixture.context, knowledgeReadViewPromise: undefined });
+		const entry = queue.entries.find((item) => item.path === proposal.proposal_path);
+		assert.ok(entry, JSON.stringify(queue));
+		assert.equal(entry.record_identity.claim_key, 'global:stable-proposal-identity');
+		assert.equal(entry.proposed_record.authority, 'user');
+		assert.equal(entry.proposed_record.confidence_level, 'verified');
+		assert.equal(entry.predicted_state, 'review');
+		assert.deepEqual(entry.prior_memory_ids, []);
 	} finally {
 		fixture.cleanup();
 	}

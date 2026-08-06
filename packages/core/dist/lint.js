@@ -8,6 +8,7 @@ const node_path_1 = __importDefault(require("node:path"));
 const graph_health_1 = require("./graph-health");
 const knowledge_architecture_1 = require("./knowledge-architecture");
 const knowledge_note_1 = require("./knowledge-note");
+const lifecycle_diagnostics_1 = require("./lifecycle-diagnostics");
 const EXTERNAL_LINK = /^(?:https?:\/\/|mailto:|file:|ftp:)/i;
 function readListLikeFrontmatter(note, keys) {
     const values = [];
@@ -419,7 +420,15 @@ function lintNotes(vaultRoot, notes, options = {}) {
     if (options.graphHealth) {
         issues.push(...buildGraphProfileLintIssues(options.graphHealth, options.graphProfile));
     }
-    return { issues };
+    const lifecycleDoctor = (0, lifecycle_diagnostics_1.buildLifecycleDoctorReport)(notes, options);
+    issues.push(...lifecycleDoctor.issues);
+    return {
+        issues,
+        doctor: {
+            directory_counts: lifecycleDoctor.directory_counts,
+            legacy_candidates: lifecycleDoctor.legacy_candidates,
+        },
+    };
 }
 function buildGraphProfileLintIssues(report, profile) {
     const evaluation = (0, graph_health_1.evaluateGraphProfile)(report, profile ?? graph_health_1.DEFAULT_GRAPH_PROFILE);

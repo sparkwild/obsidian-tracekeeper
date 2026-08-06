@@ -141,6 +141,11 @@ try {
 	await adapter.rebuild();
 	assert.equal(adapter.scanSnapshot(vaultRoot).index.index_state, 'ready');
 	assert.equal(adapter.scanSnapshot(vaultRoot).notes.length, 2);
+	const readView = await adapter.knowledgeReadView(vaultRoot);
+	assert.equal(readView.index_state, 'ready');
+	assert.equal(readView.catalog.size, 2);
+	assert.equal(Object.hasOwn(readView.catalog.values().next().value, 'content'), false);
+	assert.equal(await adapter.knowledgeReadView(path.join(tempRoot, 'different-vault')), null);
 
 	blockedPath = '01_knowledge/wiki/a.md';
 	const rebuildPromise = adapter.rebuild();
@@ -162,7 +167,7 @@ try {
 	process.stdout.write(`${JSON.stringify({
 		suite: 'obsidian-index-adapter-legacy-baseline',
 		result: 'pass',
-		checks: 7,
+		checks: 11,
 	})}\n`);
 
 	await runCharacterizationRows('obsidian-native-metadata-and-events', [

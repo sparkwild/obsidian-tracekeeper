@@ -620,8 +620,10 @@ async function main() {
 		].join('\n'));
 		writeNote(vaultRoot, '01_knowledge/memory/projects/demo/memory.md', [
 			'---',
-			'type: memory',
+			'type: project-memory',
+			'project_id: demo-proj-id',
 			'project_hint: demo',
+			'repo_path: /repo/demo-temp',
 			'related_wiki: [01_knowledge/wiki/hubs/smoke-hub.md]',
 			'related_sources: [01_knowledge/sources/local-source.md]',
 			'---',
@@ -629,6 +631,7 @@ async function main() {
 			'',
 			'## Graph links',
 			'- [[01_knowledge/wiki/hubs/smoke-hub|Smoke Graph Hub]]',
+			'- [[01_knowledge/sources/local-source|Local Source]]',
 			'',
 			'Initial project memory.',
 		].join('\n'));
@@ -1030,7 +1033,7 @@ async function main() {
 			'tracekeeper.agent_activity_recent',
 			'tracekeeper.lint',
 			'tracekeeper.recall',
-			'tracekeeper.project_memory',
+			'tracekeeper.memory',
 			'tracekeeper.read_note',
 			'tracekeeper.start_task',
 			'tracekeeper.finish_task',
@@ -1677,6 +1680,9 @@ async function main() {
 		assert.equal(Array.isArray(lintResult.profile_issues), true);
 		assert.equal(typeof lintResult.issue_count, 'number');
 		assert.ok(Array.isArray(lintResult.issues));
+		assert.ok(lintResult.lifecycle_doctor);
+		assert.ok(Array.isArray(lintResult.lifecycle_doctor.directory_counts));
+		assert.ok(Array.isArray(lintResult.lifecycle_doctor.legacy_candidates));
 		assert.ok(lintResult.issues.length > 0);
 		assert.ok(lintResult.issues.some((issue) => issue.kind.startsWith('graph_') && issue.severity === 'warning'));
 		assert.ok(Array.isArray(lintResult.fix_plan_summary));
@@ -1942,7 +1948,7 @@ async function main() {
 		const projectContext = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.recall',
 			arguments: {
-				query: 'project_overview',
+				query: 'Initial project memory',
 				scope: 'project',
 				project_hint: 'demo',
 				max_items: 5,
@@ -2356,15 +2362,14 @@ async function main() {
 					},
 				});
 					const projectMemoryArgs = {
-						action: 'list',
+						scope: 'project',
+						view: 'all',
 						project_id: 'demo-proj-id',
-						project_hint: 'demo',
-						repo_path: '/repo/demo-temp',
 						page_size: 25,
 					};
 					const projectMemoryBefore = buildStructured(
 						await autoMemoryClient.call('tools/call', {
-							name: 'tracekeeper.project_memory',
+							name: 'tracekeeper.memory',
 							arguments: projectMemoryArgs,
 						})
 					);
@@ -2406,9 +2411,22 @@ async function main() {
 				assert.equal(autoMemory.missing_wiki_bridge, false);
 				assert.deepEqual(autoMemory.related_sources, ['01_knowledge/sources/local-source.md']);
 				assert.deepEqual(autoMemory.missing_related_sources, ['01_knowledge/sources/missing-source.md']);
-				const autoTargetText = fs.readFileSync(path.join(vaultRoot, autoMemory.path), 'utf8');
-				assert.ok(autoTargetText.includes('Auto-saved project memory from smoke test.'));
-				assert.ok(autoTargetText.includes('operation_hash:'));
+					const autoTargetText = fs.readFileSync(path.join(vaultRoot, autoMemory.path), 'utf8');
+					assert.ok(autoTargetText.includes('Auto-saved project memory from smoke test.'));
+					for (const requiredV2Field of [
+						'schema_version: 2',
+						'type: memory_record',
+						'memory_id:',
+						'operation_id:',
+						'claim_key:',
+						'authority:',
+						'confidence_level:',
+						'declared_state:',
+					]) {
+						assert.ok(autoTargetText.includes(requiredV2Field), `v2 memory should include ${requiredV2Field}`);
+					}
+					assert.ok(autoTargetText.includes('[[01_knowledge/wiki/hubs/smoke-hub'));
+					assert.ok(autoTargetText.includes('[[01_knowledge/sources/local-source'));
 				assert.equal(
 					fs.readFileSync(
 						path.join(vaultRoot, '01_knowledge/memory/projects/demo/memory.md'),
@@ -2424,15 +2442,16 @@ async function main() {
 				assert.equal(duplicateAutoMemory.ok, true);
 				assert.deepEqual(duplicateAutoMemory, autoMemory);
 					const projectMemoryCall = await autoMemoryClient.call('tools/call', {
-						name: 'tracekeeper.project_memory',
+						name: 'tracekeeper.memory',
 						arguments: projectMemoryArgs,
 					});
 				const projectMemory = buildStructured(projectMemoryCall);
 				assert.equal(projectMemory.ok, true);
-				assert.equal(projectMemory.tool, 'tracekeeper.project_memory');
+				assert.equal(projectMemory.tool, 'tracekeeper.memory');
 				assert.equal(projectMemory.read_only, true);
 				assert.equal(projectMemory.project_id, 'demo-proj-id');
-				assert.equal(projectMemory.project_hub, '01_knowledge/memory/projects/demo/index.md');
+				assert.equal(projectMemory.scope, 'project');
+				assert.equal(projectMemory.view, 'all');
 				assert.equal(projectMemory.complete, true);
 					assert.equal(projectMemory.total, projectMemoryBefore.total + 1);
 					assert.equal(projectMemory.entries.length, projectMemory.total);
@@ -2446,10 +2465,10 @@ async function main() {
 						projectMemory.entries.filter((entry) => entry.path === autoMemory.path).length,
 						1
 					);
-				assert.ok(projectMemory.entries.some(
-					(entry) => entry.path === '01_knowledge/memory/projects/demo/memory.md'
-						&& entry.legacy === true
-				));
+					assert.ok(projectMemory.entries.some(
+						(entry) => entry.path === '01_knowledge/memory/projects/demo/memory.md'
+							&& entry.legacy === true
+					), `legacy project memory should remain catalogued: ${JSON.stringify(projectMemory.entries)}`);
 				for (const entry of projectMemory.entries) {
 					for (const forbidden of ['absolutePath', 'absolute_path', 'body', 'content', 'text', 'excerpt']) {
 						assert.equal(Object.hasOwn(entry, forbidden), false);
@@ -2460,7 +2479,7 @@ async function main() {
 					projectMemoryCall.structuredContent
 				);
 					const projectMemoryAudit = findSectionWithValues(readAuditLog(vaultRoot), [
-						'- tool_name: "tracekeeper.project_memory"',
+						'- tool_name: "tracekeeper.memory"',
 						'- result_status: "success"',
 						'- result_summary:',
 						`total=${projectMemory.total}`,
@@ -2473,7 +2492,6 @@ async function main() {
 				assert.match(projectMemoryAudit, /has_next_page=false/);
 				assert.equal(projectMemoryAudit.includes('next_cursor='), false);
 				assertContainsNoSensitiveText(projectMemoryAudit, [
-					'/repo/demo-temp',
 					'Auto-saved project memory from smoke test.',
 				]);
 			assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeAutoMemory);

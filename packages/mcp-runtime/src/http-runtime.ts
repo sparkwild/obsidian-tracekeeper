@@ -59,6 +59,7 @@ export interface StreamableHttpRuntimeOptions {
 	vaultRepository?: VaultRepository;
 	proposalTransitionPort?: ProposalTransitionPort;
 	knowledgeSnapshotProvider?: NonNullable<ConstructorParameters<typeof McpJsonRpcHandler>[0]>['knowledgeSnapshotProvider'];
+	knowledgeReadViewProvider?: NonNullable<ConstructorParameters<typeof McpJsonRpcHandler>[0]>['knowledgeReadViewProvider'];
 	graphProfile?: unknown;
 	memoryRules?: NonNullable<ConstructorParameters<typeof McpJsonRpcHandler>[0]>['memoryRules'];
 	contentLanguage?: unknown;
@@ -213,6 +214,7 @@ export class StreamableHttpMcpRuntime {
 			vaultRepository: options.vaultRepository,
 			proposalTransitionPort: options.proposalTransitionPort,
 			knowledgeSnapshotProvider: options.knowledgeSnapshotProvider,
+			knowledgeReadViewProvider: options.knowledgeReadViewProvider,
 			graphProfile: options.graphProfile,
 			memoryRules: options.memoryRules,
 			contentLanguage: options.contentLanguage,
@@ -228,6 +230,7 @@ export class StreamableHttpMcpRuntime {
 			vaultRepository: options.vaultRepository,
 			proposalTransitionPort: options.proposalTransitionPort,
 			knowledgeSnapshotProvider: options.knowledgeSnapshotProvider,
+			knowledgeReadViewProvider: options.knowledgeReadViewProvider,
 			graphProfile: options.graphProfile,
 			memoryRules: options.memoryRules,
 			contentLanguage: options.contentLanguage,

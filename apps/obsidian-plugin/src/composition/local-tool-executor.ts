@@ -3,7 +3,7 @@ import {
 	type ProposalTransitionPort,
 } from '@tracekeeper/mcp-runtime';
 import { randomUUID } from 'node:crypto';
-import type { ScanResult, VaultRepository } from '@tracekeeper/core';
+import type { KnowledgeReadView, ScanResult, VaultRepository } from '@tracekeeper/core';
 
 export type RuntimeContentLanguage = 'zh-CN' | 'en';
 export type RuntimeContentLanguageSource = 'setting' | 'obsidian' | 'navigator' | 'fallback';
@@ -14,6 +14,7 @@ export interface LocalToolExecutorContext {
 	vaultRepository: VaultRepository;
 	proposalTransitionPort: ProposalTransitionPort;
 	knowledgeSnapshotProvider: (requestedVaultRoot: string) => ScanResult | null;
+	knowledgeReadViewProvider: (requestedVaultRoot: string) => Promise<KnowledgeReadView | null>;
 	graphProfile: string;
 	memoryRules: {
 		globalMemoryRule: string;
@@ -76,6 +77,7 @@ export class LocalToolExecutor {
 			vaultRepository: context.vaultRepository,
 			proposalTransitionPort: context.proposalTransitionPort,
 			knowledgeSnapshotProvider: context.knowledgeSnapshotProvider,
+			knowledgeReadViewProvider: context.knowledgeReadViewProvider,
 			graphProfile: context.graphProfile,
 			memoryRules: context.memoryRules,
 			contentLanguage: context.contentLanguage,

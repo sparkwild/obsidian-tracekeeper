@@ -27,6 +27,7 @@ export interface McpJsonRpcHandlerOptions {
     vaultRepository?: VaultRepository;
     proposalTransitionPort?: ProposalTransitionPort;
     knowledgeSnapshotProvider?: ToolInvocationContext['knowledgeSnapshotProvider'];
+    knowledgeReadViewProvider?: ToolInvocationContext['knowledgeReadViewProvider'];
     graphProfile?: unknown;
     memoryRules?: ToolInvocationContext['memoryRules'];
     contentLanguage?: unknown;
@@ -41,6 +42,7 @@ export declare class McpJsonRpcHandler {
     private vaultRepository?;
     private proposalTransitionPort?;
     private knowledgeSnapshotProvider?;
+    private knowledgeReadViewProvider?;
     private graphProfile?;
     private memoryRules?;
     private contentLanguage?;

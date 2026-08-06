@@ -103,7 +103,26 @@ function buildSourceRunToken(request, now) {
         .slice(0, 60);
     return `${safeRequest}-${now.replace(/[:.]/g, '-')}`;
 }
-function buildSourceNoteContent(request, mode, analysis, dependencies, resolvedSourcePath) {
+function typedSourceKind(request, mode) {
+    const sourceKind = request.sourceKind.trim().toLowerCase();
+    if (['transcript', 'transcripts', 'audio', 'video', 'meeting'].includes(sourceKind)) {
+        return 'transcript';
+    }
+    if (mode === 'local_copy' || ['file', 'files', 'local', 'local_file', 'current_note', 'document'].includes(sourceKind)) {
+        return 'file';
+    }
+    return 'web';
+}
+function markdownLink(dependencies, targetPath, sourcePath) {
+    try {
+        return dependencies.renderMarkdownLink?.(targetPath, sourcePath)
+            ?? `[[${targetPath.replace(/\.md$/i, '')}]]`;
+    }
+    catch {
+        return `[[${targetPath.replace(/\.md$/i, '')}]]`;
+    }
+}
+function buildSourceNoteContent(request, mode, analysis, dependencies, ownerPath, inlineContent, partManifest, resolvedSourcePath) {
     const section = [
         dependencies.renderText('## 来源笔记', '## Source note'),
         `- request_path: ${request.path}`,
@@ -126,6 +145,14 @@ function buildSourceNoteContent(request, mode, analysis, dependencies, resolvedS
     section.push('');
     section.push(dependencies.renderText('## 来源摘录', '## Source excerpt'));
     section.push(analysis.excerpt);
+    section.push('');
+    section.push(dependencies.renderText('## 来源内容', '## Source content'));
+    if (partManifest.length > 0) {
+        section.push(...partManifest.map((partPath) => `- ${markdownLink(dependencies, partPath, ownerPath)}`));
+    }
+    else {
+        section.push(inlineContent);
+    }
     return section.join('\n');
 }
 function buildReportContent(request, mode, sourceText, analysis, sourceNotePath, warnings, dependencies) {
@@ -204,26 +231,79 @@ class SourceRequestApplicationService {
                 { label: 'excerpt', value: analysis.excerpt },
             ]);
             const now = dependencies.now();
+            const observedAt = request.created || now;
             const runToken = buildSourceRunToken(request, now);
+            const sourceFilename = dependencies.buildFilename(`${runToken}-source`, 'source');
+            const sourcePlan = (0, core_1.buildSourceCapturePlan)({
+                source: request.source || request.path,
+                sourceKind: typedSourceKind(request, mode),
+                filename: sourceFilename,
+                content: sourceText,
+            });
+            for (const part of sourcePlan.parts) {
+                const partDirectory = part.path.slice(0, part.path.lastIndexOf('/'));
+                const partFilename = part.path.slice(part.path.lastIndexOf('/') + 1).replace(/\.md$/i, '');
+                await dependencies.writeNote({
+                    kind: 'source_part',
+                    toolName: input.toolName,
+                    directory: partDirectory,
+                    filename: partFilename,
+                    frontmatter: {
+                        tool: input.toolName,
+                        type: 'source_part',
+                        source_id: sourcePlan.source_id,
+                        source_kind: sourcePlan.source_kind,
+                        content_hash: part.content_hash,
+                        part_number: part.part_number,
+                        part_count: sourcePlan.parts.length,
+                        parent_source: sourcePlan.index_path,
+                        created_at: now,
+                        task_id: taskId,
+                    },
+                    body: `${dependencies.renderText('## 父来源', '## Parent source')}\n\n${markdownLink(dependencies, sourcePlan.index_path, part.path)}\n\n${dependencies.renderText('## 内容', '## Content')}\n\n${part.content}`,
+                    taskId,
+                    metadata: {
+                        target_type: 'source_part',
+                        source_id: sourcePlan.source_id,
+                        content_hash: part.content_hash,
+                        parent_source: sourcePlan.index_path,
+                    },
+                });
+            }
             const sourceNote = await dependencies.writeNote({
                 kind: 'source',
                 toolName: input.toolName,
-                filename: dependencies.buildFilename(`${runToken}-source`, 'source'),
+                directory: sourcePlan.route,
+                filename: sourceFilename,
                 frontmatter: {
                     tool: input.toolName,
-                    type: 'source_analysis_source',
+                    type: 'source_capture',
                     title: `source_analysis_source_${runToken}`,
                     source: request.source,
-                    source_kind: request.sourceKind || null,
+                    source_kind: sourcePlan.source_kind,
+                    source_id: sourcePlan.source_id,
+                    content_hash: sourcePlan.content_hash,
+                    route: sourcePlan.route,
+                    part_manifest: sourcePlan.parts.map((part) => part.path),
+                    part_count: sourcePlan.parts.length,
                     analysis_mode: request.analysisMode || 'default',
                     request_path: request.path,
                     mode,
                     created_at: now,
                     task_id: taskId,
                 },
-                body: buildSourceNoteContent(request, mode, analysis, dependencies, resolvedSourcePath),
+                body: buildSourceNoteContent(request, mode, analysis, dependencies, sourcePlan.index_path, sourcePlan.inline_content, sourcePlan.parts.map((part) => part.path), resolvedSourcePath),
                 taskId,
-                metadata: { target_type: 'source', mode, request_path: request.path },
+                metadata: {
+                    target_type: 'source',
+                    mode,
+                    request_path: request.path,
+                    source_kind: sourcePlan.source_kind,
+                    source_id: sourcePlan.source_id,
+                    content_hash: sourcePlan.content_hash,
+                    route: sourcePlan.route,
+                    part_manifest: sourcePlan.parts.map((part) => part.path),
+                },
             });
             const report = await dependencies.writeNote({
                 kind: 'report',
@@ -248,10 +328,12 @@ class SourceRequestApplicationService {
             const proposals = [];
             for (const [proposalIndex, entry] of analysis.proposalDrafts.entries()) {
                 const proposalId = (0, core_1.buildStableProposalId)(`source-analysis\0${runToken}\0${proposalIndex}\0${entry.proposalKind}`);
+                const proposalFilename = dependencies.buildFilename(`proposal-${runToken}-${entry.proposalKind}`, entry.proposalKind);
+                const proposalPath = `${dependencies.proposalDirectory}/${proposalFilename}.md`;
                 const proposalNote = await dependencies.writeNote({
                     kind: 'proposal',
                     toolName: input.toolName,
-                    filename: dependencies.buildFilename(`proposal-${runToken}-${entry.proposalKind}`, entry.proposalKind),
+                    filename: proposalFilename,
                     frontmatter: {
                         tool: input.toolName,
                         type: 'memory_proposal',
@@ -259,14 +341,23 @@ class SourceRequestApplicationService {
                         title: entry.title || `source_proposal_${runToken}`,
                         proposal_kind: entry.proposalKind,
                         status: 'pending',
+                        scope: request.relatedProject ? 'project' : 'global',
+                        project_id: request.relatedProject || null,
+                        claim_key: `source:${sourcePlan.source_id}:${entry.proposalKind}:${proposalIndex}`,
+                        proposed_authority: 'source',
+                        proposed_confidence: 'supported',
+                        declared_state: 'review',
+                        observed_at: observedAt,
+                        evidence: [sourceNote.path],
+                        related_sources: [sourceNote.path],
                         source: request.source,
-                        source_kind: request.sourceKind || null,
+                        source_kind: sourcePlan.source_kind,
                         target_note: report.path,
                         risk_level: entry.riskLevel || null,
                         created_at: now,
                         task_id: taskId,
                     },
-                    body: `${dependencies.renderText('## 来源分析提案', '## Source analysis proposal')}\n\n- evidence: ${entry.evidence}\n\n${dependencies.renderText('## 写回内容', '## Writeback')}\n${entry.content}\n`,
+                    body: `${dependencies.renderText('## 来源分析提案', '## Source analysis proposal')}\n\n- source: ${markdownLink(dependencies, sourceNote.path, proposalPath)}\n- evidence: ${entry.evidence}\n\n${dependencies.renderText('## 写回内容', '## Writeback')}\n${entry.content}\n`,
                     taskId,
                     metadata: {
                         target_type: 'memory_proposal',
@@ -310,7 +401,16 @@ class SourceRequestApplicationService {
                 status: 'completed',
                 request_path: request.path,
                 mode,
-                source_note: { path: sourceNote.path, activity_path: sourceNote.activity_path },
+                source_note: {
+                    path: sourceNote.path,
+                    activity_path: sourceNote.activity_path,
+                    source_kind: sourcePlan.source_kind,
+                    source_id: sourcePlan.source_id,
+                    content_hash: sourcePlan.content_hash,
+                    route: sourcePlan.route,
+                    index_path: sourcePlan.index_path,
+                    part_manifest: sourcePlan.parts.map((part) => part.path),
+                },
                 report: { path: report.path, activity_path: report.activity_path },
                 proposals: proposals.map((proposal) => ({
                     proposal_id: proposal.proposalId,

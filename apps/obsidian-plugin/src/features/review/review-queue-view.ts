@@ -438,6 +438,46 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 		this.renderDecisionContext(container, proposal, context);
 
+		if (proposal.claimKey) {
+			const lifecycle = container.createDiv({ cls: 'tracekeeper-review-inbox__decision-context' });
+			lifecycle.createEl('strong', { text: ui('记忆生命周期影响', 'Memory lifecycle impact') });
+			this.renderSourceLine(lifecycle, ui('Claim 键', 'Claim key'), proposal.claimKey);
+			this.renderSourceLine(
+				lifecycle,
+				ui('提议权限与置信度', 'Proposed authority and confidence'),
+				[proposal.proposedAuthority || 'agent', proposal.proposedConfidence || 'inferred'].join(' · ')
+			);
+			this.renderSourceLine(
+				lifecycle,
+				ui('提议状态', 'Proposed state'),
+				proposal.declaredState || 'active'
+			);
+			this.renderSourceLine(
+				lifecycle,
+				ui('审核后预测状态', 'Predicted state after approval'),
+				ui('由运行时重新计算；当前提案保持 review。', 'Recomputed by Runtime; this proposal remains in review.')
+			);
+			if (context?.priorMemory.length) {
+				for (const prior of context.priorMemory) {
+					this.renderSourceLine(
+						lifecycle,
+						ui('现有记录', 'Existing record'),
+						[prior.memoryId || prior.path, prior.authority, prior.confidence, prior.effectiveState]
+							.filter(Boolean)
+							.join(' · ')
+					);
+				}
+			} else {
+				this.renderSourceLine(lifecycle, ui('现有记录', 'Existing record'), ui('无匹配记录', 'No matching record'));
+			}
+			if (proposal.supersedes.length > 0) {
+				this.renderSourceLine(lifecycle, ui('取代', 'Supersedes'), proposal.supersedes.join('\n'));
+			}
+			if (proposal.contradicts.length > 0) {
+				this.renderSourceLine(lifecycle, ui('矛盾', 'Contradicts'), proposal.contradicts.join('\n'));
+			}
+		}
+
 		const target = container.createDiv({ cls: 'tracekeeper-review-inbox__target' });
 		target.createEl('span', { text: ui('目标笔记', 'Target note') });
 		target.createEl('code', { text: proposal.targetNote || ui('尚未指定，需要补全。', 'Not specified; needs completion.') });

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ProjectMemoryApplicationService = exports.ProjectMemoryEntryConflictError = exports.ProjectMemoryApplicationError = void 0;
+exports.ProjectMemoryApplicationService = exports.ProjectMemoryApplicationError = void 0;
 exports.projectProjectMemorySnapshot = projectProjectMemorySnapshot;
 exports.resolveProjectMemoryWritableRoute = resolveProjectMemoryWritableRoute;
 exports.buildProjectMemoryCatalog = buildProjectMemoryCatalog;
@@ -13,16 +13,6 @@ class ProjectMemoryApplicationError extends Error {
     }
 }
 exports.ProjectMemoryApplicationError = ProjectMemoryApplicationError;
-class ProjectMemoryEntryConflictError extends ProjectMemoryApplicationError {
-    constructor(path, requestedOperationHash, existingOperationHash = null) {
-        super('project_memory_operation_conflict', `Project-memory operation already exists with a different operation hash: ${path}`);
-        this.name = 'ProjectMemoryEntryConflictError';
-        this.path = path;
-        this.existingOperationHash = existingOperationHash;
-        this.requestedOperationHash = requestedOperationHash;
-    }
-}
-exports.ProjectMemoryEntryConflictError = ProjectMemoryEntryConflictError;
 function projectProjectMemorySnapshot(scan) {
     const notes = [...scan.notes].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
     const issues = projectMemoryScanIssues(scan);
@@ -39,6 +29,10 @@ function projectProjectMemorySnapshot(scan) {
         }
         catch {
             if ((0, core_1.startsWithPathPrefix)(note.relativePath, core_1.KNOWLEDGE_PROJECTS_MEMORY_DIR)) {
+                if (note.frontmatter.schema_version === 2
+                    && note.frontmatter.type === 'memory_record') {
+                    continue;
+                }
                 issues.push({
                     path: note.relativePath,
                     code: 'invalid_project_memory_note',
@@ -248,80 +242,6 @@ class ProjectMemoryApplicationService {
         const snapshot = await this.snapshot();
         return this.ensureWritableProjectFromSnapshot(snapshot, input);
     }
-    async createImmutableEntry(input) {
-        const scan = await this.loadScan();
-        const snapshot = projectProjectMemorySnapshot(scan);
-        const project = await this.ensureWritableProjectFromSnapshot(snapshot, input);
-        if (project.status === 'review_required') {
-            return project;
-        }
-        const agentType = (0, core_1.normalizeProjectAgentType)(input.agentType);
-        const relatedWikiPaths = verifyRelatedPaths(scan, input.relatedWikiPaths ?? [], core_1.KNOWLEDGE_WIKI_DIR, 'related Wiki');
-        const relatedSourcePaths = verifyRelatedPaths(scan, input.relatedSourcePaths ?? [], core_1.KNOWLEDGE_SOURCES_DIR, 'related Source');
-        const supersedesPaths = verifySupersedesPaths(snapshot, project.binding, input.supersedesPaths ?? []);
-        const projectHubLink = canonicalWikiLink(project.binding.project_hub);
-        const relatedWikiLinks = relatedWikiPaths.map(canonicalWikiLink);
-        const supersedesLinks = supersedesPaths.map(canonicalWikiLink);
-        const entryPathInput = {
-            project_id: project.binding.project_id,
-            project_key: project.binding.project_key,
-            agent_type: agentType,
-            task_id: input.taskId ?? null,
-            operation_id: input.operationId,
-            operation_kind: input.operationKind,
-            memory_kinds: input.memoryKinds,
-            status: input.status ?? 'active',
-            created_at: input.createdAt ?? this.now(),
-            project_hub: projectHubLink,
-            related_wiki: relatedWikiLinks,
-            supersedes: supersedesLinks,
-        };
-        const canonicalBody = renderProjectMemoryEntryBody({
-            body: input.body,
-            projectHubLink,
-            relatedWikiLinks,
-            relatedSourceLinks: relatedSourcePaths.map(canonicalWikiLink),
-            supersedesLinks,
-        });
-        const built = (0, core_1.buildProjectMemoryEntry)({
-            ...entryPathInput,
-            body: canonicalBody,
-        });
-        const renderedBody = renderProjectMemoryEntryBody({
-            body: input.body,
-            projectHubLink: this.markdownLink(project.binding.project_hub, built.entry.path),
-            relatedWikiLinks: relatedWikiPaths.map((target) => this.markdownLink(target, built.entry.path)),
-            relatedSourceLinks: relatedSourcePaths.map((target) => this.markdownLink(target, built.entry.path)),
-            supersedesLinks: supersedesPaths.map((target) => this.markdownLink(target, built.entry.path)),
-        });
-        const markdown = renderProjectMemoryEntryMarkdown(built.entry, renderedBody);
-        try {
-            const receipt = await this.repository.createText(built.entry.path, markdown);
-            return entryWriteResult('created', built.entry, project.hub_status, receipt);
-        }
-        catch (error) {
-            if (!(error instanceof core_1.OperationConflictError)) {
-                throw error;
-            }
-        }
-        const refreshed = projectProjectMemorySnapshot(await this.loadScan());
-        const existing = refreshed.entries.find((row) => row.entry.path === built.entry.path)?.entry;
-        if (existing) {
-            if (existing.project_id !== built.entry.project_id) {
-                throw new ProjectMemoryEntryConflictError(built.entry.path, built.entry.operation_hash, existing.operation_hash);
-            }
-            const comparison = (0, core_1.compareProjectMemoryOperationHashes)(existing.operation_hash, built.entry.operation_hash);
-            if (comparison.status === 'exact_retry') {
-                return entryWriteResult('exact_retry', existing, project.hub_status, null);
-            }
-            throw new ProjectMemoryEntryConflictError(built.entry.path, comparison.requested_operation_hash, comparison.existing_operation_hash);
-        }
-        const repositoryEntry = await this.repository.readText(built.entry.path);
-        if (repositoryEntry?.content === markdown) {
-            return entryWriteResult('exact_retry', built.entry, project.hub_status, null);
-        }
-        throw new ProjectMemoryEntryConflictError(built.entry.path, built.entry.operation_hash);
-    }
     async ensureWritableProjectFromSnapshot(snapshot, input) {
         const route = resolveProjectMemoryWritableRoute(snapshot, input);
         if (route.status === 'review_required') {
@@ -334,7 +254,7 @@ class ProjectMemoryApplicationService {
                 hub_status: 'existing',
             };
         }
-        const markdown = renderProjectMemoryHubMarkdown(route.binding, route.project_hint);
+        const markdown = renderProjectMemoryHubMarkdown(route.binding, route.project_hint, this.markdownLink(core_1.KNOWLEDGE_PROJECTS_INDEX_PATH, route.binding.project_hub));
         try {
             await this.repository.createText(route.binding.project_hub, markdown);
             return {
@@ -491,37 +411,11 @@ function sameHubBinding(left, right) {
         && left.project_hub === right.project_hub
         && left.repo_path === right.repo_path);
 }
-function verifyRelatedPaths(scan, values, requiredPrefix, label) {
-    const notePaths = new Set(scan.notes.map((note) => note.relativePath));
-    const result = new Set();
-    for (const value of values) {
-        const target = (0, core_1.normalizeVaultRelativePath)(value);
-        if (!(0, core_1.startsWithPathPrefix)(target, requiredPrefix) || !notePaths.has(target)) {
-            throw new ProjectMemoryApplicationError('project_memory_unverified_relation', `Project-memory ${label} path is not verified by the current snapshot: ${target}`);
-        }
-        result.add(target);
-    }
-    return [...result].sort();
-}
-function verifySupersedesPaths(snapshot, binding, values) {
-    const validPaths = new Set(snapshot.entries
-        .filter((row) => row.entry.project_id === binding.project_id)
-        .map((row) => row.entry.path));
-    const result = new Set();
-    for (const value of values) {
-        const target = (0, core_1.normalizeVaultRelativePath)(value);
-        if (!validPaths.has(target)) {
-            throw new ProjectMemoryApplicationError('project_memory_invalid_supersedes', `Project-memory supersedes path is not an existing entry in this project: ${target}`);
-        }
-        result.add(target);
-    }
-    return [...result].sort();
-}
 function canonicalWikiLink(targetPath) {
     const normalized = (0, core_1.normalizeVaultRelativePath)(targetPath);
     return `[[${normalized.replace(/\.md$/i, '')}]]`;
 }
-function renderProjectMemoryHubMarkdown(binding, projectHint) {
+function renderProjectMemoryHubMarkdown(binding, projectHint, parentHubLink) {
     return [
         '---',
         `schema_version: ${core_1.PROJECT_MEMORY_ENTRY_SCHEMA_VERSION}`,
@@ -530,71 +424,17 @@ function renderProjectMemoryHubMarkdown(binding, projectHint) {
         `project_key: ${yamlValue(binding.project_key)}`,
         `project_hint: ${yamlValue(projectHint)}`,
         `repo_path: ${yamlValue(binding.repo_path)}`,
+        `parent_hub: ${yamlValue(canonicalWikiLink(core_1.KNOWLEDGE_PROJECTS_INDEX_PATH))}`,
         '---',
         '',
         `# Project memory: ${projectHint}`,
+        '',
+        `- Parent hub: ${parentHubLink}`,
         '',
         'Project memory entries link back to this hub.',
         '',
     ].join('\n');
 }
-function renderProjectMemoryEntryMarkdown(entry, body) {
-    return [
-        '---',
-        `schema_version: ${core_1.PROJECT_MEMORY_ENTRY_SCHEMA_VERSION}`,
-        `type: ${core_1.PROJECT_MEMORY_ENTRY_TYPE}`,
-        `project_id: ${yamlValue(entry.project_id)}`,
-        `agent_type: ${yamlValue(entry.agent_type)}`,
-        `task_id: ${entry.task_id === null ? 'null' : yamlValue(entry.task_id)}`,
-        `operation_id: ${yamlValue(entry.operation_id)}`,
-        `operation_kind: ${yamlValue(entry.operation_kind)}`,
-        `memory_kinds: ${yamlValue(entry.memory_kinds)}`,
-        `status: ${yamlValue(entry.status)}`,
-        `created_at: ${yamlValue(entry.created_at)}`,
-        `operation_hash: ${yamlValue(entry.operation_hash)}`,
-        `project_hub: ${yamlValue(entry.project_hub)}`,
-        `related_wiki: ${yamlValue(entry.related_wiki)}`,
-        `supersedes: ${yamlValue(entry.supersedes)}`,
-        '---',
-        '',
-        body,
-        '',
-    ].join('\n');
-}
-function renderProjectMemoryEntryBody(input) {
-    const relationLines = [
-        `- Project hub: ${input.projectHubLink}`,
-        ...input.relatedWikiLinks.map((link) => `- Wiki: ${link}`),
-        ...input.relatedSourceLinks.map((link) => `- Source: ${link}`),
-        ...input.supersedesLinks.map((link) => `- Supersedes: ${link}`),
-    ];
-    return [
-        '# Project memory entry',
-        '',
-        '## Relations',
-        '',
-        ...relationLines,
-        '',
-        '## Memory',
-        '',
-        input.body.replace(/\r\n?/g, '\n').trim(),
-    ].join('\n');
-}
 function yamlValue(value) {
     return JSON.stringify(value);
-}
-function entryWriteResult(status, entry, hubStatus, receipt) {
-    return {
-        status,
-        path: entry.path,
-        project_id: entry.project_id,
-        project_hub: entry.project_hub.replace(/^\[\[|\]\]$/g, '') + '.md',
-        agent_type: entry.agent_type,
-        operation_id: entry.operation_id,
-        operation_kind: entry.operation_kind,
-        memory_kinds: [...entry.memory_kinds],
-        operation_hash: entry.operation_hash,
-        hub_status: hubStatus,
-        receipt,
-    };
 }

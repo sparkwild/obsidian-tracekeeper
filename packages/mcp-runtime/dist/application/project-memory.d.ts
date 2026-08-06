@@ -1,4 +1,4 @@
-import { type ProjectMemoryCatalogPage, type ProjectMemoryEntry, type ProjectMemoryEntryStatus, type ProjectMemoryHubBinding, type ScanResult, type VaultRepository, type VaultWriteReceipt } from '@tracekeeper/core';
+import { type ProjectMemoryCatalogPage, type ProjectMemoryEntry, type ProjectMemoryHubBinding, type ScanResult, type VaultRepository } from '@tracekeeper/core';
 export interface ProjectMemoryHubProjection extends ProjectMemoryHubBinding {
     project_hint: string;
     backlinks: readonly string[];
@@ -65,19 +65,6 @@ export interface ProjectMemoryApplicationDependencies {
 export interface ProjectMemoryVaultRepository extends VaultRepository {
     generateMarkdownLink?(targetPath: string, sourcePath: string, subpath?: string, alias?: string): string;
 }
-export interface CreateProjectMemoryEntryInput extends ProjectMemoryIdentityInput {
-    agentType?: unknown;
-    taskId?: string | null;
-    operationId: string;
-    operationKind: string;
-    memoryKinds: readonly string[];
-    status?: ProjectMemoryEntryStatus;
-    body: string;
-    relatedWikiPaths?: readonly string[];
-    relatedSourcePaths?: readonly string[];
-    supersedesPaths?: readonly string[];
-    createdAt?: string;
-}
 export type ProjectMemoryHubResolution = {
     status: 'ready';
     binding: ProjectMemoryHubBinding;
@@ -87,32 +74,9 @@ export type ProjectMemoryHubResolution = {
     reason: ProjectMemoryReviewReason;
     warnings: readonly string[];
 };
-export type ProjectMemoryEntryWriteResult = {
-    status: 'created' | 'exact_retry';
-    path: string;
-    project_id: string;
-    project_hub: string;
-    agent_type: string;
-    operation_id: string;
-    operation_kind: string;
-    memory_kinds: readonly string[];
-    operation_hash: string;
-    hub_status: 'existing' | 'created' | 'exact_retry';
-    receipt: VaultWriteReceipt | null;
-} | {
-    status: 'review_required';
-    reason: ProjectMemoryReviewReason;
-    warnings: readonly string[];
-};
 export declare class ProjectMemoryApplicationError extends Error {
     readonly code: string;
     constructor(code: string, message: string);
-}
-export declare class ProjectMemoryEntryConflictError extends ProjectMemoryApplicationError {
-    readonly path: string;
-    readonly existingOperationHash: string | null;
-    readonly requestedOperationHash: string;
-    constructor(path: string, requestedOperationHash: string, existingOperationHash?: string | null);
 }
 export declare function projectProjectMemorySnapshot(scan: ScanResult): ProjectMemorySnapshotProjection;
 export declare function resolveProjectMemoryWritableRoute(snapshot: ProjectMemorySnapshotProjection, input: ProjectMemoryIdentityInput): ProjectMemoryWritableRoute;
@@ -125,7 +89,6 @@ export declare class ProjectMemoryApplicationService {
     snapshot(): Promise<ProjectMemorySnapshotProjection>;
     listCatalog(input: ProjectMemoryCatalogInput): Promise<ProjectMemoryCatalogPage>;
     ensureWritableProject(input: ProjectMemoryIdentityInput): Promise<ProjectMemoryHubResolution>;
-    createImmutableEntry(input: CreateProjectMemoryEntryInput): Promise<ProjectMemoryEntryWriteResult>;
     private ensureWritableProjectFromSnapshot;
     private markdownLink;
 }

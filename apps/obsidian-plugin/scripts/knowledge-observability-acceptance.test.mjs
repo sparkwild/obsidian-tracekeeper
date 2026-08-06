@@ -14,6 +14,8 @@ assert.ok(mainSource.includes('openMemoryInspector('));
 assert.ok(mainSource.includes('openSourceStatus('));
 assert.ok(mainSource.includes('loadKnowledgeIndexEvidence'));
 assert.ok(mainSource.includes('knowledgeSnapshot()'));
+assert.ok(mainSource.includes('previewLegacyMemoryMigration('));
+assert.ok(mainSource.includes('applyLegacyMemoryMigration('));
 assert.equal(memorySource.includes('getMarkdownFiles'), false);
 assert.equal(sourceSource.includes('getMarkdownFiles'), false);
 
@@ -31,6 +33,14 @@ assert.ok(memorySource.includes('missingMemoryFolder'));
 assert.ok(memorySource.includes('readFailures'));
 assert.ok(memorySource.includes('indexState'));
 assert.ok(memorySource.includes('renderPagination'));
+assert.ok(memorySource.includes("ui('当前', 'Current')"));
+assert.ok(memorySource.includes("ui('历史', 'History')"));
+assert.ok(memorySource.includes("ui('冲突', 'Conflict')"));
+assert.ok(memorySource.includes("ui('待审核', 'Review')"));
+assert.ok(memorySource.includes("ui('旧版未标识', 'Legacy unkeyed')"));
+assert.ok(memorySource.includes("setAttr('aria-live', 'polite')"));
+assert.ok(memorySource.includes("setAttr('aria-label'"));
+assert.ok(memorySource.includes("ui('预览 Doctor 候选', 'Preview Doctor candidates')"));
 
 assert.ok(sourceSource.includes("ui('已捕获资料', 'Captured sources')"));
 assert.ok(sourceSource.includes("ui('任务', 'Task')"));
@@ -43,4 +53,4 @@ assert.ok(sourceSource.includes('renderPagination'));
 
 assert.ok(repositorySource.includes('collectRecentMarkdownFiles(folder, limit)'));
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 30 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 40 })}\n`);

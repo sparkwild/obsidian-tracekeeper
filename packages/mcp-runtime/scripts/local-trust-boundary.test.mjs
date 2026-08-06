@@ -18,7 +18,7 @@ const ACCEPTED_LOCAL_TRUST_TOOLS = [
 	'tracekeeper.agent_activity_recent',
 	'tracekeeper.lint',
 	'tracekeeper.recall',
-	'tracekeeper.project_memory',
+	'tracekeeper.memory',
 	'tracekeeper.read_note',
 	'tracekeeper.start_task',
 	'tracekeeper.finish_task',

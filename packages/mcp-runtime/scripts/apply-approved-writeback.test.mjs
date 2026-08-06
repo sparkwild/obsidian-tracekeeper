@@ -178,7 +178,9 @@ function createFixture(t, options = {}) {
 	t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
 	const targetPath = options.targetPath || TARGET_PATH;
-	writeNote(vaultRoot, targetPath, options.targetText || '# Demo Memory\n');
+	if (!options.skipTarget) {
+		writeNote(vaultRoot, targetPath, options.targetText || '# Demo Memory\n');
+	}
 	writeNote(vaultRoot, TASK_PATH, options.taskText || [
 		'---',
 		'type: agent-task',
@@ -231,6 +233,40 @@ function createFixture(t, options = {}) {
 		},
 	};
 }
+
+test('approved lifecycle proposal creates one immutable v2 memory record after preview', async (t) => {
+	const fixture = createFixture(t, {
+		skipTarget: true,
+		proposalFields: {
+			target_note: '01_knowledge/memory/global/agents/custom/approved-atomic-proposal.md',
+			memory_scope: 'global',
+			claim_key: 'governance:approved-memory',
+			proposed_authority: 'user',
+			proposed_confidence: 'verified',
+			declared_state: 'active',
+			observed_at: APPROVAL_TIME,
+			related_wiki: ['01_knowledge/wiki/approved-memory.md'],
+		},
+		writeback: 'Approved governed memory content.',
+	});
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	const targetPath = dryRun.structuredContent.target_note;
+	assert.match(targetPath, /^01_knowledge\/memory\/global\/agents\//);
+	assert.equal(fs.existsSync(fixture.absolute(targetPath)), false);
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	const parsed = require('@tracekeeper/core').parseMarkdown(fixture.read(targetPath));
+	assert.equal(parsed.frontmatter.fields.schema_version, 2);
+	assert.equal(parsed.frontmatter.fields.type, 'memory_record');
+	assert.equal(parsed.frontmatter.fields.claim_key, 'governance:approved-memory');
+	assert.equal(parsed.frontmatter.fields.authority, 'user');
+	assert.equal(parsed.frontmatter.fields.confidence_level, 'verified');
+	const contentBeforeReplay = fixture.read(targetPath);
+	const replayed = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(replayed.isError, false, JSON.stringify(replayed.structuredContent));
+	assert.equal(fixture.read(targetPath), contentBeforeReplay);
+});
 
 async function preview(fixture, args = {}) {
 	return callTool(

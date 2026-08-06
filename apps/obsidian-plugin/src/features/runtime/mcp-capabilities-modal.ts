@@ -42,11 +42,11 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 		},
 		category: { zh: '检索', en: 'Recall' },
 	},
-	'tracekeeper.project_memory': {
-		title: { zh: '列出完整项目记忆', en: 'List project memory' },
+	'tracekeeper.memory': {
+		title: { zh: '查看记忆生命周期', en: 'Inspect memory lifecycle' },
 		description: {
-			zh: '按稳定项目身份分页列出当前索引代次中的全部项目记忆条目和旧版笔记；只返回元数据，完整正文需另行读取。',
-			en: 'Lists every project-memory entry and legacy note for one stable project identity within the current index generation. It returns metadata only; full note bodies require a separate read.',
+			zh: '按全局或项目范围查看当前、历史、冲突及全部记忆元数据；结果绑定索引代次，正文需另行读取。',
+			en: 'Lists current, history, conflict, or all memory metadata for global or project scope. Results are generation-bound; full bodies require a separate read.',
 		},
 		category: { zh: '检索', en: 'Recall' },
 	},
@@ -149,8 +149,8 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 	'tracekeeper.lint': {
 		title: { zh: '检查知识库规范', en: 'Run vault checks' },
 		description: {
-			zh: '统一检查目录结构、链接、来源引用、声明来源和知识图谱问题。',
-			en: 'Checks structure, links, source references, claim sources, and graph health in one entry.',
+			zh: '只读检查结构、生命周期、证据、Hub、关系一致性、来源分片和图谱问题，并返回 Doctor 预览数据。',
+			en: 'Read-only checks cover structure, lifecycle, evidence, Hubs, relation parity, source parts, and graph health, with Doctor preview data.',
 		},
 		category: { zh: '维护', en: 'Maintenance' },
 	},
@@ -189,16 +189,16 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 	'tracekeeper.capture_source': {
 		title: { zh: '捕获资料来源', en: 'Capture source' },
 		description: {
-			zh: '记录网页、文件或文本来源的元数据和内容快照，保持知识来源可追溯。',
-			en: 'Records metadata and optional content snapshots for web, file, or text sources so knowledge remains traceable.',
+			zh: '把网页、文件或转录来源写入分类目录；大内容通过一个可见索引和有界分片保持可追溯。',
+			en: 'Routes web, file, or transcript sources to typed owners; large content stays traceable through one visible index and bounded parts.',
 		},
 		category: { zh: '资料', en: 'Source' },
 	},
 	'tracekeeper.propose_memory': {
 		title: { zh: '提交记忆提案', en: 'Propose memory' },
 		description: {
-			zh: '按记忆规则处理 Agent 认为值得长期保存的内容；全局默认审核，项目可自动保存。',
-			en: 'Handles agent-suggested durable memory by memory rules; global defaults to review, project memory can auto-save.',
+			zh: '提交带 claim、证据、authority、confidence 和生命周期关系的记忆候选；全局默认审核，项目按规则处理。',
+			en: 'Submits memory candidates with claim, evidence, authority, confidence, and lifecycle relations; global defaults to review and project behavior follows policy.',
 		},
 		category: { zh: '记忆', en: 'Memory' },
 	},

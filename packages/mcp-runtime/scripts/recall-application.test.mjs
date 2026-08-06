@@ -8,7 +8,12 @@ import {
 	PUBLIC_TOOL_NAME_ORDER,
 	getContractByName,
 } from '@tracekeeper/contracts';
-import { resolveScannedNoteEdges, scannedNoteFromContent } from '@tracekeeper/core';
+import {
+	InMemoryKnowledgeIndex,
+	buildMemoryRecord,
+	resolveScannedNoteEdges,
+	scannedNoteFromContent,
+} from '@tracekeeper/core';
 import {
 	LOCAL_TRUST_CAPABILITIES,
 	LOCAL_TRUST_PRINCIPAL_ID,
@@ -299,6 +304,158 @@ test('application owner: injected dependencies execute global, project, and hist
 	assert.equal(loadCalls, 3);
 	assert.equal(resolveCalls, 2);
 	assert.equal(filterCalls, 2);
+});
+
+test('read view owner: bounded catalog recall never reads bodies and excludes archive and superseded memory by default', async (t) => {
+	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-recall-read-view-'));
+	t.after(() => fs.rmSync(vaultRoot, { recursive: true, force: true }));
+	const memory = (memoryId, overrides = {}) => buildMemoryRecord({
+		path: `01_knowledge/memory/global/${memoryId}.md`,
+		memory_id: memoryId,
+		scope: 'global',
+		project_id: null,
+		agent_type: 'codex',
+		operation_id: `operation-${memoryId}`,
+		memory_kind: 'task_decision',
+		claim_key: 'runtime choice',
+		authority: 'agent',
+		confidence_level: 'supported',
+		declared_state: 'active',
+		observed_at: '2026-08-01T00:00:00Z',
+		valid_from: null,
+		valid_to: null,
+		last_verified_at: '2026-08-01T00:00:00Z',
+		evidence: ['01_knowledge/sources/web/runtime.md'],
+		supersedes: [],
+		contradicts: [],
+		project_hub: null,
+		global_hub: '01_knowledge/memory/global/index.md',
+		related_wiki: [],
+		related_sources: ['01_knowledge/sources/web/runtime.md'],
+		body: `# ${memoryId}\nlifecyclefixture ${memoryId}`,
+		...overrides,
+	});
+	const oldMemory = memory('memory-old');
+	const currentMemory = memory('memory-current', {
+		observed_at: '2026-08-02T00:00:00Z',
+		supersedes: ['memory-old'],
+	});
+	const notes = [
+		note(vaultRoot, oldMemory.record.path, { content: oldMemory.markdown }),
+		note(vaultRoot, currentMemory.record.path, { content: currentMemory.markdown }),
+		note(vaultRoot, '02_archive/atlas-history.md', {
+			frontmatter: { project_hint: 'atlas', project_id: 'atlas-id', type: 'agent-task', task_id: 'archived-task' },
+			content: '# Archived\narchivefixture historyfixture',
+		}),
+		note(vaultRoot, '01_knowledge/wiki/concepts/chinese.md', {
+			content: '# 中文检索\n知识架构联想 chineseviewfixture',
+		}),
+		note(vaultRoot, '01_knowledge/memory/projects/atlas/durable.md', {
+			frontmatter: { project_hint: 'atlas', project_id: 'atlas-id', type: 'memory' },
+			content: '# Atlas durable memory\n订单投影的既有架构决定。',
+		}),
+		note(vaultRoot, '00_tracekeeper/work/tasks/atlas-query-echo.md', {
+			frontmatter: { project_hint: 'atlas', project_id: 'atlas-id', type: 'agent_task' },
+			content: '# Atlas task\n继续 Atlas 项目的架构工作：基于既有决策，为订单投影重建制定可执行的三步实施计划，并总结本次决定和下一步。',
+		}),
+	];
+	const scan = {
+		vaultRoot,
+		scannedAt: '2026-08-03T00:00:00.000Z',
+		notes: resolveScannedNoteEdges(notes),
+		errors: [],
+	};
+	const index = new InMemoryKnowledgeIndex({ vaultRoot, initialScan: scan });
+	const baseView = await index.readView();
+	let contentReads = 0;
+	const view = {
+		...baseView,
+		contentReader: {
+			generation: baseView.generation,
+			async read() {
+				contentReads += 1;
+				throw new Error('bounded Recall must not read a full body');
+			},
+		},
+	};
+	const service = new RecallApplicationService(directApplicationDependencies(scan));
+	const global = service.executeReadView({
+		scope: 'global', query: 'lifecyclefixture', maxItems: 10, vaultRoot, projectIdentityInput: {},
+	}, view);
+	assert.deepEqual(global.matches.map((entry) => entry.path), [currentMemory.record.path]);
+	const archived = service.executeReadView({
+		scope: 'global', query: 'archivefixture', maxItems: 10, vaultRoot, projectIdentityInput: {},
+	}, view);
+	assert.deepEqual(archived.matches, []);
+	const history = service.executeReadView({
+		scope: 'project_history', query: 'historyfixture', maxItems: 10, vaultRoot,
+		projectIdentityInput: { project_id: 'atlas-id' },
+	}, view);
+	assert.equal(history.entries[0].path, '02_archive/atlas-history.md');
+	const chinese = service.executeReadView({
+		scope: 'global', query: '知识架构', maxItems: 10, vaultRoot, projectIdentityInput: {},
+	}, view);
+	assert.equal(chinese.matches[0].path, '01_knowledge/wiki/concepts/chinese.md');
+	assert.match(chinese.matches[0].excerpt, /知识架构联想/);
+	const queryEcho = service.executeReadView({
+		scope: 'project',
+		query: '继续 Atlas 项目的架构工作：基于既有决策，为订单投影重建制定可执行的三步实施计划，并总结本次决定和下一步',
+		maxItems: 10,
+		vaultRoot,
+		projectIdentityInput: { project_id: 'atlas-id' },
+	}, view);
+	assert.equal(queryEcho.entries[0].path, '01_knowledge/memory/projects/atlas/durable.md');
+	assert.match(queryEcho.entries.find((entry) => entry.path.endsWith('atlas-query-echo.md')).score_reason.join(' '), /query-echo penalty/);
+	assert.equal(contentReads, 0);
+});
+
+test('read view owner: lexical, graph, and rerank work obey hard ceilings', async (t) => {
+	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-recall-read-view-ceilings-'));
+	t.after(() => fs.rmSync(vaultRoot, { recursive: true, force: true }));
+	const lexicalNotes = Array.from({ length: 320 }, (_, index) => note(
+		vaultRoot,
+		`01_knowledge/wiki/references/ceiling-${String(index).padStart(3, '0')}.md`,
+		{ content: `# Ceiling ${index}\nceilingfixture deterministic catalog row ${index}` }
+	));
+	const graphPaths = Array.from({ length: 90 }, (_, index) =>
+		`01_knowledge/wiki/concepts/graph-${String(index).padStart(3, '0')}.md`
+	);
+	const graphSource = note(vaultRoot, '01_knowledge/wiki/concepts/graph-source.md', {
+		content: `# Graph source\ngraphseedfixture ${graphPaths.map((entry) => `[[${entry.replace(/\.md$/, '')}]]`).join(' ')}`,
+	});
+	const graphTargets = graphPaths.map((relativePath, index) => note(vaultRoot, relativePath, {
+		content: `# Graph target ${index}\nneighbor row ${index}`,
+	}));
+	const scan = {
+		vaultRoot,
+		scannedAt: '2026-08-03T00:00:00.000Z',
+		notes: resolveScannedNoteEdges([...lexicalNotes, graphSource, ...graphTargets]),
+		errors: [],
+	};
+	const index = new InMemoryKnowledgeIndex({ vaultRoot, initialScan: scan });
+	const view = await index.readView();
+	const diagnostics = [];
+	const service = new RecallApplicationService({
+		...directApplicationDependencies(scan),
+		onReadViewDiagnostics(value) { diagnostics.push(value); },
+	});
+	const lexical = service.executeReadView({
+		scope: 'global', query: 'ceilingfixture', maxItems: 20, vaultRoot, projectIdentityInput: {},
+	}, view);
+	assert.equal(lexical.matches.length, 20);
+	assert.deepEqual(diagnostics[0], {
+		lexical_candidates: 256,
+		graph_expansions: 0,
+		reranked_rows: 32,
+	});
+	service.executeReadView({
+		scope: 'global', query: 'graphseedfixture', maxItems: 20, vaultRoot, projectIdentityInput: {},
+	}, view);
+	assert.deepEqual(diagnostics[1], {
+		lexical_candidates: 1,
+		graph_expansions: 64,
+		reranked_rows: 32,
+	});
 });
 
 test('application owner: injected clock exclusively controls the existing recency boost', (t) => {
@@ -641,7 +798,7 @@ test('snapshot and security: filesystem fallback excludes config and symlink con
 	}
 });
 
-test('ranking: project Memory and Wiki boosts, work-record penalty, recency, and result bounds remain deterministic', async (t) => {
+test('ranking: project Memory and Wiki boosts, graph neighbors, recency, and result bounds remain deterministic', async (t) => {
 	const { context } = createFixture(t);
 	const project = await successfulCall('tracekeeper.recall', {
 		scope: 'project',
@@ -656,7 +813,7 @@ test('ranking: project Memory and Wiki boosts, work-record penalty, recency, and
 	]);
 	assert.ok(project.payload.matches[0].score_reason.includes('Project-memory location boost (+4)'));
 	assert.ok(project.payload.matches[1].score_reason.includes('Wiki location boost (+0.75)'));
-	assert.ok(project.payload.matches[2].score_reason.some((reason) => reason.startsWith('Work-record query-echo penalty')));
+	assert.ok(project.payload.matches[2].score_reason.some((reason) => reason.startsWith('Work-record query-echo penalty (-')));
 	assert.ok(project.payload.matches[0].score > project.payload.matches[1].score);
 	assert.ok(project.payload.matches[1].score > project.payload.matches[2].score);
 

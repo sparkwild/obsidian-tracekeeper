@@ -1,4 +1,4 @@
-import { type OperationFailureInjection, type ProposalTransitionCommand, type ProposalTransitionDecision, type ScanResult, type VaultRepository } from '@tracekeeper/core';
+import { type OperationFailureInjection, type ProposalTransitionCommand, type ProposalTransitionDecision, type ScanResult, type KnowledgeReadView, type VaultRepository } from '@tracekeeper/core';
 import { type McpPrompt, type McpStructuredToolResult, type McpToolDefinition } from './protocol';
 import { type OperationRecoveryReport } from './application/recovery';
 import { type ObservedClientType } from './observed-client';
@@ -16,6 +16,7 @@ interface ToolContext {
     vaultConfigDir?: string;
     vaultRepository?: VaultRepository;
     knowledgeSnapshotProvider?: (vaultRoot: string) => ScanResult | null;
+    knowledgeReadViewProvider?: (vaultRoot: string) => Promise<KnowledgeReadView | null>;
     graphProfile?: unknown;
     memoryRules?: MemoryRulesContext;
     contentLanguage?: unknown;
@@ -31,6 +32,7 @@ export interface ProposalTransitionPort {
     }): Promise<ProposalTransitionDecision>;
 }
 export interface ToolInvocationContext extends ToolContext {
+    knowledgeReadViewPromise?: Promise<KnowledgeReadView>;
     invocationId?: string;
     requestId?: string;
     principalId?: string;

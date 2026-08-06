@@ -2,10 +2,14 @@ import {
 	KNOWLEDGE_GLOBAL_MEMORY_DIR,
 	KNOWLEDGE_PROJECTS_MEMORY_DIR,
 	KNOWLEDGE_SOURCES_DIR,
+	parseMemoryRecord,
+	resolveMemoryLifecycle,
 	normalizeKnowledgePath,
 	startsWithPathPrefix,
 	type IndexedKnowledgeNote,
 	type KnowledgeIndexState,
+	type MemoryEffectiveState,
+	type MemoryRecord,
 	type ScanError,
 } from '@tracekeeper/core';
 import type {
@@ -19,6 +23,12 @@ export const KNOWLEDGE_RELATIONSHIP_READ_LIMIT = 200;
 
 export type MemoryRecordScope = 'global' | 'project';
 export type MemoryPersistenceState = 'persisted' | 'queued' | 'missing';
+export type MemoryLifecycleDisplayState =
+	| 'current'
+	| 'history'
+	| 'conflict'
+	| 'review'
+	| 'legacy_unkeyed';
 export type MemoryScopeFilter = 'all' | MemoryRecordScope;
 export type MemoryStateFilter = 'all' | MemoryPersistenceState;
 
@@ -51,6 +61,20 @@ export interface MemoryInspectorRecord {
 	taskId: string;
 	status: string;
 	summary: string;
+	lifecycleState: MemoryLifecycleDisplayState;
+	effectiveState: MemoryEffectiveState | 'queued' | 'missing';
+	lifecycleReasons: string[];
+	claimKey: string;
+	authority: string;
+	confidenceLevel: string;
+	declaredState: string;
+	observedAt: string;
+	validFrom: string;
+	validTo: string;
+	lastVerifiedAt: string;
+	evidence: string[];
+	supersedes: string[];
+	contradicts: string[];
 	sortTimestamp: number;
 }
 
@@ -73,6 +97,7 @@ export interface MemoryInspectorSnapshot {
 		immutableEntries: number;
 		legacyNotes: number;
 	};
+	lifecycleCounts: Record<MemoryLifecycleDisplayState, number>;
 	updatedAt: string;
 }
 
@@ -89,9 +114,15 @@ export interface SourceStatusRecord {
 	id: string;
 	path: string;
 	evidencePath: string;
+	indexPath: string;
 	title: string;
 	source: string;
 	sourceKind: string;
+	sourceId: string;
+	contentHash: string;
+	route: string;
+	partCount: number;
+	partManifest: string[];
 	mode: string;
 	state: SourceEvidenceState;
 	taskIds: string[];
@@ -166,6 +197,23 @@ const frontmatterString = (
 	return '';
 };
 
+const frontmatterStringList = (
+	note: IndexedKnowledgeNote,
+	keys: readonly string[]
+): string[] => {
+	for (const key of keys) {
+		const value = note.frontmatter[key];
+		if (Array.isArray(value)) {
+			return value.map((entry) => asString(entry)).filter(Boolean);
+		}
+		const scalar = asString(value);
+		if (scalar) {
+			return [scalar];
+		}
+	}
+	return [];
+};
+
 const normalizeRecordPath = (value: string): string =>
 	normalizeKnowledgePath(value.replace(/^["']|["']$/g, ''));
 
@@ -235,6 +283,120 @@ const memoryProvenance = (note: IndexedKnowledgeNote): string =>
 	frontmatterString(note, ['source', 'tool', 'proposed_by', 'proposedBy'])
 	|| (frontmatterString(note, ['task_id', 'taskId']) ? 'task' : 'vault');
 
+interface IndexedMemoryLifecycle {
+	record: MemoryRecord | null;
+	displayState: MemoryLifecycleDisplayState;
+	effectiveState: MemoryEffectiveState;
+	reasons: string[];
+}
+
+const lifecycleDisplayState = (
+	state: MemoryEffectiveState
+): MemoryLifecycleDisplayState => {
+	switch (state) {
+		case 'current':
+			return 'current';
+		case 'superseded':
+		case 'retracted':
+			return 'history';
+		case 'disputed':
+			return 'conflict';
+		case 'review':
+			return 'review';
+		case 'legacy_unkeyed':
+			return 'legacy_unkeyed';
+	}
+};
+
+const buildIndexedMemoryLifecycle = (
+	notes: readonly IndexedKnowledgeNote[],
+	generation: number,
+	now?: string
+): Map<string, IndexedMemoryLifecycle> => {
+	const parsed: MemoryRecord[] = [];
+	const invalidV2Paths = new Set<string>();
+	for (const note of notes) {
+		const path = normalizeRecordPath(note.path);
+		if (!isMemoryPath(path) || isIndexNote(path)) {
+			continue;
+		}
+		const type = (frontmatterString(note, ['type']) || asString(note.type)).toLowerCase();
+		const schemaVersion = Number(note.frontmatter.schema_version);
+		if (type !== 'memory_record' && schemaVersion !== 2) {
+			continue;
+		}
+		try {
+			parsed.push(parseMemoryRecord({ path, frontmatter: note.frontmatter }));
+		} catch {
+			invalidV2Paths.add(path);
+		}
+	}
+	const lifecycle = resolveMemoryLifecycle({ generation, records: parsed, now });
+	const byPath = new Map<string, IndexedMemoryLifecycle>();
+	for (const row of lifecycle.records) {
+		byPath.set(row.record.path, {
+			record: row.record,
+			displayState: lifecycleDisplayState(row.effective_state),
+			effectiveState: row.effective_state,
+			reasons: [...row.reasons],
+		});
+	}
+	for (const path of invalidV2Paths) {
+		byPath.set(path, {
+			record: null,
+			displayState: 'review',
+			effectiveState: 'review',
+			reasons: ['invalid_v2_schema'],
+		});
+	}
+	return byPath;
+};
+
+const lifecycleFields = (
+	note: IndexedKnowledgeNote,
+	lifecycle: IndexedMemoryLifecycle | undefined
+): Pick<MemoryInspectorRecord,
+	'lifecycleState' | 'effectiveState' | 'lifecycleReasons' | 'claimKey'
+	| 'authority' | 'confidenceLevel' | 'declaredState' | 'observedAt'
+	| 'validFrom' | 'validTo' | 'lastVerifiedAt' | 'evidence'
+	| 'supersedes' | 'contradicts'> => {
+	const record = lifecycle?.record;
+	if (record) {
+		return {
+			lifecycleState: lifecycle.displayState,
+			effectiveState: lifecycle.effectiveState,
+			lifecycleReasons: lifecycle.reasons,
+			claimKey: record.claim_key,
+			authority: record.authority,
+			confidenceLevel: record.confidence_level,
+			declaredState: record.declared_state,
+			observedAt: record.observed_at,
+			validFrom: record.valid_from || '',
+			validTo: record.valid_to || '',
+			lastVerifiedAt: record.last_verified_at || '',
+			evidence: [...record.evidence],
+			supersedes: [...record.supersedes],
+			contradicts: [...record.contradicts],
+		};
+	}
+	return {
+		lifecycleState: lifecycle?.displayState || 'legacy_unkeyed',
+		effectiveState: lifecycle?.effectiveState || 'legacy_unkeyed',
+		lifecycleReasons: lifecycle?.reasons || ['missing_claim_key'],
+		claimKey: frontmatterString(note, ['claim_key']),
+		authority: frontmatterString(note, ['authority']),
+		confidenceLevel: frontmatterString(note, ['confidence_level']),
+		declaredState: frontmatterString(note, ['declared_state']),
+		observedAt: frontmatterString(note, ['observed_at']),
+		validFrom: frontmatterString(note, ['valid_from']),
+		validTo: frontmatterString(note, ['valid_to']),
+		lastVerifiedAt: frontmatterString(note, ['last_verified_at']),
+		evidence: frontmatterStringList(note, ['evidence']),
+		supersedes: frontmatterStringList(note, ['supersedes']),
+		contradicts: frontmatterStringList(note, ['contradicts']),
+	};
+};
+
 const isQueuedProposal = (proposal: MemoryProposalRecord): boolean =>
 	proposal.classification === 'memory_proposal'
 	&& (
@@ -272,6 +434,11 @@ export const buildMemoryInspectorSnapshot = (
 ): MemoryInspectorSnapshot => {
 	const persistedPaths = new Set<string>();
 	const records: MemoryInspectorRecord[] = [];
+	const lifecycleByPath = buildIndexedMemoryLifecycle(
+		input.index.notes,
+		input.index.generation,
+		input.now
+	);
 	let immutableProjectEntryCount = 0;
 	let legacyProjectNoteCount = 0;
 
@@ -306,6 +473,7 @@ export const buildMemoryInspectorSnapshot = (
 			taskId: frontmatterString(note, ['task_id', 'taskId']),
 			status: 'persisted',
 			summary: note.excerptSource,
+			...lifecycleFields(note, lifecycleByPath.get(path)),
 			sortTimestamp: parseTime(note.modifiedAt),
 		});
 	}
@@ -328,6 +496,20 @@ export const buildMemoryInspectorSnapshot = (
 			taskId: proposal.taskId,
 			status: proposal.approvalStatus,
 			summary: proposal.snippet,
+			lifecycleState: 'review',
+			effectiveState: 'queued',
+			lifecycleReasons: ['pending_human_review'],
+			claimKey: '',
+			authority: '',
+			confidenceLevel: '',
+			declaredState: 'review',
+			observedAt: '',
+			validFrom: '',
+			validTo: '',
+			lastVerifiedAt: '',
+			evidence: [...proposal.evidence],
+			supersedes: [],
+			contradicts: [],
 			sortTimestamp: proposal.sortTimestamp,
 		});
 	}
@@ -350,6 +532,11 @@ export const buildMemoryInspectorSnapshot = (
 				taskId: task.taskId,
 				status: 'missing evidence',
 				summary: task.objective,
+				lifecycleState: 'review',
+				effectiveState: 'missing',
+				lifecycleReasons: ['missing_persisted_evidence'],
+				claimKey: '', authority: '', confidenceLevel: '', declaredState: '', observedAt: '',
+				validFrom: '', validTo: '', lastVerifiedAt: '', evidence: [], supersedes: [], contradicts: [],
 				sortTimestamp: task.sortTimestamp,
 			});
 		}
@@ -376,6 +563,11 @@ export const buildMemoryInspectorSnapshot = (
 			taskId: proposal.taskId,
 			status: 'missing evidence',
 			summary: proposal.snippet,
+			lifecycleState: 'review',
+			effectiveState: 'missing',
+			lifecycleReasons: ['missing_persisted_evidence'],
+			claimKey: '', authority: '', confidenceLevel: '', declaredState: '', observedAt: '',
+			validFrom: '', validTo: '', lastVerifiedAt: '', evidence: [...proposal.evidence], supersedes: [], contradicts: [],
 			sortTimestamp: proposal.sortTimestamp,
 		});
 	}
@@ -394,6 +586,16 @@ export const buildMemoryInspectorSnapshot = (
 		.filter((record) => !focused || matchesMemoryFocus(record, focusPaths, taskId))
 		.sort((left, right) => right.sortTimestamp - left.sortTimestamp || left.path.localeCompare(right.path));
 	const page = paginate(filtered, input.query?.page, input.query?.pageSize);
+	const lifecycleCounts: Record<MemoryLifecycleDisplayState, number> = {
+		current: 0,
+		history: 0,
+		conflict: 0,
+		review: 0,
+		legacy_unkeyed: 0,
+	};
+	for (const record of records) {
+		lifecycleCounts[record.lifecycleState] += 1;
+	}
 
 	return {
 		records: page.items,
@@ -414,12 +616,21 @@ export const buildMemoryInspectorSnapshot = (
 			immutableEntries: immutableProjectEntryCount,
 			legacyNotes: legacyProjectNoteCount,
 		},
+		lifecycleCounts,
 		updatedAt: input.now || new Date().toISOString(),
 	};
 };
 
 const sourceTitle = (note: IndexedKnowledgeNote): string =>
 	note.title || note.path.split('/').pop()?.replace(/\.md$/i, '') || note.path;
+
+const sourceRecordType = (note: IndexedKnowledgeNote): string =>
+	(frontmatterString(note, ['type']) || asString(note.type)).toLowerCase();
+
+const sourcePartCount = (note: IndexedKnowledgeNote): number => {
+	const value = Number(frontmatterString(note, ['part_count', 'partCount']));
+	return Number.isSafeInteger(value) && value > 0 ? value : 0;
+};
 
 const sourceReferencePaths = (proposal: MemoryProposalRecord): string[] =>
 	[...proposal.relatedSources, ...proposal.evidence]
@@ -477,6 +688,9 @@ export const buildSourceStatusSnapshot = (
 			continue;
 		}
 		capturedPaths.add(path);
+		if (sourceRecordType(note) === 'source_part') {
+			continue;
+		}
 		const taskIds = sourceTaskIds(path, note, input.tasks);
 		const relatedTasks = input.tasks.filter((task) => taskIds.includes(task.taskId));
 		const relatedProposals = input.proposals.filter((proposal) =>
@@ -487,9 +701,19 @@ export const buildSourceStatusSnapshot = (
 			id: `captured:${path}`,
 			path,
 			evidencePath: path,
+			indexPath: normalizeRecordPath(
+				frontmatterString(note, ['index_path', 'indexPath']) || path
+			),
 			title: sourceTitle(note),
 			source: frontmatterString(note, ['source', 'source_url', 'sourceUrl']) || path,
 			sourceKind: frontmatterString(note, ['source_kind', 'sourceKind', 'type']) || 'source',
+			sourceId: frontmatterString(note, ['source_id', 'sourceId']),
+			contentHash: frontmatterString(note, ['content_hash', 'contentHash']),
+			route: frontmatterString(note, ['route', 'source_route', 'sourceRoute']),
+			partCount: sourcePartCount(note),
+			partManifest: uniquePaths(
+				frontmatterStringList(note, ['part_manifest', 'partManifest'])
+			),
 			mode: frontmatterString(note, ['mode', 'source_mode', 'sourceMode']),
 			state: 'captured',
 			taskIds,
@@ -514,9 +738,15 @@ export const buildSourceStatusSnapshot = (
 				id: `missing:${sourcePath}`,
 				path: sourcePath,
 				evidencePath: normalizeRecordPath(task.path),
+				indexPath: sourcePath,
 				title: sourcePath.split('/').pop()?.replace(/\.md$/i, '') || sourcePath,
 				source: sourcePath,
 				sourceKind: 'source',
+				sourceId: '',
+				contentHash: '',
+				route: '',
+				partCount: 0,
+				partManifest: [],
 				mode: '',
 				state: 'missing',
 				taskIds: [task.taskId],
@@ -538,9 +768,15 @@ export const buildSourceStatusSnapshot = (
 				id: `missing:${sourcePath}`,
 				path: sourcePath,
 				evidencePath: normalizeRecordPath(proposal.path),
+				indexPath: sourcePath,
 				title: sourcePath.split('/').pop()?.replace(/\.md$/i, '') || sourcePath,
 				source: sourcePath,
 				sourceKind: 'source',
+				sourceId: '',
+				contentHash: '',
+				route: '',
+				partCount: 0,
+				partManifest: [],
 				mode: '',
 				state: 'missing',
 				taskIds: proposal.taskId ? [proposal.taskId] : [],

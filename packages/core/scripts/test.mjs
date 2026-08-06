@@ -19,6 +19,10 @@ import knowledgeNoteModule from '../dist/knowledge-note.js';
 import vaultRepositoryModule from '../dist/vault-repository.js';
 import proposalTransitionModule from '../dist/proposal-transition.js';
 import projectMemoryModule from '../dist/project-memory.js';
+import memoryRecordModule from '../dist/memory-record.js';
+import memoryLifecycleModule from '../dist/memory-lifecycle.js';
+import sourceRecordModule from '../dist/source-record.js';
+import lifecycleDiagnosticsModule from '../dist/lifecycle-diagnostics.js';
 
 const KNOWLEDGE_DIR = '01_knowledge';
 const CONFIG_DIR = 'vault-config';
@@ -3602,7 +3606,674 @@ async function run() {
 	}
 }
 
-run().catch((error) => {
+async function runMemoryRecordV2Tests() {
+	const evidence = ['01_knowledge/sources/web/example.md'];
+	const built = memoryRecordModule.buildMemoryRecord({
+		path: '01_knowledge/memory/global/global-1.md',
+		memory_id: 'memory-global-1',
+		scope: 'global',
+		project_id: null,
+		agent_type: 'codex',
+		operation_id: 'operation-global-1',
+		memory_kind: 'task_decision',
+		claim_key: '  Preferred   Runtime  ',
+		authority: 'source',
+		confidence_level: 'verified',
+		declared_state: 'active',
+		observed_at: '2026-08-06T00:00:00Z',
+		valid_from: '2026-08-01T00:00:00Z',
+		valid_to: null,
+		last_verified_at: '2026-08-06T00:00:00Z',
+		evidence,
+		supersedes: [],
+		contradicts: [],
+		project_hub: null,
+		global_hub: '01_knowledge/memory/global/index.md',
+		related_wiki: ['[[01_knowledge/wiki/concepts/runtime]]'],
+		related_sources: ['01_knowledge/sources/web/example.md'],
+		body: '# Preferred Runtime\n\nUse the supported runtime.',
+	});
+	evidence.push('01_knowledge/sources/web/mutated.md');
+	assert.equal(built.record.claim_key, 'preferred runtime');
+	assert.deepEqual(built.record.evidence, ['[[01_knowledge/sources/web/example]]']);
+	assert.ok(built.markdown.includes('schema_version: 2'));
+	const renderedFrontmatter = markdownModule.parseFrontmatter(built.markdown).fields;
+	const reparsed = memoryRecordModule.parseMemoryRecord({
+		path: built.record.path,
+		frontmatter: renderedFrontmatter,
+	});
+	assert.deepEqual(reparsed, built.record);
+
+	const v1Projection = memoryRecordModule.projectMemoryEntryToReadProjection({
+		schema_version: 1,
+		type: 'project_memory_entry',
+		path: '01_knowledge/memory/projects/alpha/agents/codex/task/op-1.md',
+		project_key: 'alpha',
+		project_id: 'project-alpha',
+		agent_type: 'codex',
+		task_id: 'task-1',
+		operation_id: 'op-1',
+		operation_kind: 'task',
+		memory_kinds: ['decision'],
+		status: 'superseded',
+		created_at: '2026-08-01T00:00:00.000Z',
+		operation_hash: `sha256:${'a'.repeat(64)}`,
+		project_hub: '[[01_knowledge/memory/projects/alpha/index]]',
+		related_wiki: [],
+		supersedes: [],
+	});
+	assert.equal(v1Projection.kind, 'project_v1');
+	assert.equal(v1Projection.claim_key, null);
+	assert.equal(v1Projection.declared_state, 'active');
+	const legacyProjection = memoryRecordModule.legacyMemoryToReadProjection({
+		path: '01_knowledge/memory/projects/alpha/memory.md',
+		scope: 'project',
+		project_id: 'project-alpha',
+	});
+	assert.equal(legacyProjection.kind, 'legacy_unkeyed');
+
+	assert.throws(
+		() => memoryRecordModule.parseMemoryRecord({
+			path: '../outside.md',
+			frontmatter: renderedFrontmatter,
+		}),
+		/invalid/i
+	);
+	assert.throws(
+		() => memoryRecordModule.parseMemoryRecord({
+			path: built.record.path,
+			frontmatter: { ...renderedFrontmatter, evidence: [], confidence_level: 'verified' },
+		}),
+		/requires at least one evidence/i
+	);
+	assert.throws(
+		() => memoryRecordModule.parseMemoryRecord({
+			path: built.record.path,
+			frontmatter: {
+				...renderedFrontmatter,
+				valid_from: '2026-09-01T00:00:00Z',
+				valid_to: '2026-08-01T00:00:00Z',
+			},
+		}),
+		/valid_from/i
+	);
+
+	console.log(JSON.stringify({
+		suite: 'core-memory-record-v2',
+		result: 'pass',
+		rows: [
+			'normalized-round-trip',
+			'verified-evidence-bound',
+			'temporal-range-validation',
+			'vault-path-safety',
+			'project-v1-compatibility-projection',
+			'legacy-unkeyed-projection',
+			'input-isolation',
+		],
+	}));
+}
+
+async function runMemoryLifecycleTests() {
+	const makeRecord = (memoryId, overrides = {}) => memoryRecordModule.buildMemoryRecord({
+		path: `01_knowledge/memory/global/${memoryId}.md`,
+		memory_id: memoryId,
+		scope: 'global',
+		project_id: null,
+		agent_type: 'codex',
+		operation_id: `operation-${memoryId}`,
+		memory_kind: 'task_decision',
+		claim_key: 'runtime choice',
+		authority: 'agent',
+		confidence_level: 'supported',
+		declared_state: 'active',
+		observed_at: '2026-08-01T00:00:00Z',
+		valid_from: null,
+		valid_to: null,
+		last_verified_at: '2026-08-01T00:00:00Z',
+		evidence: ['01_knowledge/sources/web/runtime.md'],
+		supersedes: [],
+		contradicts: [],
+		project_hub: null,
+		global_hub: '01_knowledge/memory/global/index.md',
+		related_wiki: [],
+		related_sources: ['01_knowledge/sources/web/runtime.md'],
+		body: `# ${memoryId}`,
+		...overrides,
+	}).record;
+
+	const first = makeRecord('memory-a');
+	const second = makeRecord('memory-b', {
+		observed_at: '2026-08-02T00:00:00Z',
+		supersedes: ['memory-a'],
+	});
+	const linear = memoryLifecycleModule.resolveMemoryLifecycle({
+		generation: 4,
+		now: '2026-08-06T00:00:00Z',
+		records: [second, first],
+	});
+	assert.deepEqual(linear.current.map((row) => row.record.memory_id), ['memory-b']);
+	assert.equal(linear.records.find((row) => row.record.memory_id === 'memory-a')?.effective_state, 'superseded');
+
+	const branch = makeRecord('memory-c', {
+		observed_at: '2026-08-03T00:00:00Z',
+		supersedes: ['memory-a'],
+	});
+	const branched = memoryLifecycleModule.resolveMemoryLifecycle({
+		generation: 5,
+		now: '2026-08-06T00:00:00Z',
+		records: [branch, first, second],
+	});
+	assert.deepEqual(branched.conflicts.map((row) => row.record.memory_id), ['memory-c', 'memory-b']);
+	assert.ok(branched.issues.some((issue) => issue.code === 'duplicate_current'));
+
+	const contradiction = makeRecord('memory-d', {
+		observed_at: '2026-08-04T00:00:00Z',
+		contradicts: ['memory-a'],
+	});
+	const disputed = memoryLifecycleModule.resolveMemoryLifecycle({
+		generation: 6,
+		now: '2026-08-06T00:00:00Z',
+		records: [contradiction, first],
+	});
+	assert.equal(disputed.conflicts.length, 2);
+
+	const cycleA = makeRecord('memory-cycle-a', { supersedes: ['memory-cycle-b'] });
+	const cycleB = makeRecord('memory-cycle-b', { supersedes: ['memory-cycle-a'] });
+	const cycle = memoryLifecycleModule.resolveMemoryLifecycle({
+		generation: 7,
+		now: '2026-08-06T00:00:00Z',
+		records: [cycleB, cycleA],
+	});
+	assert.ok(cycle.issues.some((issue) => issue.code === 'supersession_cycle'));
+	assert.ok(cycle.records.every((row) => row.effective_state === 'review'));
+
+	const ended = makeRecord('memory-ended', { valid_to: '2026-08-02T00:00:00Z' });
+	const future = makeRecord('memory-future', { valid_from: '2026-09-01T00:00:00Z' });
+	const temporal = memoryLifecycleModule.resolveMemoryLifecycle({
+		generation: 8,
+		now: '2026-08-06T00:00:00Z',
+		records: [future, ended],
+	});
+	assert.equal(temporal.records.find((row) => row.record.memory_id === 'memory-ended')?.effective_state, 'superseded');
+	assert.equal(temporal.records.find((row) => row.record.memory_id === 'memory-future')?.effective_state, 'review');
+
+	const dangling = makeRecord('memory-dangling', { supersedes: ['missing-memory'] });
+	const danglingProjection = memoryLifecycleModule.resolveMemoryLifecycle({
+		generation: 9,
+		now: '2026-08-06T00:00:00Z',
+		records: [dangling],
+	});
+	assert.equal(danglingProjection.records[0].effective_state, 'review');
+	assert.ok(danglingProjection.issues.some((issue) => issue.code === 'dangling_supersedes'));
+
+	const retractedRecord = makeRecord('memory-retracted', { declared_state: 'retracted' });
+	const retracted = memoryLifecycleModule.resolveMemoryLifecycle({
+		generation: 10,
+		now: '2026-08-06T00:00:00Z',
+		records: [retractedRecord],
+	});
+	assert.equal(retracted.history[0].effective_state, 'retracted');
+
+	const projectRecord = makeRecord('memory-project', {
+		path: '01_knowledge/memory/projects/alpha/agents/codex/task/memory-project.md',
+		scope: 'project',
+		project_id: 'project-alpha',
+		project_hub: '01_knowledge/memory/projects/alpha/index.md',
+		global_hub: null,
+		supersedes: ['memory-a'],
+	});
+	const crossScope = memoryLifecycleModule.resolveMemoryLifecycle({
+		generation: 11,
+		now: '2026-08-06T00:00:00Z',
+		records: [first, projectRecord],
+	});
+	assert.ok(crossScope.issues.some((issue) => issue.code === 'cross_claim_relation'));
+	assert.equal(
+		crossScope.records.find((row) => row.record.memory_id === 'memory-project')?.effective_state,
+		'review'
+	);
+
+	const stale = memoryLifecycleModule.resolveMemoryLifecycle({
+		generation: 12,
+		now: '2026-08-06T00:00:00Z',
+		staleAfterDays: 2,
+		records: [first],
+		legacy: [memoryRecordModule.legacyMemoryToReadProjection({
+			path: '01_knowledge/memory/global/memory.md',
+		})],
+	});
+	assert.ok(stale.issues.some((issue) => issue.code === 'stale_verification'));
+	assert.equal(stale.legacy[0].effective_state, 'legacy_unkeyed');
+	assert.deepEqual(memoryLifecycleModule.deriveMemoryGovernance({
+		proposed_authority: 'user',
+		proposed_confidence: 'verified',
+		evidence_count: 1,
+	}), {
+		authority: 'agent',
+		confidence_level: 'supported',
+		downgraded: true,
+	});
+	assert.deepEqual(memoryLifecycleModule.deriveMemoryGovernance({
+		proposed_authority: 'user',
+		proposed_confidence: 'verified',
+		evidence_count: 1,
+		human_approved: true,
+	}), {
+		authority: 'user',
+		confidence_level: 'verified',
+		downgraded: false,
+	});
+
+	const reversed = memoryLifecycleModule.resolveMemoryLifecycle({
+		generation: 4,
+		now: '2026-08-06T00:00:00Z',
+		records: [first, second],
+	});
+	assert.deepEqual(reversed, linear);
+
+	console.log(JSON.stringify({
+		suite: 'core-memory-lifecycle',
+		result: 'pass',
+		rows: [
+			'linear-supersession',
+			'branching-duplicate-current',
+			'explicit-contradiction',
+			'supersession-cycle',
+			'validity-windows',
+			'dangling-target',
+			'retraction',
+			'cross-scope-rejection',
+			'stale-verification',
+			'legacy-unkeyed',
+			'policy-owned-authority',
+			'deterministic-order',
+		],
+	}));
+}
+
+function normalizeReadView(view) {
+	return {
+		catalog: [...view.catalog],
+		graph: {
+			outgoing: [...view.graph.outgoing],
+			incoming: [...view.graph.incoming],
+			edges: view.graph.edges,
+			unresolvedEdges: view.graph.unresolvedEdges,
+		},
+		scopes: { byType: [...view.scopes.byType], byTag: [...view.scopes.byTag] },
+		lexical: [...view.lexical.postings],
+		memory: {
+			byId: [...view.memory.byId],
+			byClaimKey: [...view.memory.byClaimKey],
+			states: view.memory.lifecycle.records.map((row) => [row.record.memory_id, row.effective_state]),
+			invalidPaths: view.memory.invalidPaths,
+		},
+	};
+}
+
+function runSourceRecordTests() {
+	assert.equal(sourceRecordModule.normalizeSourceKind('article'), 'web');
+	assert.equal(sourceRecordModule.normalizeSourceKind('document'), 'file');
+	assert.equal(sourceRecordModule.normalizeSourceKind('meeting'), 'transcript');
+	assert.throws(() => sourceRecordModule.normalizeSourceKind('database'), /source_kind/);
+
+	const inline = sourceRecordModule.buildSourceCapturePlan({
+		source: 'https://example.test/article', sourceKind: 'url', filename: 'example', content: '正文',
+	});
+	const repeated = sourceRecordModule.buildSourceCapturePlan({
+		source: 'https://example.test/article', sourceKind: 'web', filename: 'renamed', content: '正文',
+	});
+	assert.equal(inline.route, '01_knowledge/sources/web');
+	assert.equal(inline.index_path, '01_knowledge/sources/web/example.md');
+	assert.equal(inline.source_id, repeated.source_id);
+	assert.equal(inline.content_hash, repeated.content_hash);
+	assert.deepEqual(inline.parts, []);
+
+	const multibyte = '汉🙂'.repeat(32_000);
+	const split = sourceRecordModule.buildSourceCapturePlan({
+		source: 'meeting-2026-08-06', sourceKind: 'transcript', filename: 'meeting', content: multibyte,
+	});
+	assert.equal(split.route, '01_knowledge/sources/transcripts');
+	assert.equal(split.inline_content, '');
+	assert.equal(split.parts.length > 1, true);
+	assert.equal(split.parts.every((part) => part.byte_length <= sourceRecordModule.SOURCE_PART_MAX_BYTES), true);
+	assert.equal(split.parts.map((part) => part.content).join(''), multibyte);
+	assert.deepEqual(split.parts.map((part) => part.part_number), split.parts.map((_, index) => index + 1));
+	assert.equal(new Set(split.parts.map((part) => part.content_hash)).size > 1, true);
+
+	assert.throws(() => sourceRecordModule.buildSourceCapturePlan({
+		source: 'oversized', sourceKind: 'file', filename: 'oversized',
+		content: 'x'.repeat(sourceRecordModule.SOURCE_PART_MAX_BYTES * (sourceRecordModule.SOURCE_PART_MAX_COUNT + 1)),
+	}), /bounded 16-part limit/);
+
+	console.log(JSON.stringify({
+		suite: 'core-source-record', result: 'pass',
+		rows: ['kind-alias-routing', 'stable-id-and-hash', 'utf8-bounded-parts', 'part-limit'],
+	}));
+}
+
+async function runLifecycleGraphFixtureTests() {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-lifecycle-graph-'));
+	const vaultRoot = createFixture(root);
+	const globalHubPath = '01_knowledge/memory/global/index.md';
+	const recordPath = '01_knowledge/memory/global/agents/codex/record.md';
+	const sourcePath = '01_knowledge/sources/web/source.md';
+	const partPath = '01_knowledge/sources/web/source.parts/part-0001.md';
+	const renamedPartPath = '01_knowledge/sources/web/source.parts/part-0001-renamed.md';
+	const sourceId = 'source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+	const globalHub = scannedCharacterizationNote(globalHubPath, '# Global memory\n');
+	const sourceIndex = scannedCharacterizationNote(sourcePath, [
+		'---', 'type: source_capture', `source_id: ${sourceId}`,
+		`part_manifest: [${partPath}]`, '---', '# Source', '', `[[${partPath.replace(/\.md$/, '')}]]`,
+	].join('\n'));
+	const sourcePartMarkdown = [
+		'---', 'type: source_part', `source_id: ${sourceId}`, `parent_source: ${sourcePath}`,
+		'part_number: 1', 'part_count: 1', '---', '# Part', '', `[[${sourcePath.replace(/\.md$/, '')}]]`,
+	].join('\n');
+	const sourcePart = scannedCharacterizationNote(partPath, sourcePartMarkdown);
+	const builtRecord = memoryRecordModule.buildMemoryRecord({
+		path: recordPath, memory_id: 'memory-lifecycle-graph', scope: 'global', project_id: null,
+		agent_type: 'codex', operation_id: 'operation-lifecycle-graph', memory_kind: 'fact',
+		claim_key: 'lifecycle graph relation parity', authority: 'source', confidence_level: 'supported',
+		declared_state: 'active', observed_at: '2026-08-06T00:00:00Z', valid_from: null,
+		valid_to: null, last_verified_at: null, evidence: [sourcePath], supersedes: [], contradicts: [],
+		project_hub: null, global_hub: globalHubPath, related_wiki: [], related_sources: [sourcePath],
+		body: ['# Graph record', '', `[[${globalHubPath.replace(/\.md$/, '')}]]`,
+			`[Source](../../../sources/web/source.md)`, '[[01_knowledge/wiki/missing-target]]'].join('\n'),
+	});
+	const record = scannedCharacterizationNote(recordPath, builtRecord.markdown);
+	const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+	await index.rebuild(characterizationScan(vaultRoot, [globalHub, sourceIndex, sourcePart, record]));
+	const initial = await index.readView();
+	assert.equal(initial.graph.outgoing.get(recordPath)?.includes(globalHubPath), true);
+	assert.equal(initial.graph.outgoing.get(recordPath)?.includes(sourcePath), true);
+	assert.equal(initial.graph.incoming.get(globalHubPath)?.includes(recordPath), true);
+	assert.equal(initial.graph.incoming.get(sourcePath)?.includes(recordPath), true);
+	assert.equal(initial.graph.unresolvedEdges.some((edge) => edge.sourcePath === recordPath), true);
+	assert.deepEqual(builtRecord.record.related_sources, [`[[${sourcePath.replace(/\.md$/, '')}]]`]);
+	assert.match(sourcePartMarkdown, new RegExp(`source_id: ${sourceId}`));
+
+	const renamedPart = scannedCharacterizationNote(renamedPartPath, sourcePart.content);
+	await index.applyScanned({
+		kind: 'rename', path: partPath, newPath: renamedPartPath, sequence: 1,
+		fileVersion: knowledgeIndexModule.computeFileVersion(renamedPart.size, renamedPart.modifiedAt),
+		contentHash: renamedPart.contentHash,
+	}, renamedPart);
+	const afterRename = await index.readView();
+	const rebuilt = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+	await rebuilt.rebuild(characterizationScan(vaultRoot, [globalHub, sourceIndex, renamedPart, record]));
+	assert.deepEqual(normalizeReadView(afterRename), normalizeReadView(await rebuilt.readView()));
+
+	console.log(JSON.stringify({
+		suite: 'core-lifecycle-graph-fixture', result: 'pass',
+		rows: ['global-hub-backlink', 'wikilink-and-markdown-link', 'related-source-parity',
+			'unresolved-relation', 'source-part-identity', 'rename-rebuild-convergence'],
+	}));
+}
+
+async function runLifecycleDiagnosticTests() {
+	const vaultRoot = '/tmp/tracekeeper-lifecycle-diagnostics';
+	const globalHubPath = '01_knowledge/memory/global/index.md';
+	const projectHubPath = '01_knowledge/memory/projects/alpha/index.md';
+	const sourcePath = '01_knowledge/sources/web/source.md';
+	const partOnePath = '01_knowledge/sources/web/source.parts/part-0001.md';
+	const partTwoPath = '01_knowledge/sources/web/source.parts/part-0002.md';
+	const notes = [
+		scannedCharacterizationNote(globalHubPath, '# Global memory'),
+		scannedCharacterizationNote(projectHubPath, '# Alpha'),
+		scannedCharacterizationNote(sourcePath, [
+			'---', 'type: source_capture', 'source_id: source-one',
+			`part_manifest: [${partOnePath}]`, '---', '# Source', '', `[[${partOnePath.replace(/\.md$/, '')}]]`,
+		].join('\n')),
+		scannedCharacterizationNote(partOnePath, [
+			'---', 'type: source_part', 'source_id: source-wrong', `parent_source: ${sourcePath}`,
+			'part_number: 1', 'part_count: 3', '---', '# Part 1',
+		].join('\n')),
+		scannedCharacterizationNote(partTwoPath, [
+			'---', 'type: source_part', 'source_id: source-one', `parent_source: ${sourcePath}`,
+			'part_number: 3', 'part_count: 3', '---', '# Part 2',
+		].join('\n')),
+		scannedCharacterizationNote('01_knowledge/sources/web/source.parts/orphan.md', [
+			'---', 'type: source_part', 'source_id: orphan', 'parent_source: missing-source.md',
+			'part_number: 1', 'part_count: 1', '---', '# Orphan',
+		].join('\n')),
+		scannedCharacterizationNote('01_knowledge/memory/global/memory.md', '# Legacy memory'),
+		scannedCharacterizationNote('01_knowledge/memory/global/proposal.md', [
+			'---', 'type: memory_proposal', '---', '# Proposal',
+		].join('\n')),
+		scannedCharacterizationNote('01_knowledge/memory/global/invalid.md', [
+			'---', 'schema_version: 2', 'type: memory_record', 'scope: global',
+			'memory_id: invalid', 'agent_type: codex', 'operation_id: invalid-op', 'memory_kind: fact',
+			'authority: source', 'confidence_level: verified', 'declared_state: active',
+			'observed_at: 2026-08-06T00:00:00Z', 'valid_from: bad-time', 'valid_to: 2026-01-01T00:00:00Z',
+			'evidence: []', 'supersedes: []', 'contradicts: []', `global_hub: ${globalHubPath}`,
+			'related_wiki: []', 'related_sources: []', '---', '# Invalid',
+		].join('\n')),
+	];
+
+	const makeRecordNote = (memoryId, overrides = {}) => {
+		const recordPath = overrides.path || `01_knowledge/memory/global/agents/codex/facts/${memoryId}.md`;
+		const built = memoryRecordModule.buildMemoryRecord({
+			path: recordPath, memory_id: memoryId, scope: 'global', project_id: null,
+			agent_type: 'codex', operation_id: `operation-${memoryId}`, memory_kind: 'fact',
+			claim_key: 'diagnostic claim', authority: 'source', confidence_level: 'supported',
+			declared_state: 'active', observed_at: '2026-08-01T00:00:00Z', valid_from: null,
+			valid_to: null, last_verified_at: '2025-01-01T00:00:00Z', evidence: [sourcePath],
+			supersedes: [], contradicts: [], project_hub: null, global_hub: globalHubPath,
+			related_wiki: [], related_sources: [sourcePath],
+			body: `# ${memoryId}\n\n[[${globalHubPath.replace(/\.md$/, '')}]]`,
+			...overrides,
+		});
+		return scannedCharacterizationNote(recordPath, built.markdown);
+	};
+	notes.push(
+		makeRecordNote('duplicate-a'),
+		makeRecordNote('duplicate-b'),
+		makeRecordNote('duplicate-id-a', { memory_id: 'duplicate-memory-id', claim_key: 'duplicate id a' }),
+		makeRecordNote('duplicate-id-b', { memory_id: 'duplicate-memory-id', claim_key: 'duplicate id b' }),
+		makeRecordNote('dangling', { claim_key: 'dangling claim', supersedes: ['missing-memory'] }),
+		makeRecordNote('cycle-a', { claim_key: 'cycle claim', supersedes: ['cycle-b'] }),
+		makeRecordNote('cycle-b', { claim_key: 'cycle claim', supersedes: ['cycle-a'] }),
+		makeRecordNote('cross-target', { claim_key: 'cross target' }),
+		makeRecordNote('cross-source', { claim_key: 'cross source', supersedes: ['cross-target'] }),
+		makeRecordNote('unresolved-hub', {
+			claim_key: 'unresolved hub', global_hub: '01_knowledge/memory/global/missing-index.md',
+		}),
+		makeRecordNote('mismatched-hub', { claim_key: 'mismatched hub', global_hub: sourcePath }),
+		makeRecordNote('missing-source', {
+			claim_key: 'missing source claim', evidence: ['01_knowledge/sources/web/missing.md'],
+			related_sources: ['01_knowledge/sources/web/missing.md'],
+		}),
+		scannedCharacterizationNote('01_knowledge/memory/global/missing-hub.md', [
+			'---', 'schema_version: 2', 'type: memory_record', 'memory_id: missing-hub',
+			'scope: global', 'agent_type: codex', 'operation_id: operation-missing-hub',
+			'memory_kind: fact', 'claim_key: missing hub', 'authority: agent',
+			'confidence_level: inferred', 'declared_state: active', 'observed_at: 2026-08-06T00:00:00Z',
+			'evidence: []', 'supersedes: []', 'contradicts: []', 'related_wiki: []',
+			'related_sources: []', '---', '# Missing Hub',
+		].join('\n')),
+	);
+
+	const report = lintModule.lintNotes(vaultRoot, notes, {
+		graphProfile: 'advisory', now: '2026-08-06T00:00:00Z', staleAfterDays: 30,
+		maxDirectoryRecords: 1, maxSourceParts: 1,
+	});
+	const kinds = new Set(report.issues.map((row) => row.kind));
+	for (const expected of [
+		'memory_schema_invalid', 'memory_claim_key_missing', 'memory_legacy_unkeyed',
+		'memory_duplicate_id', 'memory_lifecycle_dangling_relation',
+		'memory_lifecycle_cross_claim_relation', 'memory_lifecycle_cycle',
+		'memory_lifecycle_duplicate_current', 'memory_temporal_invalid',
+		'memory_verification_stale', 'memory_verified_without_evidence',
+		'memory_authority_without_evidence', 'memory_evidence_unresolved',
+		'memory_hub_missing', 'memory_hub_unresolved', 'memory_hub_scope_mismatch',
+		'memory_project_hub_parent_missing',
+		'memory_related_source_unresolved', 'memory_relation_body_parity',
+		'source_part_parent_unresolved', 'source_part_identity_mismatch',
+		'source_part_manifest_invalid', 'storage_directory_growth', 'graph_yaml_only_relation',
+	]) assert.equal(kinds.has(expected), true, `missing lifecycle diagnostic: ${expected}`);
+	assert.equal(notes.some((note) => note.frontmatter.claim_key === 'diagnostic claim'), true);
+	const doctor = lifecycleDiagnosticsModule.buildLifecycleDoctorReport(notes, {
+		now: '2026-08-06T00:00:00Z', maxDirectoryRecords: 1, maxSourceParts: 1,
+	});
+	assert.deepEqual(doctor.legacy_candidates.map((candidate) => candidate.path), [
+		'01_knowledge/memory/global/memory.md',
+	]);
+	assert.equal(doctor.legacy_candidates[0].contentHash.length > 0, true);
+	assert.deepEqual(doctor.legacy_candidates[0].suggestions, []);
+	assert.equal(doctor.directory_counts.some((row) => row.directory === '01_knowledge/sources/web/source.parts' && row.record_count === 3), true);
+
+	console.log(JSON.stringify({
+		suite: 'core-lifecycle-diagnostics', result: 'pass',
+		rows: [...kinds].filter((kind) => kind.startsWith('memory_') || kind.startsWith('source_') || kind === 'storage_directory_growth').sort(),
+	}));
+}
+
+async function runKnowledgeReadIndexTests() {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-read-index-'));
+	const vaultRoot = createFixture(root);
+	const targetPath = '01_knowledge/wiki/topics/target.md';
+	const sourcePath = '01_knowledge/wiki/source.md';
+	const unrelatedPath = '01_knowledge/wiki/unrelated.md';
+	const target = scannedCharacterizationNote(targetPath, '---\naliases: [稳定主题]\ntags: [architecture]\n---\n# Target\n\nTarget body');
+	const source = scannedCharacterizationNote(sourcePath, '# Source\n\n[[稳定主题]]');
+	const unrelated = scannedCharacterizationNote(unrelatedPath, '# Unrelated\n\nNo links');
+	const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+	await index.rebuild(characterizationScan(vaultRoot, [target, source, unrelated]));
+	const initialView = await index.readView();
+	assert.equal(initialView.catalog.size, 3);
+	assert.equal('content' in initialView.catalog.get(targetPath), false);
+	assert.equal('text' in initialView.catalog.get(targetPath), false);
+	assert.deepEqual(initialView.graph.outgoing.get(sourcePath), [targetPath]);
+	assert.equal(initialView.lexical.postings.get('稳定')?.includes(targetPath), true);
+
+	const modifiedTarget = scannedCharacterizationNote(targetPath, '---\naliases: [稳定主题]\ntags: [systems]\n---\n# Target\n\nChanged body');
+	await index.applyScanned({
+		kind: 'modify', path: targetPath, sequence: 1,
+		fileVersion: knowledgeIndexModule.computeFileVersion(modifiedTarget.size, modifiedTarget.modifiedAt),
+		contentHash: modifiedTarget.contentHash,
+	}, modifiedTarget);
+	const modifiedView = await index.readView();
+	assert.equal(modifiedView.generation, initialView.generation + 1);
+	assert.equal(modifiedView.last_update.mode, 'incremental');
+	assert.equal(modifiedView.last_update.affectedPaths.includes(unrelatedPath), false);
+	assert.deepEqual(modifiedView.scopes.byTag.get('systems'), [targetPath]);
+	assert.equal(modifiedView.scopes.byTag.has('architecture'), false);
+	const modifiedRebuild = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+	await modifiedRebuild.rebuild(characterizationScan(vaultRoot, [modifiedTarget, source, unrelated]));
+	assert.deepEqual(normalizeReadView(modifiedView), normalizeReadView(await modifiedRebuild.readView()));
+
+	const dynamicSource = scannedCharacterizationNote('01_knowledge/wiki/dynamic-source.md', '[[Dynamic Alias]]');
+	const dynamicTarget = scannedCharacterizationNote('01_knowledge/wiki/dynamic-target.md', '---\naliases: [Dynamic Alias]\n---\n# Dynamic');
+	const dynamic = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+	await dynamic.rebuild(characterizationScan(vaultRoot, [dynamicSource, unrelated]));
+	await dynamic.applyScanned({
+		kind: 'create', path: dynamicTarget.relativePath, sequence: 1,
+		fileVersion: knowledgeIndexModule.computeFileVersion(dynamicTarget.size, dynamicTarget.modifiedAt),
+		contentHash: dynamicTarget.contentHash,
+	}, dynamicTarget);
+	assert.deepEqual((await dynamic.readView()).graph.outgoing.get(dynamicSource.relativePath), [dynamicTarget.relativePath]);
+	await dynamic.applyScanned({
+		kind: 'delete', path: dynamicTarget.relativePath, sequence: 2, fileVersion: '',
+	});
+	const afterDelete = await dynamic.readView();
+	assert.deepEqual(afterDelete.graph.outgoing.get(dynamicSource.relativePath), []);
+	const deleteRebuild = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+	await deleteRebuild.rebuild(characterizationScan(vaultRoot, [dynamicSource, unrelated]));
+	assert.deepEqual(normalizeReadView(afterDelete), normalizeReadView(await deleteRebuild.readView()));
+
+	const memoryPath = '01_knowledge/memory/global/memory-read-index.md';
+	const memoryMarkdown = memoryRecordModule.buildMemoryRecord({
+		path: memoryPath, memory_id: 'memory-read-index', scope: 'global', project_id: null,
+		agent_type: 'codex', operation_id: 'operation-read-index', memory_kind: 'decision',
+		claim_key: 'Read index ownership', authority: 'source', confidence_level: 'supported',
+		declared_state: 'active', observed_at: '2026-08-06T00:00:00Z', valid_from: null,
+		valid_to: null, last_verified_at: null, evidence: ['01_knowledge/sources/read-index.md'],
+		supersedes: [], contradicts: [], project_hub: null,
+		global_hub: '01_knowledge/memory/global/index.md', related_wiki: [],
+		related_sources: ['01_knowledge/sources/read-index.md'], body: 'The read index is generation bound.',
+	}).markdown;
+	const memory = scannedCharacterizationNote(memoryPath, memoryMarkdown);
+	await index.applyScanned({
+		kind: 'create', path: memoryPath, sequence: 2,
+		fileVersion: knowledgeIndexModule.computeFileVersion(memory.size, memory.modifiedAt),
+		contentHash: memory.contentHash,
+	}, memory);
+	const memoryView = await index.readView();
+	assert.equal(memoryView.memory.byId.get('memory-read-index')?.claim_key, 'read index ownership');
+	assert.equal(memoryView.memory.lifecycle.current[0]?.record.memory_id, 'memory-read-index');
+	const projectV1 = projectMemoryModule.buildProjectMemoryEntry({
+		project_key: 'alpha', project_id: 'project-alpha', agent_type: 'codex', task_id: 'task-v1',
+		operation_id: 'operation-v1', operation_kind: 'task', memory_kinds: ['decision'],
+		status: 'active', created_at: '2026-08-05T00:00:00.000Z',
+		project_hub: '[[01_knowledge/memory/projects/alpha/index.md]]', related_wiki: [], supersedes: [],
+		body: 'Legacy project memory remains readable.',
+	});
+	const projectV1Markdown = [
+		'---',
+		...Object.entries(projectV1.entry)
+			.filter(([key]) => key !== 'path')
+			.map(([key, value]) => `${key}: ${JSON.stringify(value)}`),
+		'---', '', projectV1.body,
+	].join('\n');
+	const projectV1Note = scannedCharacterizationNote(projectV1.entry.path, projectV1Markdown);
+	await index.applyScanned({
+		kind: 'create', path: projectV1.entry.path, sequence: 3,
+		fileVersion: knowledgeIndexModule.computeFileVersion(projectV1Note.size, projectV1Note.modifiedAt),
+		contentHash: projectV1Note.contentHash,
+	}, projectV1Note);
+	const dualReadView = await index.readView();
+	assert.equal(dualReadView.memory.lifecycle.legacy.some((row) =>
+		row.projection.kind === 'project_v1' && row.projection.operation_id === 'operation-v1'
+	), true);
+
+	const filePath = '01_knowledge/wiki/fresh-content.md';
+	writeFile(filePath, '# Fresh\n\nFirst body', vaultRoot);
+	const diskNote = scannedCharacterizationNote(filePath, '# Fresh\n\nFirst body');
+	await index.applyScanned({
+		kind: 'create', path: filePath, sequence: 4,
+		fileVersion: knowledgeIndexModule.computeFileVersion(diskNote.size, diskNote.modifiedAt),
+		contentHash: diskNote.contentHash,
+	}, diskNote);
+	const boundView = await index.readView();
+	writeFile(filePath, '# Fresh\n\nSecond body', vaultRoot);
+	const selected = await boundView.contentReader.read(filePath);
+	assert.match(selected.content, /Second body/);
+	assert.equal(selected.generation, boundView.generation);
+	assert.equal(selected.staleAgainstView, true);
+
+	const fallbackSourceA = scannedCharacterizationNote('01_knowledge/wiki/fallback-a.md', '[[稳定主题]]');
+	const fallbackSourceB = scannedCharacterizationNote('01_knowledge/wiki/fallback-b.md', '[[稳定主题]]');
+	const bounded = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot, maxIncrementalRenameImpact: 1 });
+	await bounded.rebuild(characterizationScan(vaultRoot, [modifiedTarget, fallbackSourceA, fallbackSourceB]));
+	const renamed = scannedCharacterizationNote('01_knowledge/wiki/topics/renamed.md', '---\naliases: [稳定主题]\ntags: [systems]\n---\n# Target\n\nChanged body');
+	await bounded.applyScanned({
+		kind: 'rename', path: targetPath, newPath: renamed.relativePath, sequence: 1,
+		fileVersion: knowledgeIndexModule.computeFileVersion(renamed.size, renamed.modifiedAt),
+		contentHash: renamed.contentHash,
+	}, renamed);
+	const fallbackView = await bounded.readView();
+	assert.equal(fallbackView.last_update.mode, 'rename_rebuild_fallback');
+	assert.match(fallbackView.warnings[0], /rename_rebuild_fallback/);
+	assert.deepEqual(fallbackView.graph.outgoing.get(fallbackSourceA.relativePath), [renamed.relativePath]);
+
+	const rebuilt = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+	await rebuilt.rebuild(characterizationScan(vaultRoot, [renamed, fallbackSourceA, fallbackSourceB]));
+	assert.deepEqual(normalizeReadView(fallbackView), normalizeReadView(await rebuilt.readView()));
+
+	console.log(JSON.stringify({
+		suite: 'core-knowledge-read-index', result: 'pass',
+		rows: [
+			'lightweight-generation-bound-view', 'bounded-chinese-grams',
+			'incremental-create-modify-delete', 'incremental-scope-graph-postings',
+			'memory-v2-lifecycle-index', 'memory-v1-dual-read-index',
+			'targeted-fresh-content-reader', 'observable-rename-rebuild-fallback',
+			'full-rebuild-equivalence',
+		],
+	}));
+}
+
+run().then(runMemoryRecordV2Tests).then(runMemoryLifecycleTests).then(runSourceRecordTests).then(runLifecycleGraphFixtureTests).then(runLifecycleDiagnosticTests).then(runKnowledgeReadIndexTests).catch((error) => {
 	console.error(error);
 	process.exitCode = 1;
 });

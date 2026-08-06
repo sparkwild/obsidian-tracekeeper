@@ -22,6 +22,7 @@ export interface CaptureSourceNote {
     warnings: string[];
 }
 export interface CaptureSourceWriteInput {
+    directory: string;
     filename: string;
     frontmatter: Record<string, unknown>;
     body: string;
@@ -40,7 +41,7 @@ export interface CaptureSourceApplicationDependencies {
         label: string;
         value: string;
     }>): void;
-    findOwnedSourceNote(filename: string, operationId: string): Promise<CaptureSourceNote | null>;
+    findOwnedSourceNote(directory: string, filename: string, operationId: string): Promise<CaptureSourceNote | null>;
     writeSourceNote(input: CaptureSourceWriteInput): Promise<CaptureSourceNote>;
     updateTaskSourceCapture(taskId: string | null, sourcePath: string): Promise<void>;
 }
@@ -61,6 +62,12 @@ export interface CaptureSourceApplicationResult {
     metadata: {
         source: string;
         mode: CaptureSourceMode;
+        source_kind: string;
+        source_id: string;
+        content_hash: string;
+        route: string;
+        index_path: string;
+        part_manifest: string[];
     };
 }
 type CaptureSourceMode = 'external_reference' | 'extracted_snapshot' | 'local_copy';

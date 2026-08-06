@@ -41,7 +41,9 @@ product and a bounded Agent integration.
 ## Workspace And Tooling
 
 - `packages/contracts` owns structured public tool contracts.
-- `packages/core` owns reusable knowledge and Vault primitives.
+- `packages/core` owns reusable knowledge and Vault primitives, including
+  MemoryRecord v2 parsing and lifecycle resolution, typed Source planning, and
+  Doctor diagnostics.
 - `packages/mcp-runtime` owns transport, authentication, sessions, protocol
   surfaces, and application adaptation.
 - `apps/obsidian-plugin` and `apps/mcp-server` are composition roots.

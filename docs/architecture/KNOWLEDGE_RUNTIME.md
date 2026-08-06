@@ -47,7 +47,17 @@ truth. A stale replacement fails instead of silently overwriting newer content.
 The index is disposable. Status exposes readiness and generation, and a rebuild
 can reproduce it from Markdown.
 
-## Project Memory
+## Memory Lifecycle
+
+The global Memory hub is `01_knowledge/memory/global/index.md`; project hubs
+live at `01_knowledge/memory/projects/<project-key>/index.md` and link to the
+projects parent hub. MemoryRecord v2 is the writable record shape for both
+scopes. It requires a stable claim identity, authority, confidence, declared
+state, temporal fields, evidence, and explicit supersession or contradiction
+relations. The read model resolves these immutable records into `current`,
+`history`, and `conflicts` without rewriting historical Markdown. Invalid,
+cyclic, duplicate-current, or unresolved records fail into review diagnostics
+instead of an arbitrary winner.
 
 One stable `project_id` owns a project hub at
 `01_knowledge/memory/projects/<project-key>/index.md`. The display hint and
@@ -64,14 +74,40 @@ through the production repository's `FileManager.generateMarkdownLink()`
 boundary, so the shared native edge DTO and Obsidian Backlinks provide the
 aggregate without rewriting the hub.
 
-Legacy project `memory.md` notes remain byte-preserved read members. They are
-included in project Recall and the complete project-memory catalog but are
-never represented as operation records. Recall remains relevance-ranked and
-candidate-bounded. The read-only `tracekeeper.project_memory` catalog projects
-metadata-only rows over one snapshot generation, binds cursors to the project,
-sort, and generation, and fails closed on incomplete or contradictory
-identity. Full note bodies remain behind `tracekeeper.read_note`. Bases are
-optional presentation and are not a storage or discovery dependency.
+Legacy project `memory.md` and other unkeyed Memory notes remain byte-preserved
+read members but never become v2 operation records automatically. Recall
+remains relevance-ranked and candidate-bounded. The only public catalog,
+read-only `tracekeeper.memory`, projects metadata-only rows for global or
+project scope and `current`, `history`, `conflicts`, or `all` view over one
+snapshot generation. Its cursor binds scope, project identity where present,
+view, sort, and generation, and it fails closed on stale pagination or
+incomplete or contradictory project identity. Full note bodies remain behind
+`tracekeeper.read_note`. No public project-specific catalog alias exists,
+and Bases are optional presentation rather than a storage or discovery
+dependency.
+
+## Source Ownership
+
+Source capture normalizes input to `web`, `file`, or `transcript`, then routes
+it under the matching `01_knowledge/sources/` owner. The stable Source index
+records `source_id`, content hash, route, and part manifest. Content up to the
+inline bound remains in the index note; larger UTF-8 content is split into a
+bounded number of size-bounded, individually hashed `source_part` notes. The
+index visibly links every part, each part identifies its parent Source, and
+knowledge relations point to the index so parts do not appear as independent
+user-level sources.
+
+## Doctor And Legacy Promotion
+
+`tracekeeper.lint` v3 combines structure, graph, Memory lifecycle, claim,
+authority/evidence, Source-part, and bounded-growth diagnostics in one
+read-only Doctor result. Its legacy candidates contain path, hash, scope, and
+non-authoritative identity suggestions only. The plugin promotion controller
+binds a preview to the ready snapshot generation, candidate hashes, and exact
+proposal bytes; apply re-reads the Doctor snapshot and creates only a pending
+review proposal for a unique suggestion. Missing or ambiguous identity stays
+blocked. The source legacy note is never rewritten, moved, deleted, or silently
+promoted.
 
 ## Recoverable Writes
 

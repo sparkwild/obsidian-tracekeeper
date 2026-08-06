@@ -45,6 +45,9 @@ function boundedWritebackPayload(payload) {
         || (payload.taskPath !== null && payload.taskPath.length > 2048)
         || typeof payload.taskHadTargetReference !== 'boolean'
         || typeof payload.taskHadProposalReference !== 'boolean'
+        || (payload.effectKind !== undefined
+            && payload.effectKind !== 'append'
+            && payload.effectKind !== 'create_memory_record')
         || (hasPartialStableProposalReferenceFlags && !hasStableProposalReferenceFlags)
         || (payload.taskId === null
             && (payload.taskPath !== null
@@ -115,6 +118,7 @@ function boundedWritebackPayload(payload) {
         activityAgentId: payload.activityAgentId,
         activitySessionId: payload.activitySessionId,
         activityClientName: payload.activityClientName,
+        ...(payload.effectKind ? { effectKind: payload.effectKind } : {}),
     };
 }
 function isWritebackBoundaryConflict(error) {

@@ -20,7 +20,7 @@ const {
 	GENERIC_TOOL_OUTPUT_SCHEMA,
 	START_TASK_OUTPUT_SCHEMA,
 	RECALL_OUTPUT_SCHEMA,
-	PROJECT_MEMORY_OUTPUT_SCHEMA,
+	MEMORY_OUTPUT_SCHEMA,
 	FINISH_TASK_OUTPUT_SCHEMA,
 } = contracts;
 
@@ -49,6 +49,23 @@ let visibilityMissing = 0;
 const toolNameSet = new Set();
 const actualNoneIdempotencyTools = new Set();
 const actualKeyedIdempotencyTools = new Set();
+
+function hasSchemaProperty(schema, property) {
+	if (!schema || typeof schema !== 'object') {
+		return false;
+	}
+	if (Object.prototype.hasOwnProperty.call(schema.properties || {}, property)) {
+		return true;
+	}
+	if (Array.isArray(schema.oneOf)) {
+		return schema.oneOf.some((branch) => {
+			return !!(
+				branch && typeof branch === 'object' && Object.prototype.hasOwnProperty.call(branch.properties || {}, property)
+			);
+		});
+	}
+	return false;
+}
 
 assert(Array.isArray(toolContracts), 'toolContracts should be an array');
 assert(toolContracts.length > 0, 'toolContracts should not be empty');
@@ -153,44 +170,45 @@ assert.strictEqual(visibilityMissing, 0, 'non-public tools without deprecated co
 assert.deepStrictEqual(START_TASK_OUTPUT_SCHEMA, getContractByName('tracekeeper.start_task').outputSchema, 'start_task output schema must use START_TASK_OUTPUT_SCHEMA');
 assert.deepStrictEqual(RECALL_OUTPUT_SCHEMA, getContractByName('tracekeeper.recall').outputSchema, 'recall output schema must use RECALL_OUTPUT_SCHEMA');
 assert.deepStrictEqual(
-	PROJECT_MEMORY_OUTPUT_SCHEMA,
-	getContractByName('tracekeeper.project_memory').outputSchema,
-	'project_memory output schema must use PROJECT_MEMORY_OUTPUT_SCHEMA',
+		MEMORY_OUTPUT_SCHEMA,
+		getContractByName('tracekeeper.memory').outputSchema,
+		'memory output schema must use MEMORY_OUTPUT_SCHEMA',
 );
 assert.deepStrictEqual(FINISH_TASK_OUTPUT_SCHEMA, getContractByName('tracekeeper.finish_task').outputSchema, 'finish_task output schema must use FINISH_TASK_OUTPUT_SCHEMA');
 
 const recallContract = getContractByName('tracekeeper.recall');
 assert.match(recallContract.description, /active local Obsidian Vault/i, 'recall should identify the local Vault boundary');
 
-const projectMemoryContract = getContractByName('tracekeeper.project_memory');
-assert.equal(projectMemoryContract.capability, 'vault.read');
-assert.equal(projectMemoryContract.risk, 'read-only');
-assert.equal(projectMemoryContract.effect, 'read');
-assert.equal(projectMemoryContract.idempotency, 'natural');
-assert.ok(projectMemoryContract.outputSchema.oneOf[0].required.includes('read_only'));
-assert.equal(projectMemoryContract.outputSchema.oneOf[0].properties.read_only.const, true);
-assert.deepStrictEqual(projectMemoryContract.inputSchema.required, ['action']);
-assert.deepStrictEqual(projectMemoryContract.inputSchema.properties.action.enum, ['list']);
-assert.equal(projectMemoryContract.inputSchema.properties.page_size.minimum, 1);
-assert.equal(projectMemoryContract.inputSchema.properties.page_size.maximum, 200);
-for (const property of ['project_hint', 'project_id', 'repo_path', 'repo', 'project_path', 'cursor', 'page_size']) {
+const memoryContract = getContractByName('tracekeeper.memory');
+assert.equal(memoryContract.capability, 'vault.read');
+assert.equal(memoryContract.risk, 'read-only');
+assert.equal(memoryContract.effect, 'read');
+assert.equal(memoryContract.idempotency, 'natural');
+assert.ok(memoryContract.outputSchema.oneOf[0].required.includes('read_only'));
+assert.equal(memoryContract.outputSchema.oneOf[0].properties.read_only.const, true);
+assert.deepStrictEqual(memoryContract.inputSchema.required, undefined);
+assert.deepStrictEqual(memoryContract.inputSchema.properties.scope.enum, ['global', 'project']);
+assert.deepStrictEqual(memoryContract.inputSchema.properties.view.enum, ['current', 'history', 'conflicts', 'all']);
+assert.equal(memoryContract.inputSchema.properties.page_size.minimum, 1);
+assert.equal(memoryContract.inputSchema.properties.page_size.maximum, 200);
+for (const property of ['scope', 'view', 'project_hint', 'project_id', 'repo_path', 'repo', 'project_path', 'cursor', 'page_size']) {
 	assert(
-		Object.prototype.hasOwnProperty.call(projectMemoryContract.inputSchema.properties, property),
-		`project_memory should expose ${property}`,
+		Object.prototype.hasOwnProperty.call(memoryContract.inputSchema.properties, property),
+		`memory should expose ${property}`,
 	);
 }
 assert.equal(
-	PUBLIC_TOOL_NAME_ORDER.indexOf('tracekeeper.project_memory'),
+	PUBLIC_TOOL_NAME_ORDER.indexOf('tracekeeper.memory'),
 	PUBLIC_TOOL_NAME_ORDER.indexOf('tracekeeper.recall') + 1,
-	'project_memory must follow recall in the public order',
+	'memory must follow recall in the public order',
 );
 assert.equal(
 	PUBLIC_TOOL_NAME_ORDER.indexOf('tracekeeper.read_note'),
-	PUBLIC_TOOL_NAME_ORDER.indexOf('tracekeeper.project_memory') + 1,
-	'read_note must follow project_memory in the public order',
+	PUBLIC_TOOL_NAME_ORDER.indexOf('tracekeeper.memory') + 1,
+	'read_note must follow memory in the public order',
 );
-assert.match(projectMemoryContract.description, /metadata only/i);
-assert.match(projectMemoryContract.description, /read_note/i);
+assert.match(memoryContract.description, /metadata only/i);
+assert.match(memoryContract.description, /read_note/i);
 
 const finishContract = getContractByName('tracekeeper.finish_task');
 assert.match(
@@ -208,10 +226,47 @@ assert.match(
 	/01_knowledge\/wiki\/\*\*/i,
 	'propose_memory target_note should describe the local Wiki convention',
 );
+for (const property of [
+	'claim_key',
+	'proposed_authority',
+	'proposed_confidence',
+	'declared_state',
+	'observed_at',
+	'valid_from',
+	'valid_to',
+	'last_verified_at',
+	'evidence',
+	'supersedes',
+	'contradicts',
+]) {
+	assert(
+		Object.prototype.hasOwnProperty.call(proposeMemoryContract.inputSchema.properties, property),
+		`proposeMemoryContract should expose ${property}`,
+	);
+}
+const finishTaskContract = getContractByName('tracekeeper.finish_task');
+for (const property of ['memory_candidate_records']) {
+	assert(
+		Object.prototype.hasOwnProperty.call(finishTaskContract.inputSchema.properties, property),
+		`finish_task should expose ${property}`,
+	);
+}
 for (const property of ['project_id', 'repo_path']) {
 	assert(
 		Object.prototype.hasOwnProperty.call(proposeMemoryContract.inputSchema.properties, property),
 		`propose_memory should expose ${property}`,
+	);
+}
+for (const property of ['record_identity', 'predicted_record', 'predicted_state', 'proposal_transition_preview']) {
+	assert(
+		hasSchemaProperty(proposeMemoryContract.outputSchema, property),
+		`propose_memory output should expose ${property}`,
+	);
+}
+for (const property of ['memory_candidate_records', 'memory_changes', 'proposal_transition_receipts']) {
+	assert(
+		hasSchemaProperty(finishTaskContract.outputSchema, property),
+		`finish_task output should expose ${property}`,
 	);
 }
 const applyApprovedWritebackContract = getContractByName('tracekeeper.apply_approved_writeback');
@@ -280,56 +335,44 @@ for (const contract of toolContracts) {
 	}
 }
 
-const projectMemoryCatalogSchema = PROJECT_MEMORY_OUTPUT_SCHEMA.oneOf[0];
+const memoryCatalogSchema = MEMORY_OUTPUT_SCHEMA.oneOf[0];
 assert.deepStrictEqual(
-	projectMemoryCatalogSchema.required,
+	memoryCatalogSchema.required,
 	[
 		'schema_version',
 		'ok',
 		'tool',
 		'read_only',
+		'scope',
+		'view',
 		'project_id',
-		'project_hub',
 		'generation',
 		'total',
-		'counts_by_agent',
 		'complete',
 		'sort',
 		'page',
 		'entries',
 	],
 );
-assert.equal(projectMemoryCatalogSchema.additionalProperties, false);
-assert.equal(projectMemoryCatalogSchema.properties.complete.const, true);
+assert.equal(memoryCatalogSchema.additionalProperties, false);
+assert.equal(memoryCatalogSchema.properties.complete.const, true);
 assert.equal(
-	projectMemoryCatalogSchema.properties.sort.const,
-	'created_at_desc_operation_id_path_asc',
+	memoryCatalogSchema.properties.sort.const,
+	'observed_at_desc_memory_id_path_asc',
 );
 assert.deepStrictEqual(
-	projectMemoryCatalogSchema.properties.page.required,
+	memoryCatalogSchema.properties.page.required,
 	['page_size', 'next_cursor'],
 );
-const projectMemoryEntrySchema = projectMemoryCatalogSchema.properties.entries.items;
-assert.equal(projectMemoryEntrySchema.oneOf.length, 2);
-for (const entrySchema of projectMemoryEntrySchema.oneOf) {
-	assert.equal(entrySchema.additionalProperties, false);
-	for (const forbidden of ['body', 'content', 'text', 'excerpt', 'absolutePath', 'absolute_path']) {
-		assert.equal(
-			Object.prototype.hasOwnProperty.call(entrySchema.properties, forbidden),
-			false,
-			`project_memory catalog descriptors must not expose ${forbidden}`,
-		);
-	}
-}
-assert.equal(projectMemoryEntrySchema.oneOf[0].properties.legacy.const, true);
-for (const nullableField of ['agent_type', 'operation_id', 'operation_kind', 'status', 'operation_hash', 'created_at']) {
+const memoryEntrySchema = memoryCatalogSchema.properties.entries.items;
+assert.equal(memoryEntrySchema.additionalProperties, false);
+for (const forbidden of ['body', 'content', 'text', 'excerpt', 'absolutePath', 'absolute_path']) {
 	assert.equal(
-		projectMemoryEntrySchema.oneOf[0].properties[nullableField].const,
-		null,
-		`legacy project-memory ${nullableField} must be null`,
+		Object.prototype.hasOwnProperty.call(memoryEntrySchema.properties, forbidden),
+		false,
+		`memory catalog descriptors must not expose ${forbidden}`,
 	);
 }
-assert.equal(projectMemoryEntrySchema.oneOf[1].properties.legacy.const, false);
 
 assert(Array.isArray(AGENT_ACTION_KINDS), 'AGENT_ACTION_KINDS should be an array');
 assert(AGENT_ACTION_KINDS.includes('tool_call'), 'agent action kind should include tool_call');

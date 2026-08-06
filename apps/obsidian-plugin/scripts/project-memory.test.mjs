@@ -95,7 +95,8 @@ try {
 			contents: [
 				"export { ObsidianKnowledgeIndexAdapter } from './src/knowledge-index-adapter';",
 				"export { ObsidianVaultRepository } from './src/adapters/obsidian-vault-repository';",
-				"export { ProjectMemoryApplicationService, buildProjectMemoryCatalog, projectProjectMemorySnapshot } from '../../packages/mcp-runtime/src/application/project-memory';",
+				"export { buildProjectMemoryCatalog, projectProjectMemorySnapshot } from '../../packages/mcp-runtime/src/application/project-memory';",
+				"export { buildMemoryRecord } from '../../packages/core/src/memory-record';",
 				"export { TFile, TFolder } from 'obsidian';",
 			].join('\n'),
 			resolveDir: pluginRoot,
@@ -128,10 +129,10 @@ try {
 	});
 
 	const {
+		buildMemoryRecord,
 		buildProjectMemoryCatalog,
 		ObsidianKnowledgeIndexAdapter,
 		ObsidianVaultRepository,
-		ProjectMemoryApplicationService,
 		projectProjectMemorySnapshot,
 		TFile,
 		TFolder,
@@ -703,7 +704,7 @@ try {
 			);
 			assert.equal(harness.records.get(target)?.content, '# First operation');
 		}],
-		['application-service-writes-file-manager-links-through-obsidian-repository', async () => {
+		['v2-record-writes-file-manager-links-through-obsidian-repository', async () => {
 			for (const linkStyle of ['wikilink', 'markdown']) {
 				const harness = createHarness(linkStyle);
 				seedProject(harness, { includeClaude: false });
@@ -713,28 +714,37 @@ try {
 					harness.vault,
 					harness.fileManager
 				);
-				const service = new ProjectMemoryApplicationService({
-					repository,
-					loadScan: () => adapter.scanSnapshot(tempRoot),
-					now: () => '2026-07-30T13:00:00.000Z',
-				});
-				const result = await service.createImmutableEntry({
-					projectId: 'project-alpha-id',
-					projectHint: 'project-alpha',
-					repoPath: '/tmp/project-alpha',
-					agentType: 'codex',
-					operationId: `native-${linkStyle}-operation`,
-					operationKind: 'propose_memory',
-					memoryKinds: ['task_decision'],
-					body: `Native ${linkStyle} project-memory body.`,
-					relatedWikiPaths: [WIKI_PATH],
-					relatedSourcePaths: [SOURCE_PATH],
-				});
-				assert.equal(result.status, 'created');
-				assert.match(
-					result.path,
-					new RegExp(`^${PROJECT_ROOT}/agents/codex/propose_memory-`)
+				const targetPath = `${PROJECT_ROOT}/agents/codex/v2-native-${linkStyle}.md`;
+				const relationTargets = [HUB_PATH, WIKI_PATH, SOURCE_PATH];
+				const relationLinks = relationTargets.map((targetPath) =>
+					repository.generateMarkdownLink(targetPath, `${PROJECT_ROOT}/agents/codex/v2-native-${linkStyle}.md`)
 				);
+				const built = buildMemoryRecord({
+					path: targetPath,
+					memory_id: `memory-native-${linkStyle}`,
+					scope: 'project',
+					project_id: 'project-alpha-id',
+					agent_type: 'codex',
+					operation_id: `native-${linkStyle}-operation`,
+					memory_kind: 'task_decision',
+					claim_key: `native ${linkStyle} links`,
+					authority: 'source',
+					confidence_level: 'supported',
+					declared_state: 'active',
+					observed_at: '2026-07-30T13:00:00.000Z',
+					valid_from: null,
+					valid_to: null,
+					last_verified_at: null,
+					evidence: [SOURCE_PATH],
+					supersedes: [],
+					contradicts: [],
+					project_hub: HUB_PATH,
+					global_hub: null,
+					related_wiki: [WIKI_PATH],
+					related_sources: [SOURCE_PATH],
+					body: [`Native ${linkStyle} project-memory body.`, '', ...relationLinks].join('\n'),
+				});
+				const result = await repository.createText(targetPath, built.markdown);
 				const created = harness.records.get(result.path)?.content;
 				assert.equal(typeof created, 'string');
 				assert.match(created, new RegExp(`Native ${linkStyle} project-memory body\\.`));
@@ -752,9 +762,9 @@ try {
 						targetPath,
 						sourcePath,
 					})),
-					[HUB_PATH, WIKI_PATH, SOURCE_PATH].map((targetPath) => ({
-						targetPath,
-						sourcePath: result.path,
+					[HUB_PATH, WIKI_PATH, SOURCE_PATH].map((relationTargetPath) => ({
+						targetPath: relationTargetPath,
+						sourcePath: targetPath,
 					}))
 				);
 			}

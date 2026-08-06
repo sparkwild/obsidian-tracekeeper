@@ -132,6 +132,7 @@ export interface McpJsonRpcHandlerOptions {
 	vaultRepository?: VaultRepository;
 	proposalTransitionPort?: ProposalTransitionPort;
 	knowledgeSnapshotProvider?: ToolInvocationContext['knowledgeSnapshotProvider'];
+	knowledgeReadViewProvider?: ToolInvocationContext['knowledgeReadViewProvider'];
 	graphProfile?: unknown;
 	memoryRules?: ToolInvocationContext['memoryRules'];
 	contentLanguage?: unknown;
@@ -147,6 +148,7 @@ export class McpJsonRpcHandler {
 	private vaultRepository?: VaultRepository;
 	private proposalTransitionPort?: ProposalTransitionPort;
 	private knowledgeSnapshotProvider?: ToolInvocationContext['knowledgeSnapshotProvider'];
+	private knowledgeReadViewProvider?: ToolInvocationContext['knowledgeReadViewProvider'];
 	private graphProfile?: unknown;
 	private memoryRules?: ToolInvocationContext['memoryRules'];
 	private contentLanguage?: unknown;
@@ -161,6 +163,7 @@ export class McpJsonRpcHandler {
 		this.vaultRepository = options.vaultRepository;
 		this.proposalTransitionPort = options.proposalTransitionPort;
 		this.knowledgeSnapshotProvider = options.knowledgeSnapshotProvider;
+		this.knowledgeReadViewProvider = options.knowledgeReadViewProvider;
 		this.graphProfile = options.graphProfile;
 		this.memoryRules = options.memoryRules;
 		this.contentLanguage = options.contentLanguage;
@@ -455,6 +458,7 @@ export class McpJsonRpcHandler {
 			vaultRepository: this.vaultRepository,
 			proposalTransitionPort: this.proposalTransitionPort,
 			knowledgeSnapshotProvider: this.knowledgeSnapshotProvider,
+			knowledgeReadViewProvider: this.knowledgeReadViewProvider,
 			graphProfile: this.graphProfile,
 			memoryRules: this.memoryRules,
 			contentLanguage: this.contentLanguage,

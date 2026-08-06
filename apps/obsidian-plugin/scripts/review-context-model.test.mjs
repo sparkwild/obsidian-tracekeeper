@@ -17,6 +17,8 @@ const proposal = {
 	proposedBy: 'agent',
 	relatedProject: 'Tracekeeper',
 	memoryScope: 'project',
+	projectId: 'tracekeeper-id',
+	claimKey: '',
 	taskId: 'task-42',
 	sourceSessionNote: '00_tracekeeper/work/sessions/task-42.md',
 	targetNote: '',
@@ -35,6 +37,21 @@ const proposal = {
 };
 
 const knowledgeNotes = [
+	{
+		path: '01_knowledge/memory/projects/tracekeeper/agents/codex/prior.md',
+		title: 'Prior memory',
+		excerpt: 'Prior lifecycle record.',
+		frontmatter: {
+			type: 'memory_record',
+			memory_id: 'memory-prior',
+			project_id: 'tracekeeper-id',
+			claim_key: 'project:review-lifecycle',
+			authority: 'agent',
+			confidence_level: 'supported',
+			declared_state: 'active',
+			observed_at: '2026-08-01T00:00:00.000Z',
+		},
+	},
 	{
 		path: '01_knowledge/memory/projects/tracekeeper/memory.md',
 		title: 'Tracekeeper memory',
@@ -172,6 +189,21 @@ try {
 	assert.equal(completedContexts[proposal.path].validity.isComplete, true);
 	assert.equal(completedContexts[proposal.path].target.exists, true);
 	assert.match(completedContexts[proposal.path].diffPreview, /Current project context/);
+	const lifecycleProposal = {
+		...proposal,
+		projectId: 'tracekeeper-id',
+		claimKey: 'project:review-lifecycle',
+		targetNote: '01_knowledge/memory/projects/tracekeeper/agents/codex/approved.md',
+	};
+	const lifecycleContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [lifecycleProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set(),
+	});
+	assert.equal(lifecycleContexts[proposal.path].validity.isComplete, true);
+	assert.equal(lifecycleContexts[proposal.path].priorMemory.length, 1);
+	assert.equal(lifecycleContexts[proposal.path].priorMemory[0].memoryId, 'memory-prior');
 	assert.equal(reviewModule.isReviewApprovalTargetPath('01_knowledge/index.md'), true);
 	assert.equal(reviewModule.isReviewRemediationTargetPath('01_knowledge/index.md'), false);
 	assert.equal(reviewModule.isReviewRemediationTargetPath('01_knowledge/wiki/guides/a.md'), true);

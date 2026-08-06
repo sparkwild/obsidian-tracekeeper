@@ -81,7 +81,7 @@ Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选
 
 项目记忆默认自动保存为 `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/` 下的只创建条目。稳定操作身份会让完全相同的重试复用同一条目，并拒绝使用已存在身份覆盖不同载荷。每个新条目都会通过 Obsidian 原生链接连接稳定项目 Hub，以及已验证的 Wiki 或 Source 笔记。现有项目 `memory.md` 仍可读取并列入目录，但不会被自动改写、拆分或迁移。
 
-`tracekeeper.recall` 始终是按相关性选取的结果。当 Agent 需要完整枚举项目记忆时，只读的 `tracekeeper.project_memory` 会在同一个索引代次内分页列出不可变条目与旧版笔记，并且不返回笔记正文。
+`tracekeeper.recall` 始终是按相关性选取的结果。当 Agent 需要完整枚举全局或项目记忆时，唯一规范的只读工具 `tracekeeper.memory` 会在同一个索引代次内分页列出当前、历史、冲突、待审核与旧版元数据，并且不返回笔记正文。
 
 ## 适合场景
 

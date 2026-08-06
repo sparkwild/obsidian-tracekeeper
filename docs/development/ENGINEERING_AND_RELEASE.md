@@ -244,6 +244,11 @@ Expensive or expansive assurance is change-triggered:
 - keep full/deep repository security scans independently authorized. Normal
   release review is proportional and focused on changed trust boundaries.
 
+Code refactor completion does not imply performance, Replay, real-Obsidian, or
+release acceptance. Those are separately authorized qualification tasks with
+their own candidate, fixture, provenance, and stop conditions; they are not
+silently folded into a refactor task or inferred from focused automated checks.
+
 Before an expensive row starts, its owner records the trigger, evidence it will
 decide, expected duration or quota, fixture/provenance identity, and stop
 condition. One bounded diagnostic retry is allowed only after identifying an

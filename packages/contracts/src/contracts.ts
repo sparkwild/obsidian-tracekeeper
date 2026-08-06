@@ -7,7 +7,7 @@ import {
 	FINISH_TASK_OUTPUT_SCHEMA,
 	LINT_OUTPUT_SCHEMA,
 	PROPOSE_MEMORY_OUTPUT_SCHEMA,
-	PROJECT_MEMORY_OUTPUT_SCHEMA,
+	MEMORY_OUTPUT_SCHEMA,
 	RECALL_OUTPUT_SCHEMA,
 	READ_NOTE_OUTPUT_SCHEMA,
 	REVIEW_QUEUE_OUTPUT_SCHEMA,
@@ -15,6 +15,74 @@ import {
 	STATUS_OUTPUT_SCHEMA,
 	START_TASK_OUTPUT_SCHEMA,
 } from './result-schemas';
+
+const FINISH_TASK_MEMORY_CANDIDATE_RECORD_SCHEMA = {
+	type: 'object',
+	required: ['proposal_kind', 'content'],
+	properties: {
+		proposal_kind: { type: 'string', description: 'Candidate proposal kind.' },
+		content: { type: 'string', description: 'Candidate content.' },
+		evidence: {
+			oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+			description: 'Optional evidence summary or Vault-relative evidence refs for the candidate.',
+		},
+		target_note: {
+			type: 'string',
+			description: 'Optional Vault-relative target note for the candidate.',
+		},
+		claim_key: {
+			type: 'string',
+			minLength: 1,
+			description: 'Optional candidate claim key.',
+		},
+		proposed_authority: {
+			type: 'string',
+			enum: ['agent', 'source', 'user'],
+			description: 'Optional requested authority for this candidate.',
+		},
+		proposed_confidence: {
+			type: 'string',
+			enum: ['uncertain', 'inferred', 'supported', 'verified'],
+			description: 'Optional requested confidence level.',
+		},
+		declared_state: {
+			type: 'string',
+			enum: ['active', 'disputed', 'retracted', 'review'],
+			description: 'Optional requested declared state.',
+		},
+		observed_at: {
+			type: 'string',
+			minLength: 1,
+			description: 'Optional observed-at timestamp.',
+		},
+		valid_from: {
+			type: 'string',
+			minLength: 1,
+			description: 'Optional validity start timestamp.',
+		},
+		valid_to: {
+			type: 'string',
+			minLength: 1,
+			description: 'Optional validity end timestamp.',
+		},
+		last_verified_at: {
+			type: 'string',
+			minLength: 1,
+			description: 'Optional last verified-at timestamp.',
+		},
+		supersedes: {
+			type: 'array',
+			items: { type: 'string' },
+			description: 'Optional candidate supersedes list.',
+		},
+		contradicts: {
+			type: 'array',
+			items: { type: 'string' },
+			description: 'Optional candidate contradicts list.',
+		},
+	},
+	additionalProperties: false,
+};
 
 export type ToolVisibility = 'public' | 'compatibility' | 'internal';
 export type ToolRisk = 'read-only' | 'low-risk-write' | 'review-gated-write';
@@ -72,7 +140,7 @@ export type TracekeeperToolName =
 	| 'tracekeeper.graph_health'
 	| 'tracekeeper.start_task'
 	| 'tracekeeper.recall'
-	| 'tracekeeper.project_memory'
+	| 'tracekeeper.memory'
 	| 'tracekeeper.project_context'
 	| 'tracekeeper.project_history'
 	| 'tracekeeper.read_note'
@@ -114,7 +182,7 @@ export const PUBLIC_TOOL_NAME_ORDER = [
 	'tracekeeper.agent_activity_recent',
 	'tracekeeper.lint',
 	'tracekeeper.recall',
-	'tracekeeper.project_memory',
+	'tracekeeper.memory',
 	'tracekeeper.read_note',
 	'tracekeeper.start_task',
 	'tracekeeper.finish_task',
@@ -295,8 +363,8 @@ export const toolContracts = [
 		...withResultSchema(RECALL_OUTPUT_SCHEMA),
 	},
 	{
-		name: 'tracekeeper.project_memory',
-		version: 2,
+		name: 'tracekeeper.memory',
+		version: 1,
 		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -304,16 +372,20 @@ export const toolContracts = [
 		idempotency: 'natural',
 		world: 'closed',
 		workflowRole: 'memory',
-		useCase: 'project_memory',
+		useCase: 'memory',
 		description:
-			'[read-only] Enumerate the complete generation-bound project-memory catalog in the active local Obsidian Vault. Returns metadata only; use tracekeeper.read_note for full note bodies.',
+			'[read-only] Enumerate the generation-bound global or project memory catalog by current, history, conflicts, or all view. Returns metadata only; use tracekeeper.read_note for full note bodies.',
 		inputSchema: withToolInput(
 			{
-				action: {
-					const: 'list',
+				scope: {
 					type: 'string',
-					enum: ['list'],
-					description: 'Project-memory catalog action.',
+					enum: ['global', 'project'],
+					description: 'Memory scope. Defaults to global.',
+				},
+				view: {
+					type: 'string',
+					enum: ['current', 'history', 'conflicts', 'all'],
+					description: 'Lifecycle projection. Defaults to current.',
 				},
 				project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
 				project_id: { type: 'string', description: 'Project id for scoped matching.' },
@@ -332,9 +404,9 @@ export const toolContracts = [
 					description: 'Number of catalog descriptors to return, from 1 through 200.',
 				},
 			},
-			['action'],
+			[],
 		),
-		...withResultSchema(PROJECT_MEMORY_OUTPUT_SCHEMA),
+		...withResultSchema(MEMORY_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.project_context',
@@ -526,7 +598,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.source_request',
-		version: 2,
+		version: 3,
 		visibility: 'public',
 		capability: 'vault.write',
 		risk: 'low-risk-write',
@@ -562,7 +634,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.analyze_source_request',
-		version: 2,
+		version: 3,
 		visibility: 'compatibility',
 		capability: 'vault.write',
 		risk: 'low-risk-write',
@@ -647,7 +719,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.lint',
-		version: 2,
+		version: 3,
 		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -660,6 +732,11 @@ export const toolContracts = [
 			'[read-only] Run the single vault check entry for structure, links, sources, claims, and graph health.',
 		inputSchema: withToolInput({
 			max_items: { type: 'integer', description: 'Maximum number of issues to return.' },
+			stale_after_days: {
+				type: 'integer',
+				minimum: 1,
+				description: 'Verification age in days after which a memory is diagnosed as stale. Defaults to 365.',
+			},
 			graph_profile: {
 				type: 'string',
 				enum: ['off', 'advisory', 'strict'],
@@ -705,6 +782,11 @@ export const toolContracts = [
 				memory_candidates: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
 					description: 'Optional memory candidates.',
+				},
+				memory_candidate_records: {
+					type: 'array',
+					description: 'Optional structured lifecycle-aware memory candidates.',
+					items: FINISH_TASK_MEMORY_CANDIDATE_RECORD_SCHEMA,
 				},
 				next_actions: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
@@ -834,7 +916,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.capture_source',
-		version: 3,
+		version: 4,
 		visibility: 'public',
 		capability: 'vault.write',
 		risk: 'low-risk-write',
@@ -848,7 +930,11 @@ export const toolContracts = [
 		inputSchema: withToolInput(
 			{
 				source: { type: 'string', description: 'Source identifier (usually URL or local path).' },
-				source_kind: { type: 'string', description: 'Source type label (optional).' },
+				source_kind: {
+					type: 'string',
+					enum: ['web', 'file', 'transcript'],
+					description: 'Typed source owner. When omitted, Runtime derives a compatibility default.',
+				},
 				capture_reason: { type: 'string', description: 'Capture reason.' },
 				task_id: { type: 'string', description: 'Optional task id for traceability.' },
 				related_project: { type: 'string', description: 'Optional project hint.' },
@@ -887,12 +973,65 @@ export const toolContracts = [
 			{
 				proposal_kind: { type: 'string', description: 'Proposal kind.' },
 				content: { type: 'string', description: 'Proposal markdown/text content.' },
-				evidence: { type: 'string', description: 'Optional evidence summary.' },
+				evidence: {
+					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+					description: 'Optional evidence summary or Vault-relative evidence refs.',
+				},
 				target_note: {
 					type: 'string',
 					description: 'Optional Vault-relative target note. Use 01_knowledge/wiki/** for a local project Wiki target.',
 				},
 				risk_level: { type: 'string', description: 'Risk level label.' },
+				claim_key: {
+					type: 'string',
+					minLength: 1,
+					description: 'Optional normalized claim key for a MemoryRecord v2 proposal.',
+				},
+				proposed_authority: {
+					type: 'string',
+					enum: ['agent', 'source', 'user'],
+					description: 'Optional requested authority; runtime derives effective authority for execution.',
+				},
+				proposed_confidence: {
+					type: 'string',
+					enum: ['uncertain', 'inferred', 'supported', 'verified'],
+					description: 'Optional requested confidence level.',
+				},
+				declared_state: {
+					type: 'string',
+					enum: ['active', 'disputed', 'retracted', 'review'],
+					description: 'Optional requested declared state.',
+				},
+				observed_at: {
+					type: 'string',
+					minLength: 1,
+					description: 'Optional observed timestamp for the candidate record.',
+				},
+				valid_from: {
+					type: 'string',
+					minLength: 1,
+					description: 'Optional validity window start for the candidate record.',
+				},
+				valid_to: {
+					type: 'string',
+					minLength: 1,
+					description: 'Optional validity window end for the candidate record.',
+				},
+				last_verified_at: {
+					type: 'string',
+					minLength: 1,
+					description: 'Optional last verification timestamp for the candidate record.',
+				},
+				supersedes: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'Optional superseded record identifiers.',
+				},
+				contradicts: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'Optional contradictory record identifiers.',
+				},
 				task_id: { type: 'string', description: 'Optional task id for traceability.' },
 				project_hint: { type: 'string', description: 'Optional project hint for project memory routing.' },
 				project_id: { type: 'string', description: 'Optional stable project id for project memory routing.' },

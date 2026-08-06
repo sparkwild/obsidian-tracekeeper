@@ -119,20 +119,16 @@ test('CaptureSourceApplicationService owns the runner and injected write ports',
 	};
 	const result = await service.execute(request);
 
-	assert.deepEqual(result, {
-		ok: true,
-		tool: 'tracekeeper.capture_source',
-		operation_id: 'capture-source-direct-hash',
-		idempotency_key: 'direct-idempotency',
-		status: 'written',
-		path: 'knowledge/sources/captured.md',
-		activity_path: '00_tracekeeper/control/agent_activity/2026/2026-08-03.md',
-		warnings: [],
-		metadata: {
-			source: 'direct-source',
-			mode: 'local_copy',
-		},
-	});
+	assert.equal(result.operation_id, 'capture-source-direct-hash');
+	assert.equal(result.path, 'knowledge/sources/captured.md');
+	assert.equal(result.metadata.source, 'direct-source');
+	assert.equal(result.metadata.mode, 'local_copy');
+	assert.equal(result.metadata.source_kind, 'file');
+	assert.equal(result.metadata.route, '01_knowledge/sources/files');
+	assert.equal(result.metadata.index_path, '01_knowledge/sources/files/captured.md');
+	assert.match(result.metadata.source_id, /^source-[a-f0-9]{32}$/);
+	assert.match(result.metadata.content_hash, /^sha256:[a-f0-9]{64}$/);
+	assert.deepEqual(result.metadata.part_manifest, []);
 	assert.equal(writes.length, 1);
 	assert.equal(writes[0].frontmatter.source_operation_id, 'capture-source-direct-hash');
 	assert.match(writes[0].body, /direct content/);
@@ -153,10 +149,10 @@ test('capture_source preserves all modes, aliases, warnings, and generated metad
 		capture_reason: 'characterize external reference',
 		filename: 'capture-external',
 	}, fixture.context);
-	assert.deepEqual(external.metadata, {
-		source: 'https://example.test/reference',
-		mode: 'external_reference',
-	});
+	assert.equal(external.metadata.source, 'https://example.test/reference');
+	assert.equal(external.metadata.mode, 'external_reference');
+	assert.equal(external.metadata.source_kind, 'web');
+	assert.equal(external.metadata.route, '01_knowledge/sources/web');
 	assert.deepEqual(external.warnings, ['content/text is ignored for external_reference mode.']);
 	assert.match(fixture.read(external.path), /mode: external_reference/);
 	assert.doesNotMatch(fixture.read(external.path), /ignored external body/);
@@ -200,6 +196,46 @@ test('capture_source exact retry reuses one receipt and changed payload conflict
 	assert.equal(changed.isError, true);
 	assert.match(String(changed.structuredContent?.error), /Idempotency key conflict/);
 	assert.equal(fs.existsSync(path.join(fixture.vaultRoot, first.path)), true);
+});
+
+test('capture_source routes typed owners and splits large content into bounded visible parts', async (t) => {
+	const fixture = createFixture(t);
+	const largeContent = '🙂'.repeat(40_000);
+	const captured = await invoke('tracekeeper.capture_source', {
+		source: 'meeting-2026-08-06',
+		source_kind: 'transcript',
+		mode: 'extracted_snapshot',
+		content: largeContent,
+		filename: 'large-transcript',
+		idempotency_key: 'large-transcript-capture',
+	}, fixture.context);
+	assert.equal(captured.metadata.source_kind, 'transcript');
+	assert.equal(captured.metadata.route, '01_knowledge/sources/transcripts');
+	assert.equal(captured.metadata.index_path, captured.path);
+	assert.ok(captured.metadata.part_manifest.length > 1);
+	assert.equal(captured.path, '01_knowledge/sources/transcripts/large-transcript.md');
+	const indexText = fixture.read(captured.path);
+	assert.match(indexText, /type: "?source_capture"?/);
+	assert.match(indexText, /## Parts/);
+	assert.doesNotMatch(indexText, new RegExp(largeContent.slice(0, 100)));
+	for (const [index, partPath] of captured.metadata.part_manifest.entries()) {
+		const partText = fixture.read(partPath);
+		assert.match(partText, /type: "?source_part"?/);
+		assert.match(partText, new RegExp(`part_number: ${index + 1}`));
+		assert.match(partText, new RegExp(`source_id: "?${captured.metadata.source_id}"?`));
+		assert.match(partText, /Parent source:/);
+		const body = partText.split('---\n').at(-1) || '';
+		assert.ok(Buffer.byteLength(body, 'utf8') < 66 * 1024);
+	}
+	const replayed = await invoke('tracekeeper.capture_source', {
+		source: 'meeting-2026-08-06',
+		source_kind: 'transcript',
+		mode: 'extracted_snapshot',
+		content: largeContent,
+		filename: 'large-transcript',
+		idempotency_key: 'large-transcript-capture',
+	}, fixture.context);
+	assert.deepEqual(replayed, captured);
 });
 
 test('capture_source validates mode/content and links a captured note to an existing task', async (t) => {

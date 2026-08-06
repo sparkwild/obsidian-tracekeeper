@@ -24,6 +24,12 @@ import {
 } from './knowledge-architecture';
 import { resolveNormalizedVaultEdges } from './knowledge-note';
 import { ScannedNote } from './scan';
+import {
+	buildLifecycleDoctorReport,
+	type LifecycleDiagnosticKind,
+	type LifecycleDiagnosticOptions,
+	type LifecycleDoctorReport,
+} from './lifecycle-diagnostics';
 
 export type LintIssueKind =
 	| 'broken_wikilink'
@@ -37,6 +43,7 @@ export type LintIssueKind =
 	| 'graph_missing_project_index'
 	| 'graph_yaml_only_relation'
 	| 'write_policy_unstable_target'
+	| LifecycleDiagnosticKind
 	| GraphProfileIssue['kind'];
 
 export interface LintIssue {
@@ -51,9 +58,10 @@ export interface LintIssue {
 
 export interface LintReport {
 	issues: LintIssue[];
+	doctor: Omit<LifecycleDoctorReport, 'issues'>;
 }
 
-export interface LintOptions {
+export interface LintOptions extends LifecycleDiagnosticOptions {
 	graphHealth?: GraphHealthReport;
 	graphProfile?: unknown;
 }
@@ -581,7 +589,16 @@ export function lintNotes(vaultRoot: string, notes: ScannedNote[], options: Lint
 		issues.push(...buildGraphProfileLintIssues(options.graphHealth, options.graphProfile));
 	}
 
-	return { issues };
+	const lifecycleDoctor = buildLifecycleDoctorReport(notes, options);
+	issues.push(...lifecycleDoctor.issues);
+
+	return {
+		issues,
+		doctor: {
+			directory_counts: lifecycleDoctor.directory_counts,
+			legacy_candidates: lifecycleDoctor.legacy_candidates,
+		},
+	};
 }
 
 function buildGraphProfileLintIssues(report: GraphHealthReport, profile: unknown): LintIssue[] {

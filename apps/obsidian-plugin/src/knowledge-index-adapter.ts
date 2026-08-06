@@ -17,6 +17,7 @@ import {
 	normalizeVaultRelativePath,
 	scannedNoteFromNormalized,
 	type KnowledgeSnapshot,
+	type KnowledgeReadView,
 	type KnowledgeIndexReport,
 	type NormalizedVaultCallout,
 	type NormalizedVaultEdge,
@@ -216,6 +217,20 @@ export class ObsidianKnowledgeIndexAdapter {
 			return { ...snapshot, index_state: 'initializing' };
 		}
 		return snapshot;
+	}
+
+	async knowledgeReadView(requestedVaultRoot: string): Promise<KnowledgeReadView | null> {
+		if (path.resolve(requestedVaultRoot) !== this.vaultRoot) {
+			return null;
+		}
+		const view = await this.index.readView();
+		if (this.rebuilding) {
+			return { ...view, index_state: 'rebuilding' };
+		}
+		if (this.recoveryRequired || !this.metadataInitialized || this.unavailablePaths.size > 0) {
+			return { ...view, index_state: 'initializing' };
+		}
+		return view;
 	}
 
 	async applyCreate(file: TAbstractFile): Promise<void> {

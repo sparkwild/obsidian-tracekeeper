@@ -78,6 +78,16 @@ export interface ReviewSourceContext {
 	summary: string;
 }
 
+export interface ReviewPriorMemoryContext {
+	path: string;
+	memoryId: string;
+	authority: string;
+	confidence: string;
+	effectiveState: string;
+	observedAt: string;
+	excerpt: string;
+}
+
 export interface ReviewProposalContext {
 	proposalPath: string;
 	indexState: string;
@@ -86,6 +96,7 @@ export interface ReviewProposalContext {
 	targetCandidates: ReviewTargetCandidate[];
 	task: ReviewTaskContext | null;
 	sources: ReviewSourceContext[];
+	priorMemory: ReviewPriorMemoryContext[];
 	diffPreview: string;
 }
 
@@ -255,6 +266,9 @@ export const buildReviewTargetCandidates = (
 ): ReviewTargetCandidate[] => {
 	const candidates = notes
 		.map((note) => {
+			if (frontmatterString(note, ['type']) === 'memory_record') {
+				return null;
+			}
 			const normalizedPath = normalizeReviewTargetPath(note.path);
 			const kind = targetKind(normalizedPath);
 			if (!normalizedPath || !kind || !isReviewRemediationTargetPath(normalizedPath)) {
@@ -375,6 +389,29 @@ const sourceContextsForProposal = (
 			};
 		});
 
+const priorMemoryForProposal = (
+	proposal: MemoryProposalRecord,
+	notes: readonly ReviewKnowledgeNote[]
+): ReviewPriorMemoryContext[] => {
+	if (!proposal.claimKey) {
+		return [];
+	}
+	return notes
+		.filter((note) => frontmatterString(note, ['type']) === 'memory_record')
+		.filter((note) => frontmatterString(note, ['claim_key', 'claimKey']) === proposal.claimKey)
+		.filter((note) => !proposal.projectId || frontmatterString(note, ['project_id', 'projectId']) === proposal.projectId)
+		.map((note) => ({
+			path: note.path,
+			memoryId: frontmatterString(note, ['memory_id', 'memoryId']),
+			authority: frontmatterString(note, ['authority']),
+			confidence: frontmatterString(note, ['confidence_level', 'confidenceLevel']),
+			effectiveState: frontmatterString(note, ['effective_state', 'effectiveState', 'declared_state', 'declaredState']),
+			observedAt: frontmatterString(note, ['observed_at', 'observedAt']),
+			excerpt: trimContext(note.excerpt),
+		}))
+		.sort((left, right) => left.path.localeCompare(right.path));
+};
+
 export const buildReviewProposalContexts = ({
 	proposals,
 	knowledge,
@@ -405,6 +442,7 @@ export const buildReviewProposalContexts = ({
 			targetCandidates: buildReviewTargetCandidates(proposal, knowledge.notes),
 			task: taskContextForProposal(proposal, tasks),
 			sources: sourceContextsForProposal(proposal, notesByPath),
+			priorMemory: priorMemoryForProposal(proposal, knowledge.notes),
 			diffPreview: buildReviewDiffPreview(proposal, target),
 		};
 	}

@@ -23,6 +23,7 @@ export declare const KNOWLEDGE_INDEX_PATH = "01_knowledge/index.md";
 export declare const KNOWLEDGE_MEMORY_DIR = "01_knowledge/memory";
 export declare const KNOWLEDGE_MEMORY_INDEX_PATH = "01_knowledge/memory/index.md";
 export declare const KNOWLEDGE_GLOBAL_MEMORY_DIR = "01_knowledge/memory/global";
+export declare const KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH = "01_knowledge/memory/global/index.md";
 export declare const KNOWLEDGE_PROJECTS_MEMORY_DIR = "01_knowledge/memory/projects";
 export declare const KNOWLEDGE_PROJECTS_INDEX_PATH = "01_knowledge/memory/projects/index.md";
 export declare const KNOWLEDGE_WIKI_DIR = "01_knowledge/wiki";
@@ -52,12 +53,14 @@ export declare const LEGACY_DIR_PREFIXES: readonly ["00_control", "01_inbox", "0
 export declare const ARCHITECTURE_PROJECT_DIRS: readonly ["01_knowledge/memory/projects", "04_projects", "05_projects"];
 export declare const REQUIRED_CONTROL_FILES: readonly ["00_tracekeeper/control/system.md", "00_tracekeeper/control/memory_policy.md", "00_tracekeeper/control/permissions.md", "00_tracekeeper/control/agent_activity/index.md"];
 export declare const REQUIRED_KNOWLEDGE_DIRECTORIES: readonly ["00_tracekeeper/control", "00_tracekeeper/control/agent_activity", "00_tracekeeper/control/operations", "00_tracekeeper/control/dashboards", "00_tracekeeper/inbox/agent_requests", "00_tracekeeper/inbox/review_queue", "00_tracekeeper/work/tasks", "00_tracekeeper/work/sessions", "00_tracekeeper/work/context_packs", "00_tracekeeper/work/source_analysis", "01_knowledge/memory/global", "01_knowledge/memory/projects", "01_knowledge/wiki/hubs", "01_knowledge/wiki/concepts", "01_knowledge/wiki/claims", "01_knowledge/wiki/guides", "01_knowledge/wiki/references", "01_knowledge/sources/web", "01_knowledge/sources/files", "01_knowledge/sources/transcripts", "01_knowledge/sources/attachments", "02_archive", "02_archive/review_queue"];
-export declare const REQUIRED_KNOWLEDGE_FILES: readonly ["01_knowledge/index.md", "01_knowledge/memory/index.md", "01_knowledge/memory/projects/index.md", "01_knowledge/wiki/index.md", "01_knowledge/wiki/hubs/index.md", "01_knowledge/sources/index.md"];
+export declare const REQUIRED_KNOWLEDGE_FILES: readonly ["01_knowledge/index.md", "01_knowledge/memory/index.md", "01_knowledge/memory/global/index.md", "01_knowledge/memory/projects/index.md", "01_knowledge/wiki/index.md", "01_knowledge/wiki/hubs/index.md", "01_knowledge/sources/index.md"];
 export declare const GRAPH_RECOMMENDED_ENTRY = "01_knowledge/index.md";
-export declare const GRAPH_RECOMMENDED_HUBS: readonly ["01_knowledge/memory/index.md", "01_knowledge/memory/projects/index.md", "01_knowledge/wiki/index.md", "01_knowledge/wiki/hubs/index.md", "01_knowledge/sources/index.md"];
+export declare const GRAPH_RECOMMENDED_HUBS: readonly ["01_knowledge/memory/index.md", "01_knowledge/memory/global/index.md", "01_knowledge/memory/projects/index.md", "01_knowledge/wiki/index.md", "01_knowledge/wiki/hubs/index.md", "01_knowledge/sources/index.md"];
 export declare const KNW_RELATED_WIKI_KEYS: readonly ["related_wiki", "related_wiki_notes", "wiki_topics"];
 export declare const KNW_RELATED_MEMORY_KEYS: readonly ["related_memory", "related_memory_notes"];
-export declare const YAML_RELATION_KEYS: readonly ["related", "sources", "related_wiki", "related_wiki_notes", "wiki_topics", "related_memory", "related_memory_notes"];
+export declare const KNW_RELATED_SOURCE_KEYS: readonly ["related_sources", "related_source_notes", "sources"];
+export declare const KNW_MEMORY_HUB_KEYS: readonly ["project_hub", "global_hub", "parent_hub"];
+export declare const YAML_RELATION_KEYS: readonly ["related", "related_wiki", "related_wiki_notes", "wiki_topics", "related_memory", "related_memory_notes", "related_sources", "related_source_notes", "sources", "project_hub", "global_hub", "parent_hub"];
 export interface ArchitecturePathCandidate {
     path: string;
     legacyPaths?: readonly string[];

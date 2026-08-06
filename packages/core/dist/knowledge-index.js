@@ -9,13 +9,20 @@ exports.toIndexedKnowledgeNote = toIndexedKnowledgeNote;
 exports.buildKnowledgeSnapshot = buildKnowledgeSnapshot;
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
+const node_crypto_1 = require("node:crypto");
 const node_util_1 = require("node:util");
 const safety_1 = require("./safety");
 const scan_1 = require("./scan");
 const knowledge_note_1 = require("./knowledge-note");
+const memory_record_1 = require("./memory-record");
+const memory_lifecycle_1 = require("./memory-lifecycle");
+const project_memory_1 = require("./project-memory");
+const knowledge_architecture_1 = require("./knowledge-architecture");
 exports.KNOWLEDGE_INDEX_VERSION = '1.0';
 const NOTES_EXTENSIONS = new Set(['.md', '.markdown']);
 const SNIPPET_MAX_LENGTH = 160;
+const MAX_LEXICAL_TERMS_PER_NOTE = 512;
+const DEFAULT_MAX_INCREMENTAL_RENAME_IMPACT = 256;
 const DEFAULT_INITIAL_STATE = {
     notes: new Map(),
     graph: {
@@ -34,6 +41,11 @@ const DEFAULT_INITIAL_STATE = {
     lastEvent: null,
     lastRebuild: null,
     createdAt: new Date().toISOString(),
+    catalog: new Map(),
+    lexicalPostings: new Map(),
+    memory: emptyMemoryIndex(0, new Date(0).toISOString()),
+    lastUpdate: { mode: 'rebuild', affectedPaths: [], reason: null },
+    warnings: [],
 };
 function computeFileVersion(size, modifiedAt) {
     return `${modifiedAt}|${size}`;
@@ -71,7 +83,7 @@ function normalizeVaultPath(value) {
 }
 function cloneIndexMap(input) {
     const cloned = new Map();
-    for (const [key, values] of input.entries()) {
+    for (const [key, values] of [...input.entries()].sort(([left], [right]) => left.localeCompare(right))) {
         cloned.set(key, [...values]);
     }
     return cloned;
@@ -223,19 +235,20 @@ function buildKnowledgeGraph(notes) {
     }
     for (const [notePath, note] of notes.entries()) {
         for (const link of note.edges) {
+            const sourcedLink = { ...cloneEdge(link), sourcePath: link.sourcePath ?? notePath };
             if (link.resolution.status !== 'resolved'
                 || (!notes.has(link.resolution.path)
                     && link.resolution.authority !== 'native')) {
                 unresolvedEdges.push(link.resolution.status === 'resolved'
                     ? {
-                        ...cloneEdge(link),
+                        ...sourcedLink,
                         resolution: {
                             status: 'unresolved',
                             reason: 'not_found',
                             authority: link.resolution.authority,
                         },
                     }
-                    : cloneEdge(link));
+                    : sourcedLink);
                 continue;
             }
             const target = link.resolution.path;
@@ -243,7 +256,7 @@ function buildKnowledgeGraph(notes) {
             if (!outgoingTargets) {
                 continue;
             }
-            edges.push(cloneEdge(link));
+            edges.push(sourcedLink);
             outgoingTargets.add(target);
             const backlinksForTarget = incoming.get(target);
             if (backlinksForTarget) {
@@ -309,6 +322,180 @@ function buildScopeIndex(notes) {
     return {
         byType: cloneIndexMap(byTypeMap),
         byTag: cloneIndexMap(byTagMap),
+    };
+}
+function stableJson(value) {
+    if (Array.isArray(value))
+        return `[${value.map(stableJson).join(',')}]`;
+    if (value && typeof value === 'object') {
+        return `{${Object.entries(value)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+            .join(',')}}`;
+    }
+    return JSON.stringify(value) ?? 'null';
+}
+function frontmatterHash(frontmatter) {
+    return (0, node_crypto_1.createHash)('sha256').update(stableJson(frontmatter), 'utf8').digest('hex');
+}
+function lexicalTerms(note) {
+    const terms = new Set();
+    const add = (value) => {
+        const normalized = value.normalize('NFC').trim().toLocaleLowerCase('en-US');
+        if (normalized && terms.size < MAX_LEXICAL_TERMS_PER_NOTE)
+            terms.add(normalized);
+    };
+    for (const value of [...note.searchTokens, note.title, ...note.aliases, ...note.tags]) {
+        for (const token of value.split(/[^\p{L}\p{N}_-]+/u))
+            add(token);
+        for (const run of value.match(/\p{Script=Han}{2,}/gu) ?? []) {
+            const characters = [...run];
+            for (const width of [2, 3]) {
+                for (let offset = 0; offset + width <= characters.length; offset += 1) {
+                    add(characters.slice(offset, offset + width).join(''));
+                    if (terms.size >= MAX_LEXICAL_TERMS_PER_NOTE)
+                        break;
+                }
+            }
+        }
+    }
+    return [...terms].sort();
+}
+function toCatalogEntry(note) {
+    return {
+        path: note.path,
+        fileVersion: note.fileVersion,
+        contentHash: note.contentHash,
+        frontmatterHash: frontmatterHash(note.frontmatter),
+        frontmatter: (0, knowledge_note_1.cloneVaultFrontmatter)(note.frontmatter),
+        title: note.title,
+        aliases: [...note.aliases],
+        type: note.type,
+        tags: [...note.tags],
+        searchTokens: lexicalTerms(note),
+        excerpt: note.excerptSource,
+        modifiedAt: note.modifiedAt,
+        size: note.size,
+    };
+}
+function cloneCatalogEntry(entry) {
+    return {
+        ...entry,
+        aliases: [...entry.aliases],
+        tags: [...entry.tags],
+        searchTokens: [...entry.searchTokens],
+        frontmatter: (0, knowledge_note_1.cloneVaultFrontmatter)(entry.frontmatter),
+    };
+}
+function addPosting(postings, term, notePath) {
+    postings.set(term, mergeAndSortUnique([...(postings.get(term) ?? []), notePath]));
+}
+function removePosting(postings, term, notePath) {
+    const next = (postings.get(term) ?? []).filter((candidate) => candidate !== notePath);
+    if (next.length === 0)
+        postings.delete(term);
+    else
+        postings.set(term, next);
+}
+function buildLexicalPostings(catalog) {
+    const postings = new Map();
+    for (const [notePath, entry] of catalog) {
+        for (const term of entry.searchTokens)
+            addPosting(postings, term, notePath);
+    }
+    return new Map([...postings.entries()].sort(([left], [right]) => left.localeCompare(right)));
+}
+function cloneMemoryRecord(record) {
+    return {
+        ...record,
+        evidence: [...record.evidence],
+        supersedes: [...record.supersedes],
+        contradicts: [...record.contradicts],
+        related_wiki: [...record.related_wiki],
+        related_sources: [...record.related_sources],
+    };
+}
+function buildMemoryIndex(notes, generation, resolvedAt) {
+    const records = [];
+    const legacy = [];
+    const invalidPaths = [];
+    for (const note of notes.values()) {
+        if (note.frontmatter.type === 'memory_record') {
+            try {
+                records.push((0, memory_record_1.parseMemoryRecord)({ path: note.path, frontmatter: note.frontmatter }));
+            }
+            catch {
+                invalidPaths.push(note.path);
+            }
+            continue;
+        }
+        try {
+            const projectNote = (0, project_memory_1.classifyProjectMemoryNote)({ path: note.path, frontmatter: note.frontmatter });
+            if (projectNote.kind === 'entry') {
+                const projection = (0, memory_record_1.projectMemoryEntryToReadProjection)(projectNote.entry);
+                if (projection.kind !== 'v2')
+                    legacy.push(projection);
+                continue;
+            }
+            if (projectNote.kind === 'legacy' && projectNote.project_id) {
+                const projection = (0, memory_record_1.legacyMemoryToReadProjection)({
+                    path: projectNote.path,
+                    scope: 'project',
+                    project_id: projectNote.project_id,
+                });
+                if (projection.kind !== 'v2')
+                    legacy.push(projection);
+                continue;
+            }
+        }
+        catch {
+            invalidPaths.push(note.path);
+            continue;
+        }
+        if (isGlobalLegacyMemoryPath(note.path)) {
+            const projection = (0, memory_record_1.legacyMemoryToReadProjection)({ path: note.path, scope: 'global' });
+            if (projection.kind !== 'v2')
+                legacy.push(projection);
+        }
+    }
+    const lifecycle = (0, memory_lifecycle_1.resolveMemoryLifecycle)({ generation, records, legacy, now: resolvedAt });
+    const byId = new Map();
+    const byClaimKey = new Map();
+    for (const row of lifecycle.records) {
+        byId.set(row.record.memory_id, cloneMemoryRecord(row.record));
+        const key = `${row.record.scope}\u0000${row.record.project_id ?? ''}\u0000${row.record.claim_key}`;
+        byClaimKey.set(key, mergeAndSortUnique([...(byClaimKey.get(key) ?? []), row.record.memory_id]));
+    }
+    return {
+        byId,
+        byClaimKey,
+        lifecycle,
+        invalidPaths: mergeAndSortUnique(invalidPaths),
+    };
+}
+function isGlobalLegacyMemoryPath(notePath) {
+    if (node_path_1.default.posix.basename(notePath).toLowerCase() === 'index.md')
+        return false;
+    return notePath.startsWith(`${knowledge_architecture_1.KNOWLEDGE_GLOBAL_MEMORY_DIR}/`)
+        || knowledge_architecture_1.LEGACY_MEMORY_DIRS.some((directory) => notePath.startsWith(`${directory}/`));
+}
+function emptyMemoryIndex(generation, resolvedAt) {
+    return buildMemoryIndex(new Map(), generation, resolvedAt);
+}
+function cloneMemoryIndex(index) {
+    return {
+        byId: new Map([...index.byId].map(([key, record]) => [key, cloneMemoryRecord(record)])),
+        byClaimKey: cloneIndexMap(index.byClaimKey),
+        lifecycle: {
+            ...index.lifecycle,
+            records: index.lifecycle.records.map((row) => ({ ...row, record: cloneMemoryRecord(row.record), reasons: [...row.reasons] })),
+            legacy: index.lifecycle.legacy.map((row) => ({ ...row, projection: { ...row.projection }, reasons: [...row.reasons] })),
+            current: index.lifecycle.current.map((row) => ({ ...row, record: cloneMemoryRecord(row.record), reasons: [...row.reasons] })),
+            history: index.lifecycle.history.map((row) => ({ ...row, record: cloneMemoryRecord(row.record), reasons: [...row.reasons] })),
+            conflicts: index.lifecycle.conflicts.map((row) => ({ ...row, record: cloneMemoryRecord(row.record), reasons: [...row.reasons] })),
+            issues: index.lifecycle.issues.map((issue) => ({ ...issue, memory_ids: [...issue.memory_ids] })),
+        },
+        invalidPaths: [...index.invalidPaths],
     };
 }
 function readNoteFromVault(vaultRoot, notePath) {
@@ -392,6 +579,128 @@ function enrichNoteBacklinks(notes, graph) {
     }
     return enriched;
 }
+function normalizeLookupIdentity(value) {
+    return value.normalize('NFC').trim().toLocaleLowerCase('en-US');
+}
+function noteLookupIdentities(note) {
+    if (!note)
+        return new Set();
+    const withoutExtension = note.path.replace(/\.(?:md|markdown)$/i, '');
+    return new Set([
+        note.path,
+        withoutExtension,
+        node_path_1.default.posix.basename(withoutExtension),
+        note.title,
+        ...note.aliases,
+    ].map(normalizeLookupIdentity));
+}
+function edgeTouchesIdentity(edge, identities, paths) {
+    if (edge.resolution.status === 'resolved' && paths.has(edge.resolution.path))
+        return true;
+    const target = normalizeLookupIdentity((edge.linkPath || edge.target).replace(/\.(?:md|markdown)$/i, ''));
+    return identities.has(target) || identities.has(normalizeLookupIdentity(node_path_1.default.posix.basename(target)));
+}
+function collectAffectedSources(previous, next, oldNote, newNote, changedPaths) {
+    const affected = new Set(changedPaths);
+    const identities = new Set([...noteLookupIdentities(oldNote), ...noteLookupIdentities(newNote)]);
+    const paths = new Set(changedPaths);
+    for (const [notePath, note] of new Map([...previous, ...next])) {
+        if (note.edges.some((edge) => edgeTouchesIdentity(edge, identities, paths)))
+            affected.add(notePath);
+    }
+    return affected;
+}
+function resolveAffectedNoteEdges(notes, affected) {
+    const resolved = (0, knowledge_note_1.resolveNormalizedVaultEdges)([...notes.values()].map((note) => ({
+        path: note.path,
+        title: note.title,
+        aliases: note.aliases,
+        edges: affected.has(note.path) ? note.edges : [],
+    })));
+    const result = new Map(notes);
+    for (const notePath of affected) {
+        const note = notes.get(notePath);
+        if (!note)
+            continue;
+        const edges = (resolved.get(notePath) ?? note.edges).map(cloneEdge);
+        result.set(notePath, { ...note, edges, wikilinks: edges });
+    }
+    return result;
+}
+function updateKnowledgeGraphIncrementally(graph, previousNotes, nextNotes, affectedSources) {
+    const outgoing = new Map([...graph.outgoing].map(([key, values]) => [key, new Set(values)]));
+    const incoming = new Map([...graph.incoming].map(([key, values]) => [key, new Set(values)]));
+    const affectedTargets = new Set();
+    for (const sourcePath of affectedSources) {
+        for (const targetPath of outgoing.get(sourcePath) ?? []) {
+            affectedTargets.add(targetPath);
+            incoming.get(targetPath)?.delete(sourcePath);
+        }
+        outgoing.set(sourcePath, new Set());
+    }
+    let edges = graph.edges.filter((edge) => !affectedSources.has(edge.sourcePath ?? ''));
+    let unresolvedEdges = graph.unresolvedEdges.filter((edge) => !affectedSources.has(edge.sourcePath ?? ''));
+    for (const sourcePath of affectedSources) {
+        const note = nextNotes.get(sourcePath);
+        if (!note) {
+            outgoing.delete(sourcePath);
+            continue;
+        }
+        if (!incoming.has(sourcePath))
+            incoming.set(sourcePath, new Set());
+        for (const link of note.edges) {
+            const sourcedLink = { ...cloneEdge(link), sourcePath: link.sourcePath ?? sourcePath };
+            if (link.resolution.status !== 'resolved'
+                || (!nextNotes.has(link.resolution.path) && link.resolution.authority !== 'native')) {
+                unresolvedEdges.push(link.resolution.status === 'resolved'
+                    ? {
+                        ...sourcedLink,
+                        resolution: {
+                            status: 'unresolved',
+                            reason: 'not_found',
+                            authority: link.resolution.authority,
+                        },
+                    }
+                    : sourcedLink);
+                continue;
+            }
+            const targetPath = link.resolution.path;
+            edges.push(sourcedLink);
+            outgoing.get(sourcePath).add(targetPath);
+            const backlinks = incoming.get(targetPath) ?? new Set();
+            backlinks.add(sourcePath);
+            incoming.set(targetPath, backlinks);
+            affectedTargets.add(targetPath);
+        }
+    }
+    for (const notePath of previousNotes.keys()) {
+        if (!nextNotes.has(notePath) && (incoming.get(notePath)?.size ?? 0) === 0)
+            incoming.delete(notePath);
+    }
+    return {
+        graph: {
+            outgoing: new Map([...outgoing]
+                .sort(([left], [right]) => left.localeCompare(right))
+                .map(([key, values]) => [key, mergeAndSortUnique([...values])])),
+            incoming: new Map([...incoming]
+                .sort(([left], [right]) => left.localeCompare(right))
+                .map(([key, values]) => [key, mergeAndSortUnique([...values])])),
+            edges: edges.sort(compareGraphEdges),
+            unresolvedEdges: unresolvedEdges.sort(compareGraphEdges),
+        },
+        affectedTargets,
+    };
+}
+function addScopePath(index, key, notePath) {
+    index.set(key, mergeAndSortUnique([...(index.get(key) ?? []), notePath]));
+}
+function removeScopePath(index, key, notePath) {
+    const next = (index.get(key) ?? []).filter((candidate) => candidate !== notePath);
+    if (next.length === 0)
+        index.delete(key);
+    else
+        index.set(key, next);
+}
 class InMemoryKnowledgeIndex {
     constructor(options) {
         this.sourceNotes = new Map();
@@ -399,6 +708,8 @@ class InMemoryKnowledgeIndex {
         this.writeChain = Promise.resolve();
         this.vaultRoot = (0, safety_1.resolveVaultRoot)(options.vaultRoot);
         this.vaultConfigDir = options.vaultConfigDir;
+        this.maxIncrementalRenameImpact = normalizeRenameImpactLimit(options.maxIncrementalRenameImpact);
+        const initializedAt = new Date().toISOString();
         this.state = {
             notes: new Map(),
             graph: {
@@ -416,12 +727,17 @@ class InMemoryKnowledgeIndex {
             indexState: 'initializing',
             lastEvent: null,
             lastRebuild: null,
-            createdAt: new Date().toISOString(),
+            createdAt: initializedAt,
+            catalog: new Map(),
+            lexicalPostings: new Map(),
+            memory: emptyMemoryIndex(0, initializedAt),
+            lastUpdate: { mode: 'rebuild', affectedPaths: [], reason: null },
+            warnings: [],
         };
         if (options.initialScan) {
             const snapshot = buildKnowledgeSnapshot(options.initialScan, {
-                indexState: 'ready',
-                generation: 1,
+                indexState: options.initialScan.index?.index_state ?? 'ready',
+                generation: options.initialScan.index?.generation ?? 1,
                 lastRebuild: options.initialScan.scannedAt,
             });
             this.state = this.toMutableState(snapshot);
@@ -431,6 +747,36 @@ class InMemoryKnowledgeIndex {
     }
     async snapshot() {
         return snapshotToReadonly(this.state);
+    }
+    async readView() {
+        const generation = this.state.generation;
+        const catalog = new Map([...this.state.catalog].map(([notePath, entry]) => [notePath, cloneCatalogEntry(entry)]));
+        return {
+            version: exports.KNOWLEDGE_INDEX_VERSION,
+            source: 'index',
+            createdAt: this.state.createdAt,
+            generation,
+            event_sequence: this.state.eventSequence,
+            index_state: this.state.indexState,
+            catalog,
+            graph: cloneGraph(this.state.graph),
+            scopes: {
+                byType: cloneIndexMap(this.state.scopes.byType),
+                byTag: cloneIndexMap(this.state.scopes.byTag),
+            },
+            lexical: { postings: cloneIndexMap(this.state.lexicalPostings) },
+            memory: cloneMemoryIndex(this.state.memory),
+            last_update: {
+                ...this.state.lastUpdate,
+                affectedPaths: [...this.state.lastUpdate.affectedPaths],
+            },
+            warnings: [...this.state.warnings],
+            errors: this.sourceErrors.map((error) => ({ ...error })),
+            contentReader: {
+                generation,
+                read: async (notePath) => this.readContentForView(generation, catalog, notePath),
+            },
+        };
     }
     scanSnapshot() {
         return {
@@ -459,6 +805,8 @@ class InMemoryKnowledgeIndex {
             const scopes = buildScopeIndex(withBacklinks);
             const graph = cloneGraph(built.graph);
             const generation = this.state.generation + 1;
+            const createdAt = new Date().toISOString();
+            const catalog = new Map([...withBacklinks].map(([notePath, note]) => [notePath, toCatalogEntry(note)]));
             this.state = {
                 notes: withBacklinks,
                 graph,
@@ -468,7 +816,16 @@ class InMemoryKnowledgeIndex {
                 indexState: 'ready',
                 lastEvent: this.state.lastEvent,
                 lastRebuild: built.lastRebuild,
-                createdAt: new Date().toISOString(),
+                createdAt,
+                catalog,
+                lexicalPostings: buildLexicalPostings(catalog),
+                memory: buildMemoryIndex(withBacklinks, generation, createdAt),
+                lastUpdate: {
+                    mode: 'rebuild',
+                    affectedPaths: [...withBacklinks.keys()].sort(),
+                    reason: null,
+                },
+                warnings: [],
             };
             this.sourceNotes = scanNotesByPath(sourceScan.notes);
             this.sourceErrors = sourceScan.errors.map((error) => ({ ...error }));
@@ -576,6 +933,7 @@ class InMemoryKnowledgeIndex {
                 this.state.createdAt = now;
                 this.state.generation += 1;
                 this.state.eventSequence = normalized.sequence ?? this.state.eventSequence + 1;
+                this.state.memory = buildMemoryIndex(this.state.notes, this.state.generation, now);
             }
             else if (normalized.sequence !== undefined) {
                 this.state.lastEvent = {
@@ -594,6 +952,20 @@ class InMemoryKnowledgeIndex {
             return undefined;
         });
         return next;
+    }
+    async readContentForView(generation, catalog, notePath) {
+        const normalizedPath = normalizeVaultPath(notePath);
+        const note = readNoteFromVault(this.vaultRoot, normalizedPath);
+        if (!note)
+            return null;
+        return {
+            generation,
+            path: normalizedPath,
+            contentHash: note.contentHash,
+            content: note.content,
+            modifiedAt: note.modifiedAt,
+            staleAgainstView: catalog.get(normalizedPath)?.contentHash !== note.contentHash,
+        };
     }
     clearRecoveredSourceErrors(event, note) {
         const recoveredPaths = new Set();
@@ -657,7 +1029,7 @@ class InMemoryKnowledgeIndex {
             const nextNotes = new Map(this.state.notes);
             nextNotes.set(normalizedPath, indexed);
             this.sourceNotes.set(normalizedPath, cloneScannedNote(scanned));
-            this.updateDerivedState(nextNotes);
+            this.updateIncrementally(nextNotes, existing ?? null, indexed, [normalizedPath]);
             return true;
         });
     }
@@ -671,7 +1043,7 @@ class InMemoryKnowledgeIndex {
             const nextNotes = new Map(this.state.notes);
             nextNotes.delete(normalizedPath);
             this.sourceNotes.delete(normalizedPath);
-            this.updateDerivedState(nextNotes);
+            this.updateIncrementally(nextNotes, existing, null, [normalizedPath]);
             return true;
         });
     }
@@ -680,13 +1052,14 @@ class InMemoryKnowledgeIndex {
             const fromPath = normalizeVaultPath(event.path);
             const toPath = normalizeVaultPath(event.newPath);
             const existingSource = this.state.notes.get(fromPath);
+            const existingTarget = this.state.notes.get(toPath);
             const scannedTarget = suppliedNote;
             if (!scannedTarget) {
                 if (existingSource && (!isMarkdownPath(toPath) || event.exists === false)) {
                     const nextNotes = new Map(this.state.notes);
                     nextNotes.delete(fromPath);
                     this.sourceNotes.delete(fromPath);
-                    this.updateDerivedState(nextNotes);
+                    this.updateRenameDerivedState(nextNotes, existingSource, null, fromPath, toPath);
                     return true;
                 }
                 return false;
@@ -699,7 +1072,6 @@ class InMemoryKnowledgeIndex {
                 return false;
             }
             if (!existingSource) {
-                const existingTarget = this.state.notes.get(toPath);
                 const candidateNotes = new Map(this.state.notes);
                 candidateNotes.set(toPath, indexedTarget);
                 const resolvedCandidate = resolveIndexedNoteEdges(candidateNotes).get(toPath);
@@ -721,20 +1093,96 @@ class InMemoryKnowledgeIndex {
             }
             nextNotes.set(toPath, indexedTarget);
             this.sourceNotes.set(toPath, cloneScannedNote(scannedTarget));
-            this.updateDerivedState(nextNotes);
+            this.updateRenameDerivedState(nextNotes, existingSource ?? existingTarget ?? null, indexedTarget, fromPath, toPath);
             return true;
         });
     }
-    updateDerivedState(notes) {
+    updateRenameDerivedState(notes, oldNote, newNote, fromPath, toPath) {
+        const affected = collectAffectedSources(this.state.notes, notes, oldNote, newNote, [fromPath, toPath]);
+        if (affected.size > this.maxIncrementalRenameImpact) {
+            const reason = `rename impact ${affected.size} exceeds limit ${this.maxIncrementalRenameImpact}`;
+            this.rebuildDerivedState(notes, {
+                mode: 'rename_rebuild_fallback',
+                affectedPaths: [...affected].sort(),
+                reason,
+            });
+            this.state.warnings = [`rename_rebuild_fallback:${reason}`];
+            return;
+        }
+        this.updateIncrementally(notes, oldNote, newNote, [fromPath, toPath], affected);
+    }
+    updateIncrementally(notes, oldNote, newNote, changedPaths, knownAffected) {
+        const affected = knownAffected ?? collectAffectedSources(this.state.notes, notes, oldNote, newNote, changedPaths);
+        const resolvedNotes = resolveAffectedNoteEdges(notes, affected);
+        const graphUpdate = updateKnowledgeGraphIncrementally(this.state.graph, this.state.notes, resolvedNotes, affected);
+        const backlinksAffected = new Set([...graphUpdate.affectedTargets, ...changedPaths]);
+        for (const notePath of backlinksAffected) {
+            const note = resolvedNotes.get(notePath);
+            if (note) {
+                resolvedNotes.set(notePath, {
+                    ...note,
+                    backlinks: graphUpdate.graph.incoming.get(notePath) ?? [],
+                });
+            }
+        }
+        this.updateCatalogScopesAndPostings(oldNote, newNote, changedPaths);
+        this.state.notes = resolvedNotes;
+        this.state.graph = graphUpdate.graph;
+        this.state.lastUpdate = {
+            mode: 'incremental',
+            affectedPaths: [...affected].sort(),
+            reason: null,
+        };
+        this.state.warnings = [];
+    }
+    updateCatalogScopesAndPostings(oldNote, newNote, changedPaths) {
+        const catalog = new Map(this.state.catalog);
+        const postings = new Map(this.state.lexicalPostings);
+        const byType = new Map(this.state.scopes.byType);
+        const byTag = new Map(this.state.scopes.byTag);
+        if (oldNote) {
+            const oldEntry = catalog.get(oldNote.path) ?? toCatalogEntry(oldNote);
+            for (const term of oldEntry.searchTokens)
+                removePosting(postings, term, oldNote.path);
+            removeScopePath(byType, oldNote.type ?? 'untyped', oldNote.path);
+            for (const tag of oldNote.tags)
+                removeScopePath(byTag, tag, oldNote.path);
+            catalog.delete(oldNote.path);
+        }
+        for (const changedPath of changedPaths) {
+            if (!newNote || changedPath !== newNote.path)
+                catalog.delete(changedPath);
+        }
+        if (newNote) {
+            const entry = toCatalogEntry(newNote);
+            catalog.set(newNote.path, entry);
+            for (const term of entry.searchTokens)
+                addPosting(postings, term, newNote.path);
+            addScopePath(byType, newNote.type ?? 'untyped', newNote.path);
+            for (const tag of newNote.tags)
+                addScopePath(byTag, tag, newNote.path);
+        }
+        this.state.catalog = new Map([...catalog].sort(([left], [right]) => left.localeCompare(right)));
+        this.state.lexicalPostings = new Map([...postings].sort(([left], [right]) => left.localeCompare(right)));
+        this.state.scopes = {
+            byType: cloneIndexMap(byType),
+            byTag: cloneIndexMap(byTag),
+        };
+    }
+    rebuildDerivedState(notes, update) {
         const resolvedNotes = resolveIndexedNoteEdges(notes);
         const graph = buildKnowledgeGraph(resolvedNotes);
         const withBacklinks = enrichNoteBacklinks(resolvedNotes, graph);
         this.state.notes = withBacklinks;
         this.state.graph = graph;
         this.state.scopes = buildScopeIndex(withBacklinks);
+        this.state.catalog = new Map([...withBacklinks].map(([notePath, note]) => [notePath, toCatalogEntry(note)]));
+        this.state.lexicalPostings = buildLexicalPostings(this.state.catalog);
+        this.state.lastUpdate = update;
         this.sourceNotes = scanNotesByPath([...this.sourceNotes.values()]);
     }
     toMutableState(snapshot) {
+        const catalog = new Map([...snapshot.notes].map(([notePath, note]) => [notePath, toCatalogEntry(note)]));
         return {
             notes: new Map(snapshot.notes),
             graph: {
@@ -753,10 +1201,27 @@ class InMemoryKnowledgeIndex {
             lastEvent: snapshot.last_event,
             lastRebuild: snapshot.last_rebuild,
             createdAt: snapshot.createdAt,
+            catalog,
+            lexicalPostings: buildLexicalPostings(catalog),
+            memory: buildMemoryIndex(snapshot.notes, snapshot.generation, snapshot.createdAt),
+            lastUpdate: {
+                mode: 'rebuild',
+                affectedPaths: [...snapshot.notes.keys()].sort(),
+                reason: null,
+            },
+            warnings: [],
         };
     }
 }
 exports.InMemoryKnowledgeIndex = InMemoryKnowledgeIndex;
+function normalizeRenameImpactLimit(value) {
+    if (value === undefined)
+        return DEFAULT_MAX_INCREMENTAL_RENAME_IMPACT;
+    if (!Number.isSafeInteger(value) || value < 1) {
+        throw new Error('maxIncrementalRenameImpact must be a positive safe integer.');
+    }
+    return value;
+}
 function normalizeVaultEvent(event) {
     if (event.kind === 'rename') {
         return {

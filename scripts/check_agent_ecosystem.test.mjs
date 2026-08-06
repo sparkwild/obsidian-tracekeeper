@@ -82,6 +82,22 @@ test('accepts the generated Skill v2 bundle and completed plugin integration', a
 	});
 });
 
+test('rejects the retired public project-memory alias in workflow guidance', async () => {
+	await withFixture(async (root) => {
+		const skillPath = path.join(root, 'skills/tracekeeper/SKILL.md');
+		const skill = await readFile(skillPath, 'utf8');
+		await writeFile(
+			skillPath,
+			skill.replace('`tracekeeper.memory`', '`tracekeeper.project_memory`'),
+			'utf8',
+		);
+		await writeTracekeeperSkillBundle(root);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(result.errors.join('\n'), /retired public project_memory alias/);
+	});
+});
+
 test('rejects an incomplete plugin Skill bundle integration', async () => {
 	await withFixture(async (root) => {
 		const bundlePath = path.join(root, 'apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts');

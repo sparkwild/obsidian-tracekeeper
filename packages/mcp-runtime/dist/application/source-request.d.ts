@@ -1,4 +1,4 @@
-import { type SourceAnalysisContentLanguage } from '@tracekeeper/core';
+import { type NormalizedSourceKind, type SourceAnalysisContentLanguage } from '@tracekeeper/core';
 export interface SourceRequestRecord {
     type: string;
     path: string;
@@ -25,10 +25,11 @@ export interface SourceRequestNote {
     status: string;
     warnings: string[];
 }
-export type SourceRequestWriteKind = 'source' | 'report' | 'proposal';
+export type SourceRequestWriteKind = 'source' | 'source_part' | 'report' | 'proposal';
 export interface SourceRequestWriteInput {
     kind: SourceRequestWriteKind;
     toolName: string;
+    directory?: string;
     filename: string;
     frontmatter: Record<string, unknown>;
     body: string;
@@ -62,6 +63,8 @@ export interface SourceRequestApplicationDependencies {
     contentLanguage: SourceAnalysisContentLanguage;
     now(): string;
     buildFilename(rawFilename: string, fallbackPrefix: string): string;
+    proposalDirectory: string;
+    renderMarkdownLink?(targetPath: string, sourcePath: string): string;
 }
 export interface SourceRequestApplicationRequest {
     requestPath: string;
@@ -80,6 +83,12 @@ export interface SourceRequestApplicationResult {
     source_note: {
         path: string;
         activity_path: string;
+        source_kind: NormalizedSourceKind;
+        source_id: string;
+        content_hash: string;
+        route: string;
+        index_path: string;
+        part_manifest: string[];
     };
     report: {
         path: string;

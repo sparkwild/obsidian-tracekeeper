@@ -40,6 +40,17 @@ export interface MemoryProposalRecord {
 	proposedBy: string;
 	relatedProject: string;
 	memoryScope: string;
+	projectId: string;
+	claimKey: string;
+	proposedAuthority: string;
+	proposedConfidence: string;
+	declaredState: string;
+	observedAt: string;
+	validFrom: string;
+	validTo: string;
+	lastVerifiedAt: string;
+	supersedes: string[];
+	contradicts: string[];
 	taskId: string;
 	sourceSessionNote: string;
 	targetNote: string;
@@ -274,7 +285,8 @@ export const getReviewProposalValidity = (
 	const hasTargetNote = isMeaningfulProposalValue(proposal.targetNote);
 	const targetPathAllowed = hasTargetNote && isReviewApprovalTargetPath(proposal.targetNote);
 	const targetExists = hasTargetNote && targetResolution.exists !== false;
-	const targetResolved = hasTargetNote && targetPathAllowed && targetExists;
+	const lifecycleCreate = Boolean(proposal.claimKey && hasTargetNote && targetPathAllowed);
+	const targetResolved = hasTargetNote && targetPathAllowed && (targetExists || lifecycleCreate);
 	const hasWritebackContent = isMeaningfulProposalValue(proposal.writebackContent);
 	return {
 		hasTargetNote,
@@ -284,7 +296,7 @@ export const getReviewProposalValidity = (
 		hasWritebackContent,
 		missingTargetNote: !hasTargetNote,
 		invalidTargetNote: hasTargetNote && !targetPathAllowed,
-		missingTargetEvidence: hasTargetNote && targetPathAllowed && !targetExists,
+		missingTargetEvidence: hasTargetNote && targetPathAllowed && !targetExists && !lifecycleCreate,
 		missingWritebackContent: !hasWritebackContent,
 		isComplete: targetResolved && hasWritebackContent,
 	};
@@ -449,6 +461,17 @@ export const parseMemoryProposalRecord = ({
 		proposedBy: firstString(fields, ['proposed_by', 'proposedBy']) || 'unknown',
 		relatedProject: firstString(fields, ['related_project', 'relatedProject', 'project_hint', 'projectHint']) || '',
 		memoryScope: firstString(fields, ['memory_scope', 'memoryScope']) || '',
+		projectId: firstString(fields, ['project_id', 'projectId']) || '',
+		claimKey: firstString(fields, ['claim_key', 'claimKey']) || '',
+		proposedAuthority: firstString(fields, ['proposed_authority', 'proposedAuthority']) || '',
+		proposedConfidence: firstString(fields, ['proposed_confidence', 'proposedConfidence']) || '',
+		declaredState: firstString(fields, ['declared_state', 'declaredState']) || '',
+		observedAt: firstString(fields, ['observed_at', 'observedAt']) || '',
+		validFrom: firstString(fields, ['valid_from', 'validFrom']) || '',
+		validTo: firstString(fields, ['valid_to', 'validTo']) || '',
+		lastVerifiedAt: firstString(fields, ['last_verified_at', 'lastVerifiedAt']) || '',
+		supersedes: readStringList(fields, ['supersedes']),
+		contradicts: readStringList(fields, ['contradicts']),
 		taskId: firstString(fields, ['task_id', 'taskId']) || '',
 		sourceSessionNote: firstString(fields, ['proposal_source_session_note', 'proposalSourceSessionNote', 'session_note', 'sessionNote']) || '',
 		targetNote: firstString(fields, ['target_note', 'targetNote', 'target_path', 'targetPath']) || '',

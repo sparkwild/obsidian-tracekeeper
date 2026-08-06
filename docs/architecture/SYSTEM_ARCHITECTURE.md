@@ -83,8 +83,10 @@ modes and Agent habits. The Runtime never trusts the Skill for authorization.
 
 Public tools come from one contract registry. Discovery uses deterministic order
 and the fixed `local-user` capability set; dispatch performs the same capability
-check. The registry publishes the output schemas used by both discovery and
-Runtime result validation: public top-level success/failure fields are closed,
+check. `tracekeeper.memory` is the single public generation-bound Memory
+catalog across global and project scopes; the retired project-specific name is
+not a public alias. The registry publishes the output schemas used by both
+discovery and Runtime result validation: public top-level success/failure fields are closed,
 while evidence, metadata, and diagnostics are extensible only where their
 schema says so. A per-Agent Bearer gates local access but does not establish
 identity from untrusted client claims. MCP `clientInfo` and Session identifiers are retained only as
@@ -152,6 +154,11 @@ paths.
 - MCP cannot read outside the active Vault or inside its Obsidian configuration.
 - Agent guidance cannot expand Runtime permissions.
 - Global durable memory remains review-gated by default.
+- MemoryRecord v2 preserves claim identity, authority, confidence, evidence,
+  and current/history/conflict lifecycle projections without overwriting
+  history.
+- Typed Source index notes own bounded part manifests; Source parts never
+  become independent relation targets.
 - Automatic and approved writes are attributable and recoverable in proportion
   to their risk.
 - Compatibility code may read old layouts, but new content uses the current

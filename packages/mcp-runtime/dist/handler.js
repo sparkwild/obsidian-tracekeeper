@@ -97,6 +97,7 @@ class McpJsonRpcHandler {
         this.vaultRepository = options.vaultRepository;
         this.proposalTransitionPort = options.proposalTransitionPort;
         this.knowledgeSnapshotProvider = options.knowledgeSnapshotProvider;
+        this.knowledgeReadViewProvider = options.knowledgeReadViewProvider;
         this.graphProfile = options.graphProfile;
         this.memoryRules = options.memoryRules;
         this.contentLanguage = options.contentLanguage;
@@ -328,6 +329,7 @@ class McpJsonRpcHandler {
             vaultRepository: this.vaultRepository,
             proposalTransitionPort: this.proposalTransitionPort,
             knowledgeSnapshotProvider: this.knowledgeSnapshotProvider,
+            knowledgeReadViewProvider: this.knowledgeReadViewProvider,
             graphProfile: this.graphProfile,
             memoryRules: this.memoryRules,
             contentLanguage: this.contentLanguage,

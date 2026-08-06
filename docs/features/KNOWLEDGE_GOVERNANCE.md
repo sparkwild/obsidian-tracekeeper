@@ -34,6 +34,14 @@ defined by the [Agent Workflow](AGENT_WORKFLOW.md).
 
 ## Durable Memory
 
+Durable Memory uses the MemoryRecord v2 lifecycle. Each new record has a
+stable `memory_id` and `claim_key`, declares global or project scope, authority,
+confidence, lifecycle state, observation and validity times, evidence, and
+explicit `supersedes` or `contradicts` relations. Authority and confidence are
+reviewable claims rather than hidden ranking signals: verified memory requires
+evidence, conflicting current claims remain visible as conflicts, and history
+is preserved instead of being overwritten.
+
 Global durable-memory changes enter Knowledge Change Review by default. A user
 may edit an unapproved proposal, approve it, return it for revision, or not
 accept it. Approval confirms the content; applying it remains a separate,
@@ -85,12 +93,16 @@ Project memory uses a lighter default rule:
 A pending proposal is not durable memory. Only an eligible project auto-save or
 a completed approved writeback may be described as persisted.
 
-Project Recall selects relevant evidence and is not exhaustive. The read-only
-`tracekeeper.project_memory` catalog provides complete, generation-bound,
-paginated metadata for one stable project identity. Full entry bodies remain
-behind `tracekeeper.read_note`. Obsidian Backlinks provide the human aggregate
-because every immutable entry links to the stable project hub; the hub itself
-is not rewritten for each operation, and Bases are not required.
+Recall selects relevant evidence and is not exhaustive. The only public memory
+catalog is read-only `tracekeeper.memory`; there is no public project-specific
+alias. It provides generation-bound, paginated
+metadata for global or project scope and exposes `current`, `history`,
+`conflicts`, and `all` lifecycle views. Project scope requires the Runtime's
+stable project identity. Full entry bodies remain behind
+`tracekeeper.read_note`. Obsidian Backlinks provide the human aggregate because
+every project record links to its stable project hub, while global records link
+to the global Memory hub. Hubs are not rewritten for every operation, and
+Bases are not required.
 
 An archiveable proposal remains addressable by its explicit proposal id after
 it leaves the active review queue. Archiving first shows the exact source and
@@ -142,9 +154,26 @@ the activity reader.
 
 ## Lint, Graph, And Migration
 
-`tracekeeper.lint` is the read-only structure check. Graph profiles control
+`tracekeeper.lint` v3 is the read-only Doctor entry point for structure, links,
+Sources, claims, lifecycle, and graph health. It reports invalid v2 records,
+missing claim identity, unresolved evidence or Hub/Source relations, lifecycle
+cycles and conflicts, stale verification, Source-part integrity, bounded
+directory growth, and legacy Memory candidates. Graph profiles control
 reporting severity but never create notes or rewrite links. A selected graph
 suggestion may become a normal Knowledge Change Review proposal.
+
+Source records use a normalized `web`, `file`, or `transcript` owner route and
+carry a stable `source_id` plus content hash. Small captures keep content in the
+Source index note. Large captures use a bounded manifest of content-addressed
+part notes linked visibly from that index; Memory and Wiki relations target the
+Source index rather than an individual part.
+
+Legacy Memory remains readable but has no inferred `claim_key` and does not
+participate in automatic lifecycle resolution. The plugin may turn a unique
+Doctor identity suggestion into a preview-bound review proposal only after a
+fresh ready snapshot still matches. Ambiguous or missing suggestions remain
+blocked. This promotion flow never rewrites, moves, or deletes the legacy note;
+approval and application remain governed by Knowledge Change Review.
 
 Legacy layouts are handled through a human-governed Obsidian workflow:
 

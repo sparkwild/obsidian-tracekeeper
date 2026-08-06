@@ -67,6 +67,14 @@ try {
 			approval_status: 'pending_review',
 			proposed_by: 'trace-operator',
 			related_project: 'tracekeeper',
+			project_id: 'tracekeeper-id',
+			claim_key: 'project:review-lifecycle',
+			proposed_authority: 'user',
+			proposed_confidence: 'verified',
+			declared_state: 'active',
+			observed_at: '2026-08-06T00:00:00.000Z',
+			supersedes: ['memory-old'],
+			contradicts: ['memory-conflict'],
 			target_note: '01_knowledge/memory/projects/tracekeeper/memory.md',
 			task_id: 'task-42',
 			evidence: ['e1', 'e2', 'e1'],
@@ -86,6 +94,14 @@ try {
 	assert.equal(memoryProposal?.proposalId, 'prop-1');
 	assert.equal(memoryProposal?.approvalStatus, 'pending');
 	assert.equal(memoryProposal?.targetNote, '01_knowledge/memory/projects/tracekeeper/memory.md');
+	assert.equal(memoryProposal?.claimKey, 'project:review-lifecycle');
+	assert.equal(memoryProposal?.proposedAuthority, 'user');
+	assert.equal(memoryProposal?.proposedConfidence, 'verified');
+	assert.deepEqual(memoryProposal?.supersedes, ['memory-old']);
+	assert.deepEqual(memoryProposal?.contradicts, ['memory-conflict']);
+	const lifecycleCreateValidity = reviewModule.getReviewProposalValidity(memoryProposal, { exists: false });
+	assert.equal(lifecycleCreateValidity.isComplete, true);
+	assert.equal(lifecycleCreateValidity.missingTargetEvidence, false);
 	assert.equal(memoryProposal?.riskLevel, 'low');
 	assert.equal(memoryProposal?.revisionRequestedBy, 'agent');
 	assert.equal(memoryProposal?.evidence.length, 2);
@@ -153,7 +169,7 @@ try {
 	assert.equal(validity.isComplete, false);
 	assert.equal(reviewModule.getReviewProposalAttentionState(missingWriteback), 'incomplete');
 	const unresolvedTarget = reviewModule.getReviewProposalValidity(
-		{ ...memoryProposal, approvalStatus: 'pending' },
+		{ ...memoryProposal, claimKey: '', approvalStatus: 'pending' },
 		{ exists: false }
 	);
 	assert.equal(unresolvedTarget.targetPathAllowed, true);

@@ -1,4 +1,7 @@
-import { type ScanResult, type ScannedNote } from '@tracekeeper/core';
+import { type KnowledgeReadView, type ScanResult, type ScannedNote } from '@tracekeeper/core';
+export declare const MAX_READ_VIEW_LEXICAL_CANDIDATES = 256;
+export declare const MAX_READ_VIEW_GRAPH_EXPANSIONS = 64;
+export declare const MAX_READ_VIEW_RERANKED_ROWS = 32;
 export type RecallApplicationScope = 'global' | 'project' | 'project_history';
 export type RecallContentOrigin = 'captured_source' | 'tracekeeper_generated' | 'vault_note';
 export interface RecallProjectIdentityInput {
@@ -48,6 +51,12 @@ export interface RecallApplicationDependencies {
     filterProjectNotes(notes: ScannedNote[], identity: RecallProjectIdentity): ScannedNote[];
     buildRelationEvidence(note: ScannedNote, allNotes: ScannedNote[]): RecallRelationEvidence;
     contentOrigin(relativePath: string, noteType?: string): RecallContentOrigin;
+    onReadViewDiagnostics?(diagnostics: RecallReadViewDiagnostics): void;
+}
+export interface RecallReadViewDiagnostics {
+    lexical_candidates: number;
+    graph_expansions: number;
+    reranked_rows: number;
 }
 export interface RecallEntry {
     path: string;
@@ -138,6 +147,16 @@ export declare class RecallApplicationService {
     private readonly dependencies;
     constructor(dependencies: RecallApplicationDependencies);
     execute(request: RecallApplicationRequest): RecallApplicationResult;
+    executeReadView(request: RecallApplicationRequest & {
+        scope: 'global';
+    }, view: KnowledgeReadView): GlobalRecallApplicationResult;
+    executeReadView(request: RecallApplicationRequest & {
+        scope: 'project';
+    }, view: KnowledgeReadView): ProjectRecallApplicationResult;
+    executeReadView(request: RecallApplicationRequest & {
+        scope: 'project_history';
+    }, view: KnowledgeReadView): ProjectHistoryRecallApplicationResult;
+    executeReadView(request: RecallApplicationRequest, view: KnowledgeReadView): RecallApplicationResult;
     private executeGlobal;
     private executeProject;
     private executeProjectHistory;

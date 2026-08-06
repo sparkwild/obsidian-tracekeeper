@@ -4,16 +4,23 @@ import {
 	type MemoryInspectorQuery,
 	type MemoryInspectorRecord,
 	type MemoryInspectorSnapshot,
-	type MemoryPersistenceState,
+	type MemoryLifecycleDisplayState,
 	type MemoryRecordScope,
 	type MemoryScopeFilter,
 	type MemoryStateFilter,
 } from '../observability/knowledge-observability-model';
+import type {
+	LegacyMemoryMigrationPreview,
+	LegacyMemoryMigrationResult,
+} from '../structure/legacy-memory-migration-controller';
 import { ui } from '../../ui/localization';
 import { TRACEKEEPER_MEMORY_INSPECTOR_VIEW } from '../../ui/view-types';
 import { trimText } from '../shared/markdown-record-parser';
 
 export class TracekeeperMemoryInspectorView extends ItemView {
+	private migrationPreview: LegacyMemoryMigrationPreview | null = null;
+	private migrationResult: LegacyMemoryMigrationResult | null = null;
+	private migrationBusy = false;
 	private query: MemoryInspectorQuery = {
 		page: 1,
 		scope: 'all',
@@ -78,11 +85,13 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 			cls: 'tracekeeper-view__description',
 		});
 		const refreshButton = header.createEl('button', { text: ui('刷新', 'Refresh') });
+		refreshButton.setAttr('aria-label', ui('刷新记忆索引投影', 'Refresh memory index projection'));
 		refreshButton.addEventListener('click', () => {
 			void this.refreshWithNotice(refreshButton);
 		});
 
 		this.renderIndexStatus(contentEl, snapshot);
+		this.renderLegacyMigrationStatus(contentEl, snapshot.lifecycleCounts.legacy_unkeyed);
 		this.renderFilters(contentEl, snapshot);
 
 		if (snapshot.focused) {
@@ -197,6 +206,13 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		});
 		summary.createEl('div', {
 			text: ui(
+				`生命周期：当前 ${snapshot.lifecycleCounts.current} · 历史 ${snapshot.lifecycleCounts.history} · 冲突 ${snapshot.lifecycleCounts.conflict} · 待审核 ${snapshot.lifecycleCounts.review} · 旧版未标识 ${snapshot.lifecycleCounts.legacy_unkeyed}`,
+				`Lifecycle: current ${snapshot.lifecycleCounts.current} · history ${snapshot.lifecycleCounts.history} · conflict ${snapshot.lifecycleCounts.conflict} · review ${snapshot.lifecycleCounts.review} · legacy unkeyed ${snapshot.lifecycleCounts.legacy_unkeyed}`
+			),
+			cls: 'tracekeeper-view__description',
+		});
+		summary.createEl('div', {
+			text: ui(
 				`项目记忆：不可变条目 ${snapshot.projectMemoryCounts.immutableEntries} · 旧版笔记 ${snapshot.projectMemoryCounts.legacyNotes}。此计数来自当前索引；Recall 只按相关性选择，不能替代完整目录。`,
 				`Project memory: ${snapshot.projectMemoryCounts.immutableEntries} immutable entries · ${snapshot.projectMemoryCounts.legacyNotes} legacy notes. These counts come from the current index; Recall selects by relevance and is not a complete catalog.`
 			),
@@ -245,13 +261,21 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 			cls: 'tracekeeper-observability-record__path',
 		});
 		header.createEl('span', {
-			text: this.memoryStateLabel(record.state),
-			cls: `tracekeeper-badge ${this.memoryStateClass(record.state)}`,
+			text: this.lifecycleStateLabel(record.lifecycleState),
+			cls: `tracekeeper-badge ${this.lifecycleStateClass(record.lifecycleState)}`,
 		});
 
 		const details = item.createDiv({ cls: 'tracekeeper-detail-grid' });
 		this.renderDetail(details, ui('范围', 'Scope'), this.memoryScopeLabel(record.scope, record.project));
 		this.renderDetail(details, ui('持久化', 'Persistence'), this.memoryStateDetail(record));
+		this.renderDetail(details, ui('有效状态', 'Effective state'), this.lifecycleStateDetail(record));
+		this.renderDetail(details, ui('Claim', 'Claim'), record.claimKey || ui('旧版未标识', 'Legacy unkeyed'));
+		this.renderDetail(details, ui('权威来源', 'Authority'), record.authority || ui('未声明', 'Not declared'));
+		this.renderDetail(details, ui('置信度', 'Confidence'), record.confidenceLevel || ui('未声明', 'Not declared'));
+		this.renderDetail(details, ui('有效期', 'Validity'), this.memoryValidity(record));
+		this.renderDetail(details, ui('证据', 'Evidence'), record.evidence.length
+			? `${record.evidence.slice(0, 3).join(', ')}${record.evidence.length > 3 ? ` (+${record.evidence.length - 3})` : ''}`
+			: ui('无引用', 'No references'));
 		this.renderDetail(details, ui('来源', 'Provenance'), record.provenance || ui('未记录', 'Not recorded'));
 		if (record.taskId) {
 			this.renderDetail(details, ui('任务', 'Task'), record.taskId);
@@ -273,6 +297,54 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		});
 	}
 
+	private renderLegacyMigrationStatus(container: HTMLElement, legacyCount: number): void {
+		if (legacyCount === 0 && !this.migrationPreview && !this.migrationResult) return;
+		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-observability-warning' });
+		card.setAttr('role', 'region');
+		card.setAttr('aria-label', ui('旧版记忆治理', 'Legacy memory governance'));
+		card.createEl('strong', { text: ui('旧版记忆 Doctor', 'Legacy memory Doctor') });
+		card.createEl('p', {
+			text: ui(
+				'Doctor 只预览缺少 claim_key 的旧记忆；只有唯一身份建议才可生成审核提案，源笔记不会被改写或删除。',
+				'Doctor only previews legacy memory without a claim key. Only a unique identity suggestion can create a review proposal; source notes are never rewritten or deleted.'
+			),
+		});
+		const status = card.createDiv({ cls: 'tracekeeper-view__description' });
+		status.setAttr('aria-live', 'polite');
+		if (this.migrationPreview) {
+			status.setText(ui(
+				`候选 ${this.migrationPreview.rows.length} · 可生成 ${this.migrationPreview.executableCount} · 阻塞 ${this.migrationPreview.blockedCount} · 索引 ${this.migrationPreview.indexState}`,
+				`Candidates ${this.migrationPreview.rows.length} · executable ${this.migrationPreview.executableCount} · blocked ${this.migrationPreview.blockedCount} · index ${this.migrationPreview.indexState}`
+			));
+		} else {
+			status.setText(ui('尚未生成预览；不会自动启动迁移。', 'No preview yet; migration never starts automatically.'));
+		}
+		if (this.migrationResult) {
+			card.createEl('p', {
+				text: ui(
+					`已创建 ${this.migrationResult.createdCount} · 已存在 ${this.migrationResult.alreadyCreatedCount} · 阻塞 ${this.migrationResult.blockedCount} · 失败 ${this.migrationResult.failedCount}`,
+					`Created ${this.migrationResult.createdCount} · existing ${this.migrationResult.alreadyCreatedCount} · blocked ${this.migrationResult.blockedCount} · failed ${this.migrationResult.failedCount}`
+				),
+			});
+		}
+		const actions = card.createDiv({ cls: 'tracekeeper-action-row' });
+		const previewButton = actions.createEl('button', {
+			text: ui('预览 Doctor 候选', 'Preview Doctor candidates'),
+		});
+		previewButton.disabled = this.migrationBusy;
+		previewButton.setAttr('aria-label', ui('预览旧版记忆迁移候选', 'Preview legacy memory migration candidates'));
+		previewButton.addEventListener('click', () => void this.previewLegacyMigration());
+		if (this.migrationPreview?.canApply && this.migrationPreview.executableCount > 0) {
+			const applyButton = actions.createEl('button', {
+				text: ui('生成审核提案', 'Create review proposals'),
+				cls: 'mod-cta',
+			});
+			applyButton.disabled = this.migrationBusy;
+			applyButton.setAttr('aria-label', ui('为唯一建议生成审核提案', 'Create review proposals for unique suggestions'));
+			applyButton.addEventListener('click', () => void this.applyLegacyMigration());
+		}
+	}
+
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
 		item.createEl('span', { text: label });
@@ -288,15 +360,29 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		return ui('全局记忆', 'Global memory');
 	}
 
-	private memoryStateLabel(state: MemoryPersistenceState): string {
+	private lifecycleStateLabel(state: MemoryLifecycleDisplayState): string {
 		switch (state) {
-			case 'persisted':
-				return ui('已保存', 'Persisted');
-			case 'queued':
-				return ui('待确认', 'Queued');
-			case 'missing':
-				return ui('证据缺失', 'Missing evidence');
+			case 'current': return ui('当前', 'Current');
+			case 'history': return ui('历史', 'History');
+			case 'conflict': return ui('冲突', 'Conflict');
+			case 'review': return ui('待审核', 'Review');
+			case 'legacy_unkeyed': return ui('旧版未标识', 'Legacy unkeyed');
 		}
+	}
+
+	private lifecycleStateDetail(record: MemoryInspectorRecord): string {
+		const reasons = record.lifecycleReasons.length > 0
+			? ` · ${record.lifecycleReasons.join(', ')}`
+			: '';
+		return `${record.effectiveState}${reasons}`;
+	}
+
+	private memoryValidity(record: MemoryInspectorRecord): string {
+		const range = [record.validFrom, record.validTo].filter(Boolean).join(' → ');
+		const verified = record.lastVerifiedAt
+			? `${ui('复核', 'verified')} ${record.lastVerifiedAt}`
+			: '';
+		return [range || ui('未限定', 'Unbounded'), verified].filter(Boolean).join(' · ');
 	}
 
 	private memoryStateDetail(record: MemoryInspectorRecord): string {
@@ -310,14 +396,43 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		}
 	}
 
-	private memoryStateClass(state: MemoryPersistenceState): string {
+	private lifecycleStateClass(state: MemoryLifecycleDisplayState): string {
 		switch (state) {
-			case 'persisted':
-				return 'tracekeeper-badge--success';
-			case 'queued':
-				return 'tracekeeper-badge--warning';
-			case 'missing':
-				return 'tracekeeper-badge--error';
+			case 'current': return 'tracekeeper-badge--success';
+			case 'history': return '';
+			case 'conflict': return 'tracekeeper-badge--error';
+			case 'review':
+			case 'legacy_unkeyed': return 'tracekeeper-badge--warning';
+		}
+	}
+
+	private async previewLegacyMigration(): Promise<void> {
+		this.migrationBusy = true;
+		try {
+			this.migrationPreview = await this.plugin.previewLegacyMemoryMigration();
+			this.migrationResult = null;
+		} catch (error) {
+			console.error('tracekeeper failed to preview legacy memory migration', error);
+			new Notice(ui('旧版记忆预览失败。', 'Failed to preview legacy memory.'));
+		} finally {
+			this.migrationBusy = false;
+			await this.refresh();
+		}
+	}
+
+	private async applyLegacyMigration(): Promise<void> {
+		if (!this.migrationPreview) return;
+		this.migrationBusy = true;
+		try {
+			this.migrationResult = await this.plugin.applyLegacyMemoryMigration(this.migrationPreview);
+			this.migrationPreview = await this.plugin.previewLegacyMemoryMigration(this.migrationPreview.migrationId);
+			new Notice(ui('旧版记忆审核提案已处理。', 'Legacy memory review proposals processed.'));
+		} catch (error) {
+			console.error('tracekeeper failed to apply legacy memory migration', error);
+			new Notice(ui('预览已过期或提案创建失败，请重新预览。', 'The preview is stale or proposal creation failed. Preview again.'));
+		} finally {
+			this.migrationBusy = false;
+			await this.refresh();
 		}
 	}
 

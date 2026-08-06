@@ -24,6 +24,7 @@ import { LocalToolExecutor } from './composition/local-tool-executor';
 import {
 	ARCHIVE_ROOT,
 	KNOWLEDGE_GLOBAL_MEMORY_DIR,
+	KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
 	KNOWLEDGE_INDEX_PATH,
 	KNOWLEDGE_MEMORY_DIR,
 	KNOWLEDGE_MEMORY_INDEX_PATH,
@@ -193,6 +194,11 @@ import {
 	type RuntimeLogSnapshot,
 } from './features/runtime/runtime-log-model';
 import { InitializeMemoryStructureModal } from './features/structure/initialize-memory-structure-modal';
+import {
+	LegacyMemoryMigrationController,
+	type LegacyMemoryMigrationPreview,
+	type LegacyMemoryMigrationResult,
+} from './features/structure/legacy-memory-migration-controller';
 import { OnboardingEntryModal } from './features/onboarding/onboarding-entry-modal';
 import { TracekeeperSourceStatusView } from './features/sources/source-status-view';
 import { TracekeeperActivityView } from './features/activity/activity-view';
@@ -362,8 +368,16 @@ function buildKnowledgeEntryFiles(language: ResolvedNoteContentLanguage): BaseSt
 			path: KNOWLEDGE_MEMORY_INDEX_PATH,
 			content: noteContentText(
 				language,
-				'# 记忆入口\n\n- [[projects/index|项目记忆]]\n',
-				'# Memory Index\n\n- [[projects/index|Project memory]]\n'
+				'# 记忆入口\n\n- [[global/index|全局记忆]]\n- [[projects/index|项目记忆]]\n',
+				'# Memory Index\n\n- [[global/index|Global memory]]\n- [[projects/index|Project memory]]\n'
+			),
+		},
+		{
+			path: KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
+			content: noteContentText(
+				language,
+				'# 全局记忆入口\n\n全局记忆记录链接回此处，并通过反向链接聚合。\n',
+				'# Global Memory Index\n\nGlobal memory records link back here and aggregate through Backlinks.\n'
 			),
 		},
 		{
@@ -502,6 +516,7 @@ export default class TracekeeperPlugin extends Plugin {
 	private knowledgeIndex: ObsidianKnowledgeIndexAdapter | null = null;
 	private clientSkillAdapter: ClientSkillAdapter | null = null;
 	private legacyMigrationController!: LegacyMigrationController;
+	private legacyMemoryMigrationController!: LegacyMemoryMigrationController;
 	private activityDataController!: ActivityDataController;
 	private activityRecordRepository!: ActivityRecordRepository;
 	private graphHealthController!: GraphHealthController;
@@ -544,6 +559,48 @@ export default class TracekeeperPlugin extends Plugin {
 					throw new Error('Knowledge index is not ready for legacy migration.');
 				}
 				return this.knowledgeIndex.knowledgeSnapshot();
+			},
+		});
+		this.legacyMemoryMigrationController = new LegacyMemoryMigrationController({
+			loadDoctorSnapshot: async () => {
+				const view = await this.knowledgeIndex?.knowledgeReadView(this.getVaultRoot());
+				if (!view) {
+					return { generation: 0, indexState: 'building', candidates: [] };
+				}
+				return {
+					generation: view.generation,
+					indexState: view.index_state === 'ready'
+						? 'ready'
+						: view.index_state === 'rebuilding'
+							? 'recovering'
+							: 'building',
+					candidates: view.memory.lifecycle.legacy.map((row) => ({
+						path: row.projection.path,
+						contentHash: view.catalog.get(row.projection.path)?.contentHash ?? '',
+						scope: row.projection.scope,
+						projectId: row.projection.project_id,
+						suggestions: [],
+					})),
+				};
+			},
+			readText: async (path) => {
+				const file = this.app.vault.getAbstractFileByPath(this.normalizeVaultPath(path));
+				if (!file) return null;
+				if (!(file instanceof TFile)) {
+					throw new Error(`Legacy memory proposal path is not a file: ${path}.`);
+				}
+				return this.app.vault.read(file);
+			},
+			createText: async (path, content) => {
+				const normalized = this.normalizeVaultPath(path);
+				if (!normalized.startsWith(`${TRACEKEEPER_REVIEW_QUEUE_DIR}/`)) {
+					throw new Error('Legacy memory migration can only create review proposals.');
+				}
+				await this.ensureFolderExists(TRACEKEEPER_REVIEW_QUEUE_DIR);
+				if (this.app.vault.getAbstractFileByPath(normalized)) {
+					throw new Error(`Legacy memory proposal already exists: ${normalized}.`);
+				}
+				await this.app.vault.create(normalized, content);
 			},
 		});
 		this.activityRecordRepository = new ActivityRecordRepository(this.app);
@@ -1153,6 +1210,7 @@ export default class TracekeeperPlugin extends Plugin {
 			vaultRepository: this.vaultRepository,
 			proposalTransitionPort: this.proposalTransitionAdapter,
 			knowledgeSnapshotProvider: (requestedVaultRoot) => this.knowledgeIndex?.scanSnapshot(requestedVaultRoot) ?? null,
+			knowledgeReadViewProvider: (requestedVaultRoot) => this.knowledgeIndex?.knowledgeReadView(requestedVaultRoot) ?? Promise.resolve(null),
 			contentLanguage: noteContentLanguage.language,
 			contentLanguageSource: noteContentLanguage.source,
 			graphProfile: this.settings.graphProfile,
@@ -1850,6 +1908,23 @@ export default class TracekeeperPlugin extends Plugin {
 			missingMemoryFolder: !(this.app.vault.getAbstractFileByPath(KNOWLEDGE_MEMORY_DIR) instanceof TFolder),
 			query,
 		});
+	}
+
+	async previewLegacyMemoryMigration(
+		migrationId?: string
+	): Promise<LegacyMemoryMigrationPreview> {
+		const view = await this.knowledgeIndex?.knowledgeReadView(this.getVaultRoot());
+		const resolvedId = migrationId
+			?? `legacy-memory-${view?.generation ?? 0}`;
+		return this.legacyMemoryMigrationController.preview(resolvedId);
+	}
+
+	async applyLegacyMemoryMigration(
+		preview: LegacyMemoryMigrationPreview
+	): Promise<LegacyMemoryMigrationResult> {
+		const result = await this.legacyMemoryMigrationController.apply(preview);
+		await this.refreshGovernanceViews();
+		return result;
 	}
 
 	async loadSourceStatusSnapshot(
@@ -2633,6 +2708,7 @@ export default class TracekeeperPlugin extends Plugin {
 			vaultRepository: this.vaultRepository,
 			proposalTransitionPort: this.proposalTransitionAdapter,
 			knowledgeSnapshotProvider: (requestedVaultRoot) => this.knowledgeIndex?.scanSnapshot(requestedVaultRoot) ?? null,
+			knowledgeReadViewProvider: (requestedVaultRoot) => this.knowledgeIndex?.knowledgeReadView(requestedVaultRoot) ?? Promise.resolve(null),
 			graphProfile: this.settings.graphProfile,
 			memoryRules: {
 				globalMemoryRule: this.settings.globalMemoryRule,

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA = exports.GENERIC_TOOL_OUTPUT_SCHEMA = exports.FINISH_TASK_OUTPUT_SCHEMA = exports.PROJECT_MEMORY_OUTPUT_SCHEMA = exports.RECALL_OUTPUT_SCHEMA = exports.START_TASK_OUTPUT_SCHEMA = exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = exports.CAPTURE_SOURCE_OUTPUT_SCHEMA = exports.SOURCE_REQUEST_OUTPUT_SCHEMA = exports.APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA = exports.REVIEW_QUEUE_OUTPUT_SCHEMA = exports.BUILD_CONTEXT_PACK_OUTPUT_SCHEMA = exports.READ_NOTE_OUTPUT_SCHEMA = exports.LINT_OUTPUT_SCHEMA = exports.STATUS_OUTPUT_SCHEMA = exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA = exports.PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA = exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = exports.RECALL_SUCCESS_OUTPUT_SCHEMA = exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA = exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = exports.SCHEMA_VERSION = void 0;
+exports.AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA = exports.GENERIC_TOOL_OUTPUT_SCHEMA = exports.FINISH_TASK_OUTPUT_SCHEMA = exports.MEMORY_OUTPUT_SCHEMA = exports.RECALL_OUTPUT_SCHEMA = exports.START_TASK_OUTPUT_SCHEMA = exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = exports.CAPTURE_SOURCE_OUTPUT_SCHEMA = exports.SOURCE_REQUEST_OUTPUT_SCHEMA = exports.APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA = exports.REVIEW_QUEUE_OUTPUT_SCHEMA = exports.BUILD_CONTEXT_PACK_OUTPUT_SCHEMA = exports.READ_NOTE_OUTPUT_SCHEMA = exports.LINT_OUTPUT_SCHEMA = exports.STATUS_OUTPUT_SCHEMA = exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA = exports.MEMORY_SUCCESS_OUTPUT_SCHEMA = exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = exports.RECALL_SUCCESS_OUTPUT_SCHEMA = exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA = exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = exports.SCHEMA_VERSION = void 0;
 const action_envelope_1 = require("./action-envelope");
 exports.SCHEMA_VERSION = 2;
 exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = {
@@ -50,6 +50,117 @@ const PROJECT_IDENTITY_OUTPUT_SCHEMA = {
         },
         confidence: { type: 'string', enum: ['exact', 'derived', 'uncertain'] },
         warnings: { type: 'array', items: { type: 'string' } },
+    },
+    additionalProperties: false,
+};
+const MEMORY_RECORD_SCOPE_SCHEMA = {
+    type: 'string',
+    enum: ['global', 'project'],
+};
+const MEMORY_RECORD_AUTHORITY_SCHEMA = {
+    type: 'string',
+    enum: ['agent', 'source', 'user'],
+};
+const MEMORY_RECORD_CONFIDENCE_SCHEMA = {
+    type: 'string',
+    enum: ['uncertain', 'inferred', 'supported', 'verified'],
+};
+const MEMORY_RECORD_DECLARED_STATE_SCHEMA = {
+    type: 'string',
+    enum: ['active', 'disputed', 'retracted', 'review'],
+};
+const MEMORY_RECORD_EFFECTIVE_STATE_SCHEMA = {
+    type: 'string',
+    enum: ['current', 'superseded', 'disputed', 'retracted', 'review', 'legacy_unkeyed'],
+};
+const NULLABLE_STRING_ARRAY_SCHEMA = {
+    oneOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }],
+};
+const MEMORY_RECORD_IDENTITY_SCHEMA = {
+    type: 'object',
+    required: ['scope', 'claim_key'],
+    properties: {
+        scope: MEMORY_RECORD_SCOPE_SCHEMA,
+        project_id: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        claim_key: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        memory_id: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+    },
+    additionalProperties: false,
+};
+const PROPOSED_MEMORY_RECORD_SCHEMA = {
+    type: 'object',
+    required: ['scope', 'claim_key', 'authority', 'confidence_level', 'declared_state', 'observed_at'],
+    properties: {
+        scope: MEMORY_RECORD_SCOPE_SCHEMA,
+        project_id: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        memory_id: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        memory_kind: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        claim_key: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        authority: { oneOf: [MEMORY_RECORD_AUTHORITY_SCHEMA, { type: 'null' }] },
+        confidence_level: { oneOf: [MEMORY_RECORD_CONFIDENCE_SCHEMA, { type: 'null' }] },
+        declared_state: { oneOf: [MEMORY_RECORD_DECLARED_STATE_SCHEMA, { type: 'null' }] },
+        observed_at: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        valid_from: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        valid_to: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        last_verified_at: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        evidence: NULLABLE_STRING_ARRAY_SCHEMA,
+        supersedes: NULLABLE_STRING_ARRAY_SCHEMA,
+        contradicts: NULLABLE_STRING_ARRAY_SCHEMA,
+        related_wiki: NULLABLE_STRING_ARRAY_SCHEMA,
+        related_sources: NULLABLE_STRING_ARRAY_SCHEMA,
+        effective_state: { oneOf: [MEMORY_RECORD_EFFECTIVE_STATE_SCHEMA, { type: 'null' }] },
+    },
+    additionalProperties: false,
+};
+const PROPOSAL_TRANSITION_PREVIEW_SCHEMA = {
+    type: 'object',
+    properties: {
+        operation_id: { type: 'string', minLength: 1 },
+        kind: { type: 'string' },
+        previous_status: { type: 'string' },
+        next_status: { type: 'string' },
+        expected_revision: { type: 'string', minLength: 1 },
+        committed_revision: { type: 'string', minLength: 1 },
+        proposal_path: { type: 'string', minLength: 1 },
+        proposal_id: { type: 'string', minLength: 1 },
+    },
+    additionalProperties: true,
+};
+const FINISH_TASK_CLAIM_RECORD_SCHEMA = {
+    type: 'object',
+    required: ['content'],
+    properties: {
+        proposal_kind: { type: 'string' },
+        content: { type: 'string', minLength: 1 },
+        evidence: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }, { type: 'null' }] },
+        target_note: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        claim_key: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        proposed_authority: { oneOf: [MEMORY_RECORD_AUTHORITY_SCHEMA, { type: 'null' }] },
+        proposed_confidence: { oneOf: [MEMORY_RECORD_CONFIDENCE_SCHEMA, { type: 'null' }] },
+        declared_state: { oneOf: [MEMORY_RECORD_DECLARED_STATE_SCHEMA, { type: 'null' }] },
+        observed_at: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        valid_from: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        valid_to: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        last_verified_at: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        supersedes: { type: 'array', items: { type: 'string' } },
+        contradicts: { type: 'array', items: { type: 'string' } },
+        authority: { oneOf: [MEMORY_RECORD_AUTHORITY_SCHEMA, { type: 'null' }] },
+        confidence_level: { oneOf: [MEMORY_RECORD_CONFIDENCE_SCHEMA, { type: 'null' }] },
+        effective_state: { oneOf: [MEMORY_RECORD_EFFECTIVE_STATE_SCHEMA, { type: 'null' }] },
+    },
+    additionalProperties: false,
+};
+const FINISH_TASK_MEMORY_CHANGE_SCHEMA = {
+    type: 'object',
+    required: ['source', 'change_kind'],
+    properties: {
+        source: { type: 'string', minLength: 1 },
+        change_kind: { type: 'string' },
+        proposal_id: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        record_identity: MEMORY_RECORD_IDENTITY_SCHEMA,
+        previous_effective_state: { oneOf: [MEMORY_RECORD_EFFECTIVE_STATE_SCHEMA, { type: 'null' }] },
+        next_effective_state: { oneOf: [MEMORY_RECORD_EFFECTIVE_STATE_SCHEMA, { type: 'null' }] },
+        proposal_transition: PROPOSAL_TRANSITION_PREVIEW_SCHEMA,
     },
     additionalProperties: false,
 };
@@ -360,7 +471,10 @@ exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = {
         workflow: { type: 'object', additionalProperties: true },
         memory: { type: 'object', additionalProperties: true },
         closeout_contract: { type: 'object', additionalProperties: true },
+        memory_candidate_records: { type: 'array', items: FINISH_TASK_CLAIM_RECORD_SCHEMA },
+        memory_changes: { type: 'array', items: FINISH_TASK_MEMORY_CHANGE_SCHEMA },
         proposals: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        proposal_transition_receipts: { type: 'array', items: PROPOSAL_TRANSITION_PREVIEW_SCHEMA },
         suggested_memory_updates: { type: 'array', items: { type: 'object', additionalProperties: true } },
         auto_applied_memory_updates: { type: 'array', items: { type: 'object', additionalProperties: true } },
         next_actions: { type: 'array', items: action_envelope_1.AGENT_ACTION_SCHEMA },
@@ -448,6 +562,9 @@ exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = {
                 memory_closeout_summary: { type: 'string' },
                 next_actions: { type: 'array', items: action_envelope_1.AGENT_ACTION_SCHEMA },
                 next_actions_for_agent: { type: 'array', items: { type: 'string' } },
+                memory_candidate_records: { type: 'array', items: FINISH_TASK_CLAIM_RECORD_SCHEMA },
+                memory_changes: { type: 'array', items: FINISH_TASK_MEMORY_CHANGE_SCHEMA },
+                proposal_transition_receipts: { type: 'array', items: PROPOSAL_TRANSITION_PREVIEW_SCHEMA },
                 recommended_memory_actions: { type: 'array', items: { type: 'string' } },
             },
         },
@@ -517,18 +634,51 @@ const PROJECT_MEMORY_CATALOG_ENTRY_OUTPUT_SCHEMA = {
         },
     ],
 };
-exports.PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA = {
+const MEMORY_CATALOG_ENTRY_OUTPUT_SCHEMA = {
+    type: 'object',
+    required: [
+        'path', 'legacy', 'memory_id', 'scope', 'project_id', 'claim_key', 'memory_kind',
+        'authority', 'confidence_level', 'declared_state', 'effective_state',
+        'observed_at', 'valid_from', 'valid_to', 'last_verified_at', 'evidence',
+        'supersedes', 'contradicts', 'related_wiki', 'related_sources', 'reasons',
+    ],
+    properties: {
+        path: { type: 'string', minLength: 1 },
+        legacy: { type: 'boolean' },
+        memory_id: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        scope: { type: 'string', enum: ['global', 'project'] },
+        project_id: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        claim_key: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        memory_kind: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        authority: { oneOf: [{ type: 'string', enum: ['agent', 'source', 'user'] }, { type: 'null' }] },
+        confidence_level: { oneOf: [{ type: 'string', enum: ['uncertain', 'inferred', 'supported', 'verified'] }, { type: 'null' }] },
+        declared_state: { oneOf: [{ type: 'string', enum: ['active', 'disputed', 'retracted', 'review'] }, { type: 'null' }] },
+        effective_state: { type: 'string', enum: ['current', 'superseded', 'disputed', 'retracted', 'review', 'legacy_unkeyed'] },
+        observed_at: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        valid_from: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        valid_to: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        last_verified_at: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+        evidence: { type: 'array', items: { type: 'string' } },
+        supersedes: { type: 'array', items: { type: 'string' } },
+        contradicts: { type: 'array', items: { type: 'string' } },
+        related_wiki: { type: 'array', items: { type: 'string' } },
+        related_sources: { type: 'array', items: { type: 'string' } },
+        reasons: { type: 'array', items: { type: 'string' } },
+    },
+    additionalProperties: false,
+};
+exports.MEMORY_SUCCESS_OUTPUT_SCHEMA = {
     type: 'object',
     required: [
         'schema_version',
         'ok',
         'tool',
         'read_only',
+        'scope',
+        'view',
         'project_id',
-        'project_hub',
         'generation',
         'total',
-        'counts_by_agent',
         'complete',
         'sort',
         'page',
@@ -537,23 +687,16 @@ exports.PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA = {
     properties: {
         schema_version: { const: exports.SCHEMA_VERSION, type: 'integer' },
         ok: { const: true, type: 'boolean' },
-        tool: { const: 'tracekeeper.project_memory' },
+        tool: { const: 'tracekeeper.memory' },
         read_only: { const: true, type: 'boolean' },
-        project_id: { type: 'string', minLength: 1 },
-        project_hub: {
-            type: 'string',
-            minLength: 1,
-            description: 'Vault-relative path to the authoritative project hub.',
-        },
+        scope: { type: 'string', enum: ['global', 'project'] },
+        view: { type: 'string', enum: ['current', 'history', 'conflicts', 'all'] },
+        project_id: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
         generation: { type: 'integer', minimum: 0 },
         total: { type: 'integer', minimum: 0 },
-        counts_by_agent: {
-            type: 'object',
-            additionalProperties: { type: 'integer', minimum: 0 },
-        },
         complete: { const: true, type: 'boolean' },
         sort: {
-            const: 'created_at_desc_operation_id_path_asc',
+            const: 'observed_at_desc_memory_id_path_asc',
             type: 'string',
         },
         page: {
@@ -572,7 +715,7 @@ exports.PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA = {
         },
         entries: {
             type: 'array',
-            items: PROJECT_MEMORY_CATALOG_ENTRY_OUTPUT_SCHEMA,
+            items: MEMORY_CATALOG_ENTRY_OUTPUT_SCHEMA,
         },
     },
     additionalProperties: false,
@@ -662,6 +805,40 @@ exports.STATUS_OUTPUT_SCHEMA = {
         exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
     ],
 };
+const LIFECYCLE_DOCTOR_SCHEMA = {
+    type: 'object',
+    required: ['directory_counts', 'legacy_candidates'],
+    properties: {
+        directory_counts: {
+            type: 'array',
+            items: {
+                type: 'object',
+                required: ['directory', 'record_count'],
+                properties: {
+                    directory: { type: 'string', minLength: 1 },
+                    record_count: { type: 'integer', minimum: 0 },
+                },
+                additionalProperties: false,
+            },
+        },
+        legacy_candidates: {
+            type: 'array',
+            items: {
+                type: 'object',
+                required: ['path', 'content_hash', 'scope', 'project_id', 'suggestions'],
+                properties: {
+                    path: { type: 'string', minLength: 1 },
+                    content_hash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+                    scope: { type: 'string', enum: ['global', 'project'] },
+                    project_id: NULLABLE_STRING_SCHEMA,
+                    suggestions: { type: 'array', items: OPEN_OBJECT_SCHEMA },
+                },
+                additionalProperties: false,
+            },
+        },
+    },
+    additionalProperties: false,
+};
 exports.LINT_OUTPUT_SCHEMA = {
     type: 'object',
     oneOf: [
@@ -671,7 +848,7 @@ exports.LINT_OUTPUT_SCHEMA = {
                 'schema_version', 'ok', 'tool', 'read_only', 'profile', 'graph_profile_disabled',
                 'profile_issues', 'vault_root', 'scanned_at', 'index_state', 'snapshot_generation',
                 'snapshot_warning', 'issue_count', 'issues', 'graph_summary', 'graph_health',
-                'legacy_structure', 'fix_plan_summary',
+                'legacy_structure', 'lifecycle_doctor', 'fix_plan_summary',
             ],
             properties: {
                 schema_version: { const: exports.SCHEMA_VERSION, type: 'integer' },
@@ -689,6 +866,7 @@ exports.LINT_OUTPUT_SCHEMA = {
                 graph_summary: { oneOf: [OPEN_OBJECT_SCHEMA, { type: 'null' }] },
                 graph_health: { oneOf: [OPEN_OBJECT_SCHEMA, { type: 'null' }] },
                 legacy_structure: OPEN_OBJECT_SCHEMA,
+                lifecycle_doctor: LIFECYCLE_DOCTOR_SCHEMA,
                 fix_plan_summary: STRING_ARRAY_SCHEMA,
             },
             additionalProperties: false,
@@ -809,6 +987,10 @@ const REVIEW_PENDING_ENTRY_SCHEMA = {
         status: { type: 'string' },
         proposal_kind: NULLABLE_STRING_SCHEMA,
         risk_level: NULLABLE_STRING_SCHEMA,
+        record_identity: MEMORY_RECORD_IDENTITY_SCHEMA,
+        proposed_record: PROPOSED_MEMORY_RECORD_SCHEMA,
+        prior_memory_ids: { type: 'array', items: { type: 'string' } },
+        predicted_state: MEMORY_RECORD_EFFECTIVE_STATE_SCHEMA,
     },
     additionalProperties: false,
 };
@@ -827,6 +1009,10 @@ const REVIEW_APPROVED_ENTRY_SCHEMA = {
         task_id: NULLABLE_STRING_SCHEMA,
         ready_to_apply: { type: 'boolean' },
         blocker: NULLABLE_STRING_SCHEMA,
+        record_identity: MEMORY_RECORD_IDENTITY_SCHEMA,
+        proposed_record: PROPOSED_MEMORY_RECORD_SCHEMA,
+        prior_memory_ids: { type: 'array', items: { type: 'string' } },
+        predicted_state: MEMORY_RECORD_EFFECTIVE_STATE_SCHEMA,
     },
     additionalProperties: false,
 };
@@ -985,8 +1171,19 @@ exports.SOURCE_REQUEST_OUTPUT_SCHEMA = {
                 mode: { type: 'string', enum: ['external_reference', 'extracted_snapshot', 'local_copy'] },
                 source_note: {
                     type: 'object',
-                    required: ['path', 'activity_path'],
-                    properties: { path: { type: 'string', minLength: 1 }, activity_path: { type: 'string', minLength: 1 } },
+                    required: [
+                        'path', 'activity_path', 'source_kind', 'source_id', 'content_hash', 'route', 'index_path', 'part_manifest',
+                    ],
+                    properties: {
+                        path: { type: 'string', minLength: 1 },
+                        activity_path: { type: 'string', minLength: 1 },
+                        source_kind: { type: 'string', enum: ['web', 'file', 'transcript'] },
+                        source_id: { type: 'string', minLength: 1 },
+                        content_hash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+                        route: { type: 'string', minLength: 1 },
+                        index_path: { type: 'string', minLength: 1 },
+                        part_manifest: STRING_ARRAY_SCHEMA,
+                    },
                     additionalProperties: false,
                 },
                 report: {
@@ -1023,10 +1220,16 @@ exports.CAPTURE_SOURCE_OUTPUT_SCHEMA = {
                 warnings: STRING_ARRAY_SCHEMA,
                 metadata: {
                     type: 'object',
-                    required: ['source', 'mode'],
+                    required: ['source', 'mode', 'source_kind', 'source_id', 'content_hash', 'route', 'index_path', 'part_manifest'],
                     properties: {
                         source: { type: 'string', minLength: 1 },
                         mode: { type: 'string', enum: ['external_reference', 'extracted_snapshot', 'local_copy'] },
+                        source_kind: { type: 'string', enum: ['web', 'file', 'transcript'] },
+                        source_id: { type: 'string', minLength: 1 },
+                        content_hash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+                        route: { type: 'string', minLength: 1 },
+                        index_path: { type: 'string', minLength: 1 },
+                        part_manifest: STRING_ARRAY_SCHEMA,
                     },
                     additionalProperties: false,
                 },
@@ -1062,6 +1265,10 @@ const PROPOSE_MEMORY_COMMON_PROPERTIES = {
     agent_type: { type: 'string', minLength: 1 },
     operation_hash: { type: 'string', minLength: 1 },
     target_note: { type: 'string', minLength: 1 },
+    record_identity: MEMORY_RECORD_IDENTITY_SCHEMA,
+    predicted_state: { oneOf: [MEMORY_RECORD_EFFECTIVE_STATE_SCHEMA, { type: 'null' }] },
+    predicted_record: PROPOSED_MEMORY_RECORD_SCHEMA,
+    proposal_transition_preview: PROPOSAL_TRANSITION_PREVIEW_SCHEMA,
     proposal_id: NULLABLE_STRING_SCHEMA,
     proposal_path: NULLABLE_STRING_SCHEMA,
     proposal_link_target: { type: 'string', minLength: 1 },
@@ -1103,9 +1310,9 @@ exports.RECALL_OUTPUT_SCHEMA = {
     type: 'object',
     oneOf: [exports.RECALL_SUCCESS_OUTPUT_SCHEMA, exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA],
 };
-exports.PROJECT_MEMORY_OUTPUT_SCHEMA = {
+exports.MEMORY_OUTPUT_SCHEMA = {
     type: 'object',
-    oneOf: [exports.PROJECT_MEMORY_SUCCESS_OUTPUT_SCHEMA, exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA],
+    oneOf: [exports.MEMORY_SUCCESS_OUTPUT_SCHEMA, exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA],
 };
 exports.FINISH_TASK_OUTPUT_SCHEMA = {
     type: 'object',

@@ -19,10 +19,10 @@ import {
 	recoverPendingOperations,
 } from '../dist/index.js';
 
-const PROJECT_MEMORY_TOOL = 'tracekeeper.project_memory';
+const MEMORY_TOOL = 'tracekeeper.memory';
 const PROJECT_ROOT = '01_knowledge/memory/projects';
 const WIKI_PATH = '01_knowledge/wiki/project-memory-fixture.md';
-const SORT_ORDER = 'created_at_desc_operation_id_path_asc';
+const SORT_ORDER = 'observed_at_desc_memory_id_path_asc';
 const FIXED_TIME = '2026-07-30T12:00:00.000Z';
 
 function markdown(frontmatter, body) {
@@ -116,6 +116,32 @@ class ThrowOnceAfterAgentEntryCreateRepository {
 	}
 
 	replaceText(relativePath, expectedVersion, content) {
+		return this.delegate.replaceText(relativePath, expectedVersion, content);
+	}
+
+	listMarkdown(scope) {
+		return this.delegate.listMarkdown(scope);
+	}
+}
+
+class WriteAuditRepository {
+	constructor(delegate) {
+		this.delegate = delegate;
+		this.createdPaths = [];
+		this.replacedPaths = [];
+	}
+
+	readText(relativePath) {
+		return this.delegate.readText(relativePath);
+	}
+
+	async createText(relativePath, content) {
+		this.createdPaths.push(relativePath);
+		return this.delegate.createText(relativePath, content);
+	}
+
+	async replaceText(relativePath, expectedVersion, content) {
+		this.replacedPaths.push(relativePath);
 		return this.delegate.replaceText(relativePath, expectedVersion, content);
 	}
 
@@ -395,13 +421,14 @@ async function listProjectMemory(fixture, project, {
 	context,
 } = {}) {
 	const args = {
-		action: 'list',
-		...projectArgs(project),
+		scope: 'project',
+		view: 'all',
+		project_id: project.projectId,
 		...(cursor ? { cursor } : {}),
 		...(pageSize ? { page_size: pageSize } : {}),
 	};
-	const result = await callTool(PROJECT_MEMORY_TOOL, args, context ?? fixture.context());
-	return expectSuccess(result, `${PROJECT_MEMORY_TOOL} list`);
+	const result = await callTool(MEMORY_TOOL, args, context ?? fixture.context());
+	return expectSuccess(result, `${MEMORY_TOOL} project all`);
 }
 
 function assertDescriptorOnly(entry) {
@@ -417,15 +444,15 @@ function assertDescriptorOnly(entry) {
 }
 
 function assertCatalogEnvelope(payload, project, generation) {
-	assert.equal(payload.tool, PROJECT_MEMORY_TOOL);
+	assert.equal(payload.tool, MEMORY_TOOL);
 	assert.equal(payload.read_only, true);
+	assert.equal(payload.scope, 'project');
+	assert.equal(payload.view, 'all');
 	assert.equal(payload.project_id, project.projectId);
-	assert.equal(payload.project_hub, project.hubPath);
 	assert.equal(payload.generation, generation);
 	assert.equal(payload.complete, true);
 	assert.equal(payload.sort, SORT_ORDER);
 	assert.equal(typeof payload.total, 'number');
-	assert.ok(payload.counts_by_agent && typeof payload.counts_by_agent === 'object');
 	assert.ok(payload.page && typeof payload.page === 'object');
 	assert.equal(typeof payload.page.page_size, 'number');
 	assert.ok(payload.page.next_cursor === null || typeof payload.page.next_cursor === 'string');
@@ -528,6 +555,8 @@ function projectMemoryStepReceipt(operation) {
 		Object.keys(step.result).sort(),
 		[
 			'agent_type',
+			'claim_key',
+			'memory_id',
 			'memory_kinds',
 			'operation_hash',
 			'operation_id',
@@ -550,15 +579,16 @@ function assertSingleCodexFinishEntry(fixture, project, operation) {
 		`finish-task recovery must retain the original Codex namespace: ${entries[0]}`
 	);
 	const parsed = parseMarkdown(fixture.read(entries[0]));
-	assert.equal(parsed.frontmatter.fields.type, 'project_memory_entry');
+	assert.equal(parsed.frontmatter.fields.schema_version, 2);
+	assert.equal(parsed.frontmatter.fields.type, 'memory_record');
 	assert.equal(parsed.frontmatter.fields.project_id, project.projectId);
 	assert.equal(parsed.frontmatter.fields.agent_type, 'codex');
 	assert.equal(parsed.frontmatter.fields.operation_id, operation.operation_id);
-	assert.equal(parsed.frontmatter.fields.operation_kind, 'finish_task');
-	assert.deepEqual(
-		[...parsed.frontmatter.fields.memory_kinds].sort(),
-		['lesson_learned', 'project_next_action', 'solution_change', 'task_decision']
-	);
+	assert.equal(parsed.frontmatter.fields.memory_kind, 'task_closeout');
+	assert.equal(typeof parsed.frontmatter.fields.memory_id, 'string');
+	assert.equal(typeof parsed.frontmatter.fields.claim_key, 'string');
+	assert.equal(parsed.frontmatter.fields.authority, 'agent');
+	assert.equal(parsed.frontmatter.fields.declared_state, 'active');
 	return {
 		path: entries[0],
 		content: fixture.read(entries[0]),
@@ -633,6 +663,30 @@ test('different-Agent forced concurrency retains every distinct immutable operat
 	assert.ok(entryPaths.some((entryPath) => entryPath.includes('/agents/codex/')));
 	assert.ok(entryPaths.some((entryPath) => entryPath.includes('/agents/claude-code/')));
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
+});
+
+test('ordinary v2 writes keep the aggregate project Hub create-only and unchanged', async (t) => {
+	const fixture = createFixture(t);
+	const project = addProject(fixture);
+	const hubBefore = fixture.read(project.hubPath);
+	const repository = new WriteAuditRepository(fixture.baseRepository);
+	for (const [index, claimKey] of ['architecture:hub-hotspot-one', 'architecture:hub-hotspot-two'].entries()) {
+		const result = expectSuccess(await callTool(
+			'tracekeeper.propose_memory',
+			{
+				...autoWriteArgs(project, {
+					content: `Independent immutable record ${index + 1}.`,
+					idempotencyKey: `project-memory-no-hub-hotspot-${index + 1}`,
+				}),
+				claim_key: claimKey,
+			},
+			fixture.context({ repository })
+		), `ordinary immutable write ${index + 1}`);
+		assert.equal(result.auto_applied, true);
+	}
+	assert.equal(repository.createdPaths.filter((entryPath) => entryPath.includes('/agents/')).length, 2);
+	assert.equal(repository.replacedPaths.includes(project.hubPath), false);
+	assert.equal(fixture.read(project.hubPath), hubBefore);
 });
 
 test('same-Agent forced concurrency retains every distinct immutable operation', async (t) => {
@@ -826,19 +880,125 @@ test('finish_task aggregates multiple eligible memory kinds into one immutable e
 	assert.equal(entryPaths.length, 1);
 	const parsed = parseMarkdown(fixture.read(entryPaths[0]));
 	assert.equal(parsed.frontmatter.fields.operation_id, finished.operation_id);
-	assert.ok(
-		Array.isArray(parsed.frontmatter.fields.memory_kinds),
-		'one finish_task entry must expose its aggregated memory_kinds'
-	);
-	assert.deepEqual(
-		[...parsed.frontmatter.fields.memory_kinds].sort(),
-		['lesson_learned', 'project_next_action', 'solution_change', 'task_decision']
-	);
+	assert.equal(parsed.frontmatter.fields.schema_version, 2);
+	assert.equal(parsed.frontmatter.fields.type, 'memory_record');
+	assert.equal(parsed.frontmatter.fields.memory_kind, 'task_closeout');
+	assert.equal(typeof parsed.frontmatter.fields.memory_id, 'string');
+	assert.equal(typeof parsed.frontmatter.fields.claim_key, 'string');
 	assert.match(parsed.body, /Retain one decision\./);
 	assert.match(parsed.body, /Retain one solution change\./);
 	assert.match(parsed.body, /Retain one lesson\./);
 	assert.match(parsed.body, /Retain one next action\./);
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
+});
+
+test('finish_task structured candidate writes one governed v2 record and exact retry reuses it', async (t) => {
+	const fixture = createFixture(t);
+	const project = addProject(fixture, { legacy: true });
+	const context = fixture.context();
+	const started = expectSuccess(
+		await callTool('tracekeeper.start_task', {
+			goal: 'Write one structured lifecycle candidate.',
+			...projectArgs(project),
+			idempotency_key: 'finish-structured-start',
+		}, context),
+		'start structured finish task'
+	);
+	const args = {
+		task_id: started.task_id,
+		summary: 'Completed structured lifecycle closeout.',
+		memory_candidate_records: [{
+			proposal_kind: 'task_decision',
+			content: 'Structured closeout claims use the v2 lifecycle writer.',
+			claim_key: 'project:structured-closeout-writer',
+			evidence: [WIKI_PATH],
+			proposed_authority: 'agent',
+			proposed_confidence: 'supported',
+			declared_state: 'active',
+			observed_at: FIXED_TIME,
+		}],
+		review_proposal_mode: 'auto_propose',
+		memory_scope: 'project',
+		...projectArgs(project),
+		related_wiki: [WIKI_PATH],
+		idempotency_key: 'finish-structured-complete',
+	};
+	const finished = expectSuccess(
+		await callTool('tracekeeper.finish_task', args, context),
+		'finish task with structured candidate'
+	);
+	assert.equal(finished.memory_candidate_records.length, 1);
+	assert.equal(finished.memory_candidate_records[0].claim_key, 'project:structured-closeout-writer');
+	assert.equal(finished.memory_candidate_records[0].authority, 'agent');
+	assert.equal(finished.memory_candidate_records[0].confidence_level, 'supported');
+	assert.equal(finished.memory_candidate_records[0].effective_state, 'current');
+	assert.equal(finished.memory_changes[0].change_kind, 'record_written');
+	const entries = findAgentEntries(fixture);
+	assert.equal(entries.length, 1);
+	const parsed = parseMarkdown(fixture.read(entries[0]));
+	assert.equal(parsed.frontmatter.fields.schema_version, 2);
+	assert.equal(parsed.frontmatter.fields.type, 'memory_record');
+	assert.equal(parsed.frontmatter.fields.claim_key, 'project:structured-closeout-writer');
+	assert.deepEqual(parsed.frontmatter.fields.evidence, ['[[01_knowledge/wiki/project-memory-fixture]]']);
+
+	const replayed = expectSuccess(
+		await callTool('tracekeeper.finish_task', args, context),
+		'replay structured finish task'
+	);
+	assert.equal(replayed.operation_id, finished.operation_id);
+	assert.deepEqual(findAgentEntries(fixture), entries);
+	const changed = await callTool('tracekeeper.finish_task', {
+		...args,
+		memory_candidate_records: [{
+			...args.memory_candidate_records[0],
+			content: 'Changed structured content must conflict at the same finish identity.',
+		}],
+	}, context);
+	assert.equal(changed.isError, true);
+	assert.deepEqual(findAgentEntries(fixture), entries);
+});
+
+test('finish_task structured candidate review-gates caller authority promotion', async (t) => {
+	const fixture = createFixture(t);
+	const project = addProject(fixture, { legacy: true });
+	const context = fixture.context();
+	const started = expectSuccess(
+		await callTool('tracekeeper.start_task', {
+			goal: 'Review a structured authority request.',
+			...projectArgs(project),
+			idempotency_key: 'finish-structured-review-start',
+		}, context),
+		'start structured review task'
+	);
+	const finished = expectSuccess(
+		await callTool('tracekeeper.finish_task', {
+			task_id: started.task_id,
+			summary: 'Submitted a structured candidate for review.',
+			memory_candidate_records: [{
+				proposal_kind: 'task_decision',
+				content: 'An Agent cannot promote its own claim to user authority.',
+				claim_key: 'project:authority-promotion-review',
+				evidence: [WIKI_PATH],
+				proposed_authority: 'user',
+				proposed_confidence: 'verified',
+				observed_at: FIXED_TIME,
+			}],
+			review_proposal_mode: 'auto_propose',
+			memory_scope: 'project',
+			...projectArgs(project),
+			related_wiki: [WIKI_PATH],
+			idempotency_key: 'finish-structured-review-complete',
+		}, context),
+		'finish task with review-gated candidate'
+	);
+	assert.equal(findAgentEntries(fixture).length, 0);
+	assert.equal(finished.proposal_count, 1);
+	assert.equal(finished.memory_changes[0].change_kind, 'proposal_queued');
+	assert.equal(finished.memory_candidate_records[0].effective_state, 'review');
+	const proposal = parseMarkdown(fixture.read(finished.proposals[0].path));
+	assert.equal(proposal.frontmatter.fields.claim_key, 'project:authority-promotion-review');
+	assert.equal(proposal.frontmatter.fields.proposed_authority, 'user');
+	assert.equal(proposal.frontmatter.fields.proposed_confidence, 'verified');
 });
 
 test('finish_task recovery before the aggregate step creates one entry in the original Agent namespace', async (t) => {
@@ -1210,7 +1370,99 @@ test('exact retry reuses one receipt while changed payload at the same identity 
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
 });
 
-test('catalog compatibility: legacy-only project is complete and preserves the legacy note', async (t) => {
+test('propose_memory writes a governed v2 record and derives effective authority', async (t) => {
+	const fixture = createFixture(t);
+	const project = addProject(fixture);
+	const result = expectSuccess(
+		await callTool(
+			'tracekeeper.propose_memory',
+			{
+				...autoWriteArgs(project, {
+					content: 'The project uses the canonical v2 memory writer.',
+					idempotencyKey: 'project-memory-v2-governed-write',
+				}),
+				claim_key: 'architecture:memory-writer',
+				proposed_authority: 'source',
+				proposed_confidence: 'supported',
+				observed_at: FIXED_TIME,
+			},
+			fixture.context()
+		),
+		'governed v2 project-memory write'
+	);
+	assert.equal(result.auto_applied, true);
+	assert.equal(result.record_identity.claim_key, 'architecture:memory-writer');
+	assert.equal(result.predicted_record.authority, 'source');
+	assert.equal(result.predicted_record.confidence_level, 'supported');
+	assert.equal(result.predicted_state, 'current');
+	assert.equal(typeof result.record_identity.memory_id, 'string');
+	const parsed = parseMarkdown(fixture.read(result.path));
+	assert.equal(parsed.frontmatter.fields.schema_version, 2);
+	assert.equal(parsed.frontmatter.fields.type, 'memory_record');
+	assert.equal(parsed.frontmatter.fields.memory_id, result.record_identity.memory_id);
+	assert.equal(parsed.frontmatter.fields.claim_key, result.record_identity.claim_key);
+	assert.equal(parsed.frontmatter.fields.authority, 'source');
+	assert.equal(parsed.frontmatter.fields.confidence_level, 'supported');
+});
+
+test('propose_memory review-gates self-promotion and unresolved claim conflicts', async (t) => {
+	const fixture = createFixture(t);
+	const project = addProject(fixture);
+	const promoted = expectSuccess(
+		await callTool(
+			'tracekeeper.propose_memory',
+			{
+				...autoWriteArgs(project, {
+					content: 'An Agent must not establish user authority.',
+					idempotencyKey: 'project-memory-v2-self-promotion',
+				}),
+				claim_key: 'governance:authority',
+				proposed_authority: 'user',
+				proposed_confidence: 'verified',
+			},
+			fixture.context()
+		),
+		'self-promotion review fallback'
+	);
+	assert.equal(promoted.auto_applied, false);
+	assert.equal(typeof promoted.proposal_id, 'string');
+	assert.equal(findAgentEntries(fixture).length, 0);
+
+	const first = expectSuccess(
+		await callTool(
+			'tracekeeper.propose_memory',
+			{
+				...autoWriteArgs(project, {
+					content: 'First accepted claim value.',
+					idempotencyKey: 'project-memory-v2-claim-first',
+				}),
+				claim_key: 'architecture:claim-conflict',
+			},
+			fixture.context()
+		),
+		'first governed claim'
+	);
+	assert.equal(first.auto_applied, true);
+	const conflicting = expectSuccess(
+		await callTool(
+			'tracekeeper.propose_memory',
+			{
+				...autoWriteArgs(project, {
+					content: 'Conflicting value without an explicit lifecycle relation.',
+					idempotencyKey: 'project-memory-v2-claim-conflict',
+				}),
+				claim_key: 'architecture:claim-conflict',
+			},
+			fixture.context()
+		),
+		'conflicting governed claim'
+	);
+	assert.equal(conflicting.auto_applied, false);
+	assert.equal(typeof conflicting.proposal_id, 'string');
+	assert.equal(findAgentEntries(fixture).length, 1);
+});
+
+test('canonical memory all view includes a legacy-only project note without mutation', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture, { legacy: true });
 	const legacyBefore = fixture.read(project.legacyPath);
@@ -1220,18 +1472,13 @@ test('catalog compatibility: legacy-only project is complete and preserves the l
 	assert.equal(payload.entries.length, 1);
 	assert.equal(payload.entries[0].path, project.legacyPath);
 	assert.equal(payload.entries[0].legacy, true);
-	assert.equal(payload.entries[0].operation_id, null);
-	assert.equal(payload.entries[0].operation_kind, null);
-	assert.equal(payload.entries[0].agent_type, null);
-	assert.equal(payload.entries[0].operation_hash, null);
-	assert.equal(
-		Object.values(payload.counts_by_agent).reduce((total, count) => total + count, 0),
-		0
-	);
+	assert.equal(payload.entries[0].memory_id, null);
+	assert.equal(payload.entries[0].claim_key, null);
+	assert.equal(payload.entries[0].effective_state, 'legacy_unkeyed');
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
 });
 
-test('catalog compatibility: new-only project lists immutable Agent entries', async (t) => {
+test('canonical memory all view dual-reads v1 immutable Agent entries as legacy metadata', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture);
 	const codex = addEntry(fixture, project, {
@@ -1248,13 +1495,13 @@ test('catalog compatibility: new-only project lists immutable Agent entries', as
 	assertCatalogEnvelope(payload, project, fixture.generation());
 	assert.equal(payload.total, 2);
 	assert.deepEqual(payload.entries.map((entry) => entry.path), [codex.path, claude.path]);
-	assert.ok(payload.entries.every((entry) => entry.legacy === false));
-	assert.equal(payload.counts_by_agent.codex, 1);
-	assert.equal(payload.counts_by_agent['claude-code'], 1);
+	assert.ok(payload.entries.every((entry) => entry.legacy === true));
+	assert.ok(payload.entries.every((entry) => entry.memory_id === null));
+	assert.ok(payload.entries.every((entry) => entry.effective_state === 'legacy_unkeyed'));
 	assert.equal(fixture.exists(project.legacyPath), false);
 });
 
-test('catalog compatibility: mixed project includes legacy and new entries without migration', async (t) => {
+test('canonical memory all view includes mixed legacy and v1 immutable entries without migration', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture, { legacy: true });
 	const legacyBefore = fixture.read(project.legacyPath);
@@ -1269,8 +1516,8 @@ test('catalog compatibility: mixed project includes legacy and new entries witho
 		new Set(payload.entries.map((entry) => entry.path)),
 		new Set([project.legacyPath, created.path])
 	);
-	assert.equal(payload.entries.filter((entry) => entry.legacy).length, 1);
-	assert.equal(payload.entries.filter((entry) => !entry.legacy).length, 1);
+	assert.ok(payload.entries.every((entry) => entry.legacy));
+	assert.ok(payload.entries.every((entry) => entry.effective_state === 'legacy_unkeyed'));
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
 });
 
@@ -1302,20 +1549,21 @@ test('same display slug with different stable ids resolves two independent catal
 	assert.deepEqual(betaPayload.entries.map((entry) => entry.path), [betaEntry.path]);
 });
 
-test('catalog rejects explicit project identity that contradicts its repository path', async (t) => {
+test('canonical project memory catalog requires an exact project id', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture);
 	const result = await callTool(
-		PROJECT_MEMORY_TOOL,
+		MEMORY_TOOL,
 		{
-			action: 'list',
-			project_id: project.projectId,
+			scope: 'project',
+			view: 'all',
 			project_hint: project.projectHint,
-			repo_path: '/work/different-project',
+			repo_path: project.repoPath,
 		},
 		fixture.context()
 	);
 	assert.equal(result.isError, true);
+	assert.equal(errorCode(result), 'invalid_request');
 	assert.equal(findAgentEntries(fixture).length, 0);
 });
 
@@ -1450,8 +1698,6 @@ test('complete catalog enumerates more than the Recall cap over multiple pages',
 		assertCatalogEnvelope(payload, project, fixture.generation());
 		assert.equal(payload.total, 57);
 		assert.equal(payload.page.page_size, 17);
-		assert.equal(payload.counts_by_agent.codex, 29);
-		assert.equal(payload.counts_by_agent['claude-code'], 28);
 		enumerated.push(...payload.entries.map((entry) => entry.path));
 		cursor = payload.page.next_cursor ?? undefined;
 		if (cursor) {
@@ -1477,10 +1723,11 @@ test('catalog rejects a cursor after the bound snapshot generation changes', asy
 	assert.equal(typeof first.page.next_cursor, 'string');
 	fixture.setGeneration(fixture.generation() + 1);
 	const stale = await callTool(
-		PROJECT_MEMORY_TOOL,
+		MEMORY_TOOL,
 		{
-			action: 'list',
-			...projectArgs(project),
+			scope: 'project',
+			view: 'all',
+			project_id: project.projectId,
 			page_size: 1,
 			cursor: first.page.next_cursor,
 		},
@@ -1501,10 +1748,11 @@ test('catalog rejects a tampered cursor without falling back to the first page',
 	const replacement = cursor.endsWith('a') ? 'b' : 'a';
 	const tampered = `${cursor.slice(0, -1)}${replacement}`;
 	const invalid = await callTool(
-		PROJECT_MEMORY_TOOL,
+		MEMORY_TOOL,
 		{
-			action: 'list',
-			...projectArgs(project),
+			scope: 'project',
+			view: 'all',
+			project_id: project.projectId,
 			page_size: 1,
 			cursor: tampered,
 		},
@@ -1544,7 +1792,7 @@ test('project Recall includes legacy and immutable entries without claiming comp
 	assert.notEqual(payload.recall?.complete, true);
 });
 
-test('project-memory public results and audits expose no note body or absolute Vault path', async (t) => {
+test('canonical memory public results and audits expose no note body or absolute Vault path', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture);
 	const secretBody = 'PROJECT_MEMORY_BODY_MUST_NOT_APPEAR_IN_AUDIT_7e6bf6';
@@ -1570,10 +1818,11 @@ test('project-memory public results and audits expose no note body or absolute V
 	);
 	assert.doesNotMatch(writeAudit, new RegExp(project.repoPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 	const catalogResult = await callTool(
-		PROJECT_MEMORY_TOOL,
+		MEMORY_TOOL,
 		{
-			action: 'list',
-			...projectArgs(project),
+			scope: 'project',
+			view: 'all',
+			project_id: project.projectId,
 		},
 		fixture.context()
 	);

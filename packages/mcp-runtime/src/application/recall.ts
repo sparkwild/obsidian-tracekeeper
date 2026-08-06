@@ -1,4 +1,5 @@
 import {
+	ARCHIVE_ROOT,
 	KNOWLEDGE_PROJECTS_MEMORY_DIR,
 	KNOWLEDGE_SOURCES_DIR,
 	TRACEKEEPER_ROOT,
@@ -6,6 +7,8 @@ import {
 	TRACEKEEPER_TASKS_DIR,
 	isKnowledgeWikiPath,
 	recallNotes,
+	type KnowledgeCatalogEntry,
+	type KnowledgeReadView,
 	type ScanResult,
 	type ScannedNote,
 } from '@tracekeeper/core';
@@ -15,6 +18,9 @@ const MAX_PROJECT_SCOPE_CANDIDATES = 8;
 const MAX_RECALL_EXCERPT_LENGTH = 480;
 const MAX_RECALL_GRAPH_LINKS = 8;
 const MAX_RECALL_CANDIDATES = 50;
+export const MAX_READ_VIEW_LEXICAL_CANDIDATES = 256;
+export const MAX_READ_VIEW_GRAPH_EXPANSIONS = 64;
+export const MAX_READ_VIEW_RERANKED_ROWS = 32;
 const PROJECT_MEMORY_RECALL_BOOST = 4;
 const KNOWLEDGE_WIKI_RECALL_BOOST = 0.75;
 const WORK_RECORD_RECALL_PENALTY = 5;
@@ -92,6 +98,13 @@ export interface RecallApplicationDependencies {
 		allNotes: ScannedNote[]
 	): RecallRelationEvidence;
 	contentOrigin(relativePath: string, noteType?: string): RecallContentOrigin;
+	onReadViewDiagnostics?(diagnostics: RecallReadViewDiagnostics): void;
+}
+
+export interface RecallReadViewDiagnostics {
+	lexical_candidates: number;
+	graph_expansions: number;
+	reranked_rows: number;
 }
 
 export interface RecallEntry {
@@ -687,6 +700,365 @@ function buildProjectHistoryEntries(
 	}));
 }
 
+interface RankedCatalogMatch {
+	entry: KnowledgeCatalogEntry;
+	score: number;
+	raw_score: number;
+	matchedTokens: string[];
+	score_reason: string[];
+}
+
+function readViewProvenance(view: KnowledgeReadView): RecallScanProvenance {
+	return {
+		index_state: view.source === 'filesystem_scan' ? 'filesystem_scan' : view.index_state,
+		snapshot_generation: view.source === 'filesystem_scan' ? null : view.generation,
+		snapshot_warning: view.index_state === 'rebuilding'
+			? 'Knowledge index is rebuilding; this result may come from the previous snapshot generation.'
+			: view.index_state === 'initializing'
+				? 'Knowledge index metadata is still initializing; this result may be incomplete.'
+				: null,
+	};
+}
+
+function tokenizeReadViewQuery(input: string): string[] {
+	const terms = new Set<string>();
+	const add = (value: string): void => {
+		const normalized = value.normalize('NFKC').trim().toLocaleLowerCase('en-US');
+		if (normalized.length >= 2 && terms.size < 64) terms.add(normalized);
+	};
+	for (const segment of input.normalize('NFKC').toLocaleLowerCase('en-US').match(/[a-z0-9_-]+|\p{Script=Han}+/gu) ?? []) {
+		add(segment);
+		if (!/\p{Script=Han}/u.test(segment)) continue;
+		const characters = [...segment];
+		for (const width of [2, 3]) {
+			for (let offset = 0; offset + width <= characters.length; offset += 1) {
+				add(characters.slice(offset, offset + width).join(''));
+				if (terms.size >= 64) return [...terms];
+			}
+		}
+	}
+	return [...terms];
+}
+
+function catalogMetadataProjection(entry: KnowledgeCatalogEntry): ScannedNote {
+	return {
+		schemaVersion: '1.0',
+		path: entry.path,
+		exists: true,
+		contentHash: entry.contentHash,
+		title: entry.title,
+		aliases: entry.aliases,
+		type: entry.type ?? undefined,
+		frontmatter: entry.frontmatter,
+		semanticErrors: [],
+		tags: entry.tags,
+		headings: [],
+		blockIds: [],
+		sections: [],
+		callouts: [],
+		edges: [],
+		text: '',
+		content: '',
+		modifiedAt: entry.modifiedAt,
+		size: entry.size,
+		absolutePath: '',
+		relativePath: entry.path,
+		tokens: entry.searchTokens.join(' '),
+		wikilinks: [],
+		claimBlocks: [],
+		evidenceBlocks: [],
+	};
+}
+
+function isCurrentReadViewEntry(entry: KnowledgeCatalogEntry, view: KnowledgeReadView): boolean {
+	const normalizedPath = entry.path.replace(/\\/g, '/');
+	if (normalizedPath === ARCHIVE_ROOT || normalizedPath.startsWith(`${ARCHIVE_ROOT}/`)) return false;
+	if (entry.type !== 'memory_record') return true;
+	return view.memory.lifecycle.current.some((row) => row.record.path === entry.path);
+}
+
+function relationEvidenceFromReadView(
+	entry: KnowledgeCatalogEntry,
+	view: KnowledgeReadView
+): RecallRelationEvidence {
+	const rows = new Map<string, RecallRelationEvidenceItem>();
+	const addRelation = (
+		targetPath: string,
+		declaredVia: 'frontmatter' | 'body_wikilink'
+	): void => {
+		if (!view.catalog.has(targetPath)) return;
+		const relationKind = isKnowledgeWikiPath(targetPath)
+			? 'related_wiki'
+			: targetPath.startsWith(`${KNOWLEDGE_SOURCES_DIR}/`)
+				? 'related_sources'
+				: null;
+		if (!relationKind) return;
+		const key = `${relationKind}:${targetPath.toLocaleLowerCase('en-US')}`;
+		const existing = rows.get(key);
+		if (existing) {
+			if (!existing.declared_via.includes(declaredVia)) existing.declared_via.push(declaredVia);
+			return;
+		}
+		rows.set(key, {
+			path: targetPath,
+			declared_by: entry.path,
+			declared_via: [declaredVia],
+			verified_by: 'active_vault_snapshot',
+		});
+	};
+	const normalizeReference = (value: string): string => value.trim()
+			.replace(/^\[\[/, '')
+			.replace(/\]\]$/, '')
+			.split('|', 1)[0]
+			.replace(/#.*$/, '')
+			.replace(/^\.\//, '')
+			.replace(/\\/g, '/')
+			.toLocaleLowerCase('en-US');
+	const resolveCatalogReference = (value: string): string | null => {
+		const normalized = normalizeReference(value);
+		if (!normalized) return null;
+		for (const candidate of view.catalog.values()) {
+			const candidatePath = candidate.path.toLocaleLowerCase('en-US');
+			if (candidatePath === normalized || candidatePath.replace(/\.md$/i, '') === normalized.replace(/\.md$/i, '')) {
+				return candidate.path;
+			}
+			if (candidate.title.toLocaleLowerCase('en-US') === normalized) return candidate.path;
+			if (candidate.aliases.some((alias) => alias.toLocaleLowerCase('en-US') === normalized)) return candidate.path;
+		}
+		return null;
+	};
+	for (const key of ['related_wiki', 'relatedWiki', 'wiki', 'related_sources', 'relatedSources', 'sources', 'source']) {
+		const value = entry.frontmatter[key];
+		const values = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
+		for (const reference of values
+			.filter((item): item is string => typeof item === 'string')
+			.flatMap((item) => item.split(/[\n,]/g))) {
+			const normalizedReference = normalizeReference(reference);
+			const declaredEdge = [...view.graph.edges, ...view.graph.unresolvedEdges].find((edge) =>
+				edge.source === 'frontmatter'
+				&& (!edge.sourcePath || edge.sourcePath === entry.path)
+				&& normalizeReference(edge.linkPath || edge.target || edge.raw) === normalizedReference
+			);
+			if (declaredEdge) {
+				if (declaredEdge.resolution.status === 'resolved') {
+					addRelation(declaredEdge.resolution.path, 'frontmatter');
+				}
+				continue;
+			}
+			const targetPath = resolveCatalogReference(reference);
+			if (targetPath) addRelation(targetPath, 'frontmatter');
+		}
+	}
+	const outgoing = new Set(view.graph.outgoing.get(entry.path) ?? []);
+	for (const edge of view.graph.edges) {
+		if (edge.resolution.status !== 'resolved') continue;
+		if (edge.sourcePath !== entry.path && (edge.sourcePath || !outgoing.has(edge.resolution.path))) continue;
+		const targetPath = edge.resolution.path;
+		const declaredVia = edge.source === 'frontmatter' ? 'frontmatter' : 'body_wikilink';
+		addRelation(targetPath, declaredVia);
+	}
+	const ordered = [...rows.entries()].sort(([left], [right]) => left.localeCompare(right));
+	return {
+		related_wiki: ordered.filter(([key]) => key.startsWith('related_wiki:')).slice(0, MAX_RECALL_GRAPH_LINKS).map(([, row]) => row),
+		related_sources: ordered.filter(([key]) => key.startsWith('related_sources:')).slice(0, MAX_RECALL_GRAPH_LINKS).map(([, row]) => row),
+	};
+}
+
+function buildCatalogGraphLinks(entry: KnowledgeCatalogEntry, view: KnowledgeReadView): string[] {
+	const outgoing = new Set(view.graph.outgoing.get(entry.path) ?? []);
+	const links = new Set<string>();
+	const edgeTargets = new Set<string>();
+	for (const edge of view.graph.edges) {
+		if (edge.resolution.status !== 'resolved') continue;
+		if (edge.sourcePath !== entry.path && (edge.sourcePath || !outgoing.has(edge.resolution.path))) continue;
+		edgeTargets.add(edge.resolution.path);
+		links.add(edge.subpath ? `${edge.resolution.path}#${edge.subpath}` : edge.resolution.path);
+	}
+	for (const targetPath of outgoing) {
+		if (!edgeTargets.has(targetPath)) links.add(targetPath);
+	}
+	return [...links].sort((left, right) => left.localeCompare(right)).slice(0, MAX_RECALL_GRAPH_LINKS);
+}
+
+function rankCatalogMatches(
+	rows: Array<{ entry: KnowledgeCatalogEntry; rawScore: number; matchedTokens: string[] }>,
+	query: string,
+	scope: RecallProjectIdentity,
+	nowMs: number
+): RankedCatalogMatch[] {
+	const fullQuery = query.trim().toLocaleLowerCase('en-US');
+	const scopeTokens = collectRecallScopeTokens(scope);
+	return rows.map((row) => {
+		let score = row.rawScore;
+		const reasons: string[] = [];
+		const notePath = row.entry.path.toLocaleLowerCase('en-US');
+		const noteTitle = row.entry.title.toLocaleLowerCase('en-US');
+		const frontmatter = JSON.stringify(row.entry.frontmatter).toLocaleLowerCase('en-US');
+		if (notePath.startsWith(`${KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)) {
+			score += PROJECT_MEMORY_RECALL_BOOST;
+			reasons.push(PROJECT_MEMORY_RECALL_REASON);
+		} else if (isKnowledgeWikiPath(notePath)) {
+			score += KNOWLEDGE_WIKI_RECALL_BOOST;
+			reasons.push(KNOWLEDGE_WIKI_RECALL_REASON);
+		} else if (isGeneratedWorkRecord(catalogMetadataProjection(row.entry))) {
+			const penalty = Math.max(
+				WORK_RECORD_RECALL_PENALTY + Math.max(0, row.matchedTokens.length - 1),
+				Math.max(0, row.rawScore - 2)
+			);
+			score = Math.max(0.01, score - penalty);
+			reasons.push(`Work-record query-echo penalty (-${Number(penalty.toFixed(2))})`);
+		}
+		if (row.matchedTokens.length >= 2) {
+			score += 0.4;
+			reasons.push('Multiple query token matches (+0.4)');
+		}
+		const recency = recallRecencyBoost(row.entry.modifiedAt, nowMs);
+		if (recency > 0) {
+			score += recency;
+			reasons.push(`Recent edit (+${recency})`);
+		}
+		if (fullQuery && (notePath.includes(fullQuery) || noteTitle.includes(fullQuery))) {
+			score += 1;
+			reasons.push('Exact query phrase match in title/path (+1)');
+		}
+		if (scopeTokens.some((token) => notePath.includes(token) || noteTitle.includes(token) || frontmatter.includes(token))) {
+			score += 0.4;
+			reasons.push('Project scope match (+0.4)');
+		}
+		return {
+			entry: row.entry,
+			raw_score: Number(row.rawScore.toFixed(2)),
+			score: Number(Math.max(0.01, score).toFixed(2)),
+			matchedTokens: row.matchedTokens,
+			score_reason: reasons.length > 0 ? reasons : ['Catalog lexical match'],
+		};
+	}).sort((left, right) => right.score - left.score || left.entry.path.localeCompare(right.entry.path));
+}
+
+function buildReadViewEntry(
+	match: RankedCatalogMatch,
+	scope: RecallApplicationScope,
+	view: KnowledgeReadView,
+	dependencies: RecallApplicationDependencies
+): RecallEntry {
+	const whyMatch: RankedRecallMatch = {
+		note: catalogMetadataProjection(match.entry),
+		score: match.score,
+		raw_score: match.raw_score,
+		matchedTokens: match.matchedTokens,
+		score_reason: match.score_reason,
+	};
+	return {
+		path: match.entry.path,
+		title: match.entry.title,
+		type: match.entry.type ?? undefined,
+		note_type: match.entry.type,
+		scope,
+		score: match.score,
+		raw_score: match.raw_score,
+		matched_tokens: match.matchedTokens,
+		score_reason: match.score_reason,
+		why_matched: buildRecallWhyMatched(whyMatch, scope),
+		excerpt: compactNoteText(match.entry.excerpt),
+		content_origin: dependencies.contentOrigin(match.entry.path, match.entry.type ?? undefined),
+		instruction_trust: 'data_only',
+		graph_links: buildCatalogGraphLinks(match.entry, view),
+		relation_evidence: relationEvidenceFromReadView(match.entry, view),
+	};
+}
+
+function selectCatalogRecallMatches(matches: RankedCatalogMatch[], maxItems: number): RankedCatalogMatch[] {
+	const hasDurableKnowledge = matches.some((match) =>
+		!isGeneratedWorkRecord(catalogMetadataProjection(match.entry)) && match.raw_score > 0
+	);
+	if (!hasDurableKnowledge) return matches.slice(0, maxItems);
+	const selected: RankedCatalogMatch[] = [];
+	let workRecordCount = 0;
+	for (const match of matches) {
+		if (isGeneratedWorkRecord(catalogMetadataProjection(match.entry))) {
+			if (workRecordCount >= 1) continue;
+			workRecordCount += 1;
+		}
+		selected.push(match);
+		if (selected.length >= maxItems) break;
+	}
+	if (maxItems > 1 && workRecordCount === 0 && selected.length === maxItems) {
+		const bestWorkRecord = matches.find((match) =>
+			isGeneratedWorkRecord(catalogMetadataProjection(match.entry)) && match.raw_score > 0
+		);
+		if (bestWorkRecord) selected[selected.length - 1] = bestWorkRecord;
+	}
+	return selected;
+}
+
+function boundedReadViewMatches(
+	view: KnowledgeReadView,
+	entries: readonly KnowledgeCatalogEntry[],
+	query: string,
+	scope: RecallProjectIdentity,
+	nowMs: number
+): { matches: RankedCatalogMatch[]; diagnostics: RecallReadViewDiagnostics } {
+	const allowed = new Map(entries.map((entry) => [entry.path, entry]));
+	const matchedByPath = new Map<string, Set<string>>();
+	const queryTerms = tokenizeReadViewQuery(query);
+	for (const term of queryTerms) {
+		for (const notePath of view.lexical.postings.get(term) ?? []) {
+			if (!allowed.has(notePath)) continue;
+			const matched = matchedByPath.get(notePath) ?? new Set<string>();
+			matched.add(term);
+			matchedByPath.set(notePath, matched);
+		}
+	}
+	const lexical = [...matchedByPath.entries()]
+		.sort(([leftPath, left], [rightPath, right]) => right.size - left.size || leftPath.localeCompare(rightPath))
+		.slice(0, MAX_READ_VIEW_LEXICAL_CANDIDATES);
+	const candidateScores = new Map<string, { rawScore: number; tokens: Set<string> }>();
+	for (const [notePath, matched] of lexical) {
+		candidateScores.set(notePath, { rawScore: matched.size, tokens: new Set(matched) });
+	}
+
+	let graphExpansions = 0;
+	for (const [seedPath] of lexical) {
+		const neighbors = new Set([
+			...(view.graph.outgoing.get(seedPath) ?? []),
+			...(view.graph.incoming.get(seedPath) ?? []),
+		]);
+		for (const neighbor of [...neighbors].sort((left, right) => left.localeCompare(right))) {
+			if (graphExpansions >= MAX_READ_VIEW_GRAPH_EXPANSIONS) break;
+			if (!allowed.has(neighbor) || candidateScores.has(neighbor)) continue;
+			candidateScores.set(neighbor, { rawScore: 0.25, tokens: new Set() });
+			graphExpansions += 1;
+		}
+		if (graphExpansions >= MAX_READ_VIEW_GRAPH_EXPANSIONS) break;
+	}
+
+	if (scope.projectHint || scope.projectId || scope.repoPath) {
+		for (const entry of entries
+			.filter((candidate) => candidate.path.startsWith(`${KNOWLEDGE_PROJECTS_MEMORY_DIR}/`))
+			.sort((left, right) => left.path.localeCompare(right.path))
+			.slice(0, 2)) {
+			if (!candidateScores.has(entry.path)) candidateScores.set(entry.path, { rawScore: 0, tokens: new Set() });
+		}
+	}
+
+	const rows = [...candidateScores.entries()]
+		.map(([notePath, candidate]) => ({
+			entry: allowed.get(notePath)!,
+			rawScore: candidate.rawScore,
+			matchedTokens: [...candidate.tokens].sort(),
+		}))
+		.sort((left, right) => right.rawScore - left.rawScore || left.entry.path.localeCompare(right.entry.path))
+		.slice(0, MAX_READ_VIEW_RERANKED_ROWS);
+	return {
+		matches: rankCatalogMatches(rows, query, scope, nowMs),
+		diagnostics: {
+			lexical_candidates: lexical.length,
+			graph_expansions: graphExpansions,
+			reranked_rows: rows.length,
+		},
+	};
+}
+
 export class RecallApplicationService {
 	private readonly dependencies: RecallApplicationDependencies;
 
@@ -703,6 +1075,130 @@ export class RecallApplicationService {
 			return this.executeProject(request, scan);
 		}
 		return this.executeProjectHistory(request, scan);
+	}
+
+	executeReadView(
+		request: RecallApplicationRequest & { scope: 'global' },
+		view: KnowledgeReadView
+	): GlobalRecallApplicationResult;
+	executeReadView(
+		request: RecallApplicationRequest & { scope: 'project' },
+		view: KnowledgeReadView
+	): ProjectRecallApplicationResult;
+	executeReadView(
+		request: RecallApplicationRequest & { scope: 'project_history' },
+		view: KnowledgeReadView
+	): ProjectHistoryRecallApplicationResult;
+	executeReadView(
+		request: RecallApplicationRequest,
+		view: KnowledgeReadView
+	): RecallApplicationResult;
+	executeReadView(
+		request: RecallApplicationRequest,
+		view: KnowledgeReadView
+	): RecallApplicationResult {
+		const allEntries = [...view.catalog.values()];
+		const metadataNotes = allEntries.map(catalogMetadataProjection);
+		if (request.scope === 'global') {
+			const entries = allEntries.filter((entry) => isCurrentReadViewEntry(entry, view));
+			const ranked = boundedReadViewMatches(view, entries, request.query, {
+				projectHint: '', projectId: '', repoPath: '', source: 'unknown', confidence: 'uncertain', warnings: [],
+			}, this.dependencies.nowMs());
+			this.dependencies.onReadViewDiagnostics?.(ranked.diagnostics);
+			const matches = selectCatalogRecallMatches(ranked.matches, request.maxItems);
+			return {
+				ok: true,
+				read_only: true,
+				scope_mode: 'global',
+				query: request.query,
+				vault_root: request.vaultRoot,
+				max_items: request.maxItems,
+				matched_count: matches.length,
+				...readViewProvenance(view),
+				matches: matches.map((match) => buildReadViewEntry(match, 'global', view, this.dependencies)),
+			};
+		}
+
+		const identity = this.dependencies.resolveProjectIdentity(
+			request.projectIdentityInput,
+			metadataNotes
+		);
+		const unresolved = identity.confidence === 'uncertain';
+		const scopedMetadata = unresolved
+			? []
+			: this.dependencies.filterProjectNotes(metadataNotes, identity);
+		const scopedPaths = new Set(scopedMetadata.map((note) => note.relativePath));
+		const scopedEntries = allEntries.filter((entry) => scopedPaths.has(entry.path));
+		const candidateEntries = unresolved ? allEntries : scopedEntries;
+		const candidateNotes = collectProjectCandidates(
+			candidateEntries.map(catalogMetadataProjection),
+			identity,
+			MAX_PROJECT_SCOPE_CANDIDATES
+		);
+		const uncertain = !hasProjectScope(identity) || identity.confidence === 'uncertain';
+
+		if (request.scope === 'project') {
+			const currentEntries = scopedEntries.filter((entry) => isCurrentReadViewEntry(entry, view));
+			const ranked = boundedReadViewMatches(view, currentEntries, request.query, identity, this.dependencies.nowMs());
+			this.dependencies.onReadViewDiagnostics?.(ranked.diagnostics);
+			const matches = selectCatalogRecallMatches(ranked.matches, request.maxItems);
+			return {
+				ok: true,
+				read_only: true,
+				vault_root: request.vaultRoot,
+				query: request.query,
+				uncertain,
+				scope: projectIdentityResult(identity),
+				project_identity: projectIdentityResult(identity),
+				max_items: request.maxItems,
+				matched_count: matches.length,
+				...readViewProvenance(view),
+				candidates: candidateNotes.map((candidate) => candidate.path),
+				candidate_notes: candidateNotes,
+				scope_evidence: buildProjectRecallRelationEvidence(identity),
+				scope_mode: 'project',
+				entries: matches.map((match) => buildReadViewEntry(match, 'project', view, this.dependencies)),
+			};
+		}
+
+		const queryTerms = tokenizeReadViewQuery(request.query);
+		const historyEntries = scopedEntries
+			.filter((entry) => entry.path !== '')
+			.filter((entry) => queryTerms.length === 0 || queryTerms.every((term) => entry.searchTokens.includes(term)))
+			.sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt) || left.path.localeCompare(right.path));
+		const matches = historyEntries.slice(0, request.maxItems);
+		this.dependencies.onReadViewDiagnostics?.({ lexical_candidates: 0, graph_expansions: 0, reranked_rows: 0 });
+		return {
+			ok: true,
+			read_only: true,
+			vault_root: request.vaultRoot,
+			query: request.query || null,
+			uncertain,
+			scope: projectIdentityResult(identity),
+			project_identity: projectIdentityResult(identity),
+			max_items: request.maxItems,
+			matched_count: matches.length,
+			total_matches: historyEntries.length,
+			...readViewProvenance(view),
+			candidates: candidateNotes.map((candidate) => candidate.path),
+			candidate_notes: candidateNotes,
+			entries: matches.map((entry) => ({
+				path: entry.path,
+				title: entry.title,
+				type: entry.type ?? undefined,
+				note_type: entry.type,
+				scope: 'project_history',
+				modifiedAt: entry.modifiedAt,
+				content_origin: this.dependencies.contentOrigin(entry.path, entry.type ?? undefined),
+				instruction_trust: 'data_only',
+				task_id: readFrontmatterString(entry.frontmatter as Record<string, unknown>, ['task_id', 'taskId']),
+				project_hint: readFrontmatterString(entry.frontmatter as Record<string, unknown>, ['project_hint', 'related_project', 'project']),
+				why_matched: buildProjectHistoryWhy(catalogMetadataProjection(entry), request.query),
+				excerpt: compactNoteText(entry.excerpt),
+				graph_links: buildCatalogGraphLinks(entry, view),
+				relation_evidence: relationEvidenceFromReadView(entry, view),
+			})),
+		};
 	}
 
 	private executeGlobal(
