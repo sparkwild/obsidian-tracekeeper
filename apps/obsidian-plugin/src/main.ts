@@ -483,7 +483,7 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 	skillInstallReceipts: {},
 	graphProfile: 'advisory',
 	globalMemoryRule: 'review_queue',
-	projectMemoryRule: 'review_queue',
+	projectMemoryRule: 'auto_write',
 	taskMemoryProposalMode: 'auto_propose',
 	noteContentLanguage: 'auto',
 	autoRefreshEnabled: true,
@@ -2410,7 +2410,10 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	async setProjectMemoryRule(value: unknown): Promise<void> {
-		this.settings.projectMemoryRule = normalizeMemoryProposalRule(value);
+		this.settings.projectMemoryRule = normalizeMemoryProposalRule(
+			value,
+			DEFAULT_SETTINGS.projectMemoryRule
+		);
 		await this.persistExplicitMemoryPolicySelection();
 	}
 

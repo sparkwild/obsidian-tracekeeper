@@ -15,12 +15,14 @@ function methodBody(name, nextName) {
 }
 
 const serviceSection = methodBody('renderConnectionInfoSection', 'renderRuntimeEnabledSetting');
-const endpointSetting = methodBody('renderEndpointSetting', 'renderAccessProtectionSetting');
+const endpointSetting = methodBody('renderEndpointSetting', 'renderViewRefreshSection');
 const advancedSection = methodBody('renderAdvancedMaintenanceSection', 'renderPortSetting');
 
 assert.ok(serviceSection.includes('renderRuntimeEnabledSetting'));
 assert.ok(serviceSection.includes('renderEndpointSetting'));
-assert.ok(serviceSection.includes('renderAccessProtectionSetting'));
+assert.ok(serviceSection.includes('snapshot.runtimeStatus.accessProtected'));
+assert.equal(serviceSection.includes('renderAccessProtectionSetting'), false);
+assert.equal(source.includes('private renderAccessProtectionSetting'), false);
 assert.ok(serviceSection.includes('renderCapabilitiesSetting'));
 assert.equal(serviceSection.includes('renderObservedAiToolsSetting'), false);
 assert.equal(serviceSection.includes('renderConnectAiToolSetting'), false);
@@ -28,6 +30,9 @@ assert.equal(serviceSection.includes('renderPortSetting'), false);
 
 assert.ok(source.includes("ui('本机访问已保护', 'Local access protected')"));
 assert.ok(source.includes("ui('MCP 端点', 'MCP endpoint')"));
+assert.ok(endpointSetting.includes("ui('全部 Agent 访问', 'All Agent access')"));
+assert.ok(endpointSetting.includes('tracekeeper-settings-endpoint-access'));
+assert.ok(stylesSource.includes('.tracekeeper-settings-endpoint-access'));
 assert.ok(source.includes("setIcon('copy')"));
 assert.ok(source.includes("ui('复制 MCP 端点', 'Copy MCP endpoint')"));
 assert.ok(source.includes("ui('高级选项', 'Advanced options')"));
@@ -65,4 +70,4 @@ assert.ok(advancedSection.includes("ui('重启服务', 'Restart service')"));
 assert.ok(advancedSection.includes("ui('撤销全部 Agent 访问', 'Revoke all Agent access')"));
 assert.ok(advancedSection.includes('TRACEKEEPER_ACTIVITY_VIEW'));
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 41 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 46 })}\n`);

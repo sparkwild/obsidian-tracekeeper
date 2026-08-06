@@ -320,6 +320,18 @@
 	gap: 8px;
 }
 
+.tracekeeper-settings-endpoint-access {
+	display: grid;
+	gap: 4px;
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.tracekeeper-settings-endpoint-access > small {
+	color: var(--text-muted);
+}
+
 .tracekeeper-settings-agent-actions {
 	display: flex;
 	justify-content: flex-end;

@@ -63,11 +63,12 @@ and returns focus to the relevant input. Apply failures retain an actionable
 status and keyboard focus so the user can retry an interrupted operation or
 close the modal and generate a fresh preview after a conflict.
 
-Project memory may use an opt-in lighter rule:
+Project memory uses a lighter default rule:
 
-- fresh installations start with project memory in Knowledge Change Review;
-- automatic project persistence requires an explicit user selection and a
-  separately visible onboarding confirmation;
+- fresh installations start with automatic project persistence, while global
+  memory remains review-gated;
+- Settings exposes review and ignore alternatives, and records an explicit
+  policy confirmation whenever the user changes the selected rule;
 - an upgrade preserves every stored memory rule exactly and asks for that
   confirmation without rewriting the selected policy;
 - a stable project id owns one project hub, while the display name remains

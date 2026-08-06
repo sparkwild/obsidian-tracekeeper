@@ -173,9 +173,12 @@ try {
 assert.ok(skillPromptSource.includes("case 'location_required'"));
 	assert.ok(clientSkillPromptSource.includes("setIcon(assistant, 'bot')"));
 	assert.ok(clientSkillPromptSource.includes('tracekeeper-copy-button'));
-	assert.ok(mainSource.includes("projectMemoryRule: 'review_queue'"));
+	assert.ok(mainSource.includes("projectMemoryRule: 'auto_write'"));
 	assert.ok(mainSource.includes('normalizeMemoryRuleSettings(saved, DEFAULT_SETTINGS)'));
+	assert.ok(mainSource.includes('DEFAULT_SETTINGS.projectMemoryRule'));
 	assert.equal(mainSource.includes('savedMemoryRulesVersion'), false);
+	assert.ok(settingsSource.includes('项目、仓库或工作区相关记忆默认自动保存'));
+	assert.ok(settingsSource.includes('Project, repository, or workspace memory auto-saves by default'));
 	assert.equal(settingsSource.includes("clientId === 'codex'"), false);
 	assert.ok(mainSource.includes('runtimeCapabilities: LOCAL_TRUST_CAPABILITIES'));
 	assert.ok(mainSource.includes('clearOnboardingAgentBehaviorEvidence'));
@@ -218,7 +221,7 @@ assert.ok(skillPromptSource.includes("case 'location_required'"));
 		assert.equal(/(?:sk-[A-Za-z0-9_-]{12,}|api_key\s*[:=]\s*[A-Za-z0-9._-]{12,})/i.test(content), false);
 	}
 
-		process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 53 })}\n`);
+		process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 56 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

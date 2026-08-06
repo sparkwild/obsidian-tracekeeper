@@ -29,7 +29,7 @@ try {
 	const settings = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 	const defaults = {
 		globalMemoryRule: 'review_queue',
-		projectMemoryRule: 'review_queue',
+		projectMemoryRule: 'auto_write',
 		taskMemoryProposalMode: 'auto_propose',
 	};
 

@@ -79,7 +79,7 @@ Global long-term memory changes are review-gated by default. When an assistant p
 
 Approval and writeback are separate actions. Tracekeeper only applies an approved proposal to its target note after you preview and explicitly confirm the writeback.
 
-Project memory is lighter by default: project-scoped updates can auto-save as create-only entries under `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/`. Stable operation identity makes an exact retry reuse the same entry and rejects a changed payload instead of overwriting another operation. Every new entry links to the stable project hub and verified Wiki or Source notes through Obsidian-native links. Existing project `memory.md` files remain readable and catalogued but are not rewritten, split, or migrated automatically.
+Project memory auto-saves by default as create-only entries under `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/`. Stable operation identity makes an exact retry reuse the same entry and rejects a changed payload instead of overwriting another operation. Every new entry links to the stable project hub and verified Wiki or Source notes through Obsidian-native links. Existing project `memory.md` files remain readable and catalogued but are not rewritten, split, or migrated automatically.
 
 `tracekeeper.recall` remains a relevance-ranked selection. When an Agent needs complete project-memory enumeration, the read-only `tracekeeper.project_memory` catalog lists immutable entries and legacy notes over one index generation without returning note bodies.
 

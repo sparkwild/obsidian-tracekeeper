@@ -215,8 +215,11 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			ui('查看 Obsidian 托管的本机服务状态，并在需要时恢复连接。', 'Review the local service hosted by Obsidian and recover it when needed.')
 		);
 		this.renderRuntimeEnabledSetting(section, snapshot);
-		this.renderEndpointSetting(section, snapshot.runtimeStatus.endpoint);
-		this.renderAccessProtectionSetting(section, snapshot);
+		this.renderEndpointSetting(
+			section,
+			snapshot.runtimeStatus.endpoint,
+			snapshot.runtimeStatus.accessProtected
+		);
 		this.renderCapabilitiesSetting(section);
 	}
 
@@ -279,7 +282,11 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			);
 	}
 
-	private renderEndpointSetting(container: HTMLElement, endpoint: string): void {
+	private renderEndpointSetting(
+		container: HTMLElement,
+		endpoint: string,
+		accessProtected: boolean
+	): void {
 		const setting = new Setting(container)
 			.setName(ui('MCP 端点', 'MCP endpoint'));
 		const advanced = container.createDiv({
@@ -296,6 +303,31 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			attr: {
 				'aria-label': ui('本机 MCP 端点', 'Local MCP endpoint'),
 			},
+		});
+		const accessSummary = setting.descEl.createDiv({
+			cls: 'tracekeeper-settings-endpoint-access',
+		});
+		const accessHeading = accessSummary.createDiv({
+			cls: 'tracekeeper-settings-runtime-name',
+		});
+		accessHeading.createSpan({
+			text: ui('全部 Agent 访问', 'All Agent access'),
+		});
+		accessHeading.createSpan({
+			text: accessProtected
+				? ui('本机访问已保护', 'Local access protected')
+				: ui('保护不可用', 'Protection unavailable'),
+			cls: `tracekeeper-badge ${
+				accessProtected
+					? 'tracekeeper-badge--success'
+					: 'tracekeeper-badge--error'
+			}`,
+		});
+		accessSummary.createEl('small', {
+			text: ui(
+				'每个 Agent 使用独立的 OAuth 或手动访问令牌；状态和撤销按卡片管理。',
+				'Each Agent uses an independent OAuth or manual access token; status and revocation are managed per card.'
+			),
 		});
 		setting
 			.addExtraButton((button) =>
@@ -328,30 +360,6 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						}
 					});
 			});
-	}
-
-	private renderAccessProtectionSetting(
-		container: HTMLElement,
-		snapshot: AgentConnectionsSnapshot
-	): void {
-		const protectedAccess = snapshot.runtimeStatus.accessProtected;
-		const setting = new Setting(container)
-			.setName(ui('全部 Agent 访问', 'All Agent access'))
-			.setDesc(ui(
-				'每个 Agent 使用独立的 OAuth 或手动访问令牌；状态和撤销按卡片管理。',
-				'Each Agent uses an independent OAuth or manual access token; status and revocation are managed per card.'
-			));
-		setting.nameEl.addClass('tracekeeper-settings-runtime-name');
-		setting.nameEl.createEl('span', {
-			text: protectedAccess
-				? ui('本机访问已保护', 'Local access protected')
-				: ui('保护不可用', 'Protection unavailable'),
-			cls: `tracekeeper-badge ${
-				protectedAccess
-					? 'tracekeeper-badge--success'
-					: 'tracekeeper-badge--error'
-			}`,
-		});
 	}
 
 	private renderViewRefreshSection(container: HTMLElement): void {
@@ -468,8 +476,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('项目记忆', 'Project memory'))
 			.setDesc(ui(
-				'项目、仓库或工作区相关记忆默认进入审核。仅当你明确选择自动时，才会在稳定项目 Hub 下为每次操作创建独立条目；旧版共享记忆笔记不会被改写。',
-				'Project, repository, or workspace memory starts in review. Only after you explicitly choose Auto does each operation create its own entry under a stable project hub; legacy shared memory notes are not rewritten.'
+				'项目、仓库或工作区相关记忆默认自动保存：在稳定项目 Hub 下为每次操作创建独立条目；缺少有效 Wiki 关联时仍进入审核，旧版共享记忆笔记不会被改写。',
+				'Project, repository, or workspace memory auto-saves by default: each operation creates its own entry under a stable project hub; items without a valid Wiki link still go to review, and legacy shared memory notes are not rewritten.'
 			))
 			.addDropdown((dropdown) => {
 				for (const rule of MEMORY_PROPOSAL_RULES) {
