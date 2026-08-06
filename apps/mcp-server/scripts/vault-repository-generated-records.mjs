@@ -61,6 +61,11 @@ class RecordingVaultRepository {
 		return this.delegate.replaceText(relativePath, expectedVersion, content);
 	}
 
+	async deleteText(relativePath, expectedVersion) {
+		this.calls.push({ method: 'deleteText', path: relativePath });
+		return this.delegate.deleteText(relativePath, expectedVersion);
+	}
+
 	async listMarkdown(scope) {
 		this.calls.push({ method: 'listMarkdown', path: scope || '' });
 		return this.delegate.listMarkdown(scope);

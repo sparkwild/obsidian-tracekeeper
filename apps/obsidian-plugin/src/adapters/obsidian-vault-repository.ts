@@ -104,6 +104,21 @@ export class ObsidianVaultRepository implements VaultRepository {
 		});
 	}
 
+	async deleteText(relativePath: VaultPath, expectedVersion: string): Promise<void> {
+		const safePath = this.normalizeRelativePath(relativePath);
+		await withObsidianVaultPathLock(this.vault, safePath, async () => {
+			const file = this.vault.getAbstractFileByPath(safePath);
+			if (!(file instanceof TFile)) {
+				throw new OperationConflictError(`Target does not exist: ${safePath}`);
+			}
+			const content = await this.vault.read(file);
+			if (this.fileVersion(file, content) !== expectedVersion) {
+				throw new OperationConflictError(`CAS check failed for ${safePath}`);
+			}
+			await this.vault.delete(file);
+		});
+	}
+
 	async listMarkdown(scope?: VaultPath): Promise<readonly VaultTextMetadata[]> {
 		const safeScope = scope ? this.normalizeRelativePath(scope) : '';
 		const prefix = safeScope ? `${safeScope}/` : '';

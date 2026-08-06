@@ -2380,6 +2380,19 @@ async function run() {
 			(error) => error instanceof operationJournalModule.OperationConflictError
 		);
 
+		const repositoryDeleteNote = path.join(repoScope, 'delete-note.md');
+		const repositoryDeleteCreated = await repo.createText(
+			repositoryDeleteNote,
+			'# Delete Note\n'
+		);
+		await assert.rejects(
+			() => repo.deleteText(repositoryDeleteNote, 'not-a-version'),
+			(error) => error instanceof operationJournalModule.OperationConflictError
+		);
+		assert.equal((await repo.readText(repositoryDeleteNote))?.content, '# Delete Note\n');
+		await repo.deleteText(repositoryDeleteNote, repositoryDeleteCreated.version);
+		assert.equal(await repo.readText(repositoryDeleteNote), null);
+
 		await assert.rejects(
 			() => repo.readText('../outside-repo.md'),
 			(error) => error instanceof safety.VaultPathError

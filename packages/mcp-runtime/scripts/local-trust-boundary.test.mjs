@@ -96,7 +96,7 @@ function auditSections(vaultRoot) {
 		.filter(Boolean);
 }
 
-test('accepted local trust capabilities expose the exact fixed eleven-tool surface', () => {
+test('accepted local trust capabilities expose the exact fixed twelve-tool surface', () => {
 	assert.deepEqual(LOCAL_TRUST_CAPABILITIES, [
 		'vault.read',
 		'workflow.manage',
@@ -106,6 +106,7 @@ test('accepted local trust capabilities expose the exact fixed eleven-tool surfa
 	const toolNames = toolDefinitions(LOCAL_TRUST_CAPABILITIES)
 		.map((definition) => definition.name);
 	assert.deepEqual(toolNames, ACCEPTED_LOCAL_TRUST_TOOLS);
+	assert.equal(toolDefinitions().length, 14);
 	assert.equal(toolNames.includes('tracekeeper.review_queue'), false);
 	assert.equal(toolNames.includes('tracekeeper.apply_approved_writeback'), false);
 });

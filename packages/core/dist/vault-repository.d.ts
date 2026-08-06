@@ -23,6 +23,7 @@ export interface VaultRepository {
     readText(relativePath: VaultPath): Promise<VaultTextFile | null>;
     createText(relativePath: VaultPath, content: string): Promise<VaultWriteReceipt>;
     replaceText(relativePath: VaultPath, expectedVersion: VaultFileVersion, content: string): Promise<VaultWriteReceipt>;
+    deleteText(relativePath: VaultPath, expectedVersion: VaultFileVersion): Promise<void>;
     listMarkdown(scope?: VaultPath): Promise<readonly VaultTextMetadata[]>;
 }
 export interface NodeFsVaultRepositoryOptions {
@@ -50,5 +51,6 @@ export declare class NodeFsVaultRepository implements VaultRepository {
     readText(relativePath: VaultPath): Promise<VaultTextFile | null>;
     createText(relativePath: VaultPath, content: string): Promise<VaultWriteReceipt>;
     replaceText(relativePath: VaultPath, expectedVersion: VaultFileVersion, content: string): Promise<VaultWriteReceipt>;
+    deleteText(relativePath: VaultPath, expectedVersion: VaultFileVersion): Promise<void>;
     listMarkdown(scope?: VaultPath): Promise<readonly VaultTextMetadata[]>;
 }

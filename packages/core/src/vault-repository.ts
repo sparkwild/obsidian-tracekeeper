@@ -45,6 +45,7 @@ export interface VaultRepository {
 	readText(relativePath: VaultPath): Promise<VaultTextFile | null>;
 	createText(relativePath: VaultPath, content: string): Promise<VaultWriteReceipt>;
 	replaceText(relativePath: VaultPath, expectedVersion: VaultFileVersion, content: string): Promise<VaultWriteReceipt>;
+	deleteText(relativePath: VaultPath, expectedVersion: VaultFileVersion): Promise<void>;
 	listMarkdown(scope?: VaultPath): Promise<readonly VaultTextMetadata[]>;
 }
 
@@ -443,6 +444,31 @@ export class NodeFsVaultRepository implements VaultRepository {
 			type: 'mustExist',
 			version: expectedVersion,
 		});
+	}
+
+	async deleteText(relativePath: VaultPath, expectedVersion: VaultFileVersion): Promise<void> {
+		const absolutePath = this.resolveRelativePath(relativePath);
+		const state = await this.readStats(absolutePath);
+		if (state === null) {
+			throw new OperationConflictError(
+				`Target does not exist: ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`
+			);
+		}
+		if (this.computeVersionFromStats(state) !== expectedVersion) {
+			throw new OperationConflictError(
+				`CAS check failed for ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`
+			);
+		}
+		try {
+			await fs.unlink(absolutePath);
+		} catch (error: unknown) {
+			if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+				throw new OperationConflictError(
+					`Target does not exist: ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`
+				);
+			}
+			throw error;
+		}
 	}
 
 	async listMarkdown(scope?: VaultPath): Promise<readonly VaultTextMetadata[]> {

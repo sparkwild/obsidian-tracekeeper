@@ -44,6 +44,7 @@ try {
 	const mainSource = fs.readFileSync('src/main.ts', 'utf8');
 	const entryModalSource = fs.readFileSync('src/features/onboarding/onboarding-entry-modal.ts', 'utf8');
 	const runtimeStatusSource = fs.readFileSync('src/features/runtime/runtime-status-view.ts', 'utf8');
+	const capabilitiesModalSource = fs.readFileSync('src/features/runtime/mcp-capabilities-modal.ts', 'utf8');
 	const buildSource = fs.readFileSync('scripts/build.mjs', 'utf8');
 	const clientSkillPromptSource = fs.readFileSync('src/features/skill-installation/client-skill-prompt.ts', 'utf8');
 	const skillBundleSource = fs.readFileSync('src/features/skill-installation/skill-bundle.ts', 'utf8');
@@ -155,6 +156,11 @@ try {
 	assert.equal(clientSkillPromptSource.includes('tracekeeper-settings-client-skill__technical'), false);
 	assert.ok(settingsSource.includes('McpCapabilitiesModal'));
 	assert.ok(settingsSource.includes('View capabilities'));
+	assert.ok(capabilitiesModalSource.includes('LOCAL_TRUST_CAPABILITIES'));
+	assert.ok(capabilitiesModalSource.includes('toolDefinitions(LOCAL_TRUST_CAPABILITIES)'));
+	assert.ok(capabilitiesModalSource.includes('人工审核和确认写入仍在 Obsidian 中完成'));
+	assert.ok(capabilitiesModalSource.includes('Human review and confirmed writeback remain in Obsidian'));
+	assert.equal(capabilitiesModalSource.includes('Connected agents can call the capabilities below'), false);
 	assert.ok(settingsSource.includes("section.querySelector<HTMLElement>('.tracekeeper-settings-section__header')"));
 	assert.equal(settingsSource.includes('持久 Agent 卡片独立展示 MCP 配置、授权、连接、使用和 Skill 状态。'), false);
 	assert.equal(settingsSource.includes('Persistent Agent cards show MCP setup, authorization, connection, usage, and Skill state independently.'), false);
@@ -221,7 +227,7 @@ assert.ok(skillPromptSource.includes("case 'location_required'"));
 		assert.equal(/(?:sk-[A-Za-z0-9_-]{12,}|api_key\s*[:=]\s*[A-Za-z0-9._-]{12,})/i.test(content), false);
 	}
 
-		process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 56 })}\n`);
+		process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 61 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

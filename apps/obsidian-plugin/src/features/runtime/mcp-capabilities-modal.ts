@@ -1,5 +1,5 @@
 import { Modal } from 'obsidian';
-import { toolDefinitions } from '@tracekeeper/mcp-runtime';
+import { LOCAL_TRUST_CAPABILITIES, toolDefinitions } from '@tracekeeper/mcp-runtime';
 import { getContractByName, type ToolRisk } from '@tracekeeper/contracts';
 import { localizedText, ui, type LocalizedText } from '../../ui/localization';
 
@@ -225,14 +225,14 @@ export class McpCapabilitiesModal extends Modal {
 
 		contentEl.createEl('p', {
 			text: ui(
-				'AI 工具连接后可以调用以下功能。移动到功能项上可查看说明。',
-				'Connected agents can call the capabilities below. Hover a capability to see its explanation.'
+				'以下是当前默认权限允许 Agent 调用的功能。人工审核和确认写入仍在 Obsidian 中完成。移动到功能项上可查看说明。',
+				'These capabilities are available to Agents under the current default permissions. Human review and confirmed writeback remain in Obsidian. Hover a capability to see its explanation.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
 
 		const list = contentEl.createDiv({ cls: 'tracekeeper-capability-list' });
-		for (const definition of toolDefinitions()) {
+		for (const definition of toolDefinitions(LOCAL_TRUST_CAPABILITIES)) {
 			const localization = MCP_CAPABILITY_LOCALIZATIONS[definition.name];
 			const contract = getContractByName(definition.name);
 			const title = localization ? localizedText(localization.title) : definition.title;

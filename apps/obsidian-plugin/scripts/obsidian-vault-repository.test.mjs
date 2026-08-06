@@ -79,6 +79,9 @@ try {
 			throw new Error('cachedRead must not be used for repository CAS content');
 		},
 		create: async (filePath, content) => makeFile(filePath, content, 2000),
+		delete: async (file) => {
+			records.delete(file.path);
+		},
 		modify: async () => {
 			throw new Error('modify must not be used for repository CAS writes');
 		},
@@ -165,6 +168,14 @@ try {
 	assert.equal(created.path, '01_knowledge/wiki/new.md');
 	const createdRead = await repository.readText(created.path);
 	assert.equal(created.version, createdRead.version);
+	const deletable = await repository.createText('01_knowledge/wiki/delete.md', '# Delete');
+	await assert.rejects(
+		() => repository.deleteText(deletable.path, 'stale-version'),
+		/CAS check failed/
+	);
+	assert.equal(records.get(deletable.path).content, '# Delete');
+	await repository.deleteText(deletable.path, deletable.version);
+	assert.equal(records.has(deletable.path), false);
 	makeFile('.obsidian/private.md', '# hidden');
 	const listed = await repository.listMarkdown();
 	assert.deepEqual(listed.map((entry) => entry.path), [
@@ -287,7 +298,7 @@ try {
 	assert.equal(records.get('03_external/recovered.md').content, '# Recovered');
 	await assert.rejects(() => repository.readText('../outside.md'), /Unsafe vault path/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 34 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 38 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

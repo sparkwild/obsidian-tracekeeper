@@ -334,6 +334,25 @@ class NodeFsVaultRepository {
             version: expectedVersion,
         });
     }
+    async deleteText(relativePath, expectedVersion) {
+        const absolutePath = this.resolveRelativePath(relativePath);
+        const state = await this.readStats(absolutePath);
+        if (state === null) {
+            throw new operation_journal_1.OperationConflictError(`Target does not exist: ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`);
+        }
+        if (this.computeVersionFromStats(state) !== expectedVersion) {
+            throw new operation_journal_1.OperationConflictError(`CAS check failed for ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`);
+        }
+        try {
+            await promises_1.default.unlink(absolutePath);
+        }
+        catch (error) {
+            if (error instanceof Error && error.code === 'ENOENT') {
+                throw new operation_journal_1.OperationConflictError(`Target does not exist: ${vaultRelativeFromAbsolute(this.vaultRoot, absolutePath)}`);
+            }
+            throw error;
+        }
+    }
     async listMarkdown(scope) {
         const normalizedScope = scope ? this.normalizeRelativePath(scope) : '';
         const startPath = normalizedScope ? this.resolveRelativePath(normalizedScope) : this.vaultRoot;

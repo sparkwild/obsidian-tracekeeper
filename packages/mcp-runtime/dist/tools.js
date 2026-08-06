@@ -5931,6 +5931,15 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
 }
 async function rollbackRuntimeWritebackTarget(vaultRoot, payload, context) {
     if (payload.effectKind === 'create_memory_record') {
+        const repository = projectMemoryRepository(vaultRoot, context);
+        const target = await repository.readText(payload.targetPath);
+        if (!target) {
+            return;
+        }
+        if (hashText(target.content) !== payload.writebackBlockHash) {
+            throw new core_1.OperationConflictError('Approved memory record changed after creation and cannot be safely compensated.');
+        }
+        await repository.deleteText(payload.targetPath, target.version);
         return;
     }
     const target = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
@@ -6146,6 +6155,17 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
                     return;
                 }
                 if (currentPayload.effectKind === 'create_memory_record') {
+                    const repository = projectMemoryRepository(vaultRoot, context);
+                    try {
+                        await repository.createText(currentPayload.targetPath, effect.writebackBlock);
+                    }
+                    catch (error) {
+                        if (!(error instanceof core_1.OperationConflictError))
+                            throw error;
+                        const existingTarget = await repository.readText(currentPayload.targetPath);
+                        if (existingTarget?.content !== effect.writebackBlock)
+                            throw error;
+                    }
                     return;
                 }
                 if (!effect.target) {
@@ -6175,21 +6195,6 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
                 await rollbackApprovedWritebackTask(vaultRoot, currentPayload, receipt, context);
             },
             async appendAgentActivity(currentPayload, operationId, receipt) {
-                if (currentPayload.effectKind === 'create_memory_record') {
-                    const proposal = await resolveMemoryProposalFromArgs(vaultRoot, { proposal_path: currentPayload.proposalPath }, context);
-                    const markdown = buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, currentPayload.targetPath, operationId, context);
-                    const repository = projectMemoryRepository(vaultRoot, context);
-                    try {
-                        await repository.createText(currentPayload.targetPath, markdown);
-                    }
-                    catch (error) {
-                        if (!(error instanceof core_1.OperationConflictError))
-                            throw error;
-                        const existingTarget = await repository.readText(currentPayload.targetPath);
-                        if (existingTarget?.content !== markdown)
-                            throw error;
-                    }
-                }
                 await (0, audit_persistence_1.appendAuditEventAsync)(vaultRoot, {
                     operationId,
                     tool: 'tracekeeper.apply_approved_writeback',

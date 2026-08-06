@@ -234,21 +234,38 @@ function createFixture(t, options = {}) {
 	};
 }
 
-test('approved lifecycle proposal creates one immutable v2 memory record after preview', async (t) => {
-	const fixture = createFixture(t, {
+const LIFECYCLE_PROPOSAL_FIELDS = {
+	target_note: '01_knowledge/memory/global/agents/custom/approved-atomic-proposal.md',
+	memory_scope: 'global',
+	claim_key: 'governance:approved-memory',
+	proposed_authority: 'user',
+	proposed_confidence: 'verified',
+	declared_state: 'active',
+	observed_at: APPROVAL_TIME,
+	related_wiki: ['01_knowledge/wiki/approved-memory.md'],
+};
+
+function lifecycleProposalText(writeback = 'Approved governed memory content.') {
+	return proposalText({
+		fields: LIFECYCLE_PROPOSAL_FIELDS,
+		writeback,
+	});
+}
+
+function createLifecycleFixture(t, options = {}) {
+	return createFixture(t, {
+		...options,
 		skipTarget: true,
 		proposalFields: {
-			target_note: '01_knowledge/memory/global/agents/custom/approved-atomic-proposal.md',
-			memory_scope: 'global',
-			claim_key: 'governance:approved-memory',
-			proposed_authority: 'user',
-			proposed_confidence: 'verified',
-			declared_state: 'active',
-			observed_at: APPROVAL_TIME,
-			related_wiki: ['01_knowledge/wiki/approved-memory.md'],
+			...LIFECYCLE_PROPOSAL_FIELDS,
+			...options.proposalFields,
 		},
-		writeback: 'Approved governed memory content.',
+		writeback: options.writeback ?? 'Approved governed memory content.',
 	});
+}
+
+test('approved lifecycle proposal creates one immutable v2 memory record after preview', async (t) => {
+	const fixture = createLifecycleFixture(t);
 	const dryRun = await preview(fixture);
 	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
 	const targetPath = dryRun.structuredContent.target_note;
@@ -266,6 +283,85 @@ test('approved lifecycle proposal creates one immutable v2 memory record after p
 	const replayed = await apply(fixture, tokenFrom(dryRun));
 	assert.equal(replayed.isError, false, JSON.stringify(replayed.structuredContent));
 	assert.equal(fixture.read(targetPath), contentBeforeReplay);
+});
+
+test('lifecycle proposal conflict compensates the exact created MemoryRecord before applied state', async (t) => {
+	const fixture = createLifecycleFixture(t);
+	const originalTask = fixture.read(TASK_PATH);
+	const dryRun = await preview(fixture);
+	const targetPath = dryRun.structuredContent.target_note;
+	fixture.context.operationFailureInjection = (context) => {
+		if (context.phase === 'before_step' && context.stepName === 'mark_proposal_applied') {
+			fixture.write(
+				PROPOSAL_PATH,
+				lifecycleProposalText('Changed after the MemoryRecord target effect.')
+			);
+		}
+	};
+
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(String(result.structuredContent?.error || ''), /conflict|changed/i);
+	assert.equal(fs.existsSync(fixture.absolute(targetPath)), false);
+	assert.equal(fixture.read(TASK_PATH), originalTask);
+	assert.match(fixture.read(PROPOSAL_PATH), /approval_status: approved/);
+	const operation = await operationRecord(fixture);
+	assert.equal(operation.status, 'conflicted');
+	assert.deepEqual(operation.completed_steps.map((step) => step.name), [
+		'apply_target',
+		'link_task',
+	]);
+});
+
+test('lifecycle compensation preserves a MemoryRecord changed after its owned creation', async (t) => {
+	const fixture = createLifecycleFixture(t);
+	const originalTask = fixture.read(TASK_PATH);
+	const dryRun = await preview(fixture);
+	const targetPath = dryRun.structuredContent.target_note;
+	fixture.context.operationFailureInjection = (context) => {
+		if (context.phase === 'before_step' && context.stepName === 'mark_proposal_applied') {
+			fixture.write(targetPath, `${fixture.read(targetPath)}\nUser change after creation.\n`);
+			fixture.write(
+				PROPOSAL_PATH,
+				lifecycleProposalText('Changed after the owned target was edited.')
+			);
+		}
+	};
+
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(String(result.structuredContent?.error || ''), /conflict|compensat|changed/i);
+	assert.match(fixture.read(targetPath), /User change after creation/);
+	assert.equal(fixture.read(TASK_PATH), originalTask);
+	assert.match(fixture.read(PROPOSAL_PATH), /approval_status: approved/);
+	assert.equal((await operationRecord(fixture)).status, 'conflicted');
+});
+
+test('lifecycle recovery resumes after the MemoryRecord target checkpoint without duplication', async (t) => {
+	const fixture = createLifecycleFixture(t);
+	const dryRun = await preview(fixture);
+	const targetPath = dryRun.structuredContent.target_note;
+	let interrupted = false;
+	fixture.context.operationFailureInjection = (context) => {
+		if (!interrupted && context.phase === 'after_step' && context.stepName === 'apply_target') {
+			interrupted = true;
+			throw new Error('interrupt after lifecycle target checkpoint');
+		}
+	};
+
+	const first = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(first.isError, true);
+	assert.equal(interrupted, true);
+	assert.equal(fs.existsSync(fixture.absolute(targetPath)), true);
+	const contentBeforeRecovery = fixture.read(targetPath);
+	delete fixture.context.operationFailureInjection;
+	const recovery = await recoverPendingOperations(fixture.vaultRoot, fixture.context);
+	assert.equal(recovery.failed.length, 0);
+	assert.equal(recovery.skipped.length, 0);
+	assert.equal(recovery.recovered.length, 1);
+	assert.equal(fixture.read(targetPath), contentBeforeRecovery);
+	assert.match(fixture.read(PROPOSAL_PATH), /approval_status: applied/);
+	assert.equal((await operationRecord(fixture)).status, 'completed');
 });
 
 async function preview(fixture, args = {}) {
