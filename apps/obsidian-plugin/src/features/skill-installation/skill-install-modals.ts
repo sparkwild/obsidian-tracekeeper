@@ -3,6 +3,12 @@ import type TracekeeperPlugin from '../../main';
 import type { AiSkillAssistantContext } from './skill-assistant-prompt';
 import type { SkillInstallPlan } from '../../adapters/client-skill-adapter';
 import { ui } from '../../ui/localization';
+import { sameSkillTargetDirectory } from './skill-install-paths';
+import {
+	skillFileChangeLabel,
+	skillInstallActionLabel,
+	skillInstallPlanDetail,
+} from './skill-install-view-model';
 
 export class SkillInstallPreviewModal extends Modal {
 	private plan: SkillInstallPlan | null = null;
@@ -23,27 +29,55 @@ export class SkillInstallPreviewModal extends Modal {
 	private renderChooseDirectory(): void {
 		const { contentEl } = this;
 		contentEl.empty();
-		contentEl.createEl('h2', { text: ui('选择 Skill 目录', 'Choose Skill directory') });
+		this.setTitle(ui('选择 Skill 目录', 'Choose Skill directory'));
 		contentEl.createEl('p', {
-			text: ui('请选择 Skills 根目录。Tracekeeper 只会在确认预览后写入其中的 tracekeeper 子目录。', 'Choose a Skills root directory. Tracekeeper writes only to its tracekeeper child after you confirm the preview.'),
+			text: ui('请选择 Skills 根目录或已有的 Tracekeeper 目录。确认预览后只会写入最终的 tracekeeper 目录。', 'Choose a Skills root directory or an existing Tracekeeper directory. The preview writes only to the final tracekeeper directory after confirmation.'),
 			cls: 'tracekeeper-view__description',
 		});
 		const recommendation = this.plugin.getSkillDirectoryRecommendation(this.clientId);
-		if (recommendation) {
-			const row = contentEl.createDiv({ cls: 'tracekeeper-skill-directory-recommendation' });
-			row.createEl('strong', { text: ui('建议位置', 'Suggested location') });
-			row.createEl('code', { text: recommendation.skillsRootDirectory });
-			row.createEl('small', { text: ui('来源：客户端官方文档', 'Source: official client documentation') });
-			const use = row.createEl('button', { text: ui('使用建议位置', 'Use suggested location'), cls: 'mod-cta' });
-			use.addEventListener('click', () => void this.prepare(recommendation.skillsRootDirectory));
-		}
 		const currentTarget = this.plugin.getSkillInstallState(this.clientId).targetDirectory;
-		if (currentTarget) {
-			const current = contentEl.createDiv({ cls: 'tracekeeper-skill-directory-recommendation' });
-			current.createEl('strong', { text: ui('当前目录', 'Current directory') });
-			current.createEl('code', { text: currentTarget });
-			const useCurrent = current.createEl('button', { text: ui('使用当前目录', 'Use current directory') });
-			useCurrent.addEventListener('click', () => void this.prepare(currentTarget));
+		const currentMatchesRecommendation = Boolean(
+			recommendation
+			&& currentTarget
+			&& (
+				sameSkillTargetDirectory(currentTarget, recommendation.skillDirectory)
+				|| sameSkillTargetDirectory(currentTarget, recommendation.skillsRootDirectory)
+			)
+		);
+		if (recommendation && currentMatchesRecommendation) {
+			this.renderDirectoryCard({
+				title: ui('当前使用的官方位置', 'Current official location'),
+				targetDirectory: recommendation.skillDirectory,
+				detail: ui(
+					`Skills 根目录：${recommendation.skillsRootDirectory} · 来源：客户端官方文档`,
+					`Skills root: ${recommendation.skillsRootDirectory} · Source: official client documentation`
+				),
+				selectedDirectory: recommendation.skillsRootDirectory,
+				buttonLabel: ui('使用此位置', 'Use this location'),
+				primary: true,
+			});
+		} else {
+			if (recommendation) {
+				this.renderDirectoryCard({
+					title: ui('推荐安装位置', 'Suggested install location'),
+					targetDirectory: recommendation.skillDirectory,
+					detail: ui(
+						`Skills 根目录：${recommendation.skillsRootDirectory} · 来源：客户端官方文档`,
+						`Skills root: ${recommendation.skillsRootDirectory} · Source: official client documentation`
+					),
+					selectedDirectory: recommendation.skillsRootDirectory,
+					buttonLabel: ui('使用推荐位置', 'Use suggested location'),
+					primary: true,
+				});
+			}
+			if (currentTarget) {
+				this.renderDirectoryCard({
+					title: ui('当前安装位置', 'Current install location'),
+					targetDirectory: currentTarget,
+					selectedDirectory: currentTarget,
+					buttonLabel: ui('使用当前目录', 'Use current directory'),
+				});
+			}
 		}
 		const choose = contentEl.createEl('button', { text: ui('选择其他目录', 'Choose another directory') });
 		choose.addEventListener('click', () => {
@@ -54,6 +88,22 @@ export class SkillInstallPreviewModal extends Modal {
 				new Notice(error instanceof Error ? error.message : ui('无法选择目录。', 'Unable to choose a directory.'));
 			}).finally(() => { choose.disabled = false; });
 		});
+	}
+
+	private renderDirectoryCard(options: {
+		title: string;
+		targetDirectory: string;
+		detail?: string;
+		selectedDirectory: string;
+		buttonLabel: string;
+		primary?: boolean;
+	}): void {
+		const row = this.contentEl.createDiv({ cls: 'tracekeeper-skill-directory-recommendation' });
+		row.createEl('strong', { text: options.title });
+		row.createEl('code', { text: options.targetDirectory });
+		if (options.detail) row.createEl('small', { text: options.detail });
+		const use = row.createEl('button', { text: options.buttonLabel, cls: options.primary ? 'mod-cta' : undefined });
+		use.addEventListener('click', () => void this.prepare(options.selectedDirectory));
 	}
 
 	private async prepare(selectedDirectory: string): Promise<void> {
@@ -70,18 +120,18 @@ export class SkillInstallPreviewModal extends Modal {
 		contentEl.empty();
 		const plan = this.plan;
 		if (!plan) return this.renderChooseDirectory();
-		contentEl.createEl('h2', { text: ui('确认 Skill 变更', 'Confirm Skill change') });
+		this.setTitle(ui('确认 Skill 变更', 'Confirm Skill change'));
 		contentEl.createEl('p', {
 			text: ui('只会写入下列 Tracekeeper Skill 文件；其他文件保持不变。确认时会重新检查目标内容，更新会保留备份。', 'Only the listed Tracekeeper Skill files will be written. Other files stay unchanged. The target is rechecked at confirmation and updates keep a backup.'),
 			cls: 'tracekeeper-view__description',
 		});
 		const details = contentEl.createDiv({ cls: 'tracekeeper-detail-grid' });
 		this.renderDetail(details, ui('最终目录', 'Final directory'), plan.targetDirectory || ui('不可用', 'Unavailable'));
-		this.renderDetail(details, ui('操作', 'Action'), plan.action);
+		this.renderDetail(details, ui('操作', 'Action'), skillInstallActionLabel(plan.action, ui));
 		const list = contentEl.createEl('ul');
-		for (const file of plan.files) list.createEl('li', { text: `${file.change}: ${file.path}` });
+		for (const file of plan.files) list.createEl('li', { text: `${skillFileChangeLabel(file.change, ui)}: ${file.path}` });
 		if (!plan.canConfirm) {
-			contentEl.createEl('p', { text: plan.detail, cls: 'tracekeeper-badge tracekeeper-badge--warning' });
+			contentEl.createEl('p', { text: skillInstallPlanDetail(plan, ui), cls: 'tracekeeper-badge tracekeeper-badge--warning' });
 			const choose = contentEl.createEl('button', { text: ui('重新选择目录', 'Choose another directory') });
 			choose.addEventListener('click', () => this.renderChooseDirectory());
 			return;
@@ -113,6 +163,7 @@ export class SkillInstallPreviewModal extends Modal {
 
 export class SkillAiAssistantModal extends Modal {
 	private context: AiSkillAssistantContext | null = null;
+	private selectedDirectory = '';
 
 	constructor(
 		app: App,
@@ -129,7 +180,7 @@ export class SkillAiAssistantModal extends Modal {
 
 	private async load(): Promise<void> {
 		this.contentEl.empty();
-		this.contentEl.createEl('h2', { text: ui('AI 辅助安装 Skill', 'AI-assisted Skill installation') });
+		this.setTitle(ui('AI 辅助安装 Skill', 'AI-assisted Skill installation'));
 		this.contentEl.createEl('p', { text: ui('复制提示词不会代表已安装。请将提示词交给对应 Agent，完成后再选择目录验证。', 'Copying the prompt does not mean the Skill is installed. Give it to the Agent, then verify the resulting directory.'), cls: 'tracekeeper-view__description' });
 		try {
 			this.context = await this.plugin.prepareAiSkillAssistant(this.clientId);
@@ -143,7 +194,9 @@ export class SkillAiAssistantModal extends Modal {
 		const context = this.context;
 		if (!context) return;
 		this.contentEl.empty();
-		this.contentEl.createEl('h2', { text: ui('AI 辅助安装 Skill', 'AI-assisted Skill installation') });
+		this.selectedDirectory = context.recommendation?.skillDirectory
+			|| context.recommendation?.skillsRootDirectory
+			|| '';
 		const meta = this.contentEl.createDiv({ cls: 'tracekeeper-detail-grid' });
 		this.renderDetail(meta, ui('源目录', 'Source directory'), context.sourceDirectory);
 		this.renderDetail(meta, ui('版本', 'Version'), context.skillVersion);
@@ -161,13 +214,42 @@ export class SkillAiAssistantModal extends Modal {
 				.catch(() => new Notice(ui('复制失败，请重试。', 'Copy failed. Try again.')))
 				.finally(() => { copy.disabled = false; });
 		});
-		const verify = this.contentEl.createEl('button', { text: ui('选择已安装目录并验证', 'Choose installed directory and verify'), cls: 'mod-cta' });
-		verify.addEventListener('click', () => {
-			verify.disabled = true;
+		const directoryRow = this.contentEl.createDiv({ cls: 'tracekeeper-skill-directory-row' });
+		const directoryInput = directoryRow.createEl('input', {
+			type: 'text',
+			value: this.selectedDirectory,
+			placeholder: ui('输入或粘贴已安装目录', 'Enter or paste the installed directory'),
+		});
+		directoryInput.setAttribute('aria-label', ui('已安装 Skill 目录', 'Installed Skill directory'));
+		directoryInput.title = this.selectedDirectory;
+		directoryInput.addEventListener('input', () => {
+			this.selectedDirectory = directoryInput.value;
+			directoryInput.title = directoryInput.value;
+		});
+		const choose = directoryRow.createEl('button', { text: ui('选择目录', 'Choose directory') });
+		choose.addEventListener('click', () => {
+			choose.disabled = true;
 			void this.plugin.pickSkillDirectory(this.clientId).then((selection) => {
 				if (!selection) return;
-				return this.plugin.verifyExternalSkill(this.clientId, selection.selectedDirectory);
-			}).then((result) => {
+				this.selectedDirectory = selection.selectedDirectory;
+				directoryInput.value = this.selectedDirectory;
+				directoryInput.title = this.selectedDirectory;
+				directoryInput.focus();
+			}).catch((error) => new Notice(error instanceof Error ? error.message : ui('无法选择目录。', 'Unable to choose a directory.')))
+				.finally(() => { choose.disabled = false; });
+		});
+		const verify = directoryRow.createEl('button', { text: ui('验证', 'Verify'), cls: 'mod-cta' });
+		verify.addEventListener('click', () => {
+			const selectedDirectory = directoryInput.value.trim();
+			if (!selectedDirectory) {
+				new Notice(ui('请先输入或选择 Skill 目录。', 'Enter or choose a Skill directory first.'));
+				directoryInput.focus();
+				return;
+			}
+			this.selectedDirectory = selectedDirectory;
+			directoryInput.title = selectedDirectory;
+			verify.disabled = true;
+			void this.plugin.verifyExternalSkill(this.clientId, selectedDirectory).then((result) => {
 				if (!result) return;
 				new Notice(ui('Skill 已验证。', 'Skill verified.'));
 				this.onChanged?.();

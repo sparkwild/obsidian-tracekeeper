@@ -34,9 +34,29 @@ try {
 		format: 'esm',
 		logLevel: 'silent',
 	});
-	const { buildSkillInstallPrompt } = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
+	const {
+		buildSkillInstallPrompt,
+		skillFileChangeLabel,
+		skillInstallActionLabel,
+		skillInstallPlanDetail,
+	} = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 	const localize = (zh) => zh;
+	const english = (_zh, en) => en;
 
+	assert.equal(skillInstallActionLabel('none', localize), '无需变更');
+	assert.equal(skillInstallActionLabel('update', english), 'Update');
+	assert.equal(skillFileChangeLabel('unchanged', localize), '未变化');
+	assert.equal(skillFileChangeLabel('replace', english), 'Replace');
+	assert.equal(skillInstallPlanDetail({
+		action: 'none',
+		targetDirectory: '/tmp/zcode/tracekeeper',
+		files: [{ path: 'SKILL.md', change: 'unchanged', originalHash: 'hash' }],
+	}, localize), '已安装文件与插件内置版本一致，无需写入。');
+	assert.equal(skillInstallPlanDetail({
+		action: 'none',
+		targetDirectory: '/tmp/zcode/tracekeeper',
+		files: [{ path: 'SKILL.md', change: 'replace', originalHash: 'hash' }],
+	}, english), 'The installed Skill is newer than the embedded bundle, so downgrade overwrite is blocked.');
 	assert.deepEqual(buildSkillInstallPrompt(state(), localize), {
 		label: '强化技能已安装',
 		detail: '文件已验证：/tmp/codex/tracekeeper。如需更改位置，请重新选择目录；Agent 是否实际采用仍需后续使用观察。',
@@ -94,7 +114,7 @@ try {
 	assert.equal(conflict.action, null);
 	assert.equal(conflict.currentVersion, '多个位置，无法确认');
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 23 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 29 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

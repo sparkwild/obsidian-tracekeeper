@@ -40,3 +40,11 @@ export function isAbsoluteDirectory(value: string): boolean {
 		&& !value.includes('\0')
 		&& (value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value));
 }
+
+export function sameSkillTargetDirectory(left: string, right: string): boolean {
+	const normalize = (value: string): string => {
+		const normalized = value.trim().replace(/[\\/]+$/, '').replace(/\\/g, '/');
+		return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
+	};
+	return normalize(left) === normalize(right);
+}

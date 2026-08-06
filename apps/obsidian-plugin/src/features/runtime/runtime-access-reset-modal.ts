@@ -14,13 +14,11 @@ export class RuntimeAccessResetModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.empty();
-		contentEl.createEl('h2', {
-			text: ui('撤销全部 Agent 访问', 'Revoke all Agent access'),
-		});
+		this.setTitle(ui('撤销全部 Agent 访问', 'Revoke all Agent access'));
 		contentEl.createEl('p', {
 			text: ui(
-				'这是一项全局操作：所有 Agent 凭据和活动 Session 会立即失效，但 Skill 文件和卡片会保留。',
-				'This is a global action: every Agent credential and active Session becomes invalid immediately, while Skill files and cards remain.'
+				'这是一项全局操作：所有 Agent 卡片、凭据和活动 Session 会立即清除，但 Skill 文件会保留。',
+				'This is a global action: every Agent card, credential, and active Session is removed immediately, while Skill files remain.'
 			),
 		});
 		contentEl.createEl('p', {
@@ -50,8 +48,8 @@ export class RuntimeAccessResetModal extends Modal {
 				.then(() => {
 					this.onReset?.();
 					new Notice(ui(
-						'全部 Agent 访问已撤销；现有客户端需要重新授权。',
-						'All Agent access was revoked. Existing clients must authorize again.'
+						'全部 Agent 访问已撤销；现有客户端需要重新添加并授权。',
+						'All Agent access was revoked. Existing clients must be added and authorized again.'
 					));
 					this.close();
 				})

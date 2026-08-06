@@ -2,6 +2,7 @@ export type SkillActivationMode = 'automatic_with_restart_fallback' | 'restart_r
 
 export interface ClientSkillDirectoryRecommendation {
 	skillsRootDirectory: string;
+	skillDirectory: string;
 	source: 'official_documentation';
 	documentationUrl: string;
 }
@@ -33,9 +34,9 @@ const CLIENT_SKILL_TARGETS: readonly ClientSkillTargetDescriptor[] = [
 		clientId: 'codex',
 		targetId: 'codex-user',
 		displayName: 'Codex',
-		recommendationPath: ['.agents', 'skills'],
+		recommendationPath: ['.codex', 'skills'],
 		documentationUrl: 'https://developers.openai.com/codex/skills/',
-		legacyDirectoryPaths: [['.codex', 'skills']],
+		legacyDirectoryPaths: [['.agents', 'skills']],
 		restartRequired: false,
 		activationMode: 'automatic_with_restart_fallback',
 		profileLabel: '官方目录建议',
@@ -88,11 +89,12 @@ const CLIENT_SKILL_TARGETS: readonly ClientSkillTargetDescriptor[] = [
 	{
 		clientId: 'zcode',
 		targetId: 'zcode-user',
-		legacyDirectoryPaths: [['.zcode', 'skills']],
 		displayName: 'ZCode',
+		recommendationPath: ['.zcode', 'skills'],
+		documentationUrl: 'https://zcode.z.ai/cn/docs/skill',
 		restartRequired: true,
 		activationMode: 'restart_required',
-		profileLabel: '用户选择目录',
+		profileLabel: '官方目录建议',
 	},
 	{
 		clientId: 'custom',
@@ -128,11 +130,15 @@ export function resolveClientSkillTargetProfile(
 	}
 
 	const recommendation = homeDirectory && entry.recommendationPath && entry.documentationUrl
-		? {
-			skillsRootDirectory: joinPath(homeDirectory, ...entry.recommendationPath),
-			source: 'official_documentation' as const,
-			documentationUrl: entry.documentationUrl,
-		}
+		? (() => {
+			const skillsRootDirectory = joinPath(homeDirectory, ...entry.recommendationPath);
+			return {
+				skillsRootDirectory,
+				skillDirectory: joinPath(skillsRootDirectory, 'tracekeeper'),
+				source: 'official_documentation' as const,
+				documentationUrl: entry.documentationUrl,
+			};
+		})()
 		: null;
 	const legacyTargetDirectories = homeDirectory
 		? entry.legacyDirectoryPaths?.map((parts) => joinPath(homeDirectory, ...parts, 'tracekeeper')) ?? []

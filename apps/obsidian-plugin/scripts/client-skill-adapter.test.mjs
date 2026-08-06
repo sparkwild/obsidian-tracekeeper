@@ -69,8 +69,8 @@ try {
 	};
 	let now = new Date('2026-07-23T00:00:00.000Z');
 	const homeDirectory = '/tmp/tracekeeper-user';
-	const primaryDirectory = path.join(homeDirectory, '.agents', 'skills', 'tracekeeper');
-	const legacyDirectory = path.join(homeDirectory, '.codex', 'skills', 'tracekeeper');
+	const primaryDirectory = path.join(homeDirectory, '.codex', 'skills', 'tracekeeper');
+	const legacyDirectory = path.join(homeDirectory, '.agents', 'skills', 'tracekeeper');
 	const claudeCodeDirectory = path.join(homeDirectory, '.claude', 'skills', 'tracekeeper');
 	const geminiDirectory = path.join(homeDirectory, '.gemini', 'skills', 'tracekeeper');
 	const grokDirectory = path.join(homeDirectory, '.grok', 'skills', 'tracekeeper');
@@ -78,13 +78,15 @@ try {
 
 	const codexRegistryProfile = module.buildClientSkillProfile('codex', 'Codex', homeDirectory, path.join);
 	assert.equal(codexRegistryProfile.targetDirectory, undefined);
-	assert.equal(codexRegistryProfile.recommendation.skillsRootDirectory, path.join(homeDirectory, '.agents', 'skills'));
+	assert.equal(codexRegistryProfile.recommendation.skillsRootDirectory, path.join(homeDirectory, '.codex', 'skills'));
+	assert.equal(codexRegistryProfile.recommendation.skillDirectory, primaryDirectory);
 	const codexProfile = { ...codexRegistryProfile, targetDirectory: primaryDirectory };
 	assert.deepEqual(codexProfile.legacyTargetDirectories, [legacyDirectory]);
 
 	const claudeCodeProfile = module.buildClientSkillProfile('claude-code', 'Claude Code', homeDirectory, path.join);
 	assert.equal(claudeCodeProfile.targetDirectory, undefined);
 	assert.equal(claudeCodeProfile.recommendation.skillsRootDirectory, path.join(homeDirectory, '.claude', 'skills'));
+	assert.equal(claudeCodeProfile.recommendation.skillDirectory, claudeCodeDirectory);
 
 	const cursorProfile = module.buildClientSkillProfile('cursor', 'Cursor', homeDirectory, path.join);
 	assert.equal(cursorProfile.recommendation, null);
@@ -96,7 +98,13 @@ try {
 		['zcode', 'ZCode', zcodeDirectory],
 	]) {
 		const profile = module.buildClientSkillProfile(clientId, displayName, homeDirectory, path.join);
-		assert.equal(clientId === 'gemini' ? profile.recommendation.skillsRootDirectory : profile.recommendation, clientId === 'gemini' ? path.join(homeDirectory, '.gemini', 'skills') : null);
+		const expectedRecommendation = clientId === 'grok' ? null : path.dirname(targetDirectory);
+		assert.equal(profile.recommendation?.skillsRootDirectory ?? null, expectedRecommendation);
+		assert.equal(profile.recommendation?.skillDirectory ?? null, clientId === 'grok' ? null : targetDirectory);
+		if (clientId === 'zcode') {
+			assert.equal(profile.recommendation.documentationUrl, 'https://zcode.z.ai/cn/docs/skill');
+			assert.deepEqual(profile.legacyTargetDirectories, []);
+		}
 		assert.equal(profile.targetDirectory, undefined);
 		assert.equal(profile.restartRequired, true);
 	}
@@ -114,7 +122,7 @@ try {
 		planTtlMs: 1_000,
 	});
 	assert.equal(emptyAdapter.detect(codexProfile).state, 'not_installed');
-	symbolicLinks.add(path.join(homeDirectory, '.agents'));
+	symbolicLinks.add(path.join(homeDirectory, '.codex'));
 	assert.throws(
 		() => emptyAdapter.detect(codexProfile),
 		(error) => error instanceof module.ClientSkillPlanConflictError

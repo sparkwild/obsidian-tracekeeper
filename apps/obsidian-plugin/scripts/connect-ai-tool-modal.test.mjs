@@ -20,6 +20,7 @@ for (const required of [
 	'this.plugin.setAgentAuthMode(existing.integrationId, defaultMode)',
 	'private renderAuthMode',
 	'private renderSetup',
+	'private renderManualBearer',
 	'private renderAuthorization',
 	'private renderMaintenance',
 	'private renderSkill',
@@ -29,23 +30,31 @@ for (const required of [
 	'decideOAuthRequest',
 	'getPendingOAuthRequests',
 	'copyToClipboard',
+	'buildManualMcpJsonConfig',
+	'revokeAndRemoveAgentIntegration',
 	'setIcon(copy, \'copy\')',
 	"clickable-icon tracekeeper-copy-button",
 	"createDiv({ cls: 'tracekeeper-copyable-command' })",
 	"'aria-label': copyLabel",
 	"tabindex: '0'",
-	"'aria-label': copyTokenLabel",
 	'reauthorizationInstruction',
 	'this.mode === \'manage\'',
-	"ui('移除配置', 'Remove configuration')",
+	"ui('撤销 Agent 访问', 'Revoke Agent access')",
 	"ui('自动', 'Automatic')",
 	"ui('手动', 'Manual')",
 	"ui('配置方式', 'Setup mode')",
 	"this.selectedAuthMode === 'bearer'",
 	'this.plugin.getMcpHttpEndpoint()',
-	"ui('复制 MCP 端点', 'Copy MCP endpoint')",
-	'在客户端的 MCP 设置中手动填写以下端点',
-	'手动访问令牌适用于',
+	"ui('复制完整 JSON', 'Copy complete JSON')",
+	"ui('重新生成完整 JSON', 'Regenerate complete JSON')",
+	"row.addClass('tracekeeper-copyable-json')",
+	'复制并粘贴到客户端的“完整配置 / JSON”入口',
+	'复制不会轮换凭据',
+	'生成完整 JSON 后，再粘贴到客户端的原生配置入口',
+	"presentation: 'modal-collapsible'",
+	'onExpandedChange',
+	"this.config.supportedAuthModes.length === 1",
+	"tracekeeper-connect-ai-tool-modal__auth-static",
 	'Allow',
 	'Deny',
 	'需要授权确认',
@@ -55,8 +64,8 @@ for (const required of [
 	'客户端',
 	'Redirect origin',
 	'urlOrigin(pending.redirectUri)',
-	'明文凭据只在当前弹窗内存中显示',
-	'plaintext credential is shown only in this modal memory',
+	'完整 JSON 只在当前弹窗中显示',
+	'complete JSON is shown only in this modal',
 	'不会自动修改客户端配置',
 	'never edits client configuration automatically',
 	"'aria-live': 'polite'",
@@ -72,12 +81,25 @@ assert.equal(modalSource.includes('手工 Bearer'), false);
 assert.equal(modalSource.includes('Manual Bearer'), false);
 assert.equal(modalSource.includes('不可信'), false);
 assert.equal(modalSource.includes('untrusted'), false);
+assert.equal(modalSource.includes("ui('移除配置', 'Remove configuration')"), false);
+assert.equal(modalSource.includes("ui('生成访问凭据', 'Generate access credential')"), false);
+assert.equal(modalSource.includes("ui('替换访问凭据', 'Replace access credential')"), false);
+for (const forbiddenCredentialMetadata of ['credentialId', 'issuedAt', 'tokenDigest', 'tokenDigestSha256']) {
+	assert.equal(modalSource.includes(forbiddenCredentialMetadata), false, `${forbiddenCredentialMetadata} must stay out of the management modal`);
+}
+assert.match(modalSource, /this\.setTitle\(this\.mode === 'add'/);
+assert.equal(modalSource.includes("this.contentEl.createEl('h2'"), false);
+assert.equal(modalSource.includes("section.createEl('h4'"), false);
+const copyFlowStart = modalSource.indexOf('private renderCopyableCommand');
+const copyFlowEnd = modalSource.indexOf('private renderAuthorization', copyFlowStart);
+assert.doesNotMatch(modalSource.slice(copyFlowStart, copyFlowEnd), /issueManualBearerCredential/);
 
-const removeFlowStart = modalSource.indexOf("ui('移除配置', 'Remove configuration')");
-const removeFlowEnd = modalSource.indexOf('const close =', removeFlowStart);
-const removeFlowSource = modalSource.slice(removeFlowStart, removeFlowEnd);
-assert.match(removeFlowSource, /this\.close\(\)/);
-assert.equal(removeFlowSource.includes('this.renderPanel()'), false);
+const revokeFlowStart = modalSource.indexOf("ui('撤销 Agent 访问', 'Revoke Agent access')");
+const revokeFlowEnd = modalSource.indexOf('const close =', revokeFlowStart);
+const revokeFlowSource = modalSource.slice(revokeFlowStart, revokeFlowEnd);
+assert.match(revokeFlowSource, /revokeAndRemoveAgentIntegration/);
+assert.match(revokeFlowSource, /this\.close\(\)/);
+assert.equal(revokeFlowSource.includes('forgetAgentIntegration'), false);
 
 for (const forbidden of [
 	'issueAgentPairingTicket',
@@ -99,6 +121,10 @@ for (const forbidden of [
 	'removeClientConfig',
 	'openClientConfigFile',
 	'?token=',
+	"ui('复制 MCP 端点', 'Copy MCP endpoint')",
+	'在客户端的 MCP 设置中手动填写以下端点',
+	'复制访问凭据',
+	'Copy access credential',
 	"createEl('select'",
 	"createEl('option'",
 	'private configs:',
@@ -117,9 +143,15 @@ assert.match(stylesSource, /\.tracekeeper-settings-add-agent\s*\{/);
 assert.match(stylesSource, /\.tracekeeper-copyable-command\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*center;/);
 assert.match(stylesSource, /\.tracekeeper-copyable-command \.tracekeeper-code-block\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?overflow-x:\s*auto;[\s\S]*?white-space:\s*nowrap;[\s\S]*?user-select:\s*text;[\s\S]*?cursor:\s*text;/);
 assert.match(stylesSource, /\.tracekeeper-copyable-command \.tracekeeper-copy-button\s*\{[\s\S]*?flex:\s*0 0 auto;/);
+assert.match(stylesSource, /\.tracekeeper-copyable-json\s*\{[\s\S]*?align-items:\s*flex-start;/);
+assert.match(stylesSource, /\.tracekeeper-copyable-json \.tracekeeper-code-block\s*\{[\s\S]*?max-height:\s*220px;[\s\S]*?overflow:\s*auto;[\s\S]*?white-space:\s*pre;/);
+assert.match(stylesSource, /\.tracekeeper-settings-client-skill--modal-collapsible\s*\{/);
+assert.match(stylesSource, /\.tracekeeper-settings-client-skill--modal-collapsible > summary\s*\{[\s\S]*?cursor:\s*pointer;/);
+assert.match(stylesSource, /\.tracekeeper-connect-ai-tool-modal__auth-row\s*\{/);
+assert.match(stylesSource, /\.tracekeeper-connect-ai-tool-modal__auth-static\s*\{/);
 assert.doesNotMatch(stylesSource, /\.tracekeeper-connect-ai-tool-modal__select\s*\{/);
 assert.doesNotMatch(stylesSource, /\.tracekeeper-connect-ai-tool-modal__selector\s*\{/);
 assert.match(stylesSource, /max-width:\s*min\(720px,\s*calc\(100vw - 32px\)\)/);
 assert.match(stylesSource, /@media \(max-width: 520px\)/);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 50 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 59 })}\n`);

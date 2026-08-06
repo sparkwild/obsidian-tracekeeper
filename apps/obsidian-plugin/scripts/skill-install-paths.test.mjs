@@ -23,10 +23,13 @@ try {
 		selectedDirectory: '/',
 		targetDirectory: '/tracekeeper',
 	});
+	assert.equal(module.sameSkillTargetDirectory('/tmp/skills/tracekeeper', '/tmp/skills/tracekeeper/'), true);
+	assert.equal(module.sameSkillTargetDirectory('C:\\Users\\Agent\\skills\\tracekeeper', 'c:/Users/Agent/skills/tracekeeper'), true);
+	assert.equal(module.sameSkillTargetDirectory('/tmp/skills/tracekeeper', '/tmp/other/tracekeeper'), false);
 	assert.throws(() => module.normalizeSkillDirectorySelection('relative/skills', path.join));
 	assert.throws(() => module.normalizeSkillDirectorySelection('/tmp/skills\0bad', path.join));
 	assert.throws(() => module.normalizeSkillDirectorySelection('/tmp/skills/../other', path.join));
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 6 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 9 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

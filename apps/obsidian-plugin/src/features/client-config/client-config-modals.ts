@@ -4,7 +4,7 @@ import type TracekeeperPlugin from '../../main';
 import { ui } from '../../ui/localization';
 import { renderClientSkillPrompt } from '../skill-installation/client-skill-prompt';
 import type { AgentIntegrationSnapshot } from '../settings/agent-integrations';
-import type { ClientAuthMode, GeneratedClientConfig } from './client-config';
+import { buildManualMcpJsonConfig, type ClientAuthMode, type GeneratedClientConfig } from './client-config';
 
 /** Single-panel Agent integration management. Copying configuration is always explicit. */
 export class ConnectAiToolModal extends Modal {
@@ -12,6 +12,7 @@ export class ConnectAiToolModal extends Modal {
 	private integration: AgentIntegrationSnapshot | null = null;
 	private bearerToken: string | null = null;
 	private selectedAuthMode: ClientAuthMode;
+	private skillExpanded = false;
 	private closed = false;
 
 	constructor(
@@ -27,13 +28,14 @@ export class ConnectAiToolModal extends Modal {
 
 	onOpen(): void {
 		this.closed = false;
+		this.skillExpanded = false;
 		this.modalEl.setAttribute('role', 'dialog');
 		this.modalEl.setAttribute('aria-modal', 'true');
 		this.contentEl.empty();
 		this.contentEl.addClass('tracekeeper-connect-ai-tool-modal');
-		this.contentEl.createEl('h2', { text: this.mode === 'add' ? ui(`添加 ${this.config.displayName}`, `Add ${this.config.displayName}`) : ui(`管理 ${this.config.displayName}`, `Manage ${this.config.displayName}`) });
+		this.setTitle(this.mode === 'add' ? ui(`添加 ${this.config.displayName}`, `Add ${this.config.displayName}`) : ui(`管理 ${this.config.displayName}`, `Manage ${this.config.displayName}`));
 		this.contentEl.createEl('p', {
-			text: ui('MCP 配置、授权、连接、使用和 Skill 状态彼此独立。Tracekeeper 不会自动修改客户端配置。', 'MCP setup, authorization, connection, usage, and Skill state are independent. Tracekeeper never edits client configuration automatically.'),
+			text: ui('MCP 配置、授权和 Skill 状态彼此独立。Tracekeeper 不会自动修改客户端配置。', 'MCP setup, authorization, and Skill state are independent. Tracekeeper never edits client configuration automatically.'),
 			cls: 'tracekeeper-view__description',
 		});
 		this.panelEl = this.contentEl.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__panel' });
@@ -45,6 +47,7 @@ export class ConnectAiToolModal extends Modal {
 		this.closed = true;
 		this.integration = null;
 		this.bearerToken = null;
+		this.skillExpanded = false;
 		this.panelEl = null;
 		this.contentEl.empty();
 		this.onChanged?.();
@@ -99,24 +102,28 @@ export class ConnectAiToolModal extends Modal {
 			return;
 		}
 
-		const header = container.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__header', attr: { 'aria-live': 'polite', 'aria-atomic': 'true' } });
-		header.createEl('h3', { text: this.config.displayName });
-		header.createEl('span', { text: this.statusLabel(), cls: `tracekeeper-badge ${this.statusTone()}` });
-
 		this.renderAuthMode(container);
-		const prioritizeAuthorization = this.selectedAuthMode === 'oauth'
-			&& !this.integration.credential
-			&& this.plugin.getPendingOAuthRequests().length > 0;
-		if (prioritizeAuthorization) this.renderAuthorization(container);
-		this.renderSetup(container);
-		if (!prioritizeAuthorization) this.renderAuthorization(container);
+		if (this.selectedAuthMode === 'bearer') {
+			this.renderManualBearer(container);
+		} else {
+			const prioritizeAuthorization = !this.integration.credential && this.plugin.getPendingOAuthRequests().length > 0;
+			if (prioritizeAuthorization) this.renderAuthorization(container);
+			this.renderSetup(container);
+			if (!prioritizeAuthorization) this.renderAuthorization(container);
+		}
 		this.renderSkill(container);
 		this.renderMaintenance(container);
 	}
 
 	private renderAuthMode(container: HTMLElement): void {
-		const section = container.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__section' });
-		section.createEl('h4', { text: ui('MCP 配置与授权', 'MCP setup and authorization') });
+		const section = container.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__section tracekeeper-connect-ai-tool-modal__auth-section' });
+		const row = section.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__auth-row', attr: { 'aria-live': 'polite', 'aria-atomic': 'true' } });
+		row.createEl('strong', { text: ui('配置方式', 'Setup') });
+		row.createEl('span', { text: this.statusLabel(), cls: `tracekeeper-badge ${this.statusTone()}` });
+		if (this.config.supportedAuthModes.length === 1) {
+			row.createEl('span', { text: ui('手动配置', 'Manual setup'), cls: 'tracekeeper-connect-ai-tool-modal__auth-static' });
+			return;
+		}
 		const group = section.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__auth-modes', attr: { role: 'group', 'aria-label': ui('配置方式', 'Setup mode') } });
 		for (const mode of this.config.supportedAuthModes) {
 			const button = group.createEl('button', { text: mode === 'oauth' ? ui('自动', 'Automatic') : ui('手动', 'Manual'), cls: mode === this.selectedAuthMode ? 'mod-cta' : '' });
@@ -139,20 +146,6 @@ export class ConnectAiToolModal extends Modal {
 		const markCopied = async (): Promise<void> => {
 			if (this.integration) this.integration = await this.plugin.markAgentSetupCommandCopied(this.integration.integrationId);
 		};
-		if (this.selectedAuthMode === 'bearer') {
-			section.createEl('p', {
-				text: ui('在客户端的 MCP 设置中手动填写以下端点，并单独配置访问令牌。', 'Enter this endpoint manually in the client MCP settings, then configure the access token separately.'),
-				cls: 'tracekeeper-view__description',
-			});
-			this.renderCopyableCommand(
-				section,
-				this.plugin.getMcpHttpEndpoint(),
-				ui('复制 MCP 端点', 'Copy MCP endpoint'),
-				ui('MCP 端点已复制。', 'MCP endpoint copied.'),
-				markCopied,
-			);
-			return;
-		}
 		section.createEl('p', { text: ui('只复制客户端原生配置命令或本机端点；复制不会证明客户端已连接。', 'Copy the client-native setup command or local endpoint. Copying does not prove the client connected.'), cls: 'tracekeeper-view__description' });
 		this.renderCopyableCommand(
 			section,
@@ -176,14 +169,71 @@ export class ConnectAiToolModal extends Modal {
 		}
 	}
 
+	private renderManualBearer(container: HTMLElement): void {
+		const section = container.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__section tracekeeper-connect-ai-tool-modal__manual-bearer' });
+		const markCopied = async (): Promise<void> => {
+			if (this.integration) this.integration = await this.plugin.markAgentSetupCommandCopied(this.integration.integrationId);
+		};
+		if (!this.bearerToken) {
+			section.createEl('p', {
+				text: this.integration?.credential
+					? ui('重新生成完整 JSON 会使旧配置失效。', 'Regenerating the complete JSON invalidates the previous configuration.')
+					: ui('生成完整 JSON 后，再粘贴到客户端的原生配置入口。', 'Generate the complete JSON, then paste it into the client\'s native configuration entry.'),
+				cls: 'tracekeeper-view__description',
+			});
+			const generate = section.createEl('button', {
+				text: this.integration?.credential ? ui('重新生成完整 JSON', 'Regenerate complete JSON') : ui('生成完整 JSON', 'Generate complete JSON'),
+				cls: 'mod-cta',
+			});
+			generate.addEventListener('click', () => void this.issueManualBearerCredential(generate));
+			return;
+		}
+
+		section.createEl('p', {
+			text: ui('复制并粘贴到客户端的“完整配置 / JSON”入口。复制不会轮换凭据。', 'Copy and paste this into the client\'s Full configuration / JSON entry. Copying does not rotate the credential.'),
+			cls: 'tracekeeper-view__description',
+		});
+		const completeJson = buildManualMcpJsonConfig(this.plugin.getMcpHttpEndpoint(), this.bearerToken);
+		this.renderCopyableCommand(
+			section,
+			completeJson,
+			ui('复制完整 JSON', 'Copy complete JSON'),
+			ui('完整 JSON 已复制。', 'Complete JSON copied.'),
+			markCopied,
+			true,
+		);
+		const regenerate = section.createEl('button', { text: ui('重新生成完整 JSON', 'Regenerate complete JSON') });
+		regenerate.addEventListener('click', () => void this.issueManualBearerCredential(regenerate));
+		section.createEl('p', {
+			text: ui('完整 JSON 只在当前弹窗中显示，关闭后不可恢复。', 'The complete JSON is shown only in this modal and cannot be recovered after closing.'),
+			cls: 'tracekeeper-view__description',
+		});
+	}
+
+	private async issueManualBearerCredential(button: HTMLButtonElement): Promise<void> {
+		if (!this.integration) return;
+		button.disabled = true;
+		try {
+			this.bearerToken = await this.plugin.issueManualBearerCredential(this.integration.integrationId);
+			this.integration = this.plugin.getAgentIntegrationsSnapshot().find((entry) => entry.integrationId === this.integration?.integrationId) ?? this.integration;
+			this.renderPanel();
+		} catch (error) {
+			new Notice(error instanceof Error ? error.message : ui('无法生成完整 JSON。', 'Unable to generate the complete JSON.'));
+		} finally {
+			button.disabled = false;
+		}
+	}
+
 	private renderCopyableCommand(
 		section: HTMLElement,
 		command: string,
 		copyLabel: string,
 		successMessage: string,
 		onCopied?: () => Promise<void> | void,
+		multiline = false,
 	): void {
 		const row = section.createDiv({ cls: 'tracekeeper-copyable-command' });
+		if (multiline) row.addClass('tracekeeper-copyable-json');
 		row.createEl('pre', {
 			text: command,
 			cls: 'tracekeeper-code-block',
@@ -209,84 +259,62 @@ export class ConnectAiToolModal extends Modal {
 	}
 
 	private renderAuthorization(container: HTMLElement): void {
+		if (this.selectedAuthMode !== 'oauth') return;
 		const section = container.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__section' });
-		if (this.selectedAuthMode === 'oauth') {
-			const pendingRequests = this.plugin.getPendingOAuthRequests();
-			if (pendingRequests.length === 0) {
-				section.createEl('p', { text: this.integration?.credential ? ui('OAuth 已授权。客户端完成 initialize 后才会显示已连接。', 'OAuth is authorized. Connected appears only after the client completes initialize.') : ui('客户端发起连接后，Tracekeeper 会在这里显示授权确认。', 'Tracekeeper shows an authorization confirmation here when the client connects.'), cls: 'tracekeeper-view__description' });
-			}
-			for (const pending of pendingRequests) {
-				const row = section.createDiv({
-					cls: 'tracekeeper-connect-ai-tool-modal__pending',
-					attr: { role: 'alert', 'aria-live': 'assertive', 'aria-atomic': 'true' },
-				});
-				const heading = row.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__pending-heading' });
-				const icon = heading.createSpan({ cls: 'tracekeeper-connect-ai-tool-modal__pending-icon' });
-				setIcon(icon, 'shield-alert');
-				heading.createEl('strong', { text: ui('需要授权确认', 'Authorization required') });
-				row.createEl('p', {
-					text: ui(`${this.config.displayName} 正在请求连接 Tracekeeper。请核对信息后选择授权或拒绝。`, `${this.config.displayName} is requesting access to Tracekeeper. Review the details, then allow or deny.`),
-					cls: 'tracekeeper-connect-ai-tool-modal__pending-summary',
-				});
-				const details = row.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__pending-details' });
-				this.renderApprovalDetail(details, ui('Agent', 'Agent'), this.config.displayName);
-				this.renderApprovalDetail(details, ui('客户端', 'Client'), pending.clientNameClaim);
-				this.renderApprovalDetail(details, ui('回调来源', 'Redirect origin'), urlOrigin(pending.redirectUri));
-				this.renderApprovalDetail(details, ui('访问范围', 'Scope'), pending.scope);
-				this.renderApprovalDetail(details, ui('MCP 资源', 'MCP resource'), pending.resource);
-				this.renderApprovalDetail(details, ui('有效至', 'Expires'), new Date(pending.expiresAt).toLocaleString());
-				const actions = row.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__pending-actions' });
-				const allow = actions.createEl('button', { text: ui('授权', 'Allow'), cls: 'mod-cta' });
-				const deny = actions.createEl('button', { text: ui('拒绝', 'Deny') });
-				allow.addEventListener('click', () => {
-					allow.disabled = true;
-					deny.disabled = true;
-					void this.decide(pending.requestId, { decision: 'allow', integrationId: this.integration?.integrationId ?? '' });
-				});
-				deny.addEventListener('click', () => {
-					allow.disabled = true;
-					deny.disabled = true;
-					void this.decide(pending.requestId, { decision: 'deny' });
-				});
-			}
-			return;
+		const pendingRequests = this.plugin.getPendingOAuthRequests();
+		if (pendingRequests.length === 0) {
+			section.createEl('p', { text: this.integration?.credential ? ui('OAuth 已授权。客户端完成 initialize 后才会显示已连接。', 'OAuth is authorized. Connected appears only after the client completes initialize.') : ui('客户端发起连接后，Tracekeeper 会在这里显示授权确认。', 'Tracekeeper shows an authorization confirmation here when the client connects.'), cls: 'tracekeeper-view__description' });
 		}
-		section.createEl('p', { text: ui('手动访问令牌适用于能够安全保存并配置访问令牌的客户端。Tracekeeper 不会宣称已验证未知客户端的配置格式。', 'Manual access tokens are for clients that can securely store and configure an access token. Tracekeeper does not claim to verify unknown client configuration formats.'), cls: 'tracekeeper-view__description' });
-		const generate = section.createEl('button', { text: this.integration?.credential ? ui('替换访问凭据', 'Replace access credential') : ui('生成访问凭据', 'Generate access credential'), cls: 'mod-cta' });
-		generate.addEventListener('click', () => {
-			if (!this.integration) return;
-			generate.disabled = true;
-			void this.plugin.issueManualBearerCredential(this.integration.integrationId).then((token) => { this.bearerToken = token; this.integration = this.plugin.getAgentIntegrationsSnapshot().find((entry) => entry.integrationId === this.integration?.integrationId) ?? this.integration; this.renderPanel(); }).catch((error) => new Notice(error instanceof Error ? error.message : ui('无法生成凭据。', 'Unable to generate credential.'))).finally(() => { generate.disabled = false; });
-		});
-		if (this.bearerToken) {
-			section.createEl('p', { text: ui('明文凭据只在当前弹窗内存中显示；关闭后不可恢复。', 'The plaintext credential is shown only in this modal memory and cannot be recovered after closing.'), cls: 'tracekeeper-view__description' });
-			section.createEl('pre', { text: this.bearerToken, cls: 'tracekeeper-code-block', attr: { 'aria-label': ui('访问凭据', 'Access credential') } });
-			const copyTokenLabel = ui('复制访问凭据', 'Copy access credential');
-			const copyToken = section.createEl('button', {
-				cls: 'clickable-icon tracekeeper-copy-button',
-				attr: { 'aria-label': copyTokenLabel, title: copyTokenLabel },
+		for (const pending of pendingRequests) {
+			const row = section.createDiv({
+				cls: 'tracekeeper-connect-ai-tool-modal__pending',
+				attr: { role: 'alert', 'aria-live': 'assertive', 'aria-atomic': 'true' },
 			});
-			setIcon(copyToken, 'copy');
-			copyToken.addEventListener('click', () => void this.plugin.copyToClipboard(this.bearerToken ?? '', ui('访问凭据已复制。', 'Access credential copied.')).catch(() => new Notice(ui('复制失败；凭据仍可在当前弹窗查看。', 'Copy failed; the credential remains visible in this modal.'))));
+			const heading = row.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__pending-heading' });
+			const icon = heading.createSpan({ cls: 'tracekeeper-connect-ai-tool-modal__pending-icon' });
+			setIcon(icon, 'shield-alert');
+			heading.createEl('strong', { text: ui('需要授权确认', 'Authorization required') });
+			row.createEl('p', {
+				text: ui(`${this.config.displayName} 正在请求连接 Tracekeeper。请核对信息后选择授权或拒绝。`, `${this.config.displayName} is requesting access to Tracekeeper. Review the details, then allow or deny.`),
+				cls: 'tracekeeper-connect-ai-tool-modal__pending-summary',
+			});
+			const details = row.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__pending-details' });
+			this.renderApprovalDetail(details, ui('Agent', 'Agent'), this.config.displayName);
+			this.renderApprovalDetail(details, ui('客户端', 'Client'), pending.clientNameClaim);
+			this.renderApprovalDetail(details, ui('回调来源', 'Redirect origin'), urlOrigin(pending.redirectUri));
+			this.renderApprovalDetail(details, ui('访问范围', 'Scope'), pending.scope);
+			this.renderApprovalDetail(details, ui('MCP 资源', 'MCP resource'), pending.resource);
+			this.renderApprovalDetail(details, ui('有效至', 'Expires'), new Date(pending.expiresAt).toLocaleString());
+			const actions = row.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__pending-actions' });
+			const allow = actions.createEl('button', { text: ui('授权', 'Allow'), cls: 'mod-cta' });
+			const deny = actions.createEl('button', { text: ui('拒绝', 'Deny') });
+			allow.addEventListener('click', () => {
+				allow.disabled = true;
+				deny.disabled = true;
+				void this.decide(pending.requestId, { decision: 'allow', integrationId: this.integration?.integrationId ?? '' });
+			});
+			deny.addEventListener('click', () => {
+				allow.disabled = true;
+				deny.disabled = true;
+				void this.decide(pending.requestId, { decision: 'deny' });
+			});
 		}
 	}
 
 	private renderMaintenance(container: HTMLElement): void {
 		const actions = container.createDiv({ cls: 'modal-button-container tracekeeper-connect-ai-tool-modal__actions' });
-		if (this.integration?.credential) {
-			const revoke = actions.createEl('button', { text: ui('撤销此 Agent 访问', 'Revoke this Agent access') });
-			revoke.addEventListener('click', () => void this.plugin.revokeAgentIntegration(this.integration?.integrationId ?? '').then(() => { this.bearerToken = null; this.integration = this.plugin.getAgentIntegrationsSnapshot().find((entry) => entry.clientProfileId === this.config.clientId) ?? null; this.onChanged?.(); this.renderPanel(); }));
-		}
-		if (this.integration && !this.integration.credential) {
-			const remove = actions.createEl('button', { text: ui('移除配置', 'Remove configuration') });
-			remove.addEventListener('click', () => {
-				remove.disabled = true;
-				void this.plugin.forgetAgentIntegration(this.integration?.integrationId ?? '').then(() => {
+		if (this.integration) {
+			const revoke = actions.createEl('button', { text: ui('撤销 Agent 访问', 'Revoke Agent access') });
+			revoke.addEventListener('click', () => {
+				revoke.disabled = true;
+				void this.plugin.revokeAndRemoveAgentIntegration(this.integration?.integrationId ?? '').then(() => {
+					this.bearerToken = null;
 					this.integration = null;
+					this.onChanged?.();
 					this.close();
 				}).catch((error) => {
-					remove.disabled = false;
-					new Notice(error instanceof Error ? error.message : ui('无法移除 Agent 配置。', 'Unable to remove Agent configuration.'));
+					revoke.disabled = false;
+					new Notice(error instanceof Error ? error.message : ui('无法撤销 Agent 访问。', 'Unable to revoke Agent access.'));
 				});
 			});
 		}
@@ -300,7 +328,16 @@ export class ConnectAiToolModal extends Modal {
 	}
 
 	private renderSkill(container: HTMLElement): void {
-		renderClientSkillPrompt({ app: this.app, plugin: this.plugin, container, config: this.config, presentation: this.mode === 'manage' ? 'compact' : 'optional', onChanged: () => { this.onChanged?.(); this.renderPanel(); } });
+		renderClientSkillPrompt({
+			app: this.app,
+			plugin: this.plugin,
+			container,
+			config: this.config,
+			presentation: 'modal-collapsible',
+			expanded: this.skillExpanded,
+			onExpandedChange: (expanded) => { this.skillExpanded = expanded; },
+			onChanged: () => { this.onChanged?.(); this.renderPanel(); },
+		});
 	}
 
 	private async decide(requestId: string, decision: NonNullable<OAuthDecision>): Promise<void> {

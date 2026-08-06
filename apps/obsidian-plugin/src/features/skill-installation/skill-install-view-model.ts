@@ -1,4 +1,9 @@
-import type { SkillInstallState } from '../../adapters/client-skill-adapter';
+import type {
+	SkillFileChange,
+	SkillInstallAction,
+	SkillInstallPlan,
+	SkillInstallState,
+} from '../../adapters/client-skill-adapter';
 
 export type SkillPromptAction = 'install' | 'update' | 'migrate' | null;
 export type SkillPromptTone = 'success' | 'warning' | 'muted';
@@ -15,6 +20,39 @@ export interface SkillInstallPrompt {
 }
 
 type Localize = (zh: string, en: string) => string;
+
+export function skillInstallActionLabel(action: SkillInstallAction, localize: Localize): string {
+	switch (action) {
+		case 'install': return localize('安装', 'Install');
+		case 'update': return localize('更新', 'Update');
+		case 'migrate': return localize('迁移', 'Migrate');
+		case 'conflict': return localize('存在冲突', 'Conflict');
+		case 'none': return localize('无需变更', 'No changes');
+	}
+}
+
+export function skillFileChangeLabel(change: SkillFileChange, localize: Localize): string {
+	switch (change) {
+		case 'create': return localize('新建', 'Create');
+		case 'replace': return localize('替换', 'Replace');
+		case 'unchanged': return localize('未变化', 'Unchanged');
+	}
+}
+
+export function skillInstallPlanDetail(plan: SkillInstallPlan, localize: Localize): string {
+	if (plan.action === 'none') {
+		return plan.files.every((file) => file.change === 'unchanged')
+			? localize('已安装文件与插件内置版本一致，无需写入。', 'Installed files match the embedded bundle; no write is needed.')
+			: localize('当前安装的 Skill 版本比插件内置版本更新，已阻止降级覆盖。', 'The installed Skill is newer than the embedded bundle, so downgrade overwrite is blocked.');
+	}
+	if (!plan.targetDirectory) {
+		return localize('请先选择 Skills 根目录。', 'Choose a Skills root directory first.');
+	}
+	return localize(
+		'检测到无法安全自动处理的现有 Skill 内容，请重新选择目录或手动处理冲突。',
+		'Existing Skill content cannot be handled automatically and safely. Choose another directory or resolve the conflict manually.'
+	);
+}
 
 const currentVersionLabel = (state: SkillInstallState, localize: Localize): string => {
 	switch (state.state) {
@@ -125,7 +163,7 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 		case 'unavailable':
 			return {
 				label: localize('无法读取强化技能目录', 'Skill directory unavailable'),
-				detail: state.detail,
+				detail: localize('当前环境无法读取或选择 Skill 目录。', 'The current environment cannot read or select a Skill directory.'),
 				...versions,
 				tone: 'warning',
 				action: null,

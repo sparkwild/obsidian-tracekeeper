@@ -539,8 +539,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('全部 Agent 访问', 'All Agent access'))
 			.setDesc(ui(
-				'撤销会清空全部活动凭据并终止 Session，但保留 Agent 卡片和 Skill。',
-				'Revocation clears all active credentials and ends Sessions while retaining Agent cards and Skills.'
+				'撤销会移除全部 Agent 卡片、清空凭据并终止 Session，但保留 Skill。',
+				'Revocation removes all Agent cards, clears credentials, and ends Sessions while retaining Skills.'
 			))
 			.addButton((button) => {
 				button

@@ -19,9 +19,14 @@ files and MCP credentials are separate lifecycles.
    Obsidian shows the pending request and the user explicitly chooses Allow or
    Deny for the selected integration. The browser never approves access.
 5. Clients that cannot safely complete OAuth may use the explicit manual Bearer
-   mode. Tracekeeper persists only a SHA-256 digest; the 256-bit plaintext is
-   shown once in the current modal and can be copied explicitly. It is never in
-   a URL, command, settings value, log, Vault record, or notification.
+   mode. Tracekeeper persists only a SHA-256 digest. After issuing the 256-bit
+   plaintext once, the current modal can generate a complete `mcpServers` JSON
+   object containing the endpoint and `Authorization` header for explicit
+   copying. Copying the JSON does not rotate the credential; choosing
+   **Regenerate complete JSON** is the explicit replacement action. That JSON
+   and plaintext remain memory-only, disappear when the modal closes, and
+   never enter a URL, settings value, log, Vault record, or notification.
+   Support for the common JSON structure remains client-specific.
 6. A successful token exchange changes authorization to `authorized`. A valid
    credential completing `initialize` changes MCP connection to `connected`; a
    successful tool call changes usage to `used`.
@@ -43,13 +48,15 @@ Each card renders four independent axes:
   newer than bundled, modified, legacy, conflict, or unavailable.
 
 Skill actions never create or alter credentials. Revoking MCP access never
-uninstalls Skill files. Forgetting a card requires its credential to be revoked
-first and removes only integration metadata.
+uninstalls Skill files. **Revoke Agent access** is one atomic per-card action:
+it invalidates the credential, closes bound Sessions, clears pending approval
+decisions, and removes the integration card. The Skill card and its files stay
+available independently.
 
 Changing the Runtime port marks affected cards `needs_update`; it does not
 silently revoke credentials. A Skill-only card remains visible when a receipt is
 present without an MCP integration, and scanning can recreate that card after an
-integration is forgotten.
+integration is removed.
 
 ## Credentials and sessions
 
@@ -102,7 +109,7 @@ source directory and provide a selectable prompt; copying that prompt is not
 installation. A direct install or an external directory verification must pass
 the bundle and manifest hash checks before the card shows **installed**.
 
-Settings owns connection, authorization, revocation, replacement, forgetting,
+Settings owns connection, authorization, revocation, replacement, card removal,
 and Skill actions. Activity may show recent non-secret integration and
 credential identifiers, active Sessions, pending approvals, and latest use, but
 historical events without a trusted `integrationId` never create a card.
@@ -114,8 +121,11 @@ server metadata, then uses Authorization Code with PKCE `S256` and RFC 8707
 `resource` binding.
 
 Single-card revoke affects only that integration. **Revoke all Agent access**
-clears every active credential and pending OAuth decision, closes all Sessions,
-and preserves cards and Skill files. Runtime startup after migration is allowed
-only after the new settings schema and fresh internal secret are durably saved;
+removes every integration card, clears every active credential and pending OAuth
+decision, closes all Sessions, and preserves Skill files. The OAuth protocol's
+`/oauth/revoke` endpoint remains credential-only so a client logout does not
+delete the user's integration metadata; the Obsidian management action is the
+explicit UI path for removing that card. Runtime startup after migration is
+allowed only after the new settings schema and fresh internal secret are durably saved;
 the old shared credential and old bootstrap fields are rejected rather than
 converted.

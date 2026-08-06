@@ -23,7 +23,7 @@ For the complete technical trust model, see [Trust Boundaries](./docs/architectu
 ## Data Handling
 
 - Vault content stays on the user's machine unless the user chooses another workflow.
-- MCP, authorization, and redirect URLs and client-native commands contain no credential. Supported clients receive only their selected integration's access token from the local OAuth token endpoint and own its subsequent storage.
+- MCP, authorization, and redirect URLs and client-native commands contain no credential. Supported clients receive only their selected integration's access token from the local OAuth token endpoint and own its subsequent storage. In explicit manual mode, the current modal may construct complete MCP JSON containing the one-time plaintext credential for the user to copy; Tracekeeper does not persist that JSON.
 - Pending approval requests, dynamic client registrations, authorization codes, and PKCE state are short-lived memory state and disappear on expiry, Runtime restart, plugin unload, port change, or global revoke.
 - Managed Skill writes require explicit confirmation, use previews, and create backups.
 - Tracekeeper does not write plaintext tokens, credential digests, authorization codes, PKCE verifiers, pending handles, token responses, Authorization Headers, or the internal security secret to Vault audit records, Runtime logs, screenshots, or network uploads.

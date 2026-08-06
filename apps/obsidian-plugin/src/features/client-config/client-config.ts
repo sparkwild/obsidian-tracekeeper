@@ -156,6 +156,27 @@ export const buildGeneratedClientSetup = (
 	};
 };
 
+export const buildManualMcpJsonConfig = (
+	connectionUrl: string,
+	bearerToken: string,
+): string => {
+	const endpoint = requirePublicLoopbackEndpoint(connectionUrl);
+	if (!/^[A-Za-z0-9_-]{43}$/.test(bearerToken)) {
+		throw new Error('Manual MCP JSON requires a valid access credential.');
+	}
+	return JSON.stringify({
+		mcpServers: {
+			tracekeeper: {
+				type: 'http',
+				url: endpoint,
+				headers: {
+					Authorization: `Bearer ${bearerToken}`,
+				},
+			},
+		},
+	}, null, 2);
+};
+
 const requirePublicLoopbackEndpoint = (connectionUrl: string): string => {
 	let endpoint: URL;
 	try {

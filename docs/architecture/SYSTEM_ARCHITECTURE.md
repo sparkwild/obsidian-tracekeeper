@@ -123,8 +123,11 @@ index.
 Client-native OAuth/MCP entries keep the endpoint, command, authorization URL,
 and redirect URI credential-free. OAuth clients receive their integration's
 Bearer only from the token endpoint; manual Bearer clients receive plaintext
-only in the explicit current modal. Tracekeeper's normal flow does not read or
-write operating-system-specific Agent configuration paths.
+only in the explicit current modal. The same modal may construct a complete
+common MCP JSON object containing that plaintext for an explicit copy action;
+the object is not persisted and disappears when the modal closes. Tracekeeper's
+normal flow does not read or write operating-system-specific Agent configuration
+paths.
 
 ## Related Architecture
 

@@ -17,14 +17,14 @@ try {
 		sourceDirectory: '/vault/.obsidian/plugins/tracekeeper/skill-source/2.1.0-abcd/tracekeeper',
 		skillVersion: '2.1.0',
 		bundleHash: `sha256:${'a'.repeat(64)}`,
-		recommendation: { skillsRootDirectory: '/home/user/.agents/skills', source: 'official_documentation', documentationUrl: 'https://developers.openai.com/codex/skills/' },
+		recommendation: { skillsRootDirectory: '/home/user/.codex/skills', skillDirectory: '/home/user/.codex/skills/tracekeeper', source: 'official_documentation', documentationUrl: 'https://developers.openai.com/codex/skills/' },
 	});
 	assert.match(context.prompt, /可信本地源目录/);
-	assert.match(context.prompt, /\.agents\/skills/);
+	assert.match(context.prompt, /\.codex\/skills/);
 	assert.match(context.prompt, /不从网络下载/);
 	assert.equal(context.prompt.includes('Bearer'), false);
 	const unknown = module.buildAiSkillAssistantPrompt({ ...context, recommendation: null });
-	assert.equal(unknown.prompt.includes('.agents/skills'), false);
+	assert.equal(unknown.prompt.includes('.codex/skills'), false);
 	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 5 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });

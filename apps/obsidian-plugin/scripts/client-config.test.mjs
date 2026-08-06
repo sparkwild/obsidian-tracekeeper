@@ -60,6 +60,25 @@ try {
 		assert.deepEqual(setup.supportedAuthModes, ['bearer']);
 	}
 
+	const bearerToken = 'A'.repeat(43);
+	const manualJson = config.buildManualMcpJsonConfig(endpoint, bearerToken);
+	assert.equal(manualJson.includes('\n  "mcpServers"'), true);
+	assert.deepEqual(JSON.parse(manualJson), {
+		mcpServers: {
+			tracekeeper: {
+				type: 'http',
+				url: endpoint,
+				headers: { Authorization: `Bearer ${bearerToken}` },
+			},
+		},
+	});
+	for (const invalidToken of ['', 'short', 'B'.repeat(44), 'contains whitespace', 'line\nbreak']) {
+		assert.throws(
+			() => config.buildManualMcpJsonConfig(endpoint, invalidToken),
+			/valid access credential/,
+		);
+	}
+
 	for (const invalid of [
 		'https://127.0.0.1:58437/mcp',
 		'http://localhost:58437/mcp',
@@ -101,7 +120,7 @@ try {
 	}
 	assert.doesNotMatch(mainSource, /configState:\s*'unavailable'/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 48 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 54 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

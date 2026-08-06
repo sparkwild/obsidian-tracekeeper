@@ -10,7 +10,9 @@ export interface ClientSkillPromptOptions {
 	plugin: TracekeeperPlugin;
 	container: HTMLElement;
 	config: GeneratedClientConfig;
-	presentation?: 'compact' | 'optional';
+	presentation?: 'compact' | 'optional' | 'modal-collapsible';
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
 	onChanged?: () => void;
 }
 
@@ -20,19 +22,30 @@ export function renderClientSkillPrompt({
 	container,
 	config,
 	presentation = 'compact',
+	expanded = false,
+	onExpandedChange,
 	onChanged,
 }: ClientSkillPromptOptions): void {
 	const state = plugin.getSkillInstallState(config.clientId);
 	const prompt = buildSkillInstallPrompt(state, ui);
-	const skill = container.createDiv({
+	const collapsible = presentation === 'modal-collapsible';
+	const skill = container.createEl(collapsible ? 'details' : 'div', {
 		cls: `tracekeeper-settings-client-skill tracekeeper-settings-client-skill--${presentation}`,
 	});
-	const title = skill.createDiv({ cls: 'tracekeeper-settings-client-skill__title' });
+	if (collapsible) {
+		(skill as HTMLDetailsElement).open = expanded;
+		skill.addEventListener('toggle', () => onExpandedChange?.((skill as HTMLDetailsElement).open));
+	}
+	const title = skill.createEl(collapsible ? 'summary' : 'div', { cls: 'tracekeeper-settings-client-skill__title' });
 	title.createEl('strong', { text: ui(`增强 ${config.displayName} 的记忆协作`, `Enhance ${config.displayName} with memory collaboration`) });
 	if (presentation === 'optional') {
 		title.createEl('span', { text: ui('推荐，可稍后', 'Recommended, optional for now'), cls: 'tracekeeper-badge tracekeeper-badge--muted' });
 	}
-	skill.createEl('span', { text: prompt.label, cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}` });
+	if (collapsible) {
+		title.createEl('span', { text: prompt.label, cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}` });
+	} else {
+		skill.createEl('span', { text: prompt.label, cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}` });
+	}
 	const body = skill.createDiv({ cls: 'tracekeeper-settings-client-skill__body' });
 	if (presentation === 'optional') {
 		body.createEl('div', {

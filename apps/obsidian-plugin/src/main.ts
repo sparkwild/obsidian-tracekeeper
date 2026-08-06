@@ -59,6 +59,10 @@ import {
 	type TracekeeperRecallScope,
 } from './features/recall/recall-view-model';
 import { ObsidianKnowledgeIndexAdapter } from './knowledge-index-adapter';
+import {
+	resolveDesktopDirectoryDialog,
+	type DesktopDirectoryDialog,
+} from './adapters/desktop-directory-dialog';
 import { ObsidianVaultRepository } from './adapters/obsidian-vault-repository';
 import {
 	ensureObsidianVaultFolderPath,
@@ -435,12 +439,7 @@ interface DesktopNodeApi {
 	shell?: {
 		openPath(path: string): Promise<string>;
 	};
-	dialog?: {
-		showOpenDialog(options: { properties: readonly string[] }): Promise<{
-			canceled: boolean;
-			filePaths: string[];
-		}>;
-	};
+	dialog?: DesktopDirectoryDialog;
 }
 
 type StreamableHttpRuntimeOptionsWithGraphProfile = ConstructorParameters<typeof StreamableHttpMcpRuntime>[0] & {
@@ -2169,12 +2168,10 @@ export default class TracekeeperPlugin extends Plugin {
 		});
 	}
 
-	async forgetAgentIntegration(integrationId: string): Promise<void> {
+	async revokeAndRemoveAgentIntegration(integrationId: string): Promise<void> {
 		await this.enqueueAgentCredentialOperation(async () => {
-			const entry = this.settings.agentIntegrations.find((candidate) => candidate.integrationId === integrationId);
-			if (!entry) return;
-			if (entry.credential) throw new Error('Revoke the Agent credential before forgetting the card.');
 			const previous = this.settings.agentIntegrations;
+			if (!previous.some((candidate) => candidate.integrationId === integrationId)) return;
 			this.settings.agentIntegrations = previous.filter((candidate) => candidate.integrationId !== integrationId);
 			try {
 				await this.saveSettings();
@@ -2182,21 +2179,22 @@ export default class TracekeeperPlugin extends Plugin {
 				this.settings.agentIntegrations = previous;
 				throw error;
 			}
+			this.pendingOAuthRequests.forEach((_request, requestId) => {
+				const decision = this.pendingOAuthDecisions.get(requestId);
+				if (decision?.decision === 'allow' && decision.integrationId === integrationId) {
+					this.pendingOAuthDecisions.set(requestId, { decision: 'deny' });
+				}
+			});
+			this.mcpRuntimeLifecycle.getRuntime()?.closeSessionsForIntegration?.(integrationId);
 			this.scheduleAgentStateViewRefresh();
 		});
 	}
 
 	async revokeAllAgentAccess(): Promise<void> {
 		await this.enqueueAgentCredentialOperation(async () => {
-			const now = new Date().toISOString();
 			const previous = this.settings.agentIntegrations;
-			const next = previous.map((entry) => ({
-				...entry,
-				updatedAt: now,
-				lastRevokedAt: now,
-				credential: null,
-			}));
-			this.settings.agentIntegrations = next;
+			const integrationIds = previous.map((entry) => entry.integrationId);
+			this.settings.agentIntegrations = [];
 			const previousDecisions = new Map(this.pendingOAuthDecisions);
 			const previousRequests = new Map(this.pendingOAuthRequests);
 			try {
@@ -2212,7 +2210,7 @@ export default class TracekeeperPlugin extends Plugin {
 			this.pendingOAuthDecisions.clear();
 			this.pendingOAuthRequests.clear();
 			const runtime = this.mcpRuntimeLifecycle.getRuntime();
-			for (const entry of next) runtime?.closeSessionsForIntegration?.(entry.integrationId);
+			for (const integrationId of integrationIds) runtime?.closeSessionsForIntegration?.(integrationId);
 			this.scheduleAgentStateViewRefresh();
 		});
 	}
@@ -2771,7 +2769,7 @@ export default class TracekeeperPlugin extends Plugin {
 		if (!desktopApi?.dialog) {
 			throw new Error(ui('当前环境不支持目录选择。', 'Directory selection is unavailable in this environment.'));
 		}
-		const result = await desktopApi.dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
+		const result = await desktopApi.dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory', 'showHiddenFiles'] });
 		if (result.canceled || !result.filePaths[0]) return null;
 		return normalizeSkillDirectorySelection(result.filePaths[0], desktopApi.path.join.bind(desktopApi.path));
 	}
@@ -3009,11 +3007,17 @@ export default class TracekeeperPlugin extends Plugin {
 		const pathModule = maybeWindow.require('path');
 		const os = maybeWindow.require('os');
 		const electron = maybeWindow.require('electron');
+		let electronRemote: unknown;
+		try {
+			electronRemote = maybeWindow.require('@electron/remote');
+		} catch {
+			electronRemote = undefined;
+		}
 		if (!this.isDesktopFsModule(fs) || !this.isDesktopPathModule(pathModule) || !this.isDesktopOsModule(os)) {
 			return null;
 		}
 		const shell = this.isRecord(electron) && this.isDesktopShell(electron.shell) ? electron.shell : undefined;
-		const dialog = this.isRecord(electron) && this.isDesktopDialog(electron.dialog) ? electron.dialog : undefined;
+		const dialog = resolveDesktopDirectoryDialog(electron, electronRemote);
 		return {
 			fs,
 			path: pathModule,
@@ -3022,11 +3026,6 @@ export default class TracekeeperPlugin extends Plugin {
 			dialog,
 		};
 	}
-
-	private isDesktopDialog(value: unknown): value is NonNullable<DesktopNodeApi['dialog']> {
-		return this.isRecord(value) && typeof value.showOpenDialog === 'function';
-	}
-
 
 	async loadMemoryReviewQueueSnapshot(): Promise<MemoryReviewQueueSnapshot> {
 		return this.reviewQueueController.loadMemoryReviewQueueSnapshot();
