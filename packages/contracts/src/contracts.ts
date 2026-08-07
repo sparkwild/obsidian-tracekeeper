@@ -1,0 +1,1099 @@
+import {
+	APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA,
+	AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA,
+	BUILD_CONTEXT_PACK_OUTPUT_SCHEMA,
+	CAPTURE_SOURCE_OUTPUT_SCHEMA,
+	GENERIC_TOOL_OUTPUT_SCHEMA,
+	FINISH_TASK_OUTPUT_SCHEMA,
+	LINT_OUTPUT_SCHEMA,
+	PROPOSE_MEMORY_OUTPUT_SCHEMA,
+	MEMORY_OUTPUT_SCHEMA,
+	RECALL_OUTPUT_SCHEMA,
+	READ_NOTE_OUTPUT_SCHEMA,
+	REVIEW_QUEUE_OUTPUT_SCHEMA,
+	SOURCE_REQUEST_OUTPUT_SCHEMA,
+	STATUS_OUTPUT_SCHEMA,
+	START_TASK_OUTPUT_SCHEMA,
+} from './result-schemas';
+
+const FINISH_TASK_MEMORY_CANDIDATE_RECORD_SCHEMA = {
+	type: 'object',
+	required: ['proposal_kind', 'content', 'scope'],
+	properties: {
+		proposal_kind: { type: 'string', description: 'Candidate proposal kind.' },
+		content: { type: 'string', description: 'Candidate content.' },
+		scope: { type: 'string', enum: ['global', 'project'], description: 'Durable memory scope for this candidate.' },
+		project_hint: { type: 'string', description: 'Optional project identity for this candidate; independent from task context.' },
+		project_id: { type: 'string', description: 'Optional project id for this candidate.' },
+		repo_path: { type: 'string', description: 'Optional repository path for this candidate.' },
+		related_wiki: {
+			oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+			description: 'Optional Wiki refs specific to this candidate.',
+		},
+		related_sources: {
+			oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+			description: 'Optional source refs specific to this candidate.',
+		},
+		evidence: {
+			oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+			description: 'Optional evidence summary or Vault-relative evidence refs for the candidate.',
+		},
+		target_note: {
+			type: 'string',
+			description: 'Optional Vault-relative target note for the candidate.',
+		},
+		claim_key: {
+			type: 'string',
+			minLength: 1,
+			description: 'Optional candidate claim key.',
+		},
+		proposed_authority: {
+			type: 'string',
+			enum: ['agent', 'source', 'user'],
+			description: 'Optional requested authority for this candidate.',
+		},
+		proposed_confidence: {
+			type: 'string',
+			enum: ['uncertain', 'inferred', 'supported', 'verified'],
+			description: 'Optional requested confidence level.',
+		},
+		declared_state: {
+			type: 'string',
+			enum: ['active', 'disputed', 'retracted', 'review'],
+			description: 'Optional requested declared state.',
+		},
+		observed_at: {
+			type: 'string',
+			minLength: 1,
+			description: 'Optional observed-at timestamp.',
+		},
+		valid_from: {
+			type: 'string',
+			minLength: 1,
+			description: 'Optional validity start timestamp.',
+		},
+		valid_to: {
+			type: 'string',
+			minLength: 1,
+			description: 'Optional validity end timestamp.',
+		},
+		last_verified_at: {
+			type: 'string',
+			minLength: 1,
+			description: 'Optional last verified-at timestamp.',
+		},
+		supersedes: {
+			type: 'array',
+			items: { type: 'string' },
+			description: 'Optional candidate supersedes list.',
+		},
+		contradicts: {
+			type: 'array',
+			items: { type: 'string' },
+			description: 'Optional candidate contradicts list.',
+		},
+	},
+	additionalProperties: false,
+};
+
+export type ToolVisibility = 'public' | 'compatibility' | 'internal';
+export type ToolRisk = 'read-only' | 'low-risk-write' | 'review-gated-write';
+export type ToolEffect = 'read' | 'append' | 'bounded-update' | 'review-gated';
+export type ToolIdempotency = 'natural' | 'keyed' | 'none';
+export type ToolWorld = 'closed';
+export type ToolWorkflowRole = 'observe' | 'recall' | 'task-start' | 'task-finish' | 'review' | 'source' | 'memory';
+export type ToolCapability =
+	| 'vault.read'
+	| 'vault.write'
+	| 'memory.propose'
+	| 'memory.apply'
+	| 'memory.review'
+	| 'workflow.manage'
+	| 'review-gated.apply';
+
+export interface ToolDeprecation {
+	readonly replacement: string;
+	readonly removalAfter?: string;
+}
+
+export interface ToolOutputSchema {
+	readonly type: 'object';
+	readonly [key: string]: unknown;
+}
+export type ToolResultSchema = ToolOutputSchema;
+
+export type ToolInputSchema = Record<string, unknown> & {
+	readonly type: 'object';
+	readonly properties: Record<string, unknown>;
+	readonly required?: readonly string[];
+	readonly additionalProperties?: boolean;
+};
+
+export interface ToolContract<Name extends string = string> {
+	readonly name: Name;
+	readonly version: number;
+	readonly visibility: ToolVisibility;
+	readonly capability: ToolCapability;
+	readonly risk: ToolRisk;
+	readonly effect: ToolEffect;
+	readonly idempotency: ToolIdempotency;
+	readonly world: ToolWorld;
+	readonly workflowRole: ToolWorkflowRole;
+	readonly useCase: string;
+	readonly inputSchema: ToolInputSchema;
+	readonly outputSchema: ToolOutputSchema;
+	readonly resultSchema: ToolOutputSchema;
+	readonly deprecated?: ToolDeprecation;
+	readonly description?: string;
+}
+
+export type TracekeeperToolName =
+	| 'tracekeeper.status'
+	| 'tracekeeper.graph_health'
+	| 'tracekeeper.start_task'
+	| 'tracekeeper.recall'
+	| 'tracekeeper.memory'
+	| 'tracekeeper.project_context'
+	| 'tracekeeper.project_history'
+	| 'tracekeeper.read_note'
+	| 'tracekeeper.review_queue'
+	| 'tracekeeper.list_review_queue'
+	| 'tracekeeper.list_source_requests'
+	| 'tracekeeper.list_approved_writebacks'
+	| 'tracekeeper.agent_activity_recent'
+	| 'tracekeeper.source_request'
+	| 'tracekeeper.analyze_source_request'
+	| 'tracekeeper.apply_approved_writeback'
+	| 'tracekeeper.build_context_pack'
+	| 'tracekeeper.lint'
+	| 'tracekeeper.finish_task'
+	| 'tracekeeper.distill_session'
+	| 'tracekeeper.write_context_pack'
+	| 'tracekeeper.write_session_note'
+	| 'tracekeeper.capture_source'
+	| 'tracekeeper.propose_memory';
+
+function withResultSchema(schema: ToolOutputSchema): { outputSchema: ToolOutputSchema; resultSchema: ToolOutputSchema } {
+	return {
+		outputSchema: schema,
+		resultSchema: schema,
+	};
+}
+
+function withToolInput(properties: Record<string, unknown>, required: string[] = []): ToolInputSchema {
+	return {
+		type: 'object',
+		properties,
+		additionalProperties: false,
+		...(required.length > 0 ? { required } : {}),
+	};
+}
+
+export const PUBLIC_TOOL_NAME_ORDER = [
+	'tracekeeper.status',
+	'tracekeeper.agent_activity_recent',
+	'tracekeeper.lint',
+	'tracekeeper.recall',
+	'tracekeeper.memory',
+	'tracekeeper.read_note',
+	'tracekeeper.start_task',
+	'tracekeeper.finish_task',
+	'tracekeeper.build_context_pack',
+	'tracekeeper.review_queue',
+	'tracekeeper.apply_approved_writeback',
+	'tracekeeper.source_request',
+	'tracekeeper.capture_source',
+	'tracekeeper.propose_memory',
+] as const;
+
+type PublicToolName = (typeof PUBLIC_TOOL_NAME_ORDER)[number];
+
+const compatibilityFallbackTools: ReadonlyArray<{ name: TracekeeperToolName; replacement: string; description: string }> = [
+	{
+		name: 'tracekeeper.graph_health',
+		replacement: 'tracekeeper.lint',
+		description: '[deprecated] Use tracekeeper.lint for graph checks. This compatibility tool is read-only.',
+	},
+	{
+		name: 'tracekeeper.project_context',
+		replacement: 'tracekeeper.recall with scope="project"',
+		description: '[deprecated] Use tracekeeper.recall with scope="project". Compatibility tool, read-only.',
+	},
+	{
+		name: 'tracekeeper.project_history',
+		replacement: 'tracekeeper.recall with scope="project_history"',
+		description:
+			'[deprecated] Use tracekeeper.recall with scope="project_history". Compatibility tool, read-only.',
+	},
+	{
+		name: 'tracekeeper.list_review_queue',
+		replacement: 'tracekeeper.review_queue with action="list_pending"',
+		description:
+			'[deprecated] Use tracekeeper.review_queue with action="list_pending". Compatibility tool, read-only.',
+	},
+	{
+		name: 'tracekeeper.list_source_requests',
+		replacement: 'tracekeeper.source_request with action="list"',
+		description: '[deprecated] Use tracekeeper.source_request with action="list". Compatibility tool, read-only.',
+	},
+	{
+		name: 'tracekeeper.list_approved_writebacks',
+		replacement: 'tracekeeper.review_queue with action="list_approved"',
+		description:
+			'[deprecated] Use tracekeeper.review_queue with action="list_approved". Compatibility tool, read-only.',
+	},
+	{
+		name: 'tracekeeper.analyze_source_request',
+		replacement: 'tracekeeper.source_request with action="analyze"',
+		description:
+			'[deprecated] Use tracekeeper.source_request with action="analyze". Compatibility tool, low-risk write.',
+	},
+	{
+		name: 'tracekeeper.distill_session',
+		replacement: 'tracekeeper.finish_task',
+		description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool for older session distillation flows.',
+	},
+	{
+		name: 'tracekeeper.write_context_pack',
+		replacement: 'tracekeeper.build_context_pack with write=true',
+		description:
+			'[deprecated] Use tracekeeper.build_context_pack with write=true. Compatibility tool, low-risk write.',
+	},
+	{
+		name: 'tracekeeper.write_session_note',
+		replacement: 'tracekeeper.finish_task',
+		description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool, low-risk write.',
+	},
+];
+
+const compatibilityToolNameSet = new Set(compatibilityFallbackTools.map((entry) => entry.name));
+
+export const toolContracts = [
+	{
+		name: 'tracekeeper.status',
+		version: 2,
+		visibility: 'public',
+		capability: 'vault.read',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'observe',
+		useCase: 'status',
+		description:
+			'[read-only] Quick vault and service summary. Does not read full note content or write files.',
+		inputSchema: withToolInput({}),
+		...withResultSchema(STATUS_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.graph_health',
+		version: 2,
+		visibility: 'compatibility',
+		capability: 'vault.read',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'observe',
+		useCase: 'graph_health',
+		description: '[deprecated] Use tracekeeper.lint for graph checks. This compatibility tool is read-only.',
+		inputSchema: withToolInput({
+			max_items: { type: 'integer', description: 'Maximum number of array entries to return.' },
+			graph_profile: {
+				type: 'string',
+				enum: ['off', 'advisory', 'strict'],
+				description: 'Graph checking mode. Defaults to the server graphProfile setting.',
+			},
+		}),
+		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		deprecated: {
+			replacement: 'tracekeeper.lint',
+		},
+	},
+	{
+		name: 'tracekeeper.start_task',
+		version: 3,
+		visibility: 'public',
+		capability: 'workflow.manage',
+		risk: 'low-risk-write',
+		effect: 'append',
+		idempotency: 'keyed',
+		world: 'closed',
+		workflowRole: 'task-start',
+		useCase: 'start_task',
+		description:
+			'[low-risk write] Call once when starting meaningful work when task tracking is enabled. Records a bounded task and returns the recommended recall step.',
+		inputSchema: withToolInput(
+			{
+				goal: { type: 'string', description: 'Task goal statement.' },
+				client: { type: 'string', description: 'Optional client context.' },
+				project_hint: {
+					type: 'string',
+					description: 'Optional canonical project hint. A path-valued hint is treated as repo_path evidence.',
+				},
+				project_id: { type: 'string', description: 'Optional stable project id.' },
+				repo_path: {
+					type: 'string',
+					description: 'Optional repository/workspace path used to resolve and corroborate local project identity.',
+				},
+				idempotency_key: {
+					type: 'string',
+					description: 'Optional stable retry key. Reusing it with different arguments is rejected.',
+				},
+			},
+			['goal'],
+		),
+		...withResultSchema(START_TASK_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.recall',
+		version: 3,
+		visibility: 'public',
+		capability: 'vault.read',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'recall',
+		useCase: 'recall',
+		description:
+			'[read-only] Find relevant memory, Wiki, source, or task-tracking notes in the active local Obsidian Vault before read_note. Supports global, project, project_history, and task_history scopes.',
+		inputSchema: withToolInput({
+			query: { type: 'string', description: 'Recall query text. Required unless scope is project_history or task_history.' },
+			task_id: { type: 'string', description: 'Optional exact task id for task_history recall.' },
+			scope: {
+				type: 'string',
+				enum: ['global', 'project', 'project_history', 'task_history'],
+				description: 'Recall scope. Defaults to global.',
+			},
+			project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
+			project_id: { type: 'string', description: 'Project id for scoped matching.' },
+			repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
+			repo: { type: 'string', description: 'Alias of repo_path for repository-scoped matching.' },
+			project_path: { type: 'string', description: 'Alias of repo_path for workspace/project path matching.' },
+			max_items: { type: 'integer', description: 'Maximum number of matches to return.' },
+		}),
+		...withResultSchema(RECALL_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.memory',
+		version: 1,
+		visibility: 'public',
+		capability: 'vault.read',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'memory',
+		useCase: 'memory',
+		description:
+			'[read-only] Enumerate the generation-bound global or project memory catalog by current, history, conflicts, or all view. Returns metadata only; use tracekeeper.read_note for full note bodies.',
+		inputSchema: withToolInput(
+			{
+				scope: {
+					type: 'string',
+					enum: ['global', 'project'],
+					description: 'Memory scope. Defaults to global.',
+				},
+				view: {
+					type: 'string',
+					enum: ['current', 'history', 'conflicts', 'all'],
+					description: 'Lifecycle projection. Defaults to current.',
+				},
+				project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
+				project_id: { type: 'string', description: 'Project id for scoped matching.' },
+				repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
+				repo: { type: 'string', description: 'Alias of repo_path for repository-scoped matching.' },
+				project_path: { type: 'string', description: 'Alias of repo_path for workspace/project path matching.' },
+				cursor: {
+					type: 'string',
+					minLength: 1,
+					description: 'Opaque cursor bound to the project identity, catalog sort, and snapshot generation.',
+				},
+				page_size: {
+					type: 'integer',
+					minimum: 1,
+					maximum: 200,
+					description: 'Number of catalog descriptors to return, from 1 through 200.',
+				},
+			},
+			[],
+		),
+		...withResultSchema(MEMORY_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.project_context',
+		version: 2,
+		visibility: 'compatibility',
+		capability: 'vault.read',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'recall',
+		useCase: 'project_context',
+		description:
+			'[deprecated] Use tracekeeper.recall with scope="project". Compatibility tool, read-only.',
+		inputSchema: withToolInput({
+			query: { type: 'string', description: 'Project-scoped recall query.' },
+			project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
+			project_id: { type: 'string', description: 'Project id for scoped matching.' },
+			repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
+			repo: { type: 'string', description: 'Alias of repo_path for repository-scoped matching.' },
+			project_path: { type: 'string', description: 'Alias of repo_path for workspace/project path matching.' },
+			max_items: { type: 'integer', description: 'Maximum number of matches to return.' },
+		}, ['query']),
+		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		deprecated: {
+			replacement: 'tracekeeper.recall with scope="project"',
+		},
+	},
+	{
+		name: 'tracekeeper.project_history',
+		version: 2,
+		visibility: 'compatibility',
+		capability: 'vault.read',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'recall',
+		useCase: 'project_history',
+		description:
+			'[deprecated] Use tracekeeper.recall with scope="project_history". Compatibility tool, read-only.',
+		inputSchema: withToolInput({
+			project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
+			project_id: { type: 'string', description: 'Project id for scoped matching.' },
+			repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
+			repo: { type: 'string', description: 'Alias of repo_path for repository-scoped matching.' },
+			project_path: { type: 'string', description: 'Alias of repo_path for workspace/project path matching.' },
+			query: { type: 'string', description: 'Optional query filter.' },
+			max_items: { type: 'integer', description: 'Maximum number of entries to return.' },
+		}),
+		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		deprecated: {
+			replacement: 'tracekeeper.recall with scope="project_history"',
+		},
+	},
+	{
+		name: 'tracekeeper.read_note',
+		version: 2,
+		visibility: 'public',
+		capability: 'vault.read',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'observe',
+		useCase: 'read_note',
+		description:
+			'[read-only] Read one vault note only after recall excerpts are not enough. Does not write files.',
+		inputSchema: withToolInput({
+			path: { type: 'string', description: 'Vault-relative note path.' },
+			recall_id: {
+				type: 'string',
+				description: 'Optional recall correlation id returned by tracekeeper.recall.',
+			},
+		}, ['path']),
+		...withResultSchema(READ_NOTE_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.review_queue',
+		version: 2,
+		visibility: 'public',
+		capability: 'memory.review',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'review',
+		useCase: 'review_queue',
+		description:
+			'[read-only] Inspect pending local Vault proposals or approved writeback candidates. Does not approve or apply changes.',
+		inputSchema: withToolInput({
+			action: {
+				type: 'string',
+				enum: ['list_pending', 'list_approved'],
+				description: 'Knowledge Change Review action. Defaults to list_pending.',
+			},
+			scope: {
+				type: 'string',
+				description: 'Optional proposal kind or target-note prefix filter for approved proposals.',
+			},
+			max_items: { type: 'integer', description: 'Maximum number of entries to return.' },
+			limit: { type: 'integer', description: 'Alias of max_items.' },
+		}),
+		...withResultSchema(REVIEW_QUEUE_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.list_review_queue',
+		version: 2,
+		visibility: 'compatibility',
+		capability: 'memory.review',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'review',
+		useCase: 'review_queue',
+		description:
+			'[deprecated] Use tracekeeper.review_queue with action="list_pending". Compatibility tool, read-only.',
+		inputSchema: withToolInput({
+			max_items: { type: 'integer', description: 'Maximum number of pending entries.' },
+		}),
+		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		deprecated: {
+			replacement: 'tracekeeper.review_queue with action="list_pending"',
+		},
+	},
+	{
+		name: 'tracekeeper.list_source_requests',
+		version: 2,
+		visibility: 'compatibility',
+		capability: 'vault.read',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'source',
+		useCase: 'source_request',
+		description:
+			'[deprecated] Use tracekeeper.source_request with action="list". Compatibility tool, read-only.',
+		inputSchema: withToolInput({
+			max_items: { type: 'integer', description: 'Maximum number of pending requests to return.' },
+			status: { type: 'string', description: 'Optional status filter, defaults to pending.' },
+			source_kind: { type: 'string', description: 'Optional source kind filter.' },
+		}),
+		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		deprecated: {
+			replacement: 'tracekeeper.source_request with action="list"',
+		},
+	},
+	{
+		name: 'tracekeeper.list_approved_writebacks',
+		version: 2,
+		visibility: 'compatibility',
+		capability: 'memory.review',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'review',
+		useCase: 'review_queue',
+		description:
+			'[deprecated] Use tracekeeper.review_queue with action="list_approved". Compatibility tool, read-only.',
+		inputSchema: withToolInput({
+			scope: { type: 'string', description: 'Optional proposal kind or target-note prefix filter.' },
+			max_items: { type: 'integer', description: 'Maximum number of approved writebacks to return.' },
+			limit: { type: 'integer', description: 'Alias of max_items.' },
+		}),
+		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		deprecated: {
+			replacement: 'tracekeeper.review_queue with action="list_approved"',
+		},
+	},
+	{
+		name: 'tracekeeper.agent_activity_recent',
+		version: 1,
+		visibility: 'public',
+		capability: 'vault.read',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'observe',
+		useCase: 'agent_activity_recent',
+		description: '[read-only] Read recent MCP Agent activity from daily UTC shards. User interface operations are excluded.',
+		inputSchema: withToolInput({
+			max_items: { type: 'integer', description: 'Maximum number of activity sections.' },
+		}),
+		...withResultSchema(AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.source_request',
+		version: 3,
+		visibility: 'public',
+		capability: 'vault.write',
+		risk: 'low-risk-write',
+		effect: 'bounded-update',
+		idempotency: 'none',
+		world: 'closed',
+		workflowRole: 'source',
+		useCase: 'source_request',
+		description:
+			'[read-only | low-risk write] List source requests or analyze one existing request. Does not fetch network content.',
+		inputSchema: withToolInput({
+			action: {
+				type: 'string',
+				enum: ['list', 'analyze'],
+				description: 'Source request action. Defaults to list unless request_path/path is provided.',
+			},
+			request_path: { type: 'string', description: 'Vault-relative path to an agent-request note when action is analyze.' },
+			path: { type: 'string', description: 'Alias of request_path.' },
+			task_id: { type: 'string', description: 'Optional task id to update with generated source/proposal paths.' },
+			update_request_status: {
+				type: 'boolean',
+				description: 'Whether to update request status to completed/failed. Defaults to true.',
+			},
+			force_reprocess: {
+				type: 'boolean',
+				description: 'Process request even if status is not pending.',
+			},
+			max_items: { type: 'integer', description: 'Maximum number of pending requests to return when listing.' },
+			status: { type: 'string', description: 'Optional status filter when listing, defaults to pending.' },
+			source_kind: { type: 'string', description: 'Optional source kind filter when listing.' },
+		}),
+		...withResultSchema(SOURCE_REQUEST_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.analyze_source_request',
+		version: 3,
+		visibility: 'compatibility',
+		capability: 'vault.write',
+		risk: 'low-risk-write',
+		effect: 'bounded-update',
+		idempotency: 'none',
+		world: 'closed',
+		workflowRole: 'source',
+		useCase: 'source_request',
+		description:
+			'[deprecated] Use tracekeeper.source_request with action="analyze". Compatibility tool, low-risk write.',
+		inputSchema: withToolInput({
+			request_path: { type: 'string', description: 'Vault-relative path to an agent-request note.' },
+			path: { type: 'string', description: 'Alias of request_path.' },
+			task_id: { type: 'string', description: 'Optional task id to update with generated source/proposal paths.' },
+			update_request_status: {
+				type: 'boolean',
+				description: 'Whether to update request status to completed/failed. Defaults to true.',
+			},
+			force_reprocess: { type: 'boolean', description: 'Process request even if status is not pending.' },
+		}),
+		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		deprecated: {
+			replacement: 'tracekeeper.source_request with action="analyze"',
+		},
+	},
+	{
+		name: 'tracekeeper.apply_approved_writeback',
+		version: 2,
+		visibility: 'public',
+		capability: 'memory.apply',
+		risk: 'review-gated-write',
+		effect: 'review-gated',
+		idempotency: 'keyed',
+		world: 'closed',
+		workflowRole: 'review',
+		useCase: 'apply_approved_writeback',
+		description:
+			'[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content to the local Vault target note.',
+		inputSchema: withToolInput({
+			proposal_id: { type: 'string', description: 'Proposal id to apply.' },
+			proposal_path: { type: 'string', description: 'Vault-relative proposal note path.' },
+			path: { type: 'string', description: 'Alias of proposal_path.' },
+			task_id: { type: 'string', description: 'Optional task id to update with the applied writeback target.' },
+			dry_run: { type: 'boolean', description: 'When true, return the writeback plan without modifying files.' },
+			confirmation_token: {
+				type: 'string',
+				description:
+					'Opaque confirmation token returned by the dry-run preview. Required when applying that preview and expires at the time reported with the preview.',
+			},
+		}),
+		...withResultSchema(APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.build_context_pack',
+		version: 2,
+		visibility: 'public',
+		capability: 'workflow.manage',
+		risk: 'low-risk-write',
+		effect: 'bounded-update',
+		idempotency: 'none',
+		world: 'closed',
+		workflowRole: 'memory',
+		useCase: 'build_context_pack',
+		description:
+			'[read-only | optional write] Build a compact context pack from recall results. Writes an artifact only when write=true.',
+		inputSchema: withToolInput({
+			query: { type: 'string', description: 'Context pack query.' },
+			task_id: {
+				type: 'string',
+				description: 'Optional task id. When present, the context pack inherits and enforces the task project identity.',
+			},
+			project_hint: { type: 'string', description: 'Optional project hint for scoped matching.' },
+			project_id: { type: 'string', description: 'Project id for scoped matching.' },
+			repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
+			candidate_limit: { type: 'integer', description: 'How many matches to include.' },
+			stale_after_days: { type: 'integer', description: 'Stale warning threshold in days.' },
+			write: { type: 'boolean', description: 'Whether to write a markdown context-pack artifact.' },
+			filename: { type: 'string', description: 'Optional file stem.' },
+			title: { type: 'string', description: 'Optional note title when writing markdown artifact.' },
+		}, ['query']),
+		...withResultSchema(BUILD_CONTEXT_PACK_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.lint',
+		version: 3,
+		visibility: 'public',
+		capability: 'vault.read',
+		risk: 'read-only',
+		effect: 'read',
+		idempotency: 'natural',
+		world: 'closed',
+		workflowRole: 'observe',
+		useCase: 'lint',
+		description:
+			'[read-only] Run the single vault check entry for structure, links, sources, claims, and graph health.',
+		inputSchema: withToolInput({
+			max_items: { type: 'integer', description: 'Maximum number of issues to return.' },
+			stale_after_days: {
+				type: 'integer',
+				minimum: 1,
+				description: 'Verification age in days after which a memory is diagnosed as stale. Defaults to 365.',
+			},
+			graph_profile: {
+				type: 'string',
+				enum: ['off', 'advisory', 'strict'],
+				description: 'Graph checking mode. Defaults to the server graphProfile setting.',
+			},
+		}),
+		...withResultSchema(LINT_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.finish_task',
+		version: 3,
+		visibility: 'public',
+		capability: 'workflow.manage',
+		risk: 'low-risk-write',
+		effect: 'append',
+		idempotency: 'keyed',
+		world: 'closed',
+		workflowRole: 'task-finish',
+		useCase: 'finish_task',
+		description:
+			'[low-risk write] Record the task execution summary and explicitly submitted durable memory candidates at task closeout.',
+		inputSchema: withToolInput(
+			{
+				task_id: { type: 'string', description: 'Task id.' },
+				summary: { type: 'string', description: 'Task summary.' },
+				status: { type: 'string', enum: ['completed', 'partial', 'blocked'], description: 'Final task status.' },
+				outcomes: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Optional outcomes.' },
+				decisions: {
+					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+					description: 'Optional decisions.',
+				},
+				solution_changes: {
+					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+					description: 'Optional solution changes.',
+				},
+				lessons: {
+					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+					description: 'Optional lessons learned.',
+				},
+				preferences: {
+					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+					description: 'Optional user preferences.',
+				},
+				memory_candidate_records: {
+					type: 'array',
+					description: 'Optional structured lifecycle-aware memory candidates.',
+					items: FINISH_TASK_MEMORY_CANDIDATE_RECORD_SCHEMA,
+				},
+				next_actions: {
+					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+					description: 'Optional next actions.',
+				},
+				client: { type: 'string', description: 'Optional client context.' },
+				project_hint: {
+					type: 'string',
+					description: 'Optional canonical project hint; inherited from the started task when omitted and rejected when conflicting.',
+				},
+				related_wiki: {
+					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+					description: 'Optional verified local Vault Wiki note paths, conventionally under 01_knowledge/wiki/**.',
+				},
+				related_sources: {
+					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+					description: 'Optional related sources.',
+				},
+				filename: { type: 'string', description: 'Optional file stem.' },
+				project_id: {
+					type: 'string',
+					description: 'Optional project id; a value conflicting with the started task identity is rejected.',
+				},
+				repo_path: {
+					type: 'string',
+					description: 'Optional repository path; a value conflicting with the started task identity is rejected.',
+				},
+				idempotency_key: {
+					type: 'string',
+					description: 'Optional stable retry key. Reusing it with different closeout content is rejected.',
+				},
+			},
+			['task_id', 'summary', 'status'],
+		),
+		...withResultSchema(FINISH_TASK_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.distill_session',
+		version: 2,
+		visibility: 'compatibility',
+		capability: 'workflow.manage',
+		risk: 'low-risk-write',
+		effect: 'append',
+		idempotency: 'none',
+		world: 'closed',
+		workflowRole: 'task-finish',
+		useCase: 'finish_task',
+		description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool for older session distillation flows.',
+		inputSchema: withToolInput({
+			task_id: { type: 'string', description: 'Task id.' },
+			summary: { type: 'string', description: 'Session summary.' },
+			decisions: {
+				oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+				description: 'Session decisions.',
+			},
+			next_actions: {
+				oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+				description: 'Optional next actions.',
+			},
+			possible_preferences: {
+				oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+				description: 'Possible preferences.',
+			},
+			outcomes: {
+				oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+				description: 'Optional outcomes.',
+			},
+			project_hint: { type: 'string', description: 'Optional project hint.' },
+			filename: { type: 'string', description: 'Optional file stem.' },
+		}, ['task_id', 'summary']),
+		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		deprecated: {
+			replacement: 'tracekeeper.finish_task',
+		},
+	},
+	{
+		name: 'tracekeeper.write_context_pack',
+		version: 2,
+		visibility: 'compatibility',
+		capability: 'workflow.manage',
+		risk: 'low-risk-write',
+		effect: 'bounded-update',
+		idempotency: 'none',
+		world: 'closed',
+		workflowRole: 'memory',
+		useCase: 'build_context_pack',
+		description:
+			'[deprecated] Use tracekeeper.build_context_pack with write=true. Compatibility tool, low-risk write.',
+		inputSchema: withToolInput({
+			filename: { type: 'string', description: 'Optional file stem. If omitted, auto-generates one.' },
+			title: { type: 'string', description: 'Optional note title.' },
+			content: { type: 'string', description: 'Context pack markdown/text content.' },
+			task_id: { type: 'string', description: 'Optional task id for traceability.' },
+		}, ['content']),
+		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		deprecated: {
+			replacement: 'tracekeeper.build_context_pack with write=true',
+		},
+	},
+	{
+		name: 'tracekeeper.write_session_note',
+		version: 2,
+		visibility: 'compatibility',
+		capability: 'workflow.manage',
+		risk: 'low-risk-write',
+		effect: 'bounded-update',
+		idempotency: 'none',
+		world: 'closed',
+		workflowRole: 'task-finish',
+		useCase: 'finish_task',
+		description: '[deprecated] Use tracekeeper.finish_task. Compatibility tool, low-risk write.',
+		inputSchema: withToolInput({
+			filename: { type: 'string', description: 'Optional file stem. If omitted, auto-generates one.' },
+			content: { type: 'string', description: 'Session content.' },
+			task_id: { type: 'string', description: 'Optional task id for traceability.' },
+		}, ['content']),
+		...withResultSchema(GENERIC_TOOL_OUTPUT_SCHEMA),
+		deprecated: {
+			replacement: 'tracekeeper.finish_task',
+		},
+	},
+	{
+		name: 'tracekeeper.capture_source',
+		version: 4,
+		visibility: 'public',
+		capability: 'vault.write',
+		risk: 'low-risk-write',
+		effect: 'bounded-update',
+		idempotency: 'keyed',
+		world: 'closed',
+		workflowRole: 'source',
+		useCase: 'capture_source',
+		description:
+			'[low-risk write] Save user-provided source metadata or content under sources. Does not fetch external content.',
+		inputSchema: withToolInput(
+			{
+				source: { type: 'string', description: 'Source identifier (usually URL or local path).' },
+				source_kind: {
+					type: 'string',
+					enum: ['web', 'file', 'transcript'],
+					description: 'Typed source owner. When omitted, Runtime derives a compatibility default.',
+				},
+				capture_reason: { type: 'string', description: 'Capture reason.' },
+				task_id: { type: 'string', description: 'Optional task id for traceability.' },
+				related_project: { type: 'string', description: 'Optional project hint.' },
+				mode: {
+					type: 'string',
+					enum: ['external_reference', 'extracted_snapshot', 'local_copy'],
+					description: 'Capture mode.',
+				},
+				filename: { type: 'string', description: 'Optional file stem. If omitted, auto-generates one.' },
+				title: { type: 'string', description: 'Optional source note title.' },
+				content: { type: 'string', description: 'Required when mode is extracted_snapshot or local_copy.' },
+				text: { type: 'string', description: 'Alias of content for compatibility.' },
+				idempotency_key: {
+					type: 'string',
+					description: 'Optional stable retry key. Reusing it with different source content is rejected.',
+				},
+			},
+			['source', 'mode'],
+		),
+		...withResultSchema(CAPTURE_SOURCE_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.propose_memory',
+		version: 3,
+		visibility: 'public',
+		capability: 'memory.propose',
+		risk: 'low-risk-write',
+		effect: 'bounded-update',
+		idempotency: 'keyed',
+		world: 'closed',
+		workflowRole: 'memory',
+		useCase: 'propose_memory',
+		description:
+			'[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. Global memory stays review-gated by default.',
+		inputSchema: withToolInput(
+			{
+				proposal_kind: { type: 'string', description: 'Proposal kind.' },
+				content: { type: 'string', description: 'Proposal markdown/text content.' },
+				evidence: {
+					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+					description: 'Optional evidence summary or Vault-relative evidence refs.',
+				},
+				target_note: {
+					type: 'string',
+					description: 'Optional Vault-relative target note. Use 01_knowledge/wiki/** for a local project Wiki target.',
+				},
+				risk_level: { type: 'string', description: 'Risk level label.' },
+				claim_key: {
+					type: 'string',
+					minLength: 1,
+					description: 'Optional normalized claim key for a MemoryRecord v2 proposal.',
+				},
+				proposed_authority: {
+					type: 'string',
+					enum: ['agent', 'source', 'user'],
+					description: 'Optional requested authority; runtime derives effective authority for execution.',
+				},
+				proposed_confidence: {
+					type: 'string',
+					enum: ['uncertain', 'inferred', 'supported', 'verified'],
+					description: 'Optional requested confidence level.',
+				},
+				declared_state: {
+					type: 'string',
+					enum: ['active', 'disputed', 'retracted', 'review'],
+					description: 'Optional requested declared state.',
+				},
+				observed_at: {
+					type: 'string',
+					minLength: 1,
+					description: 'Optional observed timestamp for the candidate record.',
+				},
+				valid_from: {
+					type: 'string',
+					minLength: 1,
+					description: 'Optional validity window start for the candidate record.',
+				},
+				valid_to: {
+					type: 'string',
+					minLength: 1,
+					description: 'Optional validity window end for the candidate record.',
+				},
+				last_verified_at: {
+					type: 'string',
+					minLength: 1,
+					description: 'Optional last verification timestamp for the candidate record.',
+				},
+				supersedes: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'Optional superseded record identifiers.',
+				},
+				contradicts: {
+					type: 'array',
+					items: { type: 'string' },
+					description: 'Optional contradictory record identifiers.',
+				},
+				task_id: { type: 'string', description: 'Optional task id for traceability.' },
+				project_hint: { type: 'string', description: 'Optional project hint for project memory routing.' },
+				project_id: { type: 'string', description: 'Optional stable project id for project memory routing.' },
+				repo_path: {
+					type: 'string',
+					description: 'Optional repository/workspace path used to resolve and corroborate local project identity.',
+				},
+				memory_scope: { type: 'string', enum: ['global', 'project'], description: 'Optional memory scope override.' },
+				related_wiki: {
+					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+					description: 'Optional verified local Vault Wiki note paths, conventionally under 01_knowledge/wiki/**.',
+				},
+				related_sources: {
+					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+					description: 'Optional related sources.',
+				},
+				filename: { type: 'string', description: 'Optional file stem. If omitted, auto-generates one.' },
+				title: { type: 'string', description: 'Optional proposal title.' },
+				idempotency_key: {
+					type: 'string',
+					description: 'Optional stable retry key. Reusing it with different proposal content is rejected.',
+				},
+			},
+			['proposal_kind', 'content'],
+		),
+		...withResultSchema(PROPOSE_MEMORY_OUTPUT_SCHEMA),
+	},
+] as const satisfies readonly ToolContract<TracekeeperToolName>[];
+
+type ContractByName = {
+	readonly [K in TracekeeperToolName]: ToolContract<K>;
+};
+
+const contractMap = new Map<TracekeeperToolName, ToolContract<TracekeeperToolName>>();
+for (const contract of toolContracts) {
+	contractMap.set(contract.name, contract);
+}
+
+export const compatibilityToolNames = compatibilityFallbackTools.map((entry) => entry.name);
+
+export function isPublicTool(name: string): name is PublicToolName {
+	return PUBLIC_TOOL_NAME_ORDER.includes(name as PublicToolName);
+}
+
+export function isCompatibilityTool(name: string): name is Exclude<TracekeeperToolName, PublicToolName> {
+	return compatibilityToolNameSet.has(name as Exclude<TracekeeperToolName, PublicToolName>);
+}
+
+export function getContractByName(name: string): ToolContract<TracekeeperToolName> | undefined {
+	return contractMap.get(name as TracekeeperToolName);
+}
+
+export function getContractNamesByVisibility(visibility: ToolVisibility): TracekeeperToolName[] {
+	return toolContracts.filter((contract) => contract.visibility === visibility).map((contract) => contract.name);
+}
+
+export const publicContracts: readonly ToolContract<TracekeeperToolName>[] = PUBLIC_TOOL_NAME_ORDER.map(
+	(name) => contractMap.get(name),
+).filter((contract): contract is ToolContract<TracekeeperToolName> => Boolean(contract));
+
+export { type ContractByName };

@@ -1,0 +1,27 @@
+export type JsonSchema2020 = {
+    readonly [key: string]: unknown;
+    readonly type: 'object';
+};
+export declare const SCHEMA_VERSION: 2;
+export declare const COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const COMMON_TOOL_FAILURE_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const START_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const RECALL_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const FINISH_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const MEMORY_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const STATUS_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const LINT_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const READ_NOTE_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const BUILD_CONTEXT_PACK_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const REVIEW_QUEUE_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const SOURCE_REQUEST_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const CAPTURE_SOURCE_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const PROPOSE_MEMORY_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const START_TASK_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const RECALL_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const MEMORY_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const FINISH_TASK_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const GENERIC_TOOL_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA: JsonSchema2020;

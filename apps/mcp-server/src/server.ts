@@ -1,13 +1,14 @@
-import { StreamableHttpMcpRuntime } from './http-runtime';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { Buffer } from 'node:buffer';
+import { StreamableHttpMcpRuntime, LOCAL_TRUST_CAPABILITIES } from '@tracekeeper/mcp-runtime';
 
 interface ServerArgs {
 	defaultVaultRoot?: string;
 	vaultConfigDir?: string;
 	host?: string;
 	port?: number;
-	token?: string;
-	allowMissingTokenForDev?: boolean;
 	graphProfile?: string;
+	contentLanguage?: string;
 }
 
 function parseArgs(argv: string[]): ServerArgs {
@@ -38,18 +39,18 @@ function parseArgs(argv: string[]): ServerArgs {
 			index += 1;
 			continue;
 		}
-		if (value === '--token' && next) {
-			result.token = next;
-			index += 1;
-			continue;
+		if (value === '--token' || value === '--allow-missing-token-for-dev') {
+		throw new Error('Plaintext MCP token options are not supported. Set TRACEKEEPER_STANDALONE_BEARER in the process environment.');
 		}
 		if ((value === '--graph-profile' || value === '--graphProfile') && next) {
 			result.graphProfile = next;
 			index += 1;
 			continue;
 		}
-		if (value === '--allow-missing-token-for-dev') {
-			result.allowMissingTokenForDev = true;
+		if ((value === '--content-language' || value === '--contentLanguage') && next) {
+			result.contentLanguage = next;
+			index += 1;
+			continue;
 		}
 	}
 	return result;
@@ -67,9 +68,30 @@ function toErrorMessage(error: unknown): string {
 
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2));
-	const runtime = new StreamableHttpMcpRuntime(args);
+	const standaloneBearer = process.env.TRACEKEEPER_STANDALONE_BEARER || '';
+	if (!isStandaloneBearer(standaloneBearer)) {
+		throw new Error('TRACEKEEPER_STANDALONE_BEARER must be a 256-bit base64url bearer.');
+	}
+	const bearerDigest = createHash('sha256').update(standaloneBearer, 'utf8').digest();
+	const runtime = new StreamableHttpMcpRuntime({
+		...args,
+		localTrust: true,
+		credentialVerifier: {
+			verifyBearer: async (token) => {
+				const presented = createHash('sha256').update(token, 'utf8').digest();
+				if (!timingSafeEqual(presented, bearerDigest)) return null;
+				return {
+					integrationId: 'standalone-process',
+					credentialId: 'standalone-process',
+					authMode: 'bearer',
+					principalId: 'local-user',
+					capabilities: LOCAL_TRUST_CAPABILITIES,
+				};
+			},
+		},
+		writebackConfirmationSecret: randomBytes(32).toString('base64url'),
+	});
 	const status = await runtime.start();
-	process.stdout.write(`${JSON.stringify({ ok: true, endpoint: status.endpoint })}\n`);
 
 	const stop = async () => {
 		await runtime.stop();
@@ -81,7 +103,14 @@ async function main(): Promise<void> {
 	process.once('SIGTERM', () => {
 		void stop();
 	});
+	process.stdout.write(`${JSON.stringify({ ok: true, endpoint: status.endpoint })}\n`);
 }
+
+const isStandaloneBearer = (value: string): boolean => {
+	if (!/^[A-Za-z0-9_-]{43}$/u.test(value)) return false;
+	const bytes = Buffer.from(value, 'base64url');
+	return bytes.byteLength === 32 && bytes.toString('base64url') === value;
+};
 
 void main().catch((error) => {
 	const message = toErrorMessage(error);

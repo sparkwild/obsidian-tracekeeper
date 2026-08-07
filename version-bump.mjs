@@ -33,7 +33,11 @@ function syncLockfileVersions(lock, version) {
 		'apps/mcp-server': version,
 		'apps/obsidian-plugin': version,
 		'packages/core': version,
+		'packages/contracts': version,
+		'packages/mcp-runtime': version,
 		'../../packages/core': version,
+		'../../packages/contracts': version,
+		'../../packages/mcp-runtime': version,
 	};
 	for (const [packagePath, packageVersion] of Object.entries(packageVersions)) {
 		if (lock.packages?.[packagePath]) {
@@ -58,7 +62,12 @@ const pluginPackage = readJson('apps/obsidian-plugin/package.json');
 pluginPackage.version = targetVersion;
 writeJson('apps/obsidian-plugin/package.json', pluginPackage, '  ');
 
-for (const packagePath of ['apps/mcp-server/package.json', 'packages/core/package.json']) {
+for (const packagePath of [
+	'apps/mcp-server/package.json',
+	'packages/core/package.json',
+	'packages/contracts/package.json',
+	'packages/mcp-runtime/package.json',
+]) {
 	const packageJson = readJson(packagePath);
 	packageJson.version = targetVersion;
 	writeJson(packagePath, packageJson);
@@ -79,21 +88,19 @@ for (const lockPath of [
 }
 
 replaceInFile(
-	'apps/mcp-server/src/handler.ts',
+	'packages/mcp-runtime/src/handler.ts',
 	/export const MCP_SERVER_VERSION = '[^']+';/,
 	`export const MCP_SERVER_VERSION = '${targetVersion}';`
 );
 replaceInFile(
-	'apps/obsidian-plugin/src/main.ts',
-	/version: '[^']+',/,
-	`version: '${targetVersion}',`
+	'apps/obsidian-plugin/src/composition/local-tool-executor.ts',
+	/options\.runtimeVersion\?\.trim\(\) \|\| '[^']+';/,
+	`options.runtimeVersion?.trim() || '${targetVersion}';`
 );
-replaceInFile(
-	'apps/mcp-server/scripts/smoke.mjs',
-	/version: '[^']+',/,
-	`version: '${targetVersion}',`
-);
-
 const versions = readJson('versions.json');
 versions[targetVersion] = manifest.minAppVersion;
 writeJson('versions.json', versions);
+
+const skillRelease = readJson('skills/tracekeeper/release.json');
+skillRelease.minimum_tracekeeper_version = targetVersion;
+writeJson('skills/tracekeeper/release.json', skillRelease, '  ');

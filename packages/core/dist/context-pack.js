@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildContextPack = buildContextPack;
+exports.buildContextPackFromScan = buildContextPackFromScan;
 const node_path_1 = __importDefault(require("node:path"));
 const scan_1 = require("./scan");
 const recall_1 = require("./recall");
@@ -72,6 +73,9 @@ function isStaleNote(note, staleAfterDays) {
 }
 function buildContextPack(vaultRoot, query, options = {}) {
     const scan = (0, scan_1.scanVault)(vaultRoot, { vaultConfigDir: options.vaultConfigDir });
+    return buildContextPackFromScan(scan, query, options);
+}
+function buildContextPackFromScan(scan, query, options = {}) {
     const recall = (0, recall_1.recallNotes)(scan.notes, query, { limit: options.limit });
     const topNotes = recall.map((item) => item.note);
     const staleAfterDays = options.staleAfterDays ?? 180;

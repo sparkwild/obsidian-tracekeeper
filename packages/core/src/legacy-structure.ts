@@ -40,6 +40,8 @@ export interface LegacyStructureReviewInput {
 	kind: LegacyStructureKind;
 	reason: string;
 	sourceContent: string;
+	sourceHash?: string;
+	targetHash?: string | null;
 }
 
 export function isLegacyStructurePath(relativePath: string): boolean {
@@ -177,6 +179,8 @@ export function renderLegacyMigrationReview(input: LegacyStructureReviewInput): 
 		`source_path: ${JSON.stringify(input.oldPath)}`,
 		`target_path: ${JSON.stringify(input.newPath)}`,
 		`migration_id: ${JSON.stringify(input.migrationId)}`,
+		`source_hash: ${JSON.stringify(input.sourceHash ?? 'unavailable')}`,
+		`target_hash: ${JSON.stringify(input.targetHash ?? 'missing')}`,
 		'---',
 		'',
 		'# Legacy migration review',

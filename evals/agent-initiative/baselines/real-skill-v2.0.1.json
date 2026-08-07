@@ -1,0 +1,128 @@
+{
+	"baseline_id": "real-skill-v2.0.1-full-seed-2026072301",
+	"kind": "observed_real_agent_ab",
+	"tracekeeper_version": "0.2.3",
+	"skill_version": "2.0.1",
+	"experiment": {
+		"scenario_count": 12,
+		"repetitions_per_arm": 3,
+		"pair_count": 36,
+		"run_count": 72,
+		"executed_run_count": 72,
+		"seed": "2026072301",
+		"model": "resolved_default_unknown",
+		"codex_version": "codex-cli 0.145.0-alpha.30",
+		"started_at": "2026-07-23T09:15:22.692Z",
+		"completed_at": "2026-07-23T10:11:44.126Z"
+	},
+	"identity": {
+		"skill_bundle_sha256": "417e003ac7b0752dc291ea9e12b437923d2480f40070a14589181322c3acf169",
+		"skill_manifest_sha256": "0cabca3e0423288b827e1bfe810c022c7e46ac0173c4efb487078d34429f86d6",
+		"workflow_contract_version": 2,
+		"evaluator_code_sha256": "07189aca64881a935fac1053651ca40c57d436c47288243ace7c3b2cfe249806",
+		"scenario_set_sha256": "46c62cb321997ef4fbef63dce02961eccf6807544dc7afab7f4ea484fec4e557",
+		"mcp_stack_sha256": "d7da86f9a46460c2dc0b0bf65034816736fdec33fc22c98ab7a1a6810c92ff64",
+		"source_report_sha256": "edf4eaf16e7adf5cd945ca0cd6fd43f3df6c4540edf22be5466e90afcd0cf625",
+		"git_commit": "d6da6744f235c52044c7365ceb8546ebd30edadb",
+		"git_working_tree_diff_sha256": "d4dd5dcf91cf7afd7d6de794f8ec30164891643935f552ae9e61b5e39d2d3bb9",
+		"git_changed_during_run": false,
+		"external_tracekeeper_skill_count": 0
+	},
+	"strict_pass_counts": {
+		"mcp_only": {
+			"overall": "29/36",
+			"no_track": "9/9",
+			"recall_only": "6/9",
+			"tracked_task": "14/18"
+		},
+		"mcp_skill": {
+			"overall": "25/36",
+			"no_track": "9/9",
+			"recall_only": "3/9",
+			"tracked_task": "13/18"
+		}
+	},
+	"paired_outcomes": {
+		"skill_win": 2,
+		"mcp_only_win": 6,
+		"tie_pass": 23,
+		"tie_fail": 5,
+		"discordant_pairs": 8,
+		"strict_pass_delta": -0.1111
+	},
+	"scenario_pass_counts": [
+		{ "scenario_id": "real-greeting", "class": "no_track", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-translation", "class": "no_track", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-farewell-check", "class": "no_track", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-recall-basic", "class": "recall_only", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-recall-query-echo", "class": "recall_only", "mcp_only": "1/3", "mcp_skill": "0/3" },
+		{ "scenario_id": "real-recall-noise-source", "class": "recall_only", "mcp_only": "2/3", "mcp_skill": "0/3" },
+		{ "scenario_id": "real-track-basic", "class": "tracked_task", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-track-wiki-closeout", "class": "tracked_task", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-track-query-echo-closeout", "class": "tracked_task", "mcp_only": "2/3", "mcp_skill": "1/3" },
+		{ "scenario_id": "real-track-policy-summary", "class": "tracked_task", "mcp_only": "2/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-track-recovery-forbidden", "class": "tracked_task", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-track-recovery-idempotency", "class": "tracked_task", "mcp_only": "1/3", "mcp_skill": "0/3" }
+	],
+	"behavior_metrics": {
+		"mcp_only": {
+			"mode_classification_rate": 0.9722,
+			"recall_invocation_rate": 0.963,
+			"tracked_start_recall_finish_rate": 0.9444,
+			"task_id_continuity_rate": 0.9444,
+			"tracked_finish_once_rate": 0.9444,
+			"no_track_false_positive_rate": 0,
+			"tool_error_rate": 0,
+			"related_wiki_propagation": 0.6667,
+			"related_sources_propagation": 0.7778,
+			"average_tool_calls_per_run": 2.8889,
+			"average_tool_calls_before_effective_recall": 2
+		},
+		"mcp_skill": {
+			"mode_classification_rate": 1,
+			"recall_invocation_rate": 1,
+			"tracked_start_recall_finish_rate": 1,
+			"task_id_continuity_rate": 1,
+			"tracked_finish_once_rate": 1,
+			"no_track_false_positive_rate": 0,
+			"tool_error_rate": 0.0085,
+			"related_wiki_propagation": 0.7222,
+			"related_sources_propagation": 0.8889,
+			"average_tool_calls_per_run": 3.25,
+			"average_tool_calls_before_effective_recall": 2
+		}
+	},
+	"acceptance": {
+		"decision": "hold_general_superiority_claim",
+		"safety_gates_passed": true,
+		"effectiveness_gates_passed": false,
+		"efficiency_gate_passed": true,
+		"passed_gates": [
+			"Both arms preserved no_track in 9/9 runs with zero false-positive Tracekeeper calls.",
+			"No external connector or apply_approved_writeback call occurred.",
+			"The Skill arm passed the forbidden-recovery scenario 3/3 without bypassing MCP permissions.",
+			"The Skill arm used the real task id and exactly one finish_task in all 18 tracked runs.",
+			"The Skill arm classified and completed the durable policy-summary workflow 3/3.",
+			"The Skill arm added 0.3611 average tool calls per run, a 12.5 percent increase over MCP-only."
+		],
+		"failed_gates": [
+			"Overall strict acceptance was 25/36 for the Skill arm versus 29/36 for MCP-only.",
+			"Recall-only strict acceptance was 3/9 for the Skill arm versus 6/9 for MCP-only.",
+			"Tracked-task strict acceptance was 13/18 for the Skill arm versus 14/18 for MCP-only.",
+			"Wiki propagation was 13/18 for the Skill arm, below the 16/18 target."
+		]
+	},
+	"findings": [
+		"The Skill improved mode classification, proactive Recall, tracked lifecycle completion, task-id continuity, exactly-once finish behavior, and verified Wiki/source propagation.",
+		"The main strict regression came from the first Recall using global or project_history where the scenario contract required a narrow project scope. Several answers were semantically correct despite failing the argument contract.",
+		"Preflight project-history Recall is useful for continuity but the evaluator currently checks the first matching Recall occurrence; follow-up work must align the workflow contract and evaluator rather than hiding this distinction.",
+		"One Skill-arm finish_task call reused the start_task idempotency key. The Runtime loaded the cross-tool journal payload as a finish payload and raised an undefined-filter INVALID_REQUEST instead of returning a typed cross-tool idempotency conflict. The Agent did not retry and preserved exactly-once safety.",
+		"This single seeded matrix characterizes one Codex client/model environment and does not establish a universal Agent result."
+	],
+	"privacy": {
+		"contains_raw_prompts": false,
+		"contains_note_bodies": false,
+		"contains_absolute_paths": false,
+		"source_artifacts_tracked": false
+	}
+}

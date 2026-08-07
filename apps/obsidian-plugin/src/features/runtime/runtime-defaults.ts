@@ -1,0 +1,13 @@
+import { DEFAULT_MCP_PORT as RUNTIME_DEFAULT_MCP_PORT } from '@tracekeeper/mcp-runtime';
+
+export const DEFAULT_MCP_PORT = RUNTIME_DEFAULT_MCP_PORT;
+
+export const DEFAULT_MCP_HOST = '127.0.0.1';
+
+export const DEFAULT_MCP_PATH = '/mcp';
+
+export const DEFAULT_MCP_HTTP_ENDPOINT = `http://${DEFAULT_MCP_HOST}:${DEFAULT_MCP_PORT}${DEFAULT_MCP_PATH}`;
+
+export const DEFAULT_MCP_MAX_STREAMS_PER_SESSION = 2;
+
+export const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 30 * 1000;

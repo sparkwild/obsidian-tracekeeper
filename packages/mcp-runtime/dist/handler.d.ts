@@ -1,0 +1,72 @@
+import { type JsonRpcResponse } from './protocol';
+import { type ProposalTransitionPort, type ToolInvocationContext } from './tools';
+import type { VaultRepository } from '@tracekeeper/core';
+import { type ObservedClientType } from './observed-client';
+import type { AgentAuthMode } from './agent-auth';
+export declare const MCP_PROTOCOL_VERSION = "2025-06-18";
+export declare const SUPPORTED_MCP_PROTOCOL_VERSIONS: readonly ["2025-11-25", "2025-06-18"];
+export declare const MCP_SERVER_VERSION = "0.3.0";
+export declare const STREAMABLE_HTTP_TRANSPORT = "streamable-http";
+export interface McpConnectionState {
+    sessionId: string;
+    principalId: string;
+    credentialCapabilities: readonly string[];
+    integrationId?: string;
+    credentialId?: string;
+    authMode?: AgentAuthMode;
+    agentId: string;
+    clientName: string | null;
+    clientVersion: string | null;
+    observedClientType: ObservedClientType;
+    initialized: boolean;
+    protocolVersion?: string;
+}
+export interface McpJsonRpcHandlerOptions {
+    defaultVaultRoot?: string;
+    vaultConfigDir?: string;
+    vaultRepository?: VaultRepository;
+    proposalTransitionPort?: ProposalTransitionPort;
+    knowledgeSnapshotProvider?: ToolInvocationContext['knowledgeSnapshotProvider'];
+    knowledgeReadViewProvider?: ToolInvocationContext['knowledgeReadViewProvider'];
+    graphProfile?: unknown;
+    memoryRules?: ToolInvocationContext['memoryRules'];
+    contentLanguage?: unknown;
+    contentLanguageSource?: unknown;
+    writebackConfirmationSecret?: string | Uint8Array;
+    runtimeVersion?: string;
+    transport?: string;
+}
+export declare class McpJsonRpcHandler {
+    private defaultVaultRoot?;
+    private vaultConfigDir?;
+    private vaultRepository?;
+    private proposalTransitionPort?;
+    private knowledgeSnapshotProvider?;
+    private knowledgeReadViewProvider?;
+    private graphProfile?;
+    private memoryRules?;
+    private contentLanguage?;
+    private contentLanguageSource?;
+    private writebackConfirmationSecret?;
+    private runtimeVersion;
+    private transport;
+    constructor(options?: McpJsonRpcHandlerOptions);
+    handleMessage(rawMessage: unknown, state: McpConnectionState): Promise<JsonRpcResponse | null>;
+    private readRequestId;
+    private dispatch;
+    private handleResourcesRead;
+    private handlePromptsGet;
+    private visiblePrompts;
+    private negotiateProtocolVersion;
+    private validatePromptArguments;
+    private coercePromptOrResourceName;
+    private ensureCapability;
+    private hasCapability;
+    private handleToolsCall;
+    private buildToolInvocationContext;
+    private captureConnection;
+    private extractAgentIdFromInitialize;
+    private extractClientNameFromInitialize;
+    private extractClientVersionFromInitialize;
+    private errorResponse;
+}

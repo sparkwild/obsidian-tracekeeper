@@ -1,0 +1,667 @@
+import { readFile, readdir } from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import {
+	TRACEKEEPER_SKILL_FLATTENED_PATH,
+	TRACEKEEPER_SKILL_MANIFEST_PATH,
+	TRACEKEEPER_SKILL_RELEASE_PATH,
+	TRACEKEEPER_SKILL_SOURCE_FILES,
+	buildTracekeeperSkillBundle,
+	readTracekeeperSkillReleaseMetadata,
+} from './build_tracekeeper_skill.mjs';
+
+const REQUIRED_PATHS = Object.freeze([
+	'README.md',
+	'README.zh-CN.md',
+	'PRIVACY.md',
+	'docs/features/AGENT_WORKFLOW.md',
+	'docs/features/AGENT_CONNECTION.md',
+	'docs/features/INDEX.md',
+	'docs/architecture/SYSTEM_ARCHITECTURE.md',
+	'docs/architecture/TRUST_BOUNDARIES.md',
+	'docs/development/ENGINEERING_AND_RELEASE.md',
+	`skills/tracekeeper/${TRACEKEEPER_SKILL_RELEASE_PATH}`,
+	'skills/tracekeeper/SKILL.md',
+	'skills/tracekeeper/references/closeout-fields.md',
+	'skills/tracekeeper/references/ingestion-workflow.md',
+	'skills/tracekeeper/manifest.json',
+	'skills/tracekeeper/dist/tracekeeper.flattened.md',
+	'apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts',
+	'apps/obsidian-plugin/src/features/onboarding/onboarding-state.ts',
+	'apps/obsidian-plugin/src/features/onboarding/onboarding-view-model.ts',
+	'apps/obsidian-plugin/src/features/skill-installation/client-skill-prompt.ts',
+	'apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts',
+	'apps/obsidian-plugin/src/features/skill-installation/skill-install-view-model.ts',
+	'apps/obsidian-plugin/src/features/skill-installation/skill-install-audit.ts',
+	'apps/obsidian-plugin/src/features/skill-installation/skill-install-receipts.ts',
+	'apps/obsidian-plugin/src/adapters/client-skill-adapter.ts',
+	'apps/obsidian-plugin/src/adapters/client-skill-target-registry.ts',
+	'apps/obsidian-plugin/scripts/build.mjs',
+]);
+
+const ALLOWED_SKILL_TOOL_NAMES = new Set([
+	'tracekeeper.start_task',
+	'tracekeeper.recall',
+	'tracekeeper.memory',
+	'tracekeeper.read_note',
+	'tracekeeper.finish_task',
+	'tracekeeper.capture_source',
+	'tracekeeper.propose_memory',
+	'tracekeeper.lint',
+]);
+
+function isSafeRelativePath(relativePath) {
+	return typeof relativePath === 'string'
+		&& relativePath.length > 0
+		&& !path.posix.isAbsolute(relativePath)
+		&& !relativePath.includes('\\')
+		&& !relativePath.includes('\0')
+		&& path.posix.normalize(relativePath) === relativePath
+		&& !relativePath.split('/').includes('..');
+}
+
+async function readRequired(repoRoot, relativePath, errors) {
+	try {
+		return await readFile(path.join(repoRoot, ...relativePath.split('/')), 'utf8');
+	} catch {
+		errors.push(`missing required Agent ecosystem file: ${relativePath}`);
+		return '';
+	}
+}
+
+async function listSkillFiles(skillRoot, relativeDirectory = '') {
+	const directory = path.join(skillRoot, ...relativeDirectory.split('/').filter(Boolean));
+	const entries = await readdir(directory, { withFileTypes: true });
+	const files = [];
+	for (const entry of entries) {
+		const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+		if (entry.isSymbolicLink()) {
+			files.push({ path: relativePath, symlink: true });
+		} else if (entry.isDirectory()) {
+			files.push(...await listSkillFiles(skillRoot, relativePath));
+		} else if (entry.isFile()) {
+			files.push({ path: relativePath, symlink: false });
+		}
+	}
+	return files;
+}
+
+function requirePattern(content, pattern, label, errors) {
+	if (!pattern.test(content)) errors.push(label);
+}
+
+function checkWorkflowSemantics(contract, skill, flattened, errors) {
+	for (const [content, owner] of [[contract, 'contract'], [skill, 'Skill'], [flattened, 'flattened Skill']]) {
+		requirePattern(content, /\bno_track\b/, `${owner} does not define no_track`, errors);
+		requirePattern(content, /\brecall_only\b/, `${owner} does not define recall_only`, errors);
+		requirePattern(content, /\btracked_task\b/, `${owner} does not define tracked_task`, errors);
+		requirePattern(
+			content,
+			/recall_only[\s\S]{0,500}(?:must not|never)[\s\S]{0,180}tracekeeper\.start_task[\s\S]{0,180}tracekeeper\.finish_task/i,
+			`${owner} does not prohibit start and finish in recall_only`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/tracekeeper\.start_task[^\n]{0,100}exactly once/i,
+			`${owner} does not require start exactly once`,
+			errors,
+		);
+		requirePattern(content, /real `task_id`/, `${owner} does not require the real task_id`, errors);
+		requirePattern(
+			content,
+			/tracekeeper\.finish_task[^\n]{0,120}exactly once/i,
+			`${owner} does not require finish exactly once`,
+			errors,
+		);
+		requirePattern(content, /timing/i, `${owner} does not describe next_actions timing`, errors);
+		requirePattern(content, /immediate/i, `${owner} does not include immediate next_action timing`, errors);
+		requirePattern(content, /if_context_insufficient/i, `${owner} does not include context-insufficient next_action timing`, errors);
+		requirePattern(content, /at_task_closeout/i, `${owner} does not include closeout next_action timing`, errors);
+		requirePattern(content, /required:\s*true|required actions/i, `${owner} does not describe required action semantics`, errors);
+		requirePattern(
+			content,
+			/tracekeeper\.memory/,
+			`${owner} does not define complete Memory enumeration`,
+			errors,
+		);
+		if (/tracekeeper\.project_memory/.test(content)) {
+			errors.push(`${owner} restores the retired public project_memory alias`);
+		}
+		requirePattern(
+			content,
+			/Recall[\s\S]{0,180}relevance-ranked[\s\S]{0,240}(?:not exhaustive|exhaustive (?:project-)?Memory enumeration)/i,
+			`${owner} does not distinguish relevance-ranked Recall from complete Memory enumeration`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/tracekeeper\.memory[\s\S]{0,360}scope:[\s]*["'`]?project["'`]?[\s\S]{0,360}scope:[\s]*["'`]?global["'`]?|tracekeeper\.memory[\s\S]{0,360}scope:[\s]*["'`]?global["'`]?[\s\S]{0,360}scope:[\s]*["'`]?project["'`]?/i,
+			`${owner} does not define global and project Memory catalog scopes`,
+			errors,
+		);
+		for (const view of ['current', 'history', 'conflicts', 'all']) {
+			requirePattern(
+				content,
+				new RegExp(`\\b${view}\\b`, 'i'),
+				`${owner} does not define the ${view} Memory lifecycle view`,
+				errors,
+			);
+		}
+		requirePattern(content, /MemoryRecord v2/i, `${owner} does not define MemoryRecord v2`, errors);
+		requirePattern(
+			content,
+			/web[\s\S]{0,100}file[\s\S]{0,100}transcript[\s\S]{0,300}Source index/i,
+			`${owner} does not define typed Source ownership and index relations`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/tracekeeper\.lint[\s\S]{0,80}(?:v3[\s\S]{0,80})?read-only Doctor/i,
+			`${owner} does not define the read-only Lint v3 Doctor`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/preview-bound promotion[\s\S]{0,220}(?:pending review proposal)[\s\S]{0,180}(?:never rewrites|without rewriting)/i,
+			`${owner} does not preserve preview-bound legacy Memory promotion`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/immutable\s+operation\s+entry/i,
+			`${owner} does not define immutable project-memory operation entries`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/(?:untrusted )?knowledge data, not (?:a new |system or tool )?instructions?/i,
+			`${owner} does not isolate recalled knowledge from instructions`,
+			errors,
+		);
+		if (/\bmax_items\b|\branking\b/i.test(content)) {
+			errors.push(`${owner} appears to add ranking or candidate-limit behavior not allowed by Skill scope`);
+		}
+
+		const structuredIndex = content.indexOf('`next_actions`');
+		const compatibilityIndex = content.indexOf('`next_actions_for_agent`');
+		if (structuredIndex < 0 || compatibilityIndex < 0 || structuredIndex > compatibilityIndex) {
+			errors.push(`${owner} does not prioritize next_actions before next_actions_for_agent`);
+		}
+	}
+}
+
+function checkLocalTrustSemantics(contents, errors) {
+	const sources = [
+		['README.md', contents.get('README.md') ?? ''],
+		['README.zh-CN.md', contents.get('README.zh-CN.md') ?? ''],
+		['PRIVACY.md', contents.get('PRIVACY.md') ?? ''],
+		['docs/features/AGENT_CONNECTION.md', contents.get('docs/features/AGENT_CONNECTION.md') ?? ''],
+		['docs/features/AGENT_WORKFLOW.md', contents.get('docs/features/AGENT_WORKFLOW.md') ?? ''],
+		['docs/architecture/SYSTEM_ARCHITECTURE.md', contents.get('docs/architecture/SYSTEM_ARCHITECTURE.md') ?? ''],
+		['docs/architecture/TRUST_BOUNDARIES.md', contents.get('docs/architecture/TRUST_BOUNDARIES.md') ?? ''],
+		[
+			'skills/tracekeeper/references/ingestion-workflow.md',
+			contents.get('skills/tracekeeper/references/ingestion-workflow.md') ?? '',
+		],
+	];
+	const forbidden = [
+		/\bindependent (?:local )?credential principal\b/i,
+		/\bcredential principal\b/i,
+		/\bprincipal-bound\b/i,
+		/\bsame-principal\b/i,
+		/\blocal capability profile\b/i,
+		/\blegacy shared token\b/i,
+		/\brequired (?:capability )?profile\b/i,
+		/\bcopy (?:its )?protected Header configuration\b/i,
+		/\bcomplete `Authorization` configuration is written\b/i,
+		/独立的 credential principal/i,
+		/Session 绑定 credential principal/i,
+		/复制受保护的 Header 配置/i,
+	];
+	for (const [relativePath, content] of sources) {
+			for (const pattern of forbidden) {
+				if (pattern.test(content)) {
+					errors.push(`retired Agent trust/bootstrap semantics found in ${relativePath}: ${pattern.source}`);
+				}
+			}
+	}
+
+	const readme = contents.get('README.md') ?? '';
+	const chineseReadme = contents.get('README.zh-CN.md') ?? '';
+	const privacy = contents.get('PRIVACY.md') ?? '';
+	const agentConnection = contents.get('docs/features/AGENT_CONNECTION.md') ?? '';
+	const architecture = contents.get('docs/architecture/SYSTEM_ARCHITECTURE.md') ?? '';
+	const trustBoundaries = contents.get('docs/architecture/TRUST_BOUNDARIES.md') ?? '';
+	requirePattern(
+		readme,
+		/persistent Agent integration[\s\S]{0,260}per-Agent access token/i,
+		'README does not define persistent per-Agent credentials',
+		errors,
+	);
+	requirePattern(
+		readme,
+		/authorization-code \+ PKCE[\s\S]{0,180}resource binding/i,
+		'README does not define OAuth authorization-code, PKCE, and resource binding',
+		errors,
+	);
+	requirePattern(
+		chineseReadme,
+		/每种客户端最多一张卡[\s\S]{0,220}活动凭据/i,
+		'Chinese README does not define per-Agent integration credentials',
+		errors,
+	);
+	requirePattern(
+		chineseReadme,
+		/authorization code \+ PKCE[\s\S]{0,180}resource 绑定/i,
+		'Chinese README does not define OAuth authorization-code, PKCE, and resource binding',
+		errors,
+	);
+	requirePattern(
+		privacy,
+		/digest per Agent integration/i,
+		'privacy policy does not disclose per-Agent credential digests',
+		errors,
+	);
+	requirePattern(
+		privacy,
+		/local OAuth discovery[\s\S]{0,140}token[\s\S]{0,80}revocation/i,
+		'privacy policy does not disclose local OAuth credential delivery and revocation',
+		errors,
+	);
+	requirePattern(
+		agentConnection,
+		/Every request revalidates the Bearer[\s\S]{0,180}Session is bound/i,
+		'Agent connection contract does not define request-time credential and Session binding',
+		errors,
+	);
+	requirePattern(
+		agentConnection,
+		/normalized client type/i,
+		'Agent connection contract does not define normalized observed-client grouping',
+		errors,
+	);
+	requirePattern(
+		agentConnection,
+		/Protected Resource Metadata[\s\S]{0,500}PKCE `S256`/i,
+		'Agent connection contract does not define OAuth discovery and PKCE',
+		errors,
+	);
+	requirePattern(
+		architecture,
+		/fixed `local-user` capability set/i,
+		'system architecture does not define the fixed local-user capability set',
+		errors,
+	);
+	requirePattern(
+		trustBoundaries,
+		/per-Agent Bearer/i,
+		'trust boundaries do not define the per-Agent Bearer boundary',
+		errors,
+	);
+	requirePattern(
+		trustBoundaries,
+		/fixed `local-user` execution domain/i,
+		'trust boundaries do not define the fixed local-user execution domain',
+		errors,
+	);
+	requirePattern(
+		trustBoundaries,
+		/clientInfo[\s\S]{0,120}(?:untrusted|not authentication)/i,
+		'trust boundaries do not classify clientInfo as untrusted observation data',
+		errors,
+	);
+	requirePattern(
+		trustBoundaries,
+		/pending approvals[\s\S]{0,180}memory-only/i,
+		'trust boundaries do not keep pending OAuth state memory-only',
+		errors,
+	);
+}
+
+function checkUnsafeExamples(contents, errors, { checkToolNames = false } = {}) {
+	const absoluteDeveloperPath = /(?:\/Users\/[A-Za-z0-9._-]+\/|\/home\/[A-Za-z0-9._-]+\/|[A-Za-z]:\\Users\\|file:\/\/)/;
+	const credentialExample = /(?:sk-[A-Za-z0-9_-]{12,}|eyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{6,}\.|(?:api[_-]?key|access[_-]?token|authorization|bearer)\s*[:=]\s*["'`]?[A-Za-z0-9._-]{12,})/i;
+	for (const { relativePath, content } of contents) {
+		if (absoluteDeveloperPath.test(content)) errors.push(`absolute developer path found in ${relativePath}`);
+		if (credentialExample.test(content)) errors.push(`sensitive credential example found in ${relativePath}`);
+		if (checkToolNames) {
+			const toolNames = content.match(/tracekeeper\.[a-z][a-z0-9_]*/g) ?? [];
+			for (const toolName of new Set(toolNames)) {
+				if (!ALLOWED_SKILL_TOOL_NAMES.has(toolName)) {
+					errors.push(`deprecated or unknown Tracekeeper tool name in ${relativePath}: ${toolName}`);
+				}
+			}
+		}
+	}
+}
+
+function checkManifestShape(manifest, releaseMetadata, errors) {
+	if (manifest?.format_version !== 1) errors.push('manifest format_version must be 1');
+	if (manifest?.name !== 'tracekeeper') errors.push('manifest name must be tracekeeper');
+	if (manifest?.skill_version !== releaseMetadata.skill_version) errors.push(`manifest skill_version must be ${releaseMetadata.skill_version}`);
+	if (manifest?.workflow_contract_version !== releaseMetadata.workflow_contract_version) errors.push(`manifest workflow_contract_version must be ${releaseMetadata.workflow_contract_version}`);
+	if (manifest?.minimum_tracekeeper_version !== releaseMetadata.minimum_tracekeeper_version) errors.push(`manifest minimum_tracekeeper_version must be ${releaseMetadata.minimum_tracekeeper_version}`);
+	if (manifest?.hash_algorithm !== 'sha256') errors.push('manifest hash_algorithm must be sha256');
+	if (!Array.isArray(manifest?.files)) {
+		errors.push('manifest files must be an array');
+		return;
+	}
+
+	const seen = new Set();
+	for (const file of manifest.files) {
+		if (!isSafeRelativePath(file?.path)) errors.push(`unsafe manifest source path: ${String(file?.path)}`);
+		if (seen.has(file?.path)) errors.push(`duplicate manifest source path: ${String(file?.path)}`);
+		seen.add(file?.path);
+		if (!/^sha256:[a-f0-9]{64}$/.test(file?.sha256 ?? '')) {
+			errors.push(`invalid source hash for ${String(file?.path)}`);
+		}
+	}
+
+	for (const expected of TRACEKEEPER_SKILL_SOURCE_FILES) {
+		if (!seen.has(expected)) errors.push(`manifest is missing authoritative source: ${expected}`);
+	}
+	for (const actual of seen) {
+		if (!TRACEKEEPER_SKILL_SOURCE_FILES.includes(actual)) {
+			errors.push(`manifest contains an unexpected source: ${String(actual)}`);
+		}
+	}
+
+	const artifact = manifest?.artifacts?.flattened;
+	if (!isSafeRelativePath(artifact?.path) || artifact?.path !== TRACEKEEPER_SKILL_FLATTENED_PATH) {
+		errors.push('manifest flattened artifact path is invalid');
+	}
+	if (!/^sha256:[a-f0-9]{64}$/.test(artifact?.sha256 ?? '')) {
+		errors.push('manifest flattened artifact hash is invalid');
+	}
+}
+
+export async function checkAgentEcosystem(repoRoot = process.cwd()) {
+	const errors = [];
+	const warnings = [];
+	const contents = new Map();
+	for (const relativePath of REQUIRED_PATHS) {
+		contents.set(relativePath, await readRequired(repoRoot, relativePath, errors));
+	}
+
+	const contractPath = 'docs/features/AGENT_WORKFLOW.md';
+	const skillPath = 'skills/tracekeeper/SKILL.md';
+	const flattenedPath = `skills/tracekeeper/${TRACEKEEPER_SKILL_FLATTENED_PATH}`;
+	const contract = contents.get(contractPath) ?? '';
+	const skill = contents.get(skillPath) ?? '';
+	const flattened = contents.get(flattenedPath) ?? '';
+	if (/\]\(references\//.test(flattened)) {
+		errors.push('flattened Skill must not depend on external reference files');
+	}
+
+	for (const heading of ['Responsibilities', 'Trigger Conditions', 'Golden Workflow', 'Recall Policy', 'Next-action timing', 'Closeout', 'Instruction Isolation', 'Review Boundary', 'Skill Packaging Requirements', 'Contract Synchronization']) {
+		requirePattern(contract, new RegExp(`^## ${heading}$`, 'm'), `workflow contract is missing heading: ${heading}`, errors);
+	}
+	requirePattern(skill, /^---\nname: tracekeeper\ndescription: [^\n]+\n---\n/, 'Skill frontmatter must contain only compatible name and description fields', errors);
+	requirePattern(skill, /description: .*project continuity.*Do not use Tracekeeper/i, 'Skill description must contain positive and negative triggers', errors);
+	checkWorkflowSemantics(contract, skill, flattened, errors);
+	checkLocalTrustSemantics(contents, errors);
+	for (const [content, owner] of [[contract, 'contract'], [skill, 'Skill'], [flattened, 'flattened Skill']]) {
+		requirePattern(
+			content,
+			/Unqualified `Vault`, `Wiki`, or `Memory` means the active local Obsidian Vault/i,
+			`${owner} does not define unqualified knowledge names as local Vault content`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/external connector or service[\s\S]{0,180}only when the user explicitly names/i,
+			`${owner} does not require an explicit external knowledge destination`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/(?:durable-output cues|explicit durable-output cues)[\s\S]{0,500}`tracked_task`/i,
+			`${owner} does not route durable-output cues to tracked_task`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/known project[\s\S]{0,220}(?:first knowledge Recall|first knowledge recall)[\s\S]{0,160}scope:\s*["'`]?project["'`]?[\s\S]{0,160}repo_path/i,
+			`${owner} does not route the first known-project Recall to project scope with repo_path`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/recall_only[\s\S]{0,220}(?:never|MUST NOT)[\s\S]{0,160}(?:global|scope:\s*["'`]?global)[\s\S]{0,120}(?:project_history|scope:\s*["'`]?project_history)/i,
+			`${owner} does not prohibit global and project_history as the first recall_only route`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/tracked_task[\s\S]{0,180}start first[\s\S]{0,180}(?:next_actions|recommended_recall)/i,
+			`${owner} does not route tracked-task Recall from the start result`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/project_history[\s\S]{0,220}after project identity is established/i,
+			`${owner} does not reserve project_history for established continuity`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/global[\s\S]{0,180}(?:explicit cross-project|uncertain project identity)/i,
+			`${owner} does not constrain global Recall routing`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/(?:start and finish use different stable keys|different stable[\s\S]{0,100}idempotency keys for start and finish|start key for finish)/i,
+			`${owner} does not separate start and finish idempotency keys`,
+			errors,
+		);
+	}
+	const closeoutFields = contents.get('skills/tracekeeper/references/closeout-fields.md') ?? '';
+	for (const [content, owner] of [
+		[contract, 'contract'],
+		[closeoutFields, 'closeout guidance'],
+		[flattened, 'flattened Skill'],
+	]) {
+		requirePattern(content, /\brelated_wiki\b/, `${owner} does not preserve related_wiki at closeout`, errors);
+		requirePattern(content, /\brelated_sources\b/, `${owner} does not preserve related_sources at closeout`, errors);
+		requirePattern(
+			content,
+			/relation_evidence\.related_wiki|relation_evidence\.related_sources/i,
+			`${owner} does not constrain closeout graph paths to Runtime-validated relation evidence`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/correlated read_note/i,
+			`${owner} does not allow closeout field reuse from correlated read_note evidence`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/(?:never invent|never[\s\S]{0,80}(?:invent|guess|rewrite))/i,
+			`${owner} does not constrain closeout graph paths against inference`,
+			errors,
+		);
+	}
+
+	const manifestText = contents.get(`skills/tracekeeper/${TRACEKEEPER_SKILL_MANIFEST_PATH}`) ?? '';
+	let manifest;
+	try {
+		manifest = JSON.parse(manifestText);
+	} catch {
+		errors.push('Tracekeeper Skill manifest is not valid JSON');
+	}
+	let releaseMetadata;
+	try {
+		releaseMetadata = await readTracekeeperSkillReleaseMetadata(repoRoot);
+	} catch (error) {
+		errors.push(`could not read Tracekeeper Skill release metadata: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	if (manifest && releaseMetadata) checkManifestShape(manifest, releaseMetadata, errors);
+
+	try {
+		const built = await buildTracekeeperSkillBundle(repoRoot);
+		if (manifestText !== built.manifestText) errors.push('Tracekeeper Skill manifest hashes or metadata are stale');
+		if (flattened !== built.flattened) errors.push('Tracekeeper flattened compatibility artifact is stale');
+	} catch (error) {
+		errors.push(`could not rebuild Tracekeeper Skill bundle: ${error instanceof Error ? error.message : String(error)}`);
+	}
+
+	try {
+		const skillRoot = path.join(repoRoot, 'skills', 'tracekeeper');
+		const listed = await listSkillFiles(skillRoot);
+		const allowedFiles = new Set([
+			...TRACEKEEPER_SKILL_SOURCE_FILES,
+			TRACEKEEPER_SKILL_MANIFEST_PATH,
+			TRACEKEEPER_SKILL_FLATTENED_PATH,
+			TRACEKEEPER_SKILL_RELEASE_PATH,
+		]);
+		for (const file of listed) {
+			if (file.symlink) errors.push(`symlink is not allowed in the Skill bundle: ${file.path}`);
+			if (!allowedFiles.has(file.path)) errors.push(`untracked file in the Skill bundle: ${file.path}`);
+		}
+	} catch (error) {
+		errors.push(`could not enumerate Tracekeeper Skill bundle: ${error instanceof Error ? error.message : String(error)}`);
+	}
+
+	const safetyContents = [
+		{ relativePath: contractPath, content: contract },
+		{ relativePath: skillPath, content: skill },
+		...TRACEKEEPER_SKILL_SOURCE_FILES
+			.filter((relativePath) => relativePath !== 'SKILL.md')
+			.map((relativePath) => ({
+				relativePath: `skills/tracekeeper/${relativePath}`,
+				content: '',
+			})),
+	];
+	for (const item of safetyContents) {
+		if (item.content || !item.relativePath.startsWith('skills/tracekeeper/')) continue;
+		item.content = await readRequired(repoRoot, item.relativePath, errors);
+	}
+	checkUnsafeExamples(
+		REQUIRED_PATHS
+			.filter((relativePath) => relativePath.endsWith('.md'))
+			.map((relativePath) => ({ relativePath, content: contents.get(relativePath) ?? '' })),
+		errors
+	);
+	checkUnsafeExamples(safetyContents, errors, { checkToolNames: true });
+
+	for (const indexPath of ['docs/features/INDEX.md', 'docs/architecture/SYSTEM_ARCHITECTURE.md']) {
+		requirePattern(
+			contents.get(indexPath) ?? '',
+			/AGENT_WORKFLOW\.md/,
+			`${indexPath} must link to the Agent Workflow`,
+			errors,
+		);
+	}
+
+	const settingsSource = contents.get('apps/obsidian-plugin/src/features/settings/tracekeeper-setting-tab.ts') ?? '';
+	const onboardingSource = contents.get('apps/obsidian-plugin/src/features/onboarding/onboarding-state.ts') ?? '';
+	const onboardingViewModelSource = contents.get('apps/obsidian-plugin/src/features/onboarding/onboarding-view-model.ts') ?? '';
+	const clientSkillPromptSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/client-skill-prompt.ts') ?? '';
+	const bundleSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-bundle.ts') ?? '';
+	const skillPromptSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-install-view-model.ts') ?? '';
+	const auditSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-install-audit.ts') ?? '';
+	const receiptSource = contents.get('apps/obsidian-plugin/src/features/skill-installation/skill-install-receipts.ts') ?? '';
+	const adapterSource = contents.get('apps/obsidian-plugin/src/adapters/client-skill-adapter.ts') ?? '';
+	const targetRegistrySource = contents.get('apps/obsidian-plugin/src/adapters/client-skill-target-registry.ts') ?? '';
+	const buildSource = contents.get('apps/obsidian-plugin/scripts/build.mjs') ?? '';
+	for (const [pattern, label] of [
+		[/['"]references\/workflow-state-machine\.md['"]\s*:/, 'plugin bundle does not embed the workflow state machine'],
+		[/['"]references\/ingestion-workflow\.md['"]\s*:/, 'plugin bundle does not embed source-ingestion guidance'],
+		[/['"]references\/failure-recovery\.md['"]\s*:/, 'plugin bundle does not embed failure recovery guidance'],
+		[/['"]references\/closeout-fields\.md['"]\s*:/, 'plugin bundle does not embed closeout field guidance'],
+		[/['"]references\/instruction-isolation\.md['"]\s*:/, 'plugin bundle does not embed instruction isolation guidance'],
+		[/dist\/tracekeeper\.flattened\.md/, 'plugin bundle does not embed the flattened compatibility artifact'],
+		[/manifest\.json/, 'plugin bundle does not embed the Skill manifest'],
+		[/hashSkillFileContent/, 'plugin bundle does not verify embedded file hashes'],
+		[/bundle_hash/, 'plugin bundle does not verify its bundle hash'],
+	]) {
+		requirePattern(bundleSource, pattern, label, errors);
+	}
+	for (const state of ['location_required', 'not_installed', 'installed', 'update_available', 'newer_than_bundled', 'modified', 'legacy_install', 'location_conflict', 'unavailable']) {
+		requirePattern(adapterSource, new RegExp(`['"]${state}['"]`), `Skill adapter is missing state: ${state}`, errors);
+	}
+	for (const pattern of [/planTtlMs/, /originalHashes/, /tracekeeper-backup-/, /Automatic overwrite is disabled/, /ownedBundleHash/, /ownedSkillVersion/]) {
+		requirePattern(adapterSource, pattern, `managed Skill adapter is missing safety control: ${pattern.source}`, errors);
+	}
+	for (const pattern of [/\.agents/, /\.claude/, /\.gemini/, /official_documentation/, /recommendation/, /activationMode/, /targetId/]) {
+		requirePattern(targetRegistrySource, pattern, `Skill target registry is missing contract: ${pattern.source}`, errors);
+	}
+	for (const pattern of [/schemaVersion/, /targetDirectory/, /bundleHash/, /skillVersion/, /provenance/, /normalizeSkillInstallReceipts/]) {
+		requirePattern(receiptSource, pattern, `managed Skill receipt store is missing contract: ${pattern.source}`, errors);
+	}
+	for (const evidence of ['skillAssistantPromptCopiedAt', 'skillUserConfirmedAt', 'skillFileVerifiedAt', 'agentRestartCompletedAt', 'connectionVerifiedAt', 'firstRecallCompletedAt', 'trackedWorkflowObservedAt']) {
+		requirePattern(onboardingSource, new RegExp(`\\b${evidence}\\b`), `onboarding evidence is missing field: ${evidence}`, errors);
+	}
+	for (const pattern of [/['"]tracked_workflow['"]/, /workflowManageAvailable/, /getOnboardingStepSequence/]) {
+		requirePattern(onboardingSource, pattern, `onboarding completion semantics are missing contract: ${pattern.source}`, errors);
+	}
+	for (const pattern of [/runtimeCapabilities/, /workflow\.manage/, /\brepo_path\b/, /next_actions|recommended_recall/]) {
+		requirePattern(onboardingViewModelSource, pattern, `plugin-generated onboarding guidance is missing contract: ${pattern.source}`, errors);
+	}
+	if (/\\?"project_hint\\?"\s*:\s*\\?"[^"\n]*(?:路径|path|仓库|工作区|repo|workspace)/i.test(onboardingViewModelSource)) {
+		errors.push('plugin-generated onboarding guidance must not place a repository or workspace path in project_hint');
+	}
+	for (const [pattern, label] of [
+		[/McpCapabilitiesModal/, 'settings must route public-tool discovery to the MCP capabilities viewer'],
+		[/renderClientSkillPrompt/, 'settings must place the Skill prompt in each Agent configuration row'],
+	]) {
+		requirePattern(settingsSource, pattern, label, errors);
+	}
+	requirePattern(
+		clientSkillPromptSource,
+		/buildSkillInstallPrompt/,
+		'shared Agent Skill prompt must render state-aware Skill prompts',
+		errors,
+	);
+	for (const [pattern, label] of [
+		[/renderOnboardingSection/, 'settings must not retain the resident onboarding checklist'],
+		[/runtimePublicTools/, 'Agent configuration rows must not duplicate the MCP public-tool list'],
+		[/RUNTIME_CREDENTIAL_PRESET_DEFINITIONS/, 'Agent configuration rows must not expose capability presets'],
+		[/tracekeeper-capability-preset/, 'Agent configuration rows must not render a capability-preset control'],
+	]) {
+		if (pattern.test(settingsSource)) errors.push(label);
+	}
+	for (const state of ['location_required', 'not_installed', 'installed', 'update_available', 'newer_than_bundled', 'modified', 'legacy_install', 'location_conflict', 'unavailable']) {
+		requirePattern(skillPromptSource, new RegExp(`['"]${state}['"]`), `Skill prompt model is missing state: ${state}`, errors);
+	}
+	if (/clientId\s*===\s*['"]codex['"]/.test(settingsSource)) {
+		errors.push('settings must use Skill delivery capability state instead of a Codex-only installation gate');
+	}
+	for (const field of ['action', 'client_id', 'bundle_hash', 'backup_created', 'install_method', 'result', 'timestamp']) {
+		requirePattern(auditSource, new RegExp(`\\b${field}\\b`), `Skill install audit is missing field: ${field}`, errors);
+	}
+	for (const forbidden of ['targetDirectory', 'backupDirectory', 'token']) {
+		if (new RegExp(`\\b${forbidden}\\b`).test(auditSource)) {
+			errors.push(`Skill install audit must not record sensitive field: ${forbidden}`);
+		}
+	}
+	requirePattern(buildSource, /build_tracekeeper_skill\.mjs/, 'plugin build does not validate the canonical Skill bundle', errors);
+
+	return { ok: errors.length === 0, errors, warnings };
+}
+
+async function main() {
+	const args = process.argv.slice(2);
+	const rootIndex = args.indexOf('--root');
+	const repoRoot = rootIndex >= 0 ? path.resolve(args[rootIndex + 1]) : process.cwd();
+	if (rootIndex >= 0 && !args[rootIndex + 1]) throw new Error('--root requires a path');
+	const result = await checkAgentEcosystem(repoRoot);
+	for (const warning of result.warnings) console.warn(`WARNING: ${warning}`);
+	if (!result.ok) {
+		for (const error of result.errors) console.error(`ERROR: ${error}`);
+		process.exitCode = 1;
+		return;
+	}
+	console.log('Agent ecosystem checks passed.');
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : '';
+if (invokedPath === import.meta.url) {
+	main().catch((error) => {
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exitCode = 1;
+	});
+}

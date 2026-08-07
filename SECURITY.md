@@ -4,6 +4,8 @@
 
 Tracekeeper is currently maintained on the `main` branch.
 
+The technical trust zones, permission classes, and filesystem boundaries are documented in [Trust Boundaries](./docs/architecture/TRUST_BOUNDARIES.md).
+
 ## Reporting A Vulnerability
 
 Please do not open a public issue for sensitive security problems.
@@ -28,4 +30,4 @@ Treat these as security-relevant:
 - client configuration changes without user confirmation
 - arbitrary command execution
 - unexpected remote data exposure
-- permission bypasses around Review Queue or approved writeback
+- permission bypasses around Knowledge Change Review or approved writeback

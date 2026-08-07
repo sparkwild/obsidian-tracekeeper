@@ -2,49 +2,42 @@
 
 Thanks for contributing to Tracekeeper.
 
-## Scope
+## Before You Start
 
-This repository contains the Obsidian-native Tracekeeper monorepo:
+Read [the documentation index](./docs/INDEX.md) and the owner document for your change:
 
-- `apps/obsidian-plugin/` for the Obsidian review and connection plugin.
-- `apps/mcp-server/` for the Agent-facing MCP server.
-- `packages-weaver/core/` for shared TypeScript memory and vault primitives.
-- `docs/` for current product and architecture documentation.
+- [product overview](./docs/overview/INDEX.md)
+- [user-facing features](./docs/features/INDEX.md)
+- [Agent, Skill, and MCP workflow](./docs/features/AGENT_WORKFLOW.md)
+- [technology choices](./docs/technology/INDEX.md)
+- [runtime, Vault, and trust architecture](./docs/architecture/INDEX.md)
+- [engineering and release flow](./docs/development/INDEX.md)
 
-## Setup
+## Repository Scope
 
-1. Clone the repository.
-2. Install dependencies inside the affected workspace if needed.
-3. Run root verification before sending changes for review.
+- `apps/obsidian-plugin/`: Obsidian UI, settings, runtime host, and packaging
+- `apps/mcp-server/`: Agent-facing MCP protocol and tools
+- `packages/core/`: shared TypeScript vault and knowledge primitives
+- `docs/`: durable overview, feature, technology, architecture, and development documentation
 
-## Validation
+## Setup And Validation
 
-Run these checks before opening a PR:
+Install dependencies from the repository root, then run the full verification gate:
 
 ```bash
+npm ci
 npm run verify
 ```
 
-For narrower checks:
-
-```bash
-npm run typecheck
-npm run build
-npm run test
-npm run package
-```
+Narrower commands are listed in the [engineering guide](./docs/development/ENGINEERING_AND_RELEASE.md).
 
 ## Pull Requests
 
 - Keep changes focused.
 - Explain user-facing behavior changes clearly.
-- Mention MCP or Obsidian plugin boundary changes explicitly.
-- Mention the verification commands you ran.
+- Call out changes to vault paths, MCP tools, permissions, review state, or client configuration.
+- Update the owning durable document and any active working status when behavior changes.
+- List automated checks and manual Obsidian flows that you ran.
+- Use temporary fixtures; do not write to a real Obsidian vault unless the task explicitly requires it.
 
-## Design Constraints
-
-- Agent clients are the only operation entry for URL/file submission, source analysis, context packs, lint, distill, and proposal generation.
-- Obsidian plugin commands must remain governance, review, status, and connection oriented.
-- MCP tools must stay vault-scoped and follow `docs/ARCHITECTURE.md`.
-- Do not write to a real Obsidian vault unless a task explicitly asks for it.
-- Do not hardcode developer machine paths, vault paths, repository checkouts, or local ports.
+Tracekeeper is local-first. MCP tools remain Vault-scoped and permission-enforced, while Obsidian remains the user's review and control surface. See the canonical [architecture](./docs/architecture/INDEX.md) and [trust boundaries](./docs/architecture/TRUST_BOUNDARIES.md) instead of duplicating those constraints here.

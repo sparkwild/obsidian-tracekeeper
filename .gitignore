@@ -10,4 +10,6 @@ apps/obsidian-plugin/main.js.map
 /.idea/
 apps/**/node_modules/
 apps/obsidian-plugin/node_modules/
-packages/**/node_modules/
+packages/**/node_modules
+
+.specs/

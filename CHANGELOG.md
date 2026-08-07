@@ -2,6 +2,33 @@
 
 All notable changes to Tracekeeper will be documented in this file.
 
+## [0.3.0] - Local Agent Runtime And Knowledge Governance
+
+### Added
+
+- Plugin-hosted, loopback-only MCP Runtime with installation-level access protection, OAuth discovery, authorization-code pairing, and PKCE `S256`.
+- Native setup guidance for Codex, Claude Code, and Gemini CLI, plus explicit manual fallback guidance for clients without a verified local OAuth flow.
+- Skill v2.1.1 with workflow contract v3 for task classification, proactive Recall, truthful closeout, multi-source ingestion, and instruction isolation.
+- Memory, Source, Recall, Agent Activity, Runtime, onboarding, migration, and proposal-review surfaces in Obsidian.
+- In-memory knowledge indexing, Vault event integration, background rebuild, and reusable Recall application boundaries.
+- Multi-source ingestion for user-requested local knowledge capture, source snapshots, and direct candidate-memory submission.
+- Idempotent `capture_source` and `propose_memory` operations with operation ownership markers and payload-conflict protection.
+
+### Changed
+
+- The local Runtime, contracts, Core services, and plugin composition are split into explicit package and ownership boundaries.
+- Agent cards now require observed external Session evidence from both MCP initialization and a successful `tracekeeper.*` tool call.
+- Project identity, Recall provenance, Source evidence, proposal review context, and Agent activity use normalized, inspectable records.
+- Project memory requires explicit user policy; global durable memory remains review-gated by default.
+- Tracekeeper-authored source-analysis summaries and proposal drafts now follow the configured Obsidian content language while preserving raw source material in its original language.
+- Explicit user requests to research and save knowledge are treated as workflow intent only; MCP capabilities, Vault boundaries, and review policy remain enforced.
+
+### Security
+
+- Runtime requests validate exact loopback binding, Host and Origin boundaries, Bearer access, Session state, request limits, OAuth resources and redirects, pairing expiry/replay, and access reset.
+- Client configuration and Skill installation preserve unrelated files, use preview and confirmation boundaries, and avoid exposing credentials in setup instructions or normal diagnostics.
+- Recall and Source content are labeled as untrusted knowledge data and cannot grant capabilities or override the accepted Agent workflow.
+
 ## [0.2.3] - Community CSS Lint Fix
 
 ### Fixed

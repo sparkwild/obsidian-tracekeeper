@@ -1,21 +1,23 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DEFAULT_GRAPH_PROFILE = void 0;
 exports.analyzeGraphHealth = analyzeGraphHealth;
 exports.normalizeGraphProfile = normalizeGraphProfile;
 exports.evaluateGraphProfile = evaluateGraphProfile;
-const node_path_1 = __importDefault(require("node:path"));
 const knowledge_architecture_1 = require("./knowledge-architecture");
+const knowledge_note_1 = require("./knowledge-note");
 const DEFAULT_MAX_ITEMS = 20;
 exports.DEFAULT_GRAPH_PROFILE = 'advisory';
 function analyzeGraphHealth(notes, options = {}) {
     const maxItems = normalizeMaxItems(options.maxItems);
-    const index = buildGraphIndex(notes);
     const notePaths = notes.map((note) => normalizeRelativePath(note.relativePath)).filter(Boolean);
     const notePathSet = new Set(notePaths);
+    const resolvedEdges = (0, knowledge_note_1.resolveNormalizedVaultEdges)(notes.map((note) => ({
+        path: note.relativePath,
+        title: note.title,
+        aliases: note.aliases,
+        edges: note.edges,
+    })));
     const outgoing = new Map();
     const incoming = new Map();
     const undirected = new Map();
@@ -33,15 +35,29 @@ function analyzeGraphHealth(notes, options = {}) {
         if (!sourcePath) {
             continue;
         }
-        for (const link of note.wikilinks) {
+        for (const link of resolvedEdges.get(sourcePath) ?? note.edges) {
             wikilinkEdgeCount += 1;
-            const target = resolveWikilinkTarget(link.target, sourcePath, index);
-            if (!target) {
+            if (link.resolution.status !== 'resolved') {
                 unresolvedEdgeCount += 1;
                 unresolvedEdges.push({
                     path: note.relativePath,
                     line: link.line,
-                    target: link.target,
+                    target: link.target || link.referenceLabel || link.raw,
+                    context: link.raw,
+                });
+                continue;
+            }
+            const target = link.resolution.path;
+            if (!notePathSet.has(target)) {
+                if (isNativeAttachmentResolution(link.resolution)) {
+                    resolvedEdgeCount += 1;
+                    continue;
+                }
+                unresolvedEdgeCount += 1;
+                unresolvedEdges.push({
+                    path: note.relativePath,
+                    line: link.line,
+                    target: link.target || link.referenceLabel || link.raw,
                     context: link.raw,
                 });
                 continue;
@@ -154,6 +170,9 @@ function analyzeGraphHealth(notes, options = {}) {
         recommendation_count: recommendations.length,
     };
 }
+function isNativeAttachmentResolution(resolution) {
+    return resolution.authority === 'native' && !resolution.path.toLocaleLowerCase('en-US').endsWith('.md');
+}
 function normalizeGraphProfile(value) {
     if (typeof value !== 'string') {
         return exports.DEFAULT_GRAPH_PROFILE;
@@ -243,85 +262,6 @@ function evaluateGraphProfile(report, profileValue = exports.DEFAULT_GRAPH_PROFI
         profile_issues: issues,
     };
 }
-function buildGraphIndex(notes) {
-    const pathByRelativePath = new Map();
-    const pathByRelativePathNoExt = new Map();
-    const basenameToRelativePaths = new Map();
-    const titleToRelativePaths = new Map();
-    const aliasToRelativePaths = new Map();
-    for (const note of notes) {
-        const relativePath = normalizeRelativePath(note.relativePath);
-        if (!relativePath) {
-            continue;
-        }
-        pathByRelativePath.set(relativePath, note.relativePath);
-        pathByRelativePathNoExt.set(stripKnownExtension(relativePath), note.relativePath);
-        addToLookup(basenameToRelativePaths, node_path_1.default.posix.basename(stripKnownExtension(relativePath)), note.relativePath);
-        addToLookup(titleToRelativePaths, note.title, note.relativePath);
-        for (const alias of note.aliases) {
-            addToLookup(aliasToRelativePaths, alias, note.relativePath);
-        }
-    }
-    return {
-        pathByRelativePath,
-        pathByRelativePathNoExt,
-        basenameToRelativePaths,
-        titleToRelativePaths,
-        aliasToRelativePaths,
-    };
-}
-function resolveWikilinkTarget(target, sourcePath, index) {
-    const cleanTarget = target.trim();
-    if (!cleanTarget) {
-        return null;
-    }
-    const noHeading = cleanTarget.split('#', 1)[0].trim();
-    if (!noHeading) {
-        return null;
-    }
-    if (isPathLikeTarget(noHeading)) {
-        const pathResolution = resolveByPathLike(noHeading, sourcePath, index);
-        if (pathResolution) {
-            return pathResolution;
-        }
-    }
-    const fallback = resolveByAliasAndTitle(noHeading, index);
-    if (fallback) {
-        return fallback;
-    }
-    return null;
-}
-function resolveByPathLike(target, sourcePath, index) {
-    const normalizedTarget = normalizePathCandidateForResolution(target, sourcePath);
-    if (!normalizedTarget) {
-        return null;
-    }
-    const exact = index.pathByRelativePath.get(normalizedTarget);
-    if (exact) {
-        return exact;
-    }
-    const noExt = stripKnownExtension(normalizedTarget);
-    return index.pathByRelativePathNoExt.get(noExt) || null;
-}
-function resolveByAliasAndTitle(target, index) {
-    const key = normalizeLookupToken(target);
-    if (!key) {
-        return null;
-    }
-    const titleMatch = pickSingleValue(index.titleToRelativePaths.get(key));
-    if (titleMatch) {
-        return titleMatch;
-    }
-    const aliasMatch = pickSingleValue(index.aliasToRelativePaths.get(key));
-    if (aliasMatch) {
-        return aliasMatch;
-    }
-    const basenameMatch = pickSingleValue(index.basenameToRelativePaths.get(key));
-    if (basenameMatch) {
-        return basenameMatch;
-    }
-    return null;
-}
 function computeComponents(notePaths, undirected) {
     let componentCount = 0;
     let largestComponentSize = 0;
@@ -355,70 +295,18 @@ function computeComponents(notePaths, undirected) {
     return { componentCount, largestComponentSize };
 }
 function normalizeRelativePath(value) {
-    const replaced = value.replace(/\\/g, '/').trim();
-    if (!replaced) {
+    try {
+        return (0, knowledge_note_1.normalizeVaultRelativePath)(value);
+    }
+    catch {
         return '';
     }
-    const relative = replaced.replace(/^\.\//, '');
-    return node_path_1.default.posix.normalize(relative) === '.' ? '' : node_path_1.default.posix.normalize(relative);
-}
-function normalizeLookupToken(value) {
-    return value.trim().toLowerCase();
 }
 function normalizeMaxItems(raw) {
     if (!Number.isInteger(raw) || !raw || raw <= 0) {
         return DEFAULT_MAX_ITEMS;
     }
     return raw > 2000 ? 2000 : raw;
-}
-function stripKnownExtension(value) {
-    const extension = node_path_1.default.posix.extname(value).toLowerCase();
-    if (extension === '.md' || extension === '.markdown') {
-        return value.slice(0, -extension.length);
-    }
-    return value;
-}
-function isPathLikeTarget(target) {
-    return target.includes('/') || target.includes('\\') || node_path_1.default.posix.extname(target) !== '';
-}
-function normalizePathCandidateForResolution(target, sourcePath) {
-    let normalized = target.replace(/\\/g, '/').trim();
-    if (!normalized) {
-        return '';
-    }
-    if (normalized.startsWith('./') || normalized.startsWith('../')) {
-        normalized = node_path_1.default.posix.join(node_path_1.default.posix.dirname(sourcePath), normalized);
-    }
-    normalized = normalized.replace(/^\/+/g, '');
-    normalized = normalized.replace(/\/+/g, '/');
-    normalized = node_path_1.default.posix.normalize(normalized);
-    if (normalized === '.' || !normalized) {
-        return '';
-    }
-    if (!node_path_1.default.posix.extname(normalized)) {
-        normalized = `${normalized}.md`;
-    }
-    return (0, knowledge_architecture_1.normalizeKnowledgePath)(normalized);
-}
-function addToLookup(map, key, value) {
-    const normalized = normalizeLookupToken(key);
-    if (!normalized) {
-        return;
-    }
-    const existing = map.get(normalized);
-    if (!existing) {
-        map.set(normalized, [value]);
-        return;
-    }
-    if (!existing.includes(value)) {
-        existing.push(value);
-    }
-}
-function pickSingleValue(values) {
-    if (!values || values.length !== 1) {
-        return null;
-    }
-    return values[0] || null;
 }
 function uniquePaths(paths) {
     return Array.from(new Set(paths.filter(Boolean))).sort();

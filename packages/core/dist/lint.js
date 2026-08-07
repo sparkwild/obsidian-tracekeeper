@@ -4,10 +4,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.lintNotes = lintNotes;
-const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const graph_health_1 = require("./graph-health");
 const knowledge_architecture_1 = require("./knowledge-architecture");
+const knowledge_note_1 = require("./knowledge-note");
+const lifecycle_diagnostics_1 = require("./lifecycle-diagnostics");
 const EXTERNAL_LINK = /^(?:https?:\/\/|mailto:|file:|ftp:)/i;
 function readListLikeFrontmatter(note, keys) {
     const values = [];
@@ -28,25 +29,6 @@ function readListLikeFrontmatter(note, keys) {
         }
     }
     return [...new Set(values)];
-}
-function buildLinkCandidate(vaultRoot, sourceDir, wikilinkTarget) {
-    const sanitized = wikilinkTarget.replace(/\/+/g, '/').trim();
-    const splitHash = sanitized.split('#', 2);
-    const candidateBase = splitHash[0].trim();
-    if (!candidateBase) {
-        return '';
-    }
-    let candidatePath = candidateBase;
-    if (!node_path_1.default.extname(candidatePath)) {
-        candidatePath = `${candidatePath}.md`;
-    }
-    if (!node_path_1.default.isAbsolute(candidatePath)) {
-        candidatePath = node_path_1.default.resolve(sourceDir, candidatePath);
-    }
-    if (!isInsideVault(vaultRoot, candidatePath)) {
-        return '';
-    }
-    return candidatePath;
 }
 function buildRelationCandidate(raw, sourcePath) {
     const bracketMatch = raw.match(/^\[\[(.*?)\]\]$/);
@@ -94,20 +76,6 @@ function readPathIndex(notes) {
     }
     return { noteByLowerPath, noteNoExtByLowerPath, basenameToLowerPaths };
 }
-function isInsideVault(vaultRoot, candidatePath) {
-    const root = node_path_1.default.resolve(vaultRoot);
-    const candidate = node_path_1.default.resolve(candidatePath);
-    const relative = node_path_1.default.relative(root, candidate);
-    return relative === '' || (!relative.startsWith('..') && !node_path_1.default.isAbsolute(relative));
-}
-function hasFile(candidatePath) {
-    const normalizedPath = node_path_1.default.normalize(candidatePath);
-    if (!normalizedPath || !node_fs_1.default.existsSync(normalizedPath)) {
-        return false;
-    }
-    const stat = node_fs_1.default.statSync(normalizedPath);
-    return stat.isFile();
-}
 function isPathLikeRelation(raw) {
     return raw.includes('/') || raw.includes('\\') || raw.includes('.md') || raw.includes('.markdown');
 }
@@ -118,6 +86,9 @@ function hasBodyWikilinkReference(note, ref, sourcePath, paths) {
     }
     const normalizedRef = (0, knowledge_architecture_1.normalizeKnowledgePath)(stripKnownExtension(resolvedRef.toLowerCase()));
     return note.wikilinks.some((link) => {
+        if (link.source !== 'body') {
+            return false;
+        }
         const resolvedLink = resolveReference(link.target, sourcePath, paths) || buildRelationCandidate(link.target, sourcePath);
         if (!resolvedLink) {
             return false;
@@ -225,6 +196,12 @@ function lintNotes(vaultRoot, notes, options = {}) {
     const graphProfile = (0, graph_health_1.normalizeGraphProfile)(options.graphProfile);
     const strictStructureSeverity = graphProfile === 'strict' ? 'error' : 'warning';
     const graphStructureEnabled = graphProfile !== 'off';
+    const resolvedEdges = (0, knowledge_note_1.resolveNormalizedVaultEdges)(notes.map((note) => ({
+        path: note.relativePath,
+        title: note.title,
+        aliases: note.aliases,
+        edges: note.edges,
+    })));
     const pathIndex = readPathIndex(notes);
     const notePathSet = new Set(notes.map((note) => (0, knowledge_architecture_1.normalizeKnowledgePath)(note.relativePath)).filter(Boolean));
     const memoryToWikiYamlEdges = [];
@@ -235,12 +212,17 @@ function lintNotes(vaultRoot, notes, options = {}) {
     const memoryToWikiLinkBySource = new Map();
     const wikiToMemoryYamlBySource = new Map();
     const wikiToMemoryLinkBySource = new Map();
-    for (const note of notes) {
-        const sourceDir = node_path_1.default.dirname(note.absolutePath);
-        const normalizedPath = (0, knowledge_architecture_1.normalizeKnowledgePath)(note.relativePath);
+    for (const originalNote of notes) {
+        const normalizedPath = (0, knowledge_architecture_1.normalizeKnowledgePath)(originalNote.relativePath);
         if (!normalizedPath) {
             continue;
         }
+        const semanticEdges = [...(resolvedEdges.get(normalizedPath) ?? originalNote.edges)];
+        const note = {
+            ...originalNote,
+            edges: semanticEdges,
+            wikilinks: semanticEdges,
+        };
         const sourceKinds = getSourceType(note);
         if ((0, knowledge_architecture_1.isInLegacyDirectory)(normalizedPath)) {
             issues.push({
@@ -252,33 +234,22 @@ function lintNotes(vaultRoot, notes, options = {}) {
             });
         }
         for (const link of note.wikilinks) {
-            if (EXTERNAL_LINK.test(link.target) || link.target.includes('|')) {
+            if (link.source === 'frontmatter' || EXTERNAL_LINK.test(link.target) || link.target.includes('|')) {
                 continue;
             }
-            const candidate = buildLinkCandidate(vaultRoot, sourceDir, link.target);
-            if (!candidate) {
+            if (link.resolution.status !== 'resolved') {
+                const unresolvedTarget = link.target || link.referenceLabel || link.raw;
                 issues.push({
-                    severity: 'warning',
+                    severity: link.resolution.reason === 'unsafe_path' ? 'warning' : 'error',
                     kind: 'broken_wikilink',
                     path: note.relativePath,
                     line: link.line,
-                    message: `Broken wikilink target: ${link.target}`,
+                    message: `Broken wikilink target: ${unresolvedTarget}`,
                     context: link.raw,
                 });
                 continue;
             }
-            if (!hasFile(candidate)) {
-                issues.push({
-                    severity: 'error',
-                    kind: 'broken_wikilink',
-                    path: note.relativePath,
-                    line: link.line,
-                    message: `Broken wikilink target: ${link.target}`,
-                    context: link.raw,
-                });
-                continue;
-            }
-            const targetRelative = (0, knowledge_architecture_1.normalizeKnowledgePath)(node_path_1.default.relative(vaultRoot, candidate));
+            const targetRelative = (0, knowledge_architecture_1.normalizeKnowledgePath)(link.resolution.path);
             if (sourceKinds.isMemory && (0, knowledge_architecture_1.isKnowledgeWikiPath)(targetRelative)) {
                 addRelationEdge(memoryToWikiLinkBySource, 'wikilink', normalizedPath, targetRelative, link.line, 'memory', memoryToWikiLinkEdges);
             }
@@ -449,7 +420,15 @@ function lintNotes(vaultRoot, notes, options = {}) {
     if (options.graphHealth) {
         issues.push(...buildGraphProfileLintIssues(options.graphHealth, options.graphProfile));
     }
-    return { issues };
+    const lifecycleDoctor = (0, lifecycle_diagnostics_1.buildLifecycleDoctorReport)(notes, options);
+    issues.push(...lifecycleDoctor.issues);
+    return {
+        issues,
+        doctor: {
+            directory_counts: lifecycleDoctor.directory_counts,
+            legacy_candidates: lifecycleDoctor.legacy_candidates,
+        },
+    };
 }
 function buildGraphProfileLintIssues(report, profile) {
     const evaluation = (0, graph_health_1.evaluateGraphProfile)(report, profile ?? graph_health_1.DEFAULT_GRAPH_PROFILE);

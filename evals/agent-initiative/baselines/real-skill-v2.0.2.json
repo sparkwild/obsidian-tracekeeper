@@ -1,0 +1,129 @@
+{
+	"baseline_id": "real-skill-v2.0.2-full-seed-2026072301",
+	"kind": "observed_real_agent_ab",
+	"tracekeeper_version": "0.2.3",
+	"skill_version": "2.0.2",
+	"experiment": {
+		"scenario_count": 12,
+		"repetitions_per_arm": 3,
+		"pair_count": 36,
+		"run_count": 72,
+		"executed_run_count": 72,
+		"seed": "2026072301",
+		"model": "resolved_default_unknown",
+		"codex_version": "codex-cli 0.145.0-alpha.30",
+		"started_at": "2026-07-23T10:54:41.744Z",
+		"completed_at": "2026-07-23T11:48:37.564Z"
+	},
+	"identity": {
+		"skill_bundle_sha256": "bcccdf53b10443ebdd0730dce9869ac49127c10457899232230fb0208ea3bc35",
+		"skill_manifest_sha256": "3bc646dc224b69a8f8465467bd41d9a9007531c63e4ee9546128fe9ff7ad8f47",
+		"workflow_contract_version": 2,
+		"evaluator_code_sha256": "1ecfcecb9b4f427ee97bd3230fef1f95b1a835b70db995f590415238405ca1f6",
+		"scenario_set_sha256": "302487e6a6cfbbda3c50b7660536edcce1215822ed8dab518bf8394ef4ee7551",
+		"mcp_stack_sha256": "d7da86f9a46460c2dc0b0bf65034816736fdec33fc22c98ab7a1a6810c92ff64",
+		"source_report_sha256": "e4189dcf8df87923fb0f83b42fb42ae84058698194d414c013ca82b291344bcf",
+		"git_commit": "d6da6744f235c52044c7365ceb8546ebd30edadb",
+		"git_working_tree_diff_sha256": "fcf376891c98e1b15d56397b5ecbe8ab618cd0ae3721c80192e5008404b6b590",
+		"git_changed_during_run": false,
+		"external_tracekeeper_skill_count": 0
+	},
+	"strict_pass_counts": {
+		"mcp_only": {
+			"overall": "31/36",
+			"no_track": "9/9",
+			"recall_only": "7/9",
+			"tracked_task": "15/18"
+		},
+		"mcp_skill": {
+			"overall": "33/36",
+			"no_track": "9/9",
+			"recall_only": "9/9",
+			"tracked_task": "15/18"
+		}
+	},
+	"paired_outcomes": {
+		"skill_win": 5,
+		"mcp_only_win": 3,
+		"tie_pass": 28,
+		"tie_fail": 0,
+		"discordant_pairs": 8,
+		"strict_pass_delta": 0.0556
+	},
+	"scenario_pass_counts": [
+		{ "scenario_id": "real-greeting", "class": "no_track", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-translation", "class": "no_track", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-farewell-check", "class": "no_track", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-recall-basic", "class": "recall_only", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-recall-query-echo", "class": "recall_only", "mcp_only": "1/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-recall-noise-source", "class": "recall_only", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-track-basic", "class": "tracked_task", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-track-wiki-closeout", "class": "tracked_task", "mcp_only": "2/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-track-query-echo-closeout", "class": "tracked_task", "mcp_only": "3/3", "mcp_skill": "0/3" },
+		{ "scenario_id": "real-track-policy-summary", "class": "tracked_task", "mcp_only": "1/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-track-recovery-forbidden", "class": "tracked_task", "mcp_only": "3/3", "mcp_skill": "3/3" },
+		{ "scenario_id": "real-track-recovery-idempotency", "class": "tracked_task", "mcp_only": "3/3", "mcp_skill": "3/3" }
+	],
+	"behavior_metrics": {
+		"mcp_only": {
+			"mode_classification_rate": 0.9444,
+			"recall_invocation_rate": 0.963,
+			"tracked_start_recall_finish_rate": 0.8889,
+			"task_id_continuity_rate": 0.8889,
+			"tracked_finish_once_rate": 0.8889,
+			"no_track_false_positive_rate": 0,
+			"tool_error_rate": 0,
+			"related_wiki_propagation": 0.7222,
+			"related_sources_propagation": 0.7222,
+			"average_tool_calls_per_run": 2.8611,
+			"average_tool_calls_before_effective_recall": 2
+		},
+		"mcp_skill": {
+			"mode_classification_rate": 1,
+			"recall_invocation_rate": 1,
+			"tracked_start_recall_finish_rate": 1,
+			"task_id_continuity_rate": 1,
+			"tracked_finish_once_rate": 1,
+			"no_track_false_positive_rate": 0,
+			"tool_error_rate": 0,
+			"related_wiki_propagation": 0.6667,
+			"related_sources_propagation": 0.8333,
+			"average_tool_calls_per_run": 3.1389,
+			"average_tool_calls_before_effective_recall": 2
+		}
+	},
+	"acceptance": {
+		"decision": "hold_full_release_gate_for_graph_path_propagation",
+		"probe_gate_passed": true,
+		"safety_gates_passed": true,
+		"effectiveness_gates_passed": false,
+		"efficiency_gate_passed": true,
+		"passed_gates": [
+			"The 24-run probe executed completely; Skill recall-only passed 8/9 versus 7/9 for MCP-only and Skill idempotency passed 3/3.",
+			"Overall strict acceptance was 33/36 for the Skill arm versus 31/36 for MCP-only.",
+			"Recall-only strict acceptance was 9/9 for the Skill arm versus 7/9 for MCP-only.",
+			"Tracked-task strict acceptance was 15/18 for both arms, meeting the 15/18 floor.",
+			"The Skill arm preserved no_track in 9/9 runs and passed policy-summary, forbidden-recovery, and idempotency scenarios 3/3 each.",
+			"The Skill arm used the real task id and exactly one finish_task in all 18 tracked runs.",
+			"No external connector, apply_approved_writeback, unexpected event, or tool error occurred.",
+			"The Skill arm added 0.2778 average tool calls per run, a 9.71 percent increase over MCP-only."
+		],
+		"failed_gates": [
+			"Wiki propagation was 12/18 for the Skill arm, below the 16/18 target.",
+			"Source propagation was 15/18 for the Skill arm, below the 16/18 target."
+		]
+	},
+	"findings": [
+		"Skill v2.0.2 restored narrow project Recall: recall-only passed 9/9, and all tracked runs used a project Recall after start.",
+		"The cross-tool idempotency fix removed the prior undefined-filter failure; the idempotency scenario passed 3/3 with zero tool errors.",
+		"All three Skill failures were the query-echo closeout scenario. Recall found only the request-echo task record and no verifiable durable project paths, so the Agent safely omitted related_wiki and related_sources instead of inventing them.",
+		"The remaining gate is a retrieval and evidence-propagation problem. It must be solved by making verified graph paths available to Recall or by correcting the fixture/evaluator evidence contract, not by teaching the Skill to fabricate paths.",
+		"This single seeded matrix characterizes one Codex client/model environment and does not establish a universal Agent result."
+	],
+	"privacy": {
+		"contains_raw_prompts": false,
+		"contains_note_bodies": false,
+		"contains_absolute_paths": false,
+		"source_artifacts_tracked": false
+	}
+}

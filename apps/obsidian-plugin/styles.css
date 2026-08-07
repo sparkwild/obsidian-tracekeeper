@@ -1,8 +1,31 @@
+.theme-light {
+	--tracekeeper-text-success: color-mix(
+		in srgb,
+		var(--text-success, var(--color-green)) 55%,
+		var(--text-normal)
+	);
+	--tracekeeper-text-warning: color-mix(
+		in srgb,
+		var(--text-warning, var(--color-orange)) 55%,
+		var(--text-normal)
+	);
+	--tracekeeper-text-error: color-mix(
+		in srgb,
+		var(--text-error, var(--color-red)) 55%,
+		var(--text-normal)
+	);
+}
+
 .tracekeeper-view-root {
 	padding: 12px 16px 24px;
 	font-size: 13px;
 	line-height: 1.5;
 	color: var(--text-normal);
+}
+
+.tracekeeper-activity-view .view-header-title,
+.tracekeeper-activity-view .view-header-title-container {
+	display: none;
 }
 
 .tracekeeper-view__title {
@@ -82,56 +105,6 @@
 	overflow-wrap: anywhere;
 }
 
-.tracekeeper-status-pill--runtime {
-	border-color: var(--interactive-accent);
-	box-shadow: inset 3px 0 0 var(--interactive-accent);
-}
-
-.tracekeeper-status-pill--runtime span {
-	color: var(--text-normal);
-}
-
-.tracekeeper-status-pill--runtime strong {
-	color: var(--interactive-accent);
-	font-size: 18px;
-}
-
-.tracekeeper-status-pill--success {
-	border-color: var(--text-success);
-	box-shadow: inset 3px 0 0 var(--text-success);
-}
-
-.tracekeeper-status-pill--success strong {
-	color: var(--text-success);
-}
-
-.tracekeeper-status-pill--warning {
-	border-color: var(--text-warning);
-	box-shadow: inset 3px 0 0 var(--text-warning);
-}
-
-.tracekeeper-status-pill--warning strong {
-	color: var(--text-warning);
-}
-
-.tracekeeper-status-pill--danger {
-	border-color: var(--text-error);
-	box-shadow: inset 3px 0 0 var(--text-error);
-}
-
-.tracekeeper-status-pill--danger strong {
-	color: var(--text-error);
-}
-
-.tracekeeper-status-pill--disabled {
-	border-color: var(--background-modifier-border);
-	box-shadow: none;
-}
-
-.tracekeeper-status-pill--disabled strong {
-	color: var(--text-muted);
-}
-
 .tracekeeper-detail--description strong {
 	color: var(--text-normal);
 	font-size: 13px;
@@ -152,11 +125,58 @@
 }
 
 .tracekeeper-metric-card--warning {
-	border-color: var(--text-warning);
+	border-color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-card {
 	margin-top: 12px;
+}
+
+.tracekeeper-primary-action-card {
+	border-color: var(--interactive-accent);
+	background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-secondary));
+	box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+.tracekeeper-primary-action-card h3 {
+	margin: 2px 0 6px;
+}
+
+.tracekeeper-primary-action-card__eyebrow {
+	color: var(--interactive-accent);
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.tracekeeper-agent-activity-list {
+	display: grid;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.tracekeeper-agent-activity-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+}
+
+.tracekeeper-agent-activity-row__identity {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+
+.tracekeeper-agent-activity-row__identity span {
+	color: var(--text-muted);
+	font-size: 12px;
+	overflow-wrap: anywhere;
 }
 
 .tracekeeper-connection-panel {
@@ -235,53 +255,35 @@
 	min-width: fit-content;
 }
 
-.tracekeeper-settings-root {
-	display: grid;
-	gap: 12px;
-}
-
-.tracekeeper-settings-section {
-	padding: 10px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	background: var(--background-secondary);
-}
-
-.tracekeeper-settings-section__header {
+.tracekeeper-settings-runtime-name {
 	display: flex;
 	flex-wrap: wrap;
-	align-items: flex-start;
-	justify-content: space-between;
+	align-items: center;
 	gap: 8px;
-	margin-bottom: 8px;
 }
 
-.tracekeeper-settings-section__title {
-	margin: 0;
-	font-size: 14px;
-	line-height: 1.4;
-}
-
-.tracekeeper-settings-section__description {
-	margin: 4px 0 0;
-	color: var(--text-muted);
-	font-size: 12px;
-}
-
-.tracekeeper-settings-grid {
+.tracekeeper-settings-endpoint-access {
 	display: grid;
-	gap: 8px;
+	gap: 4px;
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.tracekeeper-settings-endpoint-access > small {
+	color: var(--text-muted);
+}
+
+.tracekeeper-settings-client-item {
+	display: block;
 }
 
 .tracekeeper-settings-client-row {
 	display: grid;
-	grid-template-columns: minmax(120px, 1fr) auto;
+	grid-template-columns: minmax(0, 1fr) auto;
 	gap: 10px;
 	align-items: start;
-	padding: 8px 10px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	background: var(--background-primary);
+	width: 100%;
 }
 
 .tracekeeper-settings-client-row__info {
@@ -296,6 +298,14 @@
 	overflow-wrap: anywhere;
 }
 
+.tracekeeper-settings-client-row__meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
 .tracekeeper-settings-client-row__actions {
 	display: flex;
 	flex-wrap: wrap;
@@ -304,21 +314,345 @@
 	min-width: fit-content;
 }
 
-.tracekeeper-settings-token-row {
-	display: grid;
-	grid-template-columns: minmax(140px, 1fr) auto;
+.tracekeeper-settings-client-skill {
+	grid-column: 1 / -1;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
 	gap: 10px;
+	padding-top: 8px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.tracekeeper-settings-client-skill__title {
+	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
-	padding: 8px 10px;
+	gap: 6px;
+	flex: 0 1 100%;
+}
+
+.tracekeeper-settings-client-skill__body {
+	flex: 1 1 240px;
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+}
+
+.tracekeeper-settings-client-skill__detail {
+	color: var(--text-muted);
+}
+
+.tracekeeper-settings-client-skill__detail {
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-settings-client-skill__benefit {
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-settings-client-skill__actions {
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 6px;
+	flex: 0 0 auto;
+}
+
+.tracekeeper-settings-client-skill__actions button {
+	flex: 0 0 auto;
+}
+
+.tracekeeper-settings-client-skill--modal-collapsible {
+	display: block;
+	padding: 0;
+	border-top: 1px solid var(--background-modifier-border);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tracekeeper-settings-client-skill--modal-collapsible > summary {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 0;
+	color: var(--text-normal);
+	cursor: pointer;
+	list-style: none;
+}
+
+.tracekeeper-settings-client-skill--modal-collapsible > summary::-webkit-details-marker {
+	display: none;
+}
+
+.tracekeeper-settings-client-skill--modal-collapsible > summary::before {
+	content: '▸';
+	flex: 0 0 auto;
+	color: var(--text-muted);
+}
+
+.tracekeeper-settings-client-skill--modal-collapsible[open] > summary::before {
+	content: '▾';
+}
+
+.tracekeeper-settings-client-skill--modal-collapsible .tracekeeper-settings-client-skill__body,
+.tracekeeper-settings-client-skill--modal-collapsible .tracekeeper-settings-client-skill__actions {
+	margin: 0 0 10px 22px;
+}
+
+.tracekeeper-settings-client-skill--modal-collapsible .tracekeeper-settings-client-skill__body {
+	max-width: none;
+}
+
+.tracekeeper-settings-client-skill--modal-collapsible .tracekeeper-settings-client-skill__actions {
+	justify-content: flex-start;
+}
+
+.tracekeeper-copy-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 6px;
+}
+
+.tracekeeper-copy-button svg {
+	width: 16px;
+	height: 16px;
+}
+
+.tracekeeper-copyable-command {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-width: 0;
+}
+
+.tracekeeper-copyable-command .tracekeeper-code-block {
+	flex: 1 1 auto;
+	width: auto;
+	min-width: 0;
+	overflow-x: auto;
+	overflow-y: hidden;
+	white-space: nowrap;
+	overflow-wrap: normal;
+	-webkit-user-select: text;
+	user-select: text;
+	cursor: text;
+}
+
+.tracekeeper-copyable-command .tracekeeper-copy-button {
+	flex: 0 0 auto;
+}
+
+.tracekeeper-copyable-json {
+	align-items: flex-start;
+}
+
+.tracekeeper-copyable-json .tracekeeper-code-block {
+	max-height: 220px;
+	overflow: auto;
+	white-space: pre;
+}
+
+.tracekeeper-skill-directory-recommendation {
+	display: grid;
+	gap: 6px;
+	margin: 12px 0;
+	padding: 12px;
 	border: 1px solid var(--background-modifier-border);
+	border-left: 3px solid var(--interactive-accent);
+	border-radius: 8px;
+}
+
+.tracekeeper-skill-directory-recommendation code,
+.tracekeeper-skill-directory-recommendation small {
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-skill-directory-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-width: 0;
+	margin: 12px 0;
+}
+
+.tracekeeper-skill-directory-row input {
+	flex: 1 1 0;
+	min-width: 0;
+	width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.tracekeeper-skill-directory-row button {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+
+.tracekeeper-ai-skill-prompt {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 12px 0;
+}
+
+.tracekeeper-ai-skill-prompt .tracekeeper-code-block {
+	flex: 1 1 auto;
+	max-height: 320px;
+	overflow: auto;
+	white-space: pre-wrap;
+	user-select: text;
+}
+
+.tracekeeper-ai-skill-prompt .tracekeeper-copy-button {
+	flex: 0 0 auto;
+}
+
+.tracekeeper-connect-ai-tool-modal {
+	width: 100%;
+	max-width: min(720px, calc(100vw - 32px));
+}
+
+.tracekeeper-settings-add-agent {
+	white-space: nowrap;
+}
+
+.tracekeeper-connect-ai-tool-modal__panel {
+	min-width: 0;
+}
+
+.tracekeeper-connect-ai-tool-modal__auth-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+
+.tracekeeper-connect-ai-tool-modal__auth-static {
+	color: var(--text-muted);
+}
+
+.tracekeeper-connect-ai-tool-modal__auth-modes {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 8px;
+}
+
+.tracekeeper-connect-ai-tool-modal__pending {
+	display: grid;
+	gap: 10px;
+	margin: 4px 0 12px;
+	padding: 14px;
+	border: 1px solid var(--interactive-accent);
+	border-left-width: 4px;
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-heading {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--text-normal);
+	font-size: var(--font-ui-medium);
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-icon {
+	display: inline-flex;
+	color: var(--interactive-accent);
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-icon svg {
+	width: 20px;
+	height: 20px;
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-summary {
+	margin: 0;
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-details {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: 5px 12px;
+	padding: 10px 12px;
 	border-radius: 6px;
 	background: var(--background-primary);
+	font-size: var(--font-ui-small);
 }
+
+.tracekeeper-connect-ai-tool-modal__pending-details span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-label {
+	color: var(--text-muted);
+}
+
+.tracekeeper-connect-ai-tool-modal__pending-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.tracekeeper-connect-ai-tool-modal__actions {
+	flex-wrap: wrap;
+	margin-top: 14px;
+}
+
+.tracekeeper-connect-ai-tool-modal__actions button {
+	max-width: 100%;
+	white-space: normal;
+}
+
 
 .tracekeeper-settings-root .setting-item-control select {
 	width: 140px;
 	min-width: 140px;
 	max-width: 140px;
+}
+
+@media (max-width: 520px) {
+	.tracekeeper-connect-ai-tool-modal {
+		max-width: calc(100vw - 20px);
+	}
+
+	.tracekeeper-connect-ai-tool-modal .tracekeeper-detail-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.tracekeeper-connect-ai-tool-modal__pending-details {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.tracekeeper-connect-ai-tool-modal__actions {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.tracekeeper-connect-ai-tool-modal__actions button {
+		width: 100%;
+	}
+
+	.tracekeeper-settings-client-skill {
+		flex-direction: column;
+	}
+
+	.tracekeeper-settings-client-skill__actions {
+		width: 100%;
+		justify-content: flex-start;
+	}
+
+	.tracekeeper-settings-client-skill__actions button {
+		width: 100%;
+	}
 }
 
 .tracekeeper-runtime-log-toolbar {
@@ -406,8 +740,8 @@
 
 .tracekeeper-proposal-card__eyebrow,
 .tracekeeper-proposal-card__subject,
-.tracekeeper-proposal-card__summary span,
-.tracekeeper-proposal-card__technical small {
+.tracekeeper-review-focus-panel span,
+.tracekeeper-review-focus-item span {
 	color: var(--text-muted);
 	font-size: 12px;
 }
@@ -562,6 +896,17 @@
 	font-size: 14px;
 }
 
+button.tracekeeper-task-card__change-chip {
+	height: auto;
+	cursor: pointer;
+}
+
+button.tracekeeper-task-card__change-chip:hover,
+button.tracekeeper-task-card__change-chip:focus-visible {
+	border-color: var(--interactive-accent);
+	color: var(--text-normal);
+}
+
 .tracekeeper-task-card__change-note {
 	color: var(--text-muted);
 }
@@ -604,16 +949,76 @@
 	gap: 6px;
 }
 
+.tracekeeper-observability-list {
+	display: grid;
+	gap: 8px;
+}
+
+.tracekeeper-observability-list > .tracekeeper-card {
+	margin-top: 0;
+	background: var(--background-primary);
+}
+
+.tracekeeper-observability-record__path {
+	margin-top: 2px;
+	color: var(--text-muted);
+	font-family: var(--font-monospace);
+	font-size: 11px;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-observability-warning {
+	border-color: var(--tracekeeper-text-warning, var(--text-warning));
+	box-shadow: inset 3px 0 0 var(--tracekeeper-text-warning, var(--text-warning));
+}
+
+.tracekeeper-observability-warning p {
+	margin: 4px 0 0;
+	color: var(--text-muted);
+}
+
+.tracekeeper-observability-filters {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.tracekeeper-observability-focus {
+	border-color: var(--interactive-accent);
+	box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+.tracekeeper-observability-focus .tracekeeper-card__header {
+	align-items: center;
+	margin-bottom: 0;
+}
+
+.tracekeeper-observability-pagination {
+	align-items: center;
+	justify-content: center;
+	margin-top: 10px;
+}
+
+.tracekeeper-source-requests > summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+
+.tracekeeper-source-requests__body {
+	margin-top: 10px;
+}
+
 button.tracekeeper-confirm-button {
-	background: var(--text-success);
-	background-color: var(--text-success);
+	background: var(--tracekeeper-text-success, var(--text-success));
+	background-color: var(--tracekeeper-text-success, var(--text-success));
 	color: var(--text-on-accent);
 }
 
 button.tracekeeper-confirm-button:hover,
 button.tracekeeper-confirm-button:focus {
-	background: var(--text-success);
-	background-color: var(--text-success);
+	background: var(--tracekeeper-text-success, var(--text-success));
+	background-color: var(--tracekeeper-text-success, var(--text-success));
 	color: var(--text-on-accent);
 	filter: brightness(0.95);
 }
@@ -624,15 +1029,15 @@ button.tracekeeper-confirm-button:disabled {
 }
 
 button.tracekeeper-revision-button {
-	background: var(--text-warning);
-	background-color: var(--text-warning);
+	background: var(--tracekeeper-text-warning, var(--text-warning));
+	background-color: var(--tracekeeper-text-warning, var(--text-warning));
 	color: var(--text-on-accent);
 }
 
 button.tracekeeper-revision-button:hover,
 button.tracekeeper-revision-button:focus {
-	background: var(--text-warning);
-	background-color: var(--text-warning);
+	background: var(--tracekeeper-text-warning, var(--text-warning));
+	background-color: var(--tracekeeper-text-warning, var(--text-warning));
 	color: var(--text-on-accent);
 	filter: brightness(0.95);
 }
@@ -669,28 +1074,34 @@ button.tracekeeper-revision-button:disabled {
 
 .tracekeeper-badge--risk-high,
 .tracekeeper-badge--risk-critical {
-	border-color: var(--text-error);
-	color: var(--text-error);
+	border-color: var(--tracekeeper-text-error, var(--text-error));
+	color: var(--tracekeeper-text-error, var(--text-error));
 }
 
 .tracekeeper-badge--risk-medium {
-	border-color: var(--text-warning);
-	color: var(--text-warning);
+	border-color: var(--tracekeeper-text-warning, var(--text-warning));
+	color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-badge--warning {
-	border-color: var(--text-warning);
-	color: var(--text-warning);
+	border-color: var(--tracekeeper-text-warning, var(--text-warning));
+	color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-badge--error {
-	border-color: var(--text-error);
-	color: var(--text-error);
+	border-color: var(--tracekeeper-text-error, var(--text-error));
+	color: var(--tracekeeper-text-error, var(--text-error));
 }
 
 .tracekeeper-badge--success {
-	border-color: var(--text-success, var(--color-green));
-	color: var(--text-success, var(--color-green));
+	border-color: var(
+		--tracekeeper-text-success,
+		var(--text-success, var(--color-green))
+	);
+	color: var(
+		--tracekeeper-text-success,
+		var(--text-success, var(--color-green))
+	);
 }
 
 .tracekeeper-badge--muted {
@@ -707,6 +1118,349 @@ button.tracekeeper-revision-button:disabled {
 	color: var(--text-on-accent);
 }
 
+.tracekeeper-review-inbox__controls {
+	display: grid;
+	gap: 10px;
+	margin: 12px 0;
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.tracekeeper-review-inbox__filters,
+.tracekeeper-review-inbox__query,
+.tracekeeper-review-inbox__actions,
+.tracekeeper-review-inbox__pagination {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+}
+
+.tracekeeper-review-inbox__filters button.is-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.tracekeeper-review-inbox__query input {
+	flex: 1 1 220px;
+	min-width: 0;
+}
+
+.tracekeeper-review-inbox__query select {
+	min-width: 132px;
+}
+
+.tracekeeper-review-inbox {
+	display: grid;
+	grid-template-columns: minmax(270px, 0.85fr) minmax(380px, 1.4fr);
+	gap: 12px;
+	align-items: start;
+}
+
+.tracekeeper-review-inbox__list,
+.tracekeeper-review-inbox__detail {
+	min-width: 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-primary);
+}
+
+.tracekeeper-review-inbox__list {
+	overflow: hidden;
+}
+
+.tracekeeper-review-inbox__list-header {
+	display: grid;
+	gap: 3px;
+	padding: 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tracekeeper-review-inbox__list-header small,
+.tracekeeper-review-inbox__row-body small,
+.tracekeeper-review-inbox__eyebrow,
+.tracekeeper-review-inbox__target span,
+.tracekeeper-review-inbox__source span,
+.tracekeeper-review-edit-modal__label small {
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.tracekeeper-review-inbox__rows {
+	display: grid;
+}
+
+button.tracekeeper-review-inbox__row {
+	display: flex;
+	width: 100%;
+	height: auto;
+	min-height: 82px;
+	gap: 8px;
+	align-items: flex-start;
+	padding: 12px;
+	border: 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+	border-radius: 0;
+	background: transparent;
+	color: var(--text-normal);
+	text-align: left;
+	white-space: normal;
+	box-shadow: none;
+}
+
+button.tracekeeper-review-inbox__row:hover,
+button.tracekeeper-review-inbox__row:focus,
+button.tracekeeper-review-inbox__row.is-selected {
+	background: var(--background-secondary-alt);
+	box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+button.tracekeeper-review-inbox__row input[type='checkbox'] {
+	flex: 0 0 auto;
+	margin: 4px 0 0;
+}
+
+.tracekeeper-review-inbox__row-body {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+	flex: 1;
+}
+
+.tracekeeper-review-inbox__row-title {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 6px;
+}
+
+.tracekeeper-review-inbox__row-title strong,
+.tracekeeper-review-inbox__row-body p,
+.tracekeeper-review-inbox__row-body small {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-review-inbox__row-body p {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
+
+.tracekeeper-review-inbox__pagination {
+	justify-content: space-between;
+	padding: 10px 12px;
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.tracekeeper-review-inbox__detail {
+	padding: 14px;
+}
+
+.tracekeeper-review-inbox__detail-panel {
+	display: grid;
+	gap: 12px;
+}
+
+.tracekeeper-review-inbox__detail-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.tracekeeper-review-inbox__detail-header h3 {
+	margin: 2px 0 0;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-review-inbox__notice,
+.tracekeeper-review-inbox__summary,
+.tracekeeper-review-inbox__target,
+.tracekeeper-review-inbox__target-context,
+.tracekeeper-review-inbox__decision-context,
+.tracekeeper-review-inbox__candidates,
+.tracekeeper-review-inbox__writeback,
+.tracekeeper-review-inbox__revision {
+	display: grid;
+	gap: 6px;
+	min-width: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+}
+
+.tracekeeper-review-inbox__notice--warning {
+	border-left: 3px solid var(--tracekeeper-text-warning, var(--text-warning));
+	color: var(--tracekeeper-text-warning, var(--text-warning));
+}
+
+.tracekeeper-review-inbox__summary {
+	border-left: 3px solid var(--interactive-accent);
+}
+
+.tracekeeper-review-inbox__summary p,
+.tracekeeper-review-inbox__revision p,
+.tracekeeper-review-inbox__target-context p,
+.tracekeeper-review-inbox__decision-context p,
+.tracekeeper-review-inbox__candidates p {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-review-inbox__target {
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	align-items: center;
+}
+
+.tracekeeper-review-inbox__target code,
+.tracekeeper-review-inbox__source code {
+	min-width: 0;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+.tracekeeper-review-inbox__writeback pre {
+	box-sizing: border-box;
+	max-height: 360px;
+	margin: 0;
+	padding: 10px;
+	overflow: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-review-inbox__writeback pre.is-empty {
+	color: var(--tracekeeper-text-warning, var(--text-warning));
+}
+
+.tracekeeper-review-inbox__diff {
+	color: var(--text-normal);
+	font-family: var(--font-monospace);
+}
+
+.tracekeeper-review-inbox__decision-context,
+.tracekeeper-review-inbox__candidates {
+	gap: 10px;
+}
+
+.tracekeeper-review-context-list,
+.tracekeeper-review-candidate-list {
+	display: grid;
+	gap: 8px;
+}
+
+.tracekeeper-review-context-card,
+.tracekeeper-review-candidate {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+	padding: 9px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+}
+
+.tracekeeper-review-context-card p,
+.tracekeeper-review-candidate p {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-review-context-card button {
+	justify-self: start;
+}
+
+.tracekeeper-review-candidate {
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+}
+
+.tracekeeper-review-candidate > div {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+}
+
+.tracekeeper-review-candidate code,
+.tracekeeper-review-edit-modal__target-context code {
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+.tracekeeper-review-candidate small,
+.tracekeeper-review-edit-modal__target-section small {
+	color: var(--text-muted);
+}
+
+.tracekeeper-review-inbox__candidate-warning {
+	color: var(--tracekeeper-text-warning, var(--text-warning));
+}
+
+.tracekeeper-review-inbox__source {
+	display: grid;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.tracekeeper-review-inbox__source > div {
+	display: grid;
+	grid-template-columns: 100px minmax(0, 1fr);
+	gap: 8px;
+}
+
+.tracekeeper-review-edit-modal {
+	max-width: 760px;
+}
+
+.tracekeeper-review-edit-modal__target {
+	width: 100%;
+}
+
+.tracekeeper-review-edit-modal__target-section,
+.tracekeeper-review-edit-modal__target-context {
+	display: grid;
+	gap: 6px;
+}
+
+.tracekeeper-review-edit-modal__target-context {
+	margin-top: 4px;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+}
+
+.tracekeeper-review-edit-modal__target-context p {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 12px;
+	white-space: pre-wrap;
+}
+
+.tracekeeper-review-edit-modal__label {
+	display: grid;
+	gap: 3px;
+	margin-top: 12px;
+}
+
+.tracekeeper-review-edit-modal__textarea {
+	box-sizing: border-box;
+	width: 100%;
+	margin-top: 6px;
+	resize: vertical;
+}
+
 .tracekeeper-proposal-grid {
 	display: grid;
 	gap: 10px;
@@ -718,31 +1472,59 @@ button.tracekeeper-revision-button:disabled {
 	margin-top: 0;
 }
 
-.tracekeeper-proposal-card__summary {
+.tracekeeper-review-target-grid {
 	display: grid;
-	gap: 3px;
-	padding: 8px 10px;
-	border-left: 3px solid var(--interactive-accent);
+	grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.7fr);
+	gap: 8px;
+}
+
+.tracekeeper-review-focus-item,
+.tracekeeper-review-focus-panel {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
 	background: var(--background-primary);
 }
 
-.tracekeeper-proposal-card__summary strong {
-	font-size: 14px;
-	line-height: 1.45;
+.tracekeeper-review-focus-item strong,
+.tracekeeper-review-focus-panel strong {
 	overflow-wrap: anywhere;
 }
 
-.tracekeeper-proposal-card__context {
-	margin: 0;
+.tracekeeper-review-focus-panel--change {
+	border-left: 4px solid var(--interactive-accent);
 }
 
-.tracekeeper-proposal-card__technical {
+.tracekeeper-review-focus-panel--reason {
+	border-left: 4px solid var(--background-modifier-border-hover);
+}
+
+.tracekeeper-review-change-preview {
+	box-sizing: border-box;
+	width: 100%;
+	max-height: 220px;
+	margin: 2px 0 0;
+	padding: 10px;
+	overflow: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-review-change-preview--empty {
+	color: var(--tracekeeper-text-warning, var(--text-warning));
+}
+
+.tracekeeper-review-source-line {
 	min-width: 0;
-	padding-top: 2px;
-}
-
-.tracekeeper-proposal-card__technical small {
-	display: block;
+	color: var(--text-muted);
+	font-size: 12px;
 	overflow-wrap: anywhere;
 }
 
@@ -769,7 +1551,7 @@ button.tracekeeper-revision-button:disabled {
 .tracekeeper-revision-comment {
 	margin-top: 8px;
 	padding: 8px;
-	border-left: 3px solid var(--text-warning);
+	border-left: 3px solid var(--tracekeeper-text-warning, var(--text-warning));
 	background: var(--background-primary);
 }
 
@@ -802,11 +1584,11 @@ button.tracekeeper-revision-button:disabled {
 }
 
 .tracekeeper-issue-row--error {
-	border-color: var(--text-error);
+	border-color: var(--tracekeeper-text-error, var(--text-error));
 }
 
 .tracekeeper-issue-row--warning {
-	border-color: var(--text-warning);
+	border-color: var(--tracekeeper-text-warning, var(--text-warning));
 }
 
 .tracekeeper-graph-candidate-row {
@@ -965,21 +1747,13 @@ button.tracekeeper-revision-button:disabled {
 	min-width: 0;
 }
 
-.tracekeeper-capability-row__heading {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px 10px;
-	align-items: baseline;
-	min-width: 0;
-}
-
-.tracekeeper-capability-row__heading strong,
-.tracekeeper-capability-row__heading code {
+.tracekeeper-capability-row__tool {
+	display: block;
+	color: var(--text-normal);
 	overflow-wrap: anywhere;
 }
 
-.tracekeeper-capability-row__heading code,
-.tracekeeper-capability-row__body small {
+.tracekeeper-capability-row__subtitle {
 	color: var(--text-muted);
 }
 
@@ -1094,6 +1868,39 @@ button.tracekeeper-review-queue-button--action:focus {
 	max-width: 700px;
 }
 
+.tracekeeper-review-archive-modal {
+	max-width: min(760px, calc(100vw - 32px));
+}
+
+.tracekeeper-review-archive-modal__items,
+.tracekeeper-review-archive-modal__conflicts {
+	max-height: min(44vh, 420px);
+	overflow: auto;
+}
+
+.tracekeeper-review-archive-modal__items code,
+.tracekeeper-review-archive-modal__conflicts {
+	overflow-wrap: anywhere;
+}
+
+.tracekeeper-review-archive-modal__items small {
+	display: block;
+	color: var(--text-muted);
+}
+
+.tracekeeper-runtime-log-cleanup-modal {
+	max-width: min(760px, calc(100vw - 32px));
+}
+
+.tracekeeper-runtime-log-cleanup-modal__file-list {
+	max-height: min(28vh, 280px);
+	overflow: auto;
+}
+
+.tracekeeper-runtime-log-cleanup-modal__file-list li {
+	overflow-wrap: anywhere;
+}
+
 .tracekeeper-recall-results {
 	display: grid;
 	gap: 10px;
@@ -1114,6 +1921,25 @@ button.tracekeeper-review-queue-button--action:focus {
 	cursor: pointer;
 	color: var(--text-muted);
 	font-size: 12px;
+}
+
+.tracekeeper-activity-diagnostics {
+	padding: 0;
+}
+
+.tracekeeper-activity-diagnostics__summary {
+	padding: 10px;
+	cursor: pointer;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.tracekeeper-activity-diagnostics[open] > .tracekeeper-activity-diagnostics__summary {
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tracekeeper-activity-diagnostics__body {
+	padding: 10px;
 }
 
 .tracekeeper-advanced-list {
@@ -1144,9 +1970,25 @@ button.tracekeeper-review-queue-button--action:focus {
 	overflow-wrap: anywhere;
 }
 
+
 .tracekeeper-advanced-config-row__info small {
 	color: var(--text-muted);
 	font-size: 12px;
+}
+
+@media (max-width: 760px) {
+	.tracekeeper-review-inbox {
+		grid-template-columns: 1fr;
+	}
+
+	.tracekeeper-review-inbox__detail-header,
+	.tracekeeper-review-inbox__target {
+		align-items: flex-start;
+	}
+
+	.tracekeeper-review-inbox__target {
+		grid-template-columns: 1fr;
+	}
 }
 
 @media (max-width: 520px) {
@@ -1200,6 +2042,10 @@ button.tracekeeper-review-queue-button--action:focus {
 		grid-template-columns: 1fr;
 	}
 
+	.tracekeeper-review-target-grid {
+		grid-template-columns: 1fr;
+	}
+
 	.tracekeeper-runtime-log-row > .tracekeeper-runtime-log-row__badge {
 		width: 100%;
 		min-width: 0;
@@ -1224,5 +2070,30 @@ button.tracekeeper-review-queue-button--action:focus {
 	.tracekeeper-proposal-group__header {
 		align-items: flex-start;
 		flex-direction: column;
+	}
+
+	.tracekeeper-review-inbox__query,
+	.tracekeeper-review-inbox__pagination {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.tracekeeper-review-inbox__query input,
+	.tracekeeper-review-inbox__query select,
+	.tracekeeper-review-inbox__query button,
+	.tracekeeper-review-inbox__pagination button {
+		width: 100%;
+	}
+
+	.tracekeeper-review-inbox__source > div {
+		grid-template-columns: 1fr;
+	}
+
+	.tracekeeper-review-candidate {
+		grid-template-columns: 1fr;
+	}
+
+	.tracekeeper-review-candidate button {
+		width: 100%;
 	}
 }

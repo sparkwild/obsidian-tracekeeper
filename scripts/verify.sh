@@ -10,6 +10,13 @@ run_root_script() {
 }
 
 run_root_script community:check
+run_root_script agent:ecosystem
+run_root_script agent:ecosystem:test
+run_root_script eval:agent-initiative:test
+run_root_script eval:agent-initiative:real:test
+run_root_script eval:agent-initiative:compare
+run_root_script architecture:check
+run_root_script release:upgrade-fixture:test
 run_root_script typecheck
 run_root_script build
 run_root_script test

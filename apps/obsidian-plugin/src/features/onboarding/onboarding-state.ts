@@ -1,0 +1,402 @@
+export const ONBOARDING_STEP_SEQUENCE = [
+	'vault_check',
+	'runtime',
+	'client_configuration',
+	'skill_setup',
+	'memory_policy',
+	'agent_restart',
+	'connection_verification',
+	'first_recall',
+	'tracked_workflow',
+] as const;
+
+export const CURRENT_ONBOARDING_ENTRY_PROMPT_VERSION = 1;
+
+export type OnboardingStep = (typeof ONBOARDING_STEP_SEQUENCE)[number] | 'complete';
+
+export interface OnboardingProgressContext {
+	vaultReady: boolean;
+	runtimeRunning: boolean;
+	clientConfigured: boolean;
+	skillSetupConfirmed: boolean;
+	memoryPolicyConfirmed: boolean;
+	agentRestartConfirmed: boolean;
+	connectionVerified: boolean;
+	firstRecallCompleted: boolean;
+	skillAvailable: boolean;
+	skillAssistantPromptCopied: boolean;
+	skillUserConfirmed: boolean;
+	skillFileVerified: boolean;
+	skillUpdateAvailable: boolean;
+	clientReloaded: boolean;
+	recallObserved: boolean;
+	workflowManageAvailable: boolean;
+	trackedWorkflowObserved: boolean;
+}
+
+export interface OnboardingSettingsState {
+	selectedClientId: string;
+	entryPromptVersion: number;
+	entryDeferredAt: string;
+	skillSetupCompletedAt: string;
+	skillAssistantPromptCopiedAt: string;
+	skillUserConfirmedAt: string;
+	skillFileVerifiedAt: string;
+	skillVerifiedBundleHash: string;
+	skillUpdateAvailableAt: string;
+	memoryPolicyConfirmedAt: string;
+	agentRestartCompletedAt: string;
+	connectionVerifiedAt: string;
+	connectionVerifiedSessionId: string;
+	firstRecallCompletedAt: string;
+	firstRecallMatchedCount: number;
+	firstRecallQuery: string;
+	trackedWorkflowObservedAt: string;
+	trackedWorkflowTaskId: string;
+	lastUpdatedAt: string;
+}
+
+export interface OnboardingConnectionEvidence {
+	principalId?: string;
+	sessionId: string;
+	transport: string;
+	connectedAt: string;
+	resultStatus: string;
+	sortTimestamp: number;
+}
+
+export interface OnboardingToolEvidence {
+	principalId?: string;
+	sessionId: string;
+	transport: string;
+	taskId?: string;
+	toolName: string;
+	resultStatus: string;
+	resultSummary: string;
+	argsSummary: string;
+	scopeMode?: string;
+	matchedCount?: string | number;
+	sortTimestamp: number;
+}
+
+export type OnboardingRecallEvidence = OnboardingToolEvidence;
+
+export interface OnboardingTrackedWorkflowEvidence {
+	taskId: string;
+	startTimestamp: number;
+	recallTimestamp: number;
+	finishTimestamp: number;
+}
+
+export const DEFAULT_ONBOARDING_SETTINGS: OnboardingSettingsState = {
+	selectedClientId: 'codex',
+	entryPromptVersion: 0,
+	entryDeferredAt: '',
+	skillSetupCompletedAt: '',
+	skillAssistantPromptCopiedAt: '',
+	skillUserConfirmedAt: '',
+	skillFileVerifiedAt: '',
+	skillVerifiedBundleHash: '',
+	skillUpdateAvailableAt: '',
+	memoryPolicyConfirmedAt: '',
+	agentRestartCompletedAt: '',
+	connectionVerifiedAt: '',
+	connectionVerifiedSessionId: '',
+	firstRecallCompletedAt: '',
+	firstRecallMatchedCount: 0,
+	firstRecallQuery: '',
+	trackedWorkflowObservedAt: '',
+	trackedWorkflowTaskId: '',
+	lastUpdatedAt: '',
+};
+
+const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+const asTimestamp = (value: unknown): string => {
+	const valueString = asString(value);
+	return valueString && !Number.isNaN(Date.parse(valueString)) ? valueString : '';
+};
+
+const asNonNegativeInteger = (value: unknown, fallback = 0): number => {
+	if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+	if (typeof value !== 'string') return fallback;
+	const parsed = Number.parseInt(value.trim(), 10);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
+export const normalizeOnboardingSettingsState = (raw: unknown): OnboardingSettingsState => {
+	const rawState = (raw && typeof raw === 'object' ? raw : {}) as Partial<OnboardingSettingsState>;
+	const legacySkillConfirmation = asTimestamp(rawState.skillSetupCompletedAt);
+	const userConfirmation = asTimestamp(rawState.skillUserConfirmedAt) || legacySkillConfirmation;
+	return {
+		selectedClientId: asString(rawState.selectedClientId) || DEFAULT_ONBOARDING_SETTINGS.selectedClientId,
+		entryPromptVersion: asNonNegativeInteger(rawState.entryPromptVersion, DEFAULT_ONBOARDING_SETTINGS.entryPromptVersion),
+		entryDeferredAt: asTimestamp(rawState.entryDeferredAt),
+		skillSetupCompletedAt: legacySkillConfirmation || userConfirmation,
+		skillAssistantPromptCopiedAt: asTimestamp(rawState.skillAssistantPromptCopiedAt),
+		skillUserConfirmedAt: userConfirmation,
+		skillFileVerifiedAt: asTimestamp(rawState.skillFileVerifiedAt),
+		skillVerifiedBundleHash: asString(rawState.skillVerifiedBundleHash),
+		skillUpdateAvailableAt: asTimestamp(rawState.skillUpdateAvailableAt),
+		memoryPolicyConfirmedAt: asTimestamp(rawState.memoryPolicyConfirmedAt),
+		agentRestartCompletedAt: asTimestamp(rawState.agentRestartCompletedAt),
+		connectionVerifiedAt: asTimestamp(rawState.connectionVerifiedAt),
+		connectionVerifiedSessionId: asString(rawState.connectionVerifiedSessionId),
+		firstRecallCompletedAt: asTimestamp(rawState.firstRecallCompletedAt),
+		firstRecallMatchedCount: asNonNegativeInteger(rawState.firstRecallMatchedCount, 0),
+		firstRecallQuery: asString(rawState.firstRecallQuery),
+		trackedWorkflowObservedAt: asTimestamp(rawState.trackedWorkflowObservedAt),
+		trackedWorkflowTaskId: asString(rawState.trackedWorkflowTaskId),
+		lastUpdatedAt: asTimestamp(rawState.lastUpdatedAt) || new Date().toISOString(),
+	};
+};
+
+export const shouldShowOnboardingEntryPrompt = (state: OnboardingSettingsState): boolean =>
+	state.entryPromptVersion < CURRENT_ONBOARDING_ENTRY_PROMPT_VERSION
+	&& asTimestamp(state.entryDeferredAt) === '';
+
+export const markOnboardingEntryPromptDeferred = (state: OnboardingSettingsState): OnboardingSettingsState =>
+	timestamped(state, {
+		entryPromptVersion: CURRENT_ONBOARDING_ENTRY_PROMPT_VERSION,
+		entryDeferredAt: new Date().toISOString(),
+	});
+
+export const markOnboardingEntryPromptOpened = (state: OnboardingSettingsState): OnboardingSettingsState =>
+	timestamped(state, {
+		entryPromptVersion: CURRENT_ONBOARDING_ENTRY_PROMPT_VERSION,
+		entryDeferredAt: '',
+	});
+
+const stepIsCompleted = (
+	state: OnboardingSettingsState,
+	context: OnboardingProgressContext,
+	step: OnboardingStep
+): boolean => {
+	switch (step) {
+		case 'vault_check': return context.vaultReady;
+		case 'runtime': return context.runtimeRunning;
+		case 'client_configuration': return context.clientConfigured;
+		case 'skill_setup': return context.skillSetupConfirmed;
+		case 'memory_policy': return context.memoryPolicyConfirmed;
+		case 'agent_restart': return context.agentRestartConfirmed;
+		case 'connection_verification': return context.connectionVerified;
+		case 'first_recall': return context.firstRecallCompleted && asNonNegativeInteger(state.firstRecallMatchedCount, 0) > 0;
+		case 'tracked_workflow': return !context.workflowManageAvailable || context.trackedWorkflowObserved;
+		case 'complete': return getOnboardingStepSequence(context).every((currentStep) => stepIsCompleted(state, context, currentStep));
+		default: return false;
+	}
+};
+
+export const getOnboardingStepSequence = (
+	context: Pick<OnboardingProgressContext, 'workflowManageAvailable'>
+): readonly Exclude<OnboardingStep, 'complete'>[] => context.workflowManageAvailable
+	? ONBOARDING_STEP_SEQUENCE
+	: ONBOARDING_STEP_SEQUENCE.filter((step) => step !== 'tracked_workflow');
+
+export const isOnboardingStepCompleted = (
+	step: OnboardingStep,
+	state: OnboardingSettingsState,
+	context: OnboardingProgressContext
+): boolean => stepIsCompleted(state, context, step);
+
+export const getNextOnboardingStep = (
+	state: OnboardingSettingsState,
+	context: OnboardingProgressContext
+): OnboardingStep => getOnboardingStepSequence(context).find((step) => !stepIsCompleted(state, context, step)) || 'complete';
+
+export const hasOnboardingRecallResult = (state: OnboardingSettingsState): boolean =>
+	state.connectionVerifiedSessionId !== ''
+	&& state.firstRecallCompletedAt !== ''
+	&& asNonNegativeInteger(state.firstRecallMatchedCount, 0) > 0;
+
+export const findOnboardingConnectionEvidence = (
+	evidence: readonly OnboardingConnectionEvidence[],
+	notBefore: number
+): (OnboardingConnectionEvidence & { connectedTimestamp: number }) | null => {
+	let latest: (OnboardingConnectionEvidence & { connectedTimestamp: number }) | null = null;
+	for (const entry of evidence) {
+		const sessionId = asString(entry.sessionId);
+		const connectedAt = asTimestamp(entry.connectedAt);
+		const connectedTimestamp = connectedAt ? Date.parse(connectedAt) : Number.NaN;
+		if (!sessionId
+			|| sessionId === 'unknown'
+			|| entry.transport !== 'streamable-http'
+			|| entry.resultStatus !== 'success'
+			|| !Number.isFinite(connectedTimestamp)
+			|| connectedTimestamp < notBefore) {
+			continue;
+		}
+		if (!latest || connectedTimestamp > latest.connectedTimestamp) {
+			latest = { ...entry, sessionId, connectedAt, connectedTimestamp };
+		}
+	}
+	return latest;
+};
+
+export const findOnboardingRecallEvidence = (
+	evidence: readonly OnboardingRecallEvidence[],
+	sessionId: string,
+	notBefore: number
+): (OnboardingRecallEvidence & { matchedCount: number }) | null => {
+	const expectedSessionId = asString(sessionId);
+	if (!expectedSessionId || expectedSessionId === 'unknown') {
+		return null;
+	}
+	for (const entry of evidence) {
+		const matchedCount = asNonNegativeInteger(
+			entry.matchedCount,
+			extractSummaryInteger(entry.resultSummary, 'matched_count')
+		);
+		const scopeMode = asString(entry.scopeMode) || extractSummaryValue(entry.resultSummary, 'scope_mode');
+		if (asString(entry.sessionId) === expectedSessionId
+			&& entry.transport === 'streamable-http'
+			&& entry.toolName === 'tracekeeper.recall'
+			&& entry.resultStatus === 'success'
+			&& entry.sortTimestamp >= notBefore
+			&& scopeMode === 'project'
+			&& matchedCount > 0) return { ...entry, matchedCount };
+	}
+	return null;
+};
+
+export const findOnboardingTrackedWorkflowEvidence = (
+	evidence: readonly OnboardingToolEvidence[],
+	sessionId: string,
+	notBefore: number
+): OnboardingTrackedWorkflowEvidence | null => {
+	const expectedSessionId = asString(sessionId);
+	if (!expectedSessionId || expectedSessionId === 'unknown') {
+		return null;
+	}
+	const entries = evidence
+		.filter((entry) =>
+			asString(entry.sessionId) === expectedSessionId
+			&& entry.transport === 'streamable-http'
+			&& entry.resultStatus === 'success'
+			&& entry.sortTimestamp >= notBefore
+		)
+		.sort((left, right) => left.sortTimestamp - right.sortTimestamp);
+	for (const start of entries.filter((entry) => entry.toolName === 'tracekeeper.start_task')) {
+		const taskId = asString(start.taskId) || extractTaskId(start.resultSummary);
+		if (!taskId) continue;
+		const recall = entries.find((entry) => entry.toolName === 'tracekeeper.recall' && entry.sortTimestamp > start.sortTimestamp);
+		if (!recall) continue;
+		const finish = entries.find((entry) =>
+			entry.toolName === 'tracekeeper.finish_task'
+			&& entry.sortTimestamp > recall.sortTimestamp
+			&& (asString(entry.taskId) || extractTaskId(`${entry.argsSummary}|${entry.resultSummary}`)) === taskId
+		);
+		if (finish) {
+			return {
+				taskId,
+				startTimestamp: start.sortTimestamp,
+				recallTimestamp: recall.sortTimestamp,
+				finishTimestamp: finish.sortTimestamp,
+			};
+		}
+	}
+	return null;
+};
+
+export const markSkillAssistantPromptCopied = (state: OnboardingSettingsState): OnboardingSettingsState => timestamped(state, { skillAssistantPromptCopiedAt: new Date().toISOString() });
+
+export const markSkillUserConfirmed = (state: OnboardingSettingsState): OnboardingSettingsState => {
+	const timestamp = new Date().toISOString();
+	return timestamped(state, { skillSetupCompletedAt: timestamp, skillUserConfirmedAt: timestamp });
+};
+
+export const markSkillSetupDone = markSkillUserConfirmed;
+
+export const markMemoryPolicyConfirmed = (state: OnboardingSettingsState): OnboardingSettingsState =>
+	timestamped(state, { memoryPolicyConfirmedAt: new Date().toISOString() });
+
+export const markSkillFileVerified = (
+	state: OnboardingSettingsState,
+	bundleHash: string
+): OnboardingSettingsState => timestamped(state, {
+	skillFileVerifiedAt: new Date().toISOString(),
+	skillVerifiedBundleHash: asString(bundleHash),
+	skillUpdateAvailableAt: '',
+});
+
+export const markSkillUpdateAvailable = (
+	state: OnboardingSettingsState,
+	available: boolean
+): OnboardingSettingsState => timestamped(state, {
+	skillUpdateAvailableAt: available ? new Date().toISOString() : '',
+	skillFileVerifiedAt: available ? '' : state.skillFileVerifiedAt,
+	skillVerifiedBundleHash: available ? '' : state.skillVerifiedBundleHash,
+});
+
+export const markAgentRestartDone = (state: OnboardingSettingsState): OnboardingSettingsState =>
+	timestamped(state, { agentRestartCompletedAt: new Date().toISOString() });
+
+export const markConnectionVerified = (
+	state: OnboardingSettingsState,
+	sessionId: string,
+	connectedAt: string
+): OnboardingSettingsState => {
+	const verifiedSessionId = asString(sessionId);
+	const verifiedAt = asTimestamp(connectedAt);
+	if (!verifiedSessionId || verifiedSessionId === 'unknown' || !verifiedAt) {
+		return state;
+	}
+	return timestamped(state, {
+		connectionVerifiedAt: verifiedAt,
+		connectionVerifiedSessionId: verifiedSessionId,
+		firstRecallCompletedAt: '',
+		firstRecallMatchedCount: 0,
+		firstRecallQuery: '',
+		trackedWorkflowObservedAt: '',
+		trackedWorkflowTaskId: '',
+	});
+};
+
+export const markFirstRecallDone = (
+	state: OnboardingSettingsState,
+	matchedCount: number,
+	query: string
+): OnboardingSettingsState => {
+	const nextMatchedCount = asNonNegativeInteger(matchedCount, 0);
+	if (nextMatchedCount <= 0) return state;
+	return timestamped(state, {
+		firstRecallCompletedAt: new Date().toISOString(),
+		firstRecallMatchedCount: nextMatchedCount,
+		firstRecallQuery: asString(query),
+	});
+};
+
+export const markTrackedWorkflowObserved = (
+	state: OnboardingSettingsState,
+	taskId: string
+): OnboardingSettingsState => timestamped(state, {
+	trackedWorkflowObservedAt: new Date().toISOString(),
+	trackedWorkflowTaskId: asString(taskId),
+});
+
+export const resetOnboardingState = (): OnboardingSettingsState => ({
+	...DEFAULT_ONBOARDING_SETTINGS,
+	selectedClientId: 'codex',
+	lastUpdatedAt: new Date().toISOString(),
+});
+
+function timestamped(
+	state: OnboardingSettingsState,
+	change: Partial<OnboardingSettingsState>
+): OnboardingSettingsState {
+	return { ...state, ...change, lastUpdatedAt: new Date().toISOString() };
+}
+
+function extractTaskId(value: string): string {
+	const match = value.match(/task_id(?:["']?\s*[:=]\s*["']?)([A-Za-z0-9._-]+)/i);
+	return match?.[1] || '';
+}
+
+function extractSummaryValue(value: string, key: string): string {
+	const match = value.match(new RegExp(`(?:^|\\|)\\s*${key}=([^|\\s]+)`));
+	return match?.[1]?.trim() || '';
+}
+
+function extractSummaryInteger(value: string, key: string): number {
+	return asNonNegativeInteger(extractSummaryValue(value, key), 0);
+}

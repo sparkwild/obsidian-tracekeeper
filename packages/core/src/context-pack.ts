@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { scanVault, type ScannedNote } from './scan';
+import { scanVault, type ScanResult, type ScannedNote } from './scan';
 import { recallNotes, type RecallMatch } from './recall';
 import {
 	KNOWLEDGE_SOURCES_DIR,
@@ -127,6 +127,14 @@ export function buildContextPack(
 	options: ContextPackOptions = {}
 ): ContextPack {
 	const scan = scanVault(vaultRoot, { vaultConfigDir: options.vaultConfigDir });
+	return buildContextPackFromScan(scan, query, options);
+}
+
+export function buildContextPackFromScan(
+	scan: ScanResult,
+	query: string,
+	options: ContextPackOptions = {}
+): ContextPack {
 	const recall = recallNotes(scan.notes, query, { limit: options.limit });
 	const topNotes = recall.map((item: RecallMatch) => item.note);
 	const staleAfterDays = options.staleAfterDays ?? 180;

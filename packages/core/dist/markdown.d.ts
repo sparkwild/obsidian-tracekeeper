@@ -1,23 +1,15 @@
+import { type NormalizedVaultCallout, type NormalizedVaultEdge, type NormalizedVaultSection } from './knowledge-note';
 export interface ParsedFrontmatter {
     fields: Record<string, unknown>;
     raw: string;
     body: string;
+    errors: string[];
+    bodyOffset: number;
+    bodyStartLine: number;
 }
-export interface Wikilink {
-    raw: string;
-    target: string;
-    alias?: string;
-    heading?: string;
-    line: number;
+export interface Wikilink extends NormalizedVaultEdge {
 }
-export interface CalloutBlock {
-    type: string;
-    rawHeader: string;
-    content: string;
-    sourceRefs: string[];
-    blockId?: string;
-    line: number;
-    endLine: number;
+export interface CalloutBlock extends NormalizedVaultCallout {
 }
 export interface ParsedMarkdown {
     frontmatter: ParsedFrontmatter;
@@ -27,6 +19,9 @@ export interface ParsedMarkdown {
     headings: string[];
     blockIds: string[];
     wikilinks: Wikilink[];
+    edges: NormalizedVaultEdge[];
+    sections: NormalizedVaultSection[];
+    callouts: CalloutBlock[];
     claimBlocks: CalloutBlock[];
     evidenceBlocks: CalloutBlock[];
     searchText: string;

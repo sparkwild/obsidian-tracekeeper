@@ -1,6 +1,6 @@
 {
 	"name": "@tracekeeper/core",
-	"version": "0.2.3",
+	"version": "0.3.0",
 	"description": "Shared local wiki compilation runtime for Tracekeeper.",
 	"private": true,
 	"type": "commonjs",
@@ -15,5 +15,8 @@
 		"@types/node": "^22.14.0",
 		"typescript": "^5.8.2"
 	},
-	"license": "MIT"
+	"license": "MIT",
+	"dependencies": {
+		"yaml": "^2.9.0"
+	}
 }

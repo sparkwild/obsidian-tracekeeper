@@ -1,0 +1,25 @@
+{
+	"name": "@tracekeeper/mcp-runtime",
+	"version": "0.3.0",
+	"description": "Tracekeeper local MCP transport, tool adapter, and application runtime.",
+	"private": true,
+	"type": "commonjs",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"test:loopback": "npm run build && node --test ./scripts/local-oauth.test.mjs",
+		"test:non-listener": "npm run build && node --test ./scripts/apply-approved-writeback.test.mjs ./scripts/local-trust-boundary.test.mjs ./scripts/output-contracts.test.mjs ./scripts/project-identity.test.mjs ./scripts/project-memory.test.mjs ./scripts/recall-application.test.mjs ./scripts/recall-audit-redaction.test.mjs ./scripts/record-lifecycle.test.mjs ./scripts/source-request.test.mjs ./scripts/vault-root-boundary.test.mjs",
+		"test": "npm run build && node --test ./scripts/*.test.mjs",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@tracekeeper/contracts": "file:../contracts",
+		"@tracekeeper/core": "file:../core"
+	},
+	"devDependencies": {
+		"@types/node": "^22.14.0",
+		"typescript": "^5.8.2"
+	},
+	"license": "MIT"
+}

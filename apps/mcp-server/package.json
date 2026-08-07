@@ -1,20 +1,27 @@
 {
 	"name": "tracekeeper-mcp-server",
-	"version": "0.2.3",
+	"version": "0.3.0",
 	"description": "Agent-first MCP server for Tracekeeper: read-only default, bounded writes, and review-gated apply.",
 	"private": true,
 	"type": "commonjs",
 	"main": "dist/server.js",
 	"types": "dist/server.d.ts",
 	"scripts": {
-		"test": "node ./scripts/smoke.mjs",
+		"test": "node ./scripts/contracts.mjs && node ./scripts/smoke.mjs && node ./scripts/writeback-recovery.mjs && node ./scripts/finish-task-recovery.mjs",
+		"test:loopback": "node ./scripts/smoke.mjs",
+		"test:non-listener": "node ./scripts/contracts.mjs && node ./scripts/vault-repository-generated-records.mjs && node ./scripts/writeback-recovery.mjs && node ./scripts/finish-task-recovery.mjs",
+		"test:contracts": "node ./scripts/contracts.mjs",
 		"smoke": "node ./scripts/smoke.mjs",
+		"test:writeback-recovery": "node ./scripts/writeback-recovery.mjs",
+		"test:finish-task-recovery": "node ./scripts/finish-task-recovery.mjs",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"build": "tsc -p tsconfig.json",
 		"start": "node dist/server.js"
 	},
 	"dependencies": {
-		"@tracekeeper/core": "file:../../packages/core"
+		"@tracekeeper/contracts": "file:../../packages/contracts",
+		"@tracekeeper/core": "file:../../packages/core",
+		"@tracekeeper/mcp-runtime": "file:../../packages/mcp-runtime"
 	},
 	"devDependencies": {
 		"@types/node": "^22.14.0",

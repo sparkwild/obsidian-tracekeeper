@@ -1,9 +1,12 @@
-import path from 'node:path';
 import {
 	GRAPH_RECOMMENDED_ENTRY,
 	GRAPH_RECOMMENDED_HUBS,
 	normalizeKnowledgePath as normalizeVaultPath,
 } from './knowledge-architecture';
+import {
+	normalizeVaultRelativePath,
+	resolveNormalizedVaultEdges,
+} from './knowledge-note';
 import { ScannedNote } from './scan';
 
 export interface GraphHealthOptions {
@@ -73,21 +76,18 @@ export interface GraphHealthUnresolvedEdge {
 const DEFAULT_MAX_ITEMS = 20;
 export const DEFAULT_GRAPH_PROFILE: GraphProfile = 'advisory';
 
-type MultiLookup = Map<string, string[]>;
-
-interface GraphIndex {
-	pathByRelativePath: Map<string, string>;
-	pathByRelativePathNoExt: Map<string, string>;
-	basenameToRelativePaths: MultiLookup;
-	titleToRelativePaths: MultiLookup;
-	aliasToRelativePaths: MultiLookup;
-}
-
 export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOptions = {}): GraphHealthReport {
 	const maxItems = normalizeMaxItems(options.maxItems);
-	const index = buildGraphIndex(notes);
 	const notePaths = notes.map((note) => normalizeRelativePath(note.relativePath)).filter(Boolean);
 	const notePathSet = new Set(notePaths);
+	const resolvedEdges = resolveNormalizedVaultEdges(
+		notes.map((note) => ({
+			path: note.relativePath,
+			title: note.title,
+			aliases: note.aliases,
+			edges: note.edges,
+		}))
+	);
 
 	const outgoing = new Map<string, Set<string>>();
 	const incoming = new Map<string, Set<string>>();
@@ -109,15 +109,29 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 			continue;
 		}
 
-		for (const link of note.wikilinks) {
+		for (const link of resolvedEdges.get(sourcePath) ?? note.edges) {
 			wikilinkEdgeCount += 1;
-			const target = resolveWikilinkTarget(link.target, sourcePath, index);
-			if (!target) {
+			if (link.resolution.status !== 'resolved') {
 				unresolvedEdgeCount += 1;
 				unresolvedEdges.push({
 					path: note.relativePath,
 					line: link.line,
-					target: link.target,
+					target: link.target || link.referenceLabel || link.raw,
+					context: link.raw,
+				});
+				continue;
+			}
+			const target = link.resolution.path;
+			if (!notePathSet.has(target)) {
+				if (isNativeAttachmentResolution(link.resolution)) {
+					resolvedEdgeCount += 1;
+					continue;
+				}
+				unresolvedEdgeCount += 1;
+				unresolvedEdges.push({
+					path: note.relativePath,
+					line: link.line,
+					target: link.target || link.referenceLabel || link.raw,
 					context: link.raw,
 				});
 				continue;
@@ -244,6 +258,14 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 	};
 }
 
+function isNativeAttachmentResolution(resolution: {
+	status: 'resolved';
+	path: string;
+	authority: 'fallback' | 'native';
+}): boolean {
+	return resolution.authority === 'native' && !resolution.path.toLocaleLowerCase('en-US').endsWith('.md');
+}
+
 export function normalizeGraphProfile(value: unknown): GraphProfile {
 	if (typeof value !== 'string') {
 		return DEFAULT_GRAPH_PROFILE;
@@ -341,106 +363,6 @@ export function evaluateGraphProfile(
 	};
 }
 
-function buildGraphIndex(notes: ScannedNote[]): GraphIndex {
-	const pathByRelativePath = new Map<string, string>();
-	const pathByRelativePathNoExt = new Map<string, string>();
-	const basenameToRelativePaths: MultiLookup = new Map();
-	const titleToRelativePaths: MultiLookup = new Map();
-	const aliasToRelativePaths: MultiLookup = new Map();
-
-	for (const note of notes) {
-		const relativePath = normalizeRelativePath(note.relativePath);
-		if (!relativePath) {
-			continue;
-		}
-
-		pathByRelativePath.set(relativePath, note.relativePath);
-		pathByRelativePathNoExt.set(stripKnownExtension(relativePath), note.relativePath);
-		addToLookup(
-			basenameToRelativePaths,
-			path.posix.basename(stripKnownExtension(relativePath)),
-			note.relativePath
-		);
-		addToLookup(titleToRelativePaths, note.title, note.relativePath);
-		for (const alias of note.aliases) {
-			addToLookup(aliasToRelativePaths, alias, note.relativePath);
-		}
-	}
-
-	return {
-		pathByRelativePath,
-		pathByRelativePathNoExt,
-		basenameToRelativePaths,
-		titleToRelativePaths,
-		aliasToRelativePaths,
-	};
-}
-
-function resolveWikilinkTarget(target: string, sourcePath: string, index: GraphIndex): string | null {
-	const cleanTarget = target.trim();
-	if (!cleanTarget) {
-		return null;
-	}
-
-	const noHeading = cleanTarget.split('#', 1)[0].trim();
-	if (!noHeading) {
-		return null;
-	}
-
-	if (isPathLikeTarget(noHeading)) {
-		const pathResolution = resolveByPathLike(noHeading, sourcePath, index);
-		if (pathResolution) {
-			return pathResolution;
-		}
-	}
-
-	const fallback = resolveByAliasAndTitle(noHeading, index);
-	if (fallback) {
-		return fallback;
-	}
-
-	return null;
-}
-
-function resolveByPathLike(target: string, sourcePath: string, index: GraphIndex): string | null {
-	const normalizedTarget = normalizePathCandidateForResolution(target, sourcePath);
-	if (!normalizedTarget) {
-		return null;
-	}
-
-	const exact = index.pathByRelativePath.get(normalizedTarget);
-	if (exact) {
-		return exact;
-	}
-
-	const noExt = stripKnownExtension(normalizedTarget);
-	return index.pathByRelativePathNoExt.get(noExt) || null;
-}
-
-function resolveByAliasAndTitle(target: string, index: GraphIndex): string | null {
-	const key = normalizeLookupToken(target);
-	if (!key) {
-		return null;
-	}
-
-	const titleMatch = pickSingleValue(index.titleToRelativePaths.get(key));
-	if (titleMatch) {
-		return titleMatch;
-	}
-
-	const aliasMatch = pickSingleValue(index.aliasToRelativePaths.get(key));
-	if (aliasMatch) {
-		return aliasMatch;
-	}
-
-	const basenameMatch = pickSingleValue(index.basenameToRelativePaths.get(key));
-	if (basenameMatch) {
-		return basenameMatch;
-	}
-
-	return null;
-}
-
 function computeComponents(notePaths: string[], undirected: Map<string, Set<string>>) {
 	let componentCount = 0;
 	let largestComponentSize = 0;
@@ -480,16 +402,11 @@ function computeComponents(notePaths: string[], undirected: Map<string, Set<stri
 }
 
 function normalizeRelativePath(value: string): string {
-	const replaced = value.replace(/\\/g, '/').trim();
-	if (!replaced) {
+	try {
+		return normalizeVaultRelativePath(value);
+	} catch {
 		return '';
 	}
-	const relative = replaced.replace(/^\.\//, '');
-	return path.posix.normalize(relative) === '.' ? '' : path.posix.normalize(relative);
-}
-
-function normalizeLookupToken(value: string): string {
-	return value.trim().toLowerCase();
 }
 
 function normalizeMaxItems(raw: number | undefined): number {
@@ -497,64 +414,6 @@ function normalizeMaxItems(raw: number | undefined): number {
 		return DEFAULT_MAX_ITEMS;
 	}
 	return raw > 2000 ? 2000 : raw;
-}
-
-function stripKnownExtension(value: string): string {
-	const extension = path.posix.extname(value).toLowerCase();
-	if (extension === '.md' || extension === '.markdown') {
-		return value.slice(0, -extension.length);
-	}
-	return value;
-}
-
-function isPathLikeTarget(target: string): boolean {
-	return target.includes('/') || target.includes('\\') || path.posix.extname(target) !== '';
-}
-
-function normalizePathCandidateForResolution(target: string, sourcePath: string): string {
-	let normalized = target.replace(/\\/g, '/').trim();
-	if (!normalized) {
-		return '';
-	}
-
-	if (normalized.startsWith('./') || normalized.startsWith('../')) {
-		normalized = path.posix.join(path.posix.dirname(sourcePath), normalized);
-	}
-
-	normalized = normalized.replace(/^\/+/g, '');
-	normalized = normalized.replace(/\/+/g, '/');
-	normalized = path.posix.normalize(normalized);
-	if (normalized === '.' || !normalized) {
-		return '';
-	}
-
-	if (!path.posix.extname(normalized)) {
-		normalized = `${normalized}.md`;
-	}
-
-	return normalizeVaultPath(normalized);
-}
-
-function addToLookup(map: MultiLookup, key: string, value: string): void {
-	const normalized = normalizeLookupToken(key);
-	if (!normalized) {
-		return;
-	}
-	const existing = map.get(normalized);
-	if (!existing) {
-		map.set(normalized, [value]);
-		return;
-	}
-	if (!existing.includes(value)) {
-		existing.push(value);
-	}
-}
-
-function pickSingleValue(values?: string[]): string | null {
-	if (!values || values.length !== 1) {
-		return null;
-	}
-	return values[0] || null;
 }
 
 function uniquePaths(paths: string[]): string[] {

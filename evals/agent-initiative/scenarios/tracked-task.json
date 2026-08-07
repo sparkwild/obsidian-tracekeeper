@@ -1,0 +1,66 @@
+[
+	{
+		"id": "project-architecture-continuation",
+		"class": "tracked_task",
+		"kind": "positive",
+		"prompt": "继续优化 Tracekeeper 的 Agent 记忆架构并给出实现方案。",
+		"project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": true, "allowed_statuses": ["recorded", "queued", "auto_saved", "ignored", "requires_user_action"], "match_finish_result": true } }
+	},
+	{
+		"id": "multi-file-runtime-refactor",
+		"class": "tracked_task",
+		"kind": "positive",
+		"prompt": "在现有仓库中修改多个 Runtime 文件并运行窄测试。",
+		"project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": true, "allowed_statuses": ["recorded", "queued", "auto_saved", "ignored", "requires_user_action"], "match_finish_result": true } }
+	},
+	{
+		"id": "ongoing-topic-research",
+		"class": "tracked_task",
+		"kind": "positive",
+		"prompt": "继续研究本地优先 Agent 记忆治理，并整理可复用结论。",
+		"project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": true, "allowed_statuses": ["recorded", "queued", "auto_saved", "ignored", "requires_user_action"], "match_finish_result": true } }
+	},
+	{
+		"id": "decision-and-next-actions",
+		"class": "tracked_task",
+		"kind": "positive",
+		"prompt": "为项目形成一个新的架构决策，并明确下一轮实施动作。",
+		"project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": true, "allowed_statuses": ["recorded", "queued", "auto_saved", "ignored", "requires_user_action"], "match_finish_result": true } }
+	},
+	{
+		"id": "cross-session-resume",
+		"class": "tracked_task",
+		"kind": "positive",
+		"prompt": "恢复上次未完成的 Tracekeeper 迁移工作并继续实现。",
+		"project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": true, "allowed_statuses": ["recorded", "queued", "auto_saved", "ignored", "requires_user_action"], "match_finish_result": true } }
+	},
+	{
+		"id": "preference-aware-design",
+		"class": "tracked_task",
+		"kind": "positive",
+		"prompt": "依据用户已有的本地优先和显式审批偏好设计实现方案。",
+		"project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": true, "allowed_statuses": ["recorded", "queued", "auto_saved", "ignored", "requires_user_action"], "match_finish_result": true } }
+	},
+	{
+		"id": "incident-followup",
+		"class": "tracked_task",
+		"kind": "positive",
+		"prompt": "继续调查昨天的 operation recovery 故障，修复并记录后续动作。",
+		"project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": true, "allowed_statuses": ["recorded", "queued", "auto_saved", "ignored", "requires_user_action"], "match_finish_result": true } }
+	},
+	{
+		"id": "release-readiness-plan",
+		"class": "tracked_task",
+		"kind": "positive",
+		"prompt": "为下一个版本完成持续性的发布准备评估和行动计划。",
+		"project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": true, "allowed_statuses": ["recorded", "queued", "auto_saved", "ignored", "requires_user_action"], "match_finish_result": true } }
+	}
+]
