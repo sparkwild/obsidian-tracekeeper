@@ -65,6 +65,7 @@ export interface ProposalTransitionEnvironment {
     actor?: string;
     targetExists?: (relativePath: string) => boolean;
     targetAllowed?: (relativePath: string) => boolean;
+    targetCreationAllowed?: (relativePath: string) => boolean;
 }
 export type ProposalFrontmatterMutationValue = string | string[] | null;
 export interface ProposalTransitionDecision {

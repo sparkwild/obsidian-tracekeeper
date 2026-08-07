@@ -37,6 +37,46 @@ const REVIEW_PAGE_SIZE = 18;
 const isProposalTransitionConflict = (error: unknown): boolean =>
 	error instanceof Error && error.name === 'ProposalTransitionConflictError';
 
+export const reviewStatusFailureReason = (error: unknown): string => {
+	if (!(error instanceof Error)) {
+		return ui('发生未知错误。', 'An unknown error occurred.');
+	}
+	const message = error.message.trim();
+	if (error.name === 'ProposalTransitionValidationError') {
+		if (/target is required/i.test(message)) {
+			return ui('提案缺少目标笔记。', 'The proposal has no target note.');
+		}
+		if (/target is outside .* boundary/i.test(message)) {
+			return ui('目标笔记不在允许的 Memory 或 Wiki 范围内。', 'The target note is outside the allowed Memory or Wiki area.');
+		}
+		if (/target does not exist/i.test(message)) {
+			return ui('目标笔记不存在，且该提案不是新建记忆记录。', 'The target note does not exist, and this proposal does not create a new memory record.');
+		}
+		if (/writeback content is required/i.test(message)) {
+			return ui('提案缺少拟写入内容。', 'The proposal has no writeback content.');
+		}
+		if (/frontmatter is required|frontmatter is invalid/i.test(message)) {
+			return ui('提案元数据缺失或格式无效。', 'The proposal metadata is missing or invalid.');
+		}
+		if (/content hash/i.test(message)) {
+			return ui('无法确认当前提案内容，请刷新后重试。', 'The current proposal content could not be verified. Refresh and try again.');
+		}
+		return ui('提案数据未通过审核校验。', 'The proposal data did not pass review validation.');
+	}
+	if (error.name === 'ProposalTransitionStateError') {
+		if (/archived proposals cannot be changed/i.test(message)) {
+			return ui('该提案已归档，不能再修改审核状态。', 'The proposal is archived and its review status cannot be changed.');
+		}
+		return ui('当前提案状态不允许执行此操作，请刷新后确认最新状态。', 'The current proposal state does not allow this action. Refresh to confirm its latest state.');
+	}
+	return ui('发生意外错误，请查看开发者控制台中的详细记录。', 'An unexpected error occurred. Check the developer console for details.');
+};
+
+export const reviewStatusFailureMessage = (error: unknown): string => {
+	const reason = reviewStatusFailureReason(error);
+	return ui(`更新审核状态失败：${reason}`, `Failed to update review status: ${reason}`);
+};
+
 export class TracekeeperReviewQueueView extends ItemView {
 	private activeFilter: ReviewInboxFilter = 'needs_completion';
 	private activeSort: ReviewQueueSort = 'attention';
@@ -865,7 +905,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 						));
 						await this.refresh();
 					} else {
-						new Notice(ui('更新审核状态失败。', 'Failed to update review status.'));
+						new Notice(reviewStatusFailureMessage(error));
 					}
 				}
 			})();
@@ -874,6 +914,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 	private async batchUpdate(proposals: MemoryProposalRecord[], status: MemoryProposalStatus): Promise<void> {
 		const failedPaths: string[] = [];
+		const failedReasons: string[] = [];
 		let updated = 0;
 		for (const proposal of proposals) {
 			try {
@@ -881,6 +922,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 				updated += 1;
 			} catch (error) {
 				failedPaths.push(proposal.path);
+				failedReasons.push(reviewStatusFailureReason(error));
 				console.error('tracekeeper failed to update review proposal in batch', error);
 			}
 		}
@@ -893,8 +935,8 @@ export class TracekeeperReviewQueueView extends ItemView {
 			failed === 0
 				? ui(`已更新 ${updated} 条变更提案。`, `Updated ${updated} change proposals.`)
 				: ui(
-					`已更新 ${updated} 条变更提案；${failed} 条失败并保留选择。`,
-					`Updated ${updated} change proposals; ${failed} failed and remain selected.`
+					`已更新 ${updated} 条变更提案；${failed} 条失败并保留选择。首个失败原因：${failedReasons[0]}`,
+					`Updated ${updated} change proposals; ${failed} failed and remain selected. First failure: ${failedReasons[0]}`
 				)
 		);
 		await this.refresh();

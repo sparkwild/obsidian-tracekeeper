@@ -377,13 +377,22 @@ export class ObsidianProposalTransitionAdapter {
 		);
 	}
 
-	private environment(request: ObsidianProposalTransitionRequest): ProposalTransitionEnvironment {
+	private environment(
+		request: ObsidianProposalTransitionRequest,
+		frontmatter: Readonly<Record<string, unknown>>
+	): ProposalTransitionEnvironment {
+		const claimKey = scalarField(
+			frontmatter,
+			['claim_key', 'claimKey'],
+			'Proposal claim key'
+		);
 		return {
 			now: request.now || new Date().toISOString(),
 			actor: request.actor || 'user',
 			targetAllowed: isAllowedProposalTargetPath,
 			targetExists: (relativePath) =>
 				this.app.vault.getAbstractFileByPath(relativePath) instanceof TFile,
+			targetCreationAllowed: () => Boolean(claimKey),
 		};
 	}
 
@@ -405,7 +414,7 @@ export class ObsidianProposalTransitionAdapter {
 			committed = transitionProposal(
 				current,
 				request,
-				this.environment(request)
+				this.environment(request, frontmatter)
 			);
 			applyFrontmatterMutation(frontmatter, committed.frontmatter);
 		});
@@ -438,7 +447,7 @@ export class ObsidianProposalTransitionAdapter {
 			committed = transitionProposal(
 				current,
 				request,
-				this.environment(request)
+				this.environment(request, frontmatter)
 			);
 			if (committed.replayed) {
 				return content;

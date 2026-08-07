@@ -1813,6 +1813,40 @@ async function run() {
 			),
 			approvedDecision.receipt
 		);
+		const lifecycleTarget = '01_knowledge/memory/projects/demo/agents/codex/new-record.md';
+		const lifecycleSnapshot = {
+			...proposalSnapshot,
+			proposalId: 'proposal-lifecycle-create',
+			targetPath: lifecycleTarget,
+		};
+		const lifecycleApproval = proposalTransitionModule.transitionProposal(
+			lifecycleSnapshot,
+			{
+				expectedRevision: proposalTransitionModule.computeProposalRevision(lifecycleSnapshot),
+				expectedContentHash: proposalTransitionModule.computeProposalContentHash(lifecycleSnapshot),
+				operationId: 'review-approve-lifecycle-create',
+				action: { kind: 'status', nextStatus: 'approved' },
+			},
+			{
+				...transitionEnvironment,
+				targetCreationAllowed: (targetPath) => targetPath === lifecycleTarget,
+			}
+		);
+		assert.equal(lifecycleApproval.state.status, 'approved');
+		assert.equal(lifecycleApproval.state.targetPath, lifecycleTarget);
+		assert.throws(
+			() => proposalTransitionModule.transitionProposal(
+				lifecycleSnapshot,
+				{
+					expectedRevision: proposalTransitionModule.computeProposalRevision(lifecycleSnapshot),
+					expectedContentHash: proposalTransitionModule.computeProposalContentHash(lifecycleSnapshot),
+					operationId: 'review-reject-missing-append-target',
+					action: { kind: 'status', nextStatus: 'approved' },
+				},
+				transitionEnvironment
+			),
+			/target does not exist/i
+		);
 		assert.throws(
 			() => proposalTransitionModule.proposalTransitionReceiptFromFrontmatter({
 				review_transition_id: 'incomplete',

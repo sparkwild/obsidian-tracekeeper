@@ -219,7 +219,7 @@ const ensureSnapshotIdentity = (snapshot) => {
         }
     }
 };
-const ensureAllowedTarget = (targetPath, environment) => {
+const ensureAllowedTarget = (targetPath, environment, allowCreation = false) => {
     const normalized = normalizeProposalTargetPath(targetPath);
     if (!normalized) {
         throw new ProposalTransitionValidationError('Proposal target is required.');
@@ -230,7 +230,10 @@ const ensureAllowedTarget = (targetPath, environment) => {
     if (!allowed) {
         throw new ProposalTransitionValidationError('Proposal target is outside the allowed Memory or Wiki boundary.');
     }
-    if (!environment.targetExists || !environment.targetExists(normalized)) {
+    const exists = Boolean(environment.targetExists?.(normalized));
+    const creationAllowed = allowCreation
+        && Boolean(environment.targetCreationAllowed?.(normalized));
+    if (!exists && !creationAllowed) {
         throw new ProposalTransitionValidationError('Proposal target does not exist.');
     }
     return normalized;
@@ -239,7 +242,7 @@ const ensureCompleteMemoryProposal = (snapshot, environment) => {
     if (snapshot.classification !== 'memory_proposal') {
         throw new ProposalTransitionValidationError('Only memory proposals can use the writeback transition.');
     }
-    const targetPath = ensureAllowedTarget(snapshot.targetPath, environment);
+    const targetPath = ensureAllowedTarget(snapshot.targetPath, environment, true);
     if (!isMeaningfulProposalText(snapshot.writebackContent)) {
         throw new ProposalTransitionValidationError('Proposal writeback content is required.');
     }

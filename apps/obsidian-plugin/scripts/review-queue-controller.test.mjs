@@ -527,6 +527,7 @@ function createNativeTransitionHarness(options = {}) {
 		status: 'pending',
 		target_note: targetPath,
 		task_id: 'task-1',
+		...options.proposalFields,
 	};
 	const proposalFile = {
 		__tracekeeper_kind: 'file',
@@ -642,7 +643,11 @@ try {
 	]);
 
 	const { ReviewQueueController } = require(controllerOutput);
-	const { TracekeeperReviewQueueView } = require(viewOutput);
+	const {
+		TracekeeperReviewQueueView,
+		reviewStatusFailureMessage,
+		reviewStatusFailureReason,
+	} = require(viewOutput);
 	const {
 		ApprovedWritebackApplyModal,
 		ReviewQueueArchiveModal,
@@ -661,6 +666,22 @@ try {
 	proposalTransitionReceiptFromFrontmatterForTest =
 		proposalTransitionReceiptFromFrontmatter;
 	transitionProposalForTest = transitionProposal;
+
+	test('review status errors expose localized, actionable failure reasons', () => {
+		const missingTarget = new Error('Proposal target does not exist.');
+		missingTarget.name = 'ProposalTransitionValidationError';
+		assert.equal(
+			reviewStatusFailureReason(missingTarget),
+			'The target note does not exist, and this proposal does not create a new memory record.'
+		);
+		assert.equal(
+			reviewStatusFailureMessage(missingTarget),
+			'Failed to update review status: The target note does not exist, and this proposal does not create a new memory record.'
+		);
+		const invalidState = new Error('Proposal transition approved -> rejected is not allowed.');
+		invalidState.name = 'ProposalTransitionStateError';
+		assert.match(reviewStatusFailureMessage(invalidState), /current proposal state.*does not allow/i);
+	});
 
 	test('native transition adapter commits frontmatter-only status through processFrontMatter', async () => {
 		const harness = createNativeTransitionHarness();
@@ -845,6 +866,30 @@ try {
 		);
 		assert.equal(harness.textWrites, 0);
 		assert.equal(harness.proposalFile.frontmatter.approval_status, 'pending');
+	});
+
+	test('native transition adapter approves a lifecycle proposal before its MemoryRecord target exists', async () => {
+		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				claim_key: 'review.lifecycle-create',
+			},
+			beforeTextMutation({ files }) {
+				files.delete(targetPath);
+			},
+		});
+		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
+		const snapshot = nativeSnapshot();
+		const decision = await adapter.transition({
+			proposalPath,
+			expectedRevision: computeProposalRevision(snapshot),
+			expectedContentHash: computeProposalContentHash(snapshot),
+			operationId: 'review-approve-lifecycle-create',
+			action: { kind: 'status', nextStatus: 'approved' },
+			now: '2026-07-30T00:00:04.500Z',
+		});
+		assert.equal(decision.state.status, 'approved');
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
+		assert.equal(harness.files.has(targetPath), false);
 	});
 
 	test('native transition adapter rejects an intervening status before draft mutation', async () => {

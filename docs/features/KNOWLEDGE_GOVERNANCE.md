@@ -50,13 +50,16 @@ may edit an unapproved proposal, approve it, return it for revision, or not
 accept it. Approval confirms the content; applying it remains a separate,
 previewed, explicitly confirmed action.
 
-An incomplete proposal is a remediation item, not a review-ready change. A
-missing, invalid, or unavailable target must be resolved from existing
-Vault-local Memory/Wiki candidates, and writable content must be present, before
-approval is available. The review detail presents the available task and source
-evidence, current target context, and an expected append diff. Approval still
+An incomplete proposal is a remediation item, not a review-ready change. An
+append proposal must resolve an existing Vault-local Memory/Wiki target before
+approval, while a lifecycle proposal with a validated claim may approve a new
+MemoryRecord target that does not exist yet. In both cases the target path must
+remain inside the allowed knowledge boundary and writable content must be
+present. The review detail presents the available task and source evidence,
+current target context, and the expected append or create diff. Approval still
 does not write; apply generates a fresh preview and requires a separate
-confirmation.
+confirmation. A lifecycle target is created atomically only during that explicit
+apply step.
 
 Approval commits a receipt that binds the exact proposal revision and content
 hash reviewed by the user. The apply preview produces an opaque, expiring
