@@ -7,9 +7,10 @@ Provide accurate values for the fields exposed by the current `tracekeeper.finis
 - `task_id`: the exact identifier returned by `tracekeeper.start_task`.
 - status: completed, partial, or blocked according to actual outcome.
 - summary: concise work performed and user-visible result.
-- decisions: durable decisions made during the task.
+- decisions: decisions made during the task; these remain task facts unless copied into an explicit memory candidate.
 - unresolved items: risks, blockers, or intentionally deferred work.
 - next steps: concrete follow-up that remains useful after the current session.
+- `memory_candidate_records`: optional explicit durable-memory candidates. Every record must declare `scope: "global"` or `scope: "project"`; candidate project identity is independent from task context.
 - `related_wiki`: reuse only `relation_evidence.related_wiki[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
 - `related_sources`: reuse only `relation_evidence.related_sources[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
 
@@ -21,6 +22,11 @@ Review semantics:
 - Pending content is not durable memory or an applied Wiki update.
 - Apply an approved proposal only when the user explicitly requests the apply action.
 - Missing Wiki context routes the proposal to review rather than weakening the boundary.
+
+Task tracking and durable Memory are independent. A task without project identity
+can still submit a project candidate when that candidate supplies its own project
+identity, and a project task can submit a global candidate. Ordinary task fields
+are never promoted automatically.
 
 Exactly-once rules:
 

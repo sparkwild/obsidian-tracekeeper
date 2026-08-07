@@ -10,10 +10,13 @@ The user edits and reorganizes notes through Obsidian. Tracekeeper maintains the
 three-root knowledge structure, reports graph and structure issues, and creates
 reviewable artifacts without replacing Markdown with an external database.
 
-Memory captures continuity such as tasks, decisions, preferences, lessons, and
-project history. Wiki notes capture reusable subjects such as hubs, concepts,
-claims, guides, and references. Durable Memory should link to relevant Wiki or
-Source notes so Recall and the Obsidian graph use the same relationships.
+Task tracking captures execution continuity: goals, status, decisions, outcomes,
+and next steps. It is separate from Durable Memory. Durable Memory is created
+only from explicit candidate records, each declaring global or project scope;
+ordinary task fields are never promoted automatically. Wiki notes capture
+reusable subjects such as hubs, concepts, claims, guides, and references.
+Durable Memory should link to relevant Wiki or Source notes so Recall and the
+Obsidian graph use the same relationships.
 
 ## Agent Work
 

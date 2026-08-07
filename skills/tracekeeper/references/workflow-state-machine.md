@@ -8,13 +8,13 @@ Choose exactly one mode before invoking Tracekeeper.
 | --- | --- | --- |
 | `no_track` | Prior local context and durable continuity do not improve the result | None |
 | `recall_only` | A historical answer or decision needs local context but no task lifecycle | `tracekeeper.recall` only |
-| `tracked_task` | Work is multi-step, continuity-sensitive, or needs durable closeout | start once, recall as needed, finish once |
+| `tracked_task` | Work is multi-step, continuity-sensitive, or needs task tracking | start once, recall as needed, finish once |
 
 Apply the modes in this order:
 
 1. Choose `no_track` for greetings, simple transformations, isolated facts, and isolated commands.
 2. Choose `recall_only` when the request primarily needs historical context.
-3. Choose `tracked_task` only when work needs continuity or durable closeout.
+3. Choose `tracked_task` only when work needs continuity or task tracking.
 
 Prefer the least stateful valid mode. Availability of Tracekeeper tools is not itself a reason to create a task.
 
@@ -65,6 +65,7 @@ Structured actions do not bypass capability checks, confirmation, review, or act
 - A `recall_only` workflow never begins with `scope: "global"` or `scope: "project_history"`.
 - A `tracked_task` starts first, then copies the Runtime's `next_actions` or `recommended_recall` arguments.
 - Use `project_history` only after project identity is established and task or session continuity is specifically needed.
+- Use `task_history` when recalling task execution records without requiring project identity.
 - Use `global` only for an explicit cross-project request or when the Runtime reports uncertain project identity.
 - Recall is relevance-ranked. For exhaustive Memory enumeration, use
   `tracekeeper.memory` with `scope: "project"` and the resolved stable project

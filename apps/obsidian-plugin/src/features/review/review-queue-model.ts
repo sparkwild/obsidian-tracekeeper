@@ -88,6 +88,10 @@ export interface ReviewQueueQueryResult {
 
 export interface MemoryReviewQueueSnapshot {
 	proposals: MemoryProposalRecord[];
+	totalProposalCount: number;
+	windowOffset: number;
+	windowLimit: number;
+	isTruncated: boolean;
 	contexts: Record<string, ReviewProposalContext>;
 	indexState: string;
 	missingReviewQueueFolder: boolean;

@@ -4,6 +4,7 @@ import {
 	type MemoryInspectorQuery,
 	type MemoryInspectorRecord,
 	type MemoryInspectorSnapshot,
+	type MemoryLifecycleFilter,
 	type MemoryLifecycleDisplayState,
 	type MemoryRecordScope,
 	type MemoryScopeFilter,
@@ -25,6 +26,7 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		page: 1,
 		scope: 'all',
 		state: 'all',
+		lifecycle: 'all',
 	};
 
 	constructor(
@@ -237,6 +239,23 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		stateSelect.setAttr('aria-label', ui('按持久化状态筛选', 'Filter by persistence state'));
 		stateSelect.addEventListener('change', () => {
 			this.query = { ...this.query, page: 1, state: stateSelect.value as MemoryStateFilter };
+			void this.refresh();
+		});
+
+		const lifecycleSelect = controls.createEl('select') as HTMLSelectElement;
+		this.addOption(lifecycleSelect, 'all', ui('全部生命周期', 'All lifecycle states'), snapshot.lifecycle);
+		this.addOption(lifecycleSelect, 'current', ui('当前', 'Current'), snapshot.lifecycle);
+		this.addOption(lifecycleSelect, 'history', ui('历史', 'History'), snapshot.lifecycle);
+		this.addOption(lifecycleSelect, 'conflict', ui('冲突', 'Conflict'), snapshot.lifecycle);
+		this.addOption(lifecycleSelect, 'review', ui('待审核', 'Review'), snapshot.lifecycle);
+		this.addOption(lifecycleSelect, 'legacy_unkeyed', ui('旧版未标识', 'Legacy unkeyed'), snapshot.lifecycle);
+		lifecycleSelect.setAttr('aria-label', ui('按记忆生命周期筛选', 'Filter by memory lifecycle'));
+		lifecycleSelect.addEventListener('change', () => {
+			this.query = {
+				...this.query,
+				page: 1,
+				lifecycle: lifecycleSelect.value as MemoryLifecycleFilter,
+			};
 			void this.refresh();
 		});
 	}

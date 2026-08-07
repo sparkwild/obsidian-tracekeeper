@@ -1,7 +1,7 @@
 import type { RuntimeViewModelInput } from '../runtime/runtime-view-model';
 import { runtimeViewModel } from '../runtime/runtime-view-model';
 import type { StructureState } from '../structure/legacy-migration-controller';
-import type { AgentConnectionRecord } from './activity-model';
+import type { AgentConnectionRecord, AgentTaskRecord } from './activity-model';
 
 export type ActivityPrimaryAction =
 	| 'repair_structure'
@@ -31,6 +31,18 @@ export interface ActivityAgentSummary {
 	state: 'observed' | 'not_observed';
 	observedAgentCount: number;
 	agentGroups: ActivityAgentGroup[];
+}
+
+export type LatestTaskPlacement = 'hidden' | 'memory_loop' | 'standalone';
+
+export function selectLatestTaskPlacement(latestTask: AgentTaskRecord | null): LatestTaskPlacement {
+	if (!latestTask) {
+		return 'hidden';
+	}
+	const status = latestTask.status.trim().toLowerCase();
+	return status === 'completed' || status === 'done' || status === 'success'
+		? 'memory_loop'
+		: 'standalone';
 }
 
 export function selectActivityPrimaryAction(input: ActivityPrimaryActionInput): ActivityPrimaryAction {
@@ -106,7 +118,6 @@ export function selectSuccessfullyUsedAgentConnections(
 		agent.transport.trim().toLowerCase() === 'streamable-http'
 		&& agent.sessionId.trim() !== ''
 		&& agent.resultStatus === 'success'
-		&& Date.parse(agent.connectedAt) > 0
 		&& Date.parse(agent.lastUsedAt) > 0
 		&& agent.lastSuccessfulTool.trim() !== ''
 	);

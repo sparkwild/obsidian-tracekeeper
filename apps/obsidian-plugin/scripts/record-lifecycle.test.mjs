@@ -734,8 +734,8 @@ const createActivityHost = (fixture) => ({
 		async readRecentSourceRequests() {
 			return [];
 		},
-		async readRecentMemoryProposals() {
-			return [];
+		async readMemoryProposalWindow() {
+			return { records: [], totalItems: 0, isTruncated: false };
 		},
 		async readActivityTimelineRecords() {
 			return {
@@ -1013,6 +1013,31 @@ test('active proposal enumeration stays active-only while history resolves archi
 	);
 	const fallback = await repository.readProposalHistoryById('legacy-fallback.md');
 	assert.equal(fallback.status, 'missing');
+});
+
+test('review proposal window bounds body reads and prioritizes attention items', async () => {
+	const processedPath = '00_tracekeeper/inbox/review_queue/recent-applied.md';
+	const pendingPath = '00_tracekeeper/inbox/review_queue/older-pending.md';
+	const fixture = createNativeVaultFixture({
+		files: {
+			[processedPath]: {
+				content: proposalMarkdown({ proposalId: 'recent-applied', status: 'applied' }),
+				mtime: Date.parse('2026-07-31T00:00:00.000Z'),
+			},
+			[pendingPath]: {
+				content: proposalMarkdown({ proposalId: 'older-pending', status: 'pending' }),
+				mtime: Date.parse('2026-07-29T00:00:00.000Z'),
+			},
+		},
+	});
+	const repository = new ActivityRecordRepository(fixture.app);
+	const window = await repository.readMemoryProposalWindow(1);
+	assert.equal(window.totalItems, 2);
+	assert.equal(window.isTruncated, true);
+	assert.deepEqual(window.records.map((record) => record.path), [pendingPath]);
+	const nextWindow = await repository.readMemoryProposalWindow(1, 1);
+	assert.equal(nextWindow.offset, 1);
+	assert.deepEqual(nextWindow.records.map((record) => record.path), [processedPath]);
 });
 
 test('managed path-only proposal references backfill once from one proven explicit id', async () => {

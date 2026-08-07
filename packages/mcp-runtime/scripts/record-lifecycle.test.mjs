@@ -226,9 +226,13 @@ test('finish task stores proposal ids and generated-link handoff in task and ses
 		const task = await startTask(fixture, 'finish-links');
 		const finished = await invoke('tracekeeper.finish_task', {
 			task_id: task.task_id,
+			status: 'completed',
 			summary: 'Finish with one review proposal.',
-			decisions: ['Keep stable proposal joins.'],
-			review_proposal_mode: 'review_queue',
+			memory_candidate_records: [{
+				proposal_kind: 'task_decision',
+				content: 'Keep stable proposal joins.',
+				scope: 'global',
+			}],
 			idempotency_key: 'record-lifecycle-finish-links',
 		}, fixture.context);
 		assert.equal(finished.proposals.length, 1);
@@ -261,9 +265,13 @@ test('finish task persists human links returned by a Vault adapter', async () =>
 		const task = await startTask(fixture, 'finish-generated-links');
 		const finished = await invoke('tracekeeper.finish_task', {
 			task_id: task.task_id,
+			status: 'completed',
 			summary: 'Finish with an adapter-generated proposal link.',
-			decisions: ['Use the native link adapter.'],
-			review_proposal_mode: 'review_queue',
+			memory_candidate_records: [{
+				proposal_kind: 'task_decision',
+				content: 'Use the native link adapter.',
+				scope: 'global',
+			}],
 			idempotency_key: 'record-lifecycle-finish-generated-links',
 		}, fixture.context);
 		const proposalPath = finished.proposals[0].path;

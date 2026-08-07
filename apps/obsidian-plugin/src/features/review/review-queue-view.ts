@@ -43,6 +43,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 	private filterExplicitlySelected = false;
 	private searchQuery = '';
 	private pageIndex = 0;
+	private windowOffset = 0;
 	private selectedProposalPath = '';
 	private selectionMode = false;
 	private selectedProposalPaths = new Set<string>();
@@ -135,6 +136,34 @@ export class TracekeeperReviewQueueView extends ItemView {
 			return;
 		}
 
+		if (snapshot.isTruncated) {
+			const warning = contentEl.createDiv({ cls: 'tracekeeper-card tracekeeper-observability-warning' });
+			warning.createEl('strong', {
+				text: ui('审核队列已启用有界读取', 'Review queue uses bounded reads'),
+			});
+			warning.createEl('p', {
+				text: ui(
+					`当前显示第 ${snapshot.windowOffset + 1}–${Math.min(snapshot.windowOffset + snapshot.windowLimit, snapshot.totalProposalCount)} 条，共 ${snapshot.totalProposalCount} 条；待处理项优先。只有切换批次时才读取下一批正文。`,
+					`Showing ${snapshot.windowOffset + 1}–${Math.min(snapshot.windowOffset + snapshot.windowLimit, snapshot.totalProposalCount)} of ${snapshot.totalProposalCount}, with attention items first. The next body batch is read only when requested.`
+				),
+			});
+			const actions = warning.createDiv({ cls: 'tracekeeper-action-row' });
+			const previous = actions.createEl('button', { text: ui('上一批', 'Previous batch') });
+			previous.disabled = snapshot.windowOffset === 0;
+			previous.addEventListener('click', () => {
+				this.windowOffset = Math.max(0, snapshot.windowOffset - snapshot.windowLimit);
+				this.pageIndex = 0;
+				void this.refresh();
+			});
+			const next = actions.createEl('button', { text: ui('下一批', 'Next batch') });
+			next.disabled = snapshot.windowOffset + snapshot.windowLimit >= snapshot.totalProposalCount;
+			next.addEventListener('click', () => {
+				this.windowOffset = snapshot.windowOffset + snapshot.windowLimit;
+				this.pageIndex = 0;
+				void this.refresh();
+			});
+		}
+
 		let result = filterReviewQueueItems(snapshot.proposals, {
 			filter: this.activeFilter,
 			search: this.searchQuery,
@@ -185,7 +214,8 @@ export class TracekeeperReviewQueueView extends ItemView {
 	}
 
 	async refresh(): Promise<void> {
-		const snapshot = await this.plugin.loadMemoryReviewQueueSnapshot();
+		const snapshot = await this.plugin.loadMemoryReviewQueueSnapshot(this.windowOffset);
+		this.windowOffset = snapshot.windowOffset;
 		await this.render(snapshot);
 	}
 

@@ -31,6 +31,7 @@ export type MemoryLifecycleDisplayState =
 	| 'legacy_unkeyed';
 export type MemoryScopeFilter = 'all' | MemoryRecordScope;
 export type MemoryStateFilter = 'all' | MemoryPersistenceState;
+export type MemoryLifecycleFilter = 'all' | MemoryLifecycleDisplayState;
 
 export interface KnowledgeIndexEvidence {
 	state: KnowledgeIndexState;
@@ -45,6 +46,7 @@ export interface MemoryInspectorQuery {
 	pageSize?: number;
 	scope?: MemoryScopeFilter;
 	state?: MemoryStateFilter;
+	lifecycle?: MemoryLifecycleFilter;
 	focusPaths?: readonly string[];
 	taskId?: string;
 }
@@ -86,6 +88,7 @@ export interface MemoryInspectorSnapshot {
 	totalPages: number;
 	scope: MemoryScopeFilter;
 	state: MemoryStateFilter;
+	lifecycle: MemoryLifecycleFilter;
 	focused: boolean;
 	missingMemoryFolder: boolean;
 	indexState: KnowledgeIndexState;
@@ -455,7 +458,7 @@ export const buildMemoryInspectorSnapshot = (
 				frontmatterString(note, ['type'])
 				|| asString(note.type)
 			).toLowerCase();
-			if (recordType === 'project_memory_entry') {
+			if (recordType === 'project_memory_entry' || recordType === 'memory_record') {
 				immutableProjectEntryCount += 1;
 			} else {
 				legacyProjectNoteCount += 1;
@@ -575,6 +578,7 @@ export const buildMemoryInspectorSnapshot = (
 
 	const scope = input.query?.scope || 'all';
 	const state = input.query?.state || 'all';
+	const lifecycle = input.query?.lifecycle || 'all';
 	const focusPaths = new Set(
 		(input.query?.focusPaths || []).map(normalizeRecordPath).filter(Boolean)
 	);
@@ -583,6 +587,7 @@ export const buildMemoryInspectorSnapshot = (
 	const filtered = records
 		.filter((record) => scope === 'all' || record.scope === scope)
 		.filter((record) => state === 'all' || record.state === state)
+		.filter((record) => lifecycle === 'all' || record.lifecycleState === lifecycle)
 		.filter((record) => !focused || matchesMemoryFocus(record, focusPaths, taskId))
 		.sort((left, right) => right.sortTimestamp - left.sortTimestamp || left.path.localeCompare(right.path));
 	const page = paginate(filtered, input.query?.page, input.query?.pageSize);
@@ -605,6 +610,7 @@ export const buildMemoryInspectorSnapshot = (
 		totalPages: page.totalPages,
 		scope,
 		state,
+		lifecycle,
 		focused,
 		missingMemoryFolder: input.missingMemoryFolder,
 		indexState: input.index.state,

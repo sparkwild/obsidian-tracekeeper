@@ -1337,7 +1337,7 @@ async function main() {
 		assert.ok(Array.isArray(startTask.next_actions_for_agent), 'start_task should return next actions for agents');
 		assert.ok(startTask.next_actions_for_agent.some((entry) => entry.includes('scope="project"')));
 		assert.equal(startTask.closeout_contract?.required_tool, 'tracekeeper.finish_task');
-		assert.equal(startTask.closeout_contract?.default_mode, 'auto_propose');
+		assert.equal(startTask.closeout_contract?.default_mode, 'explicit_candidates');
 		assert.equal(startTask.content_language, 'en');
 		assert.equal(startTask.closeout_contract?.content_language, 'en');
 		assert.ok(
@@ -1715,6 +1715,7 @@ async function main() {
 			arguments: {
 					task_id: taskId,
 					summary: 'Smoke task finish session.',
+					status: 'completed',
 					outcomes: ['Complete smoke validation'],
 					idempotency_key: 'smoke-finish-task',
 			},
@@ -1725,11 +1726,10 @@ async function main() {
 		assert.equal(finishTask.tool, 'tracekeeper.finish_task');
 		assert.equal(finishTask.workflow?.state, 'finished');
 		assert.equal(finishTask.read_only, false);
-		assert.equal(finishTask.review_proposal_mode, 'auto_propose');
+		assert.equal(finishTask.status, 'completed');
 		assert.equal(finishTask.content_language, 'en');
-		assert.equal(finishTask.memory_closeout_status, 'empty');
-		assert.equal(finishTask.memory_closeout_state, 'no_candidates');
-		assert.match(finishTask.memory_closeout_summary, /No durable closeout memory candidates/);
+		assert.equal(finishTask.memory_status, 'no_candidates');
+		assert.deepEqual(finishTask.memory_candidate_records, []);
 		assert.equal(finishTask.proposal_count, 0);
 		assert.deepEqual(finishTask.proposals, []);
 		assert.equal(finishTask.auto_applied_count, 0);
@@ -1740,7 +1740,7 @@ async function main() {
 		assert.ok(Array.isArray(finishTask.next_actions));
 		assert.equal(finishTask.next_actions.some((action) => action.tool === 'tracekeeper.finish_task'), false);
 		assert.ok(Array.isArray(finishTask.next_actions_for_agent));
-		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('no durable closeout memory candidates')));
+		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('no durable memory candidates')));
 		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('tracekeeper.propose_memory')));
 		assert.equal(finishTask.next_actions_for_agent.some((entry) => entry.includes('call tracekeeper.finish_task again with')), false);
 		assert.deepEqual(JSON.parse(finishTaskCall.content[0]?.text), finishTask, 'finish text fallback should match structuredContent');
@@ -1748,7 +1748,7 @@ async function main() {
 			hasToolCallSection(readAuditLog(vaultRoot), 'tracekeeper.finish_task', 'success', [
 				`- task_id: "${taskId}"`,
 				'- workflow_mode: "tracked_task"',
-				'- memory_closeout_status: "no_candidates"',
+				'- memory_status: "no_candidates"',
 			]),
 			'finish audit should preserve tracked workflow closeout evidence'
 		);
@@ -1761,6 +1761,7 @@ async function main() {
 				arguments: {
 					task_id: taskId,
 					summary: 'Smoke task finish session.',
+					status: 'completed',
 					outcomes: ['Complete smoke validation'],
 					idempotency_key: 'smoke-finish-task',
 				},
@@ -1772,6 +1773,7 @@ async function main() {
 					arguments: {
 						task_id: taskId,
 						summary: 'Different closeout under the same retry key.',
+						status: 'completed',
 						outcomes: ['Complete smoke validation'],
 						idempotency_key: 'smoke-finish-task',
 					},
@@ -1784,6 +1786,7 @@ async function main() {
 					arguments: {
 						task_id: taskId,
 						summary: 'Second independent closeout.',
+						status: 'completed',
 						idempotency_key: 'smoke-finish-task-second',
 					},
 				}),
@@ -1855,11 +1858,12 @@ async function main() {
 				arguments: {
 					task_id: zhStart.task_id,
 					summary: '中文收尾内容保持原文。',
+					status: 'completed',
 					outcomes: ['验证中文包装'],
 				},
 			}));
 			assert.equal(zhFinish.content_language, 'zh-CN');
-			assert.match(zhFinish.memory_closeout_summary, /没有提交可长期沉淀/);
+			assert.equal(zhFinish.memory_status, 'no_candidates');
 			const zhSessionText = fs.readFileSync(path.join(vaultRoot, zhFinish.path), 'utf8');
 			assert.ok(zhSessionText.includes('# 任务会话记录'));
 			assert.ok(zhSessionText.includes('## 摘要'));
@@ -1900,6 +1904,104 @@ async function main() {
 			await zhClient.close().catch(() => {});
 		}
 
+		const explicitProjectStart = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.start_task',
+			arguments: {
+				goal: 'Smoke explicit project memory candidate.',
+				project_hint: 'demo',
+				project_id: 'demo-proj-id',
+				repo_path: atlasRepoPath,
+				idempotency_key: 'smoke-explicit-project-start',
+			},
+		}));
+		const explicitProjectQueueBefore = countReviewQueueFiles(vaultRoot);
+		const explicitProjectFinish = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: {
+				task_id: explicitProjectStart.task_id,
+				summary: 'Smoke explicit project memory candidate.',
+				status: 'completed',
+				outcomes: ['Task tracking and durable routing validated'],
+				project_hint: 'demo',
+				project_id: 'demo-proj-id',
+				repo_path: atlasRepoPath,
+				related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
+				related_sources: ['01_knowledge/sources/local-source.md'],
+				memory_candidate_records: [{
+					proposal_kind: 'project_update',
+					content: 'Explicit project candidate from smoke test.',
+					scope: 'project',
+					evidence: ['01_knowledge/sources/local-source.md'],
+					related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
+					related_sources: ['01_knowledge/sources/local-source.md'],
+				}],
+			},
+		}));
+		assert.equal(explicitProjectFinish.ok, true);
+		assert.equal(explicitProjectFinish.status, 'completed');
+		assert.equal(explicitProjectFinish.memory_status, 'queued_for_review');
+		assert.equal(explicitProjectFinish.memory_candidate_records.length, 1);
+		assert.equal(explicitProjectFinish.memory_candidate_records[0].scope, 'project');
+		assert.equal(explicitProjectFinish.memory_changes[0].scope, 'project');
+		assert.equal(explicitProjectFinish.proposal_count, 1);
+		assert.equal(explicitProjectFinish.auto_applied_count, 0);
+		assert.equal(countReviewQueueFiles(vaultRoot), explicitProjectQueueBefore + 1);
+
+		const explicitGlobalStart = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.start_task',
+			arguments: {
+				goal: 'Smoke explicit global memory candidate.',
+				idempotency_key: 'smoke-explicit-global-start',
+			},
+		}));
+		const explicitGlobalQueueBefore = countReviewQueueFiles(vaultRoot);
+		const explicitGlobalFinish = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: {
+				task_id: explicitGlobalStart.task_id,
+				summary: 'Smoke explicit global memory candidate.',
+				status: 'partial',
+				outcomes: ['Global candidate remains review-gated'],
+				memory_candidate_records: [{
+					proposal_kind: 'user_preference',
+					content: 'Explicit global candidate from smoke test.',
+					scope: 'global',
+					evidence: ['Smoke task execution'],
+				}],
+			},
+		}));
+		assert.equal(explicitGlobalFinish.ok, true);
+		assert.equal(explicitGlobalFinish.status, 'partial');
+		assert.equal(explicitGlobalFinish.memory_status, 'queued_for_review');
+		assert.equal(explicitGlobalFinish.memory_candidate_records[0].scope, 'global');
+		assert.equal(explicitGlobalFinish.proposal_count, 1);
+		assert.equal(explicitGlobalFinish.auto_applied_count, 0);
+		assert.equal(countReviewQueueFiles(vaultRoot), explicitGlobalQueueBefore + 1);
+
+		const ordinaryTaskStart = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.start_task',
+			arguments: {
+				goal: 'Smoke ordinary task facts remain task history.',
+				idempotency_key: 'smoke-ordinary-start',
+			},
+		}));
+		const ordinaryTaskFinish = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: {
+				task_id: ordinaryTaskStart.task_id,
+				summary: 'Smoke ordinary task facts remain task history.',
+				status: 'blocked',
+				decisions: ['This decision must not be auto-promoted.'],
+				lessons: ['This lesson remains in task tracking.'],
+			},
+		}));
+		assert.equal(ordinaryTaskFinish.ok, true);
+		assert.equal(ordinaryTaskFinish.status, 'blocked');
+		assert.equal(ordinaryTaskFinish.memory_status, 'no_candidates');
+		assert.deepEqual(ordinaryTaskFinish.memory_candidate_records, []);
+
+		if (false) {
+			// Retired characterization of implicit closeout fields; explicit candidates are tested above.
 		const queueCountBeforeDefaultAuto = countReviewQueueFiles(vaultRoot);
 		const defaultAutoFinish = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.finish_task',
@@ -2264,6 +2366,8 @@ async function main() {
 		);
 		assert.equal(countReviewQueueFiles(vaultRoot), queueCountAfterAutoPropose, 'auto_propose retry should not create Review Queue proposals');
 
+		}
+
 		const distillSession = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.distill_session',
 			arguments: {
@@ -2348,7 +2452,7 @@ async function main() {
 			memoryRules: {
 				globalMemoryRule: 'review_queue',
 				projectMemoryRule: 'auto_write',
-				taskMemoryProposalMode: 'off',
+				taskTrackingEnabled: true,
 			},
 		});
 		try {
@@ -2388,7 +2492,6 @@ async function main() {
 					risk_level: 'medium',
 					task_id: taskId,
 					project_hint: 'demo',
-					memory_scope: 'project',
 					related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
 					related_sources: [
 						'01_knowledge/sources/local-source.md',
@@ -2515,29 +2618,47 @@ async function main() {
 			assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeAutoMemory + 1);
 			assert.equal(fs.readFileSync(path.join(vaultRoot, missingBridgeAutoMemory.path), 'utf8').includes('related_wiki'), true);
 
+			const autoFinishStart = buildStructured(await autoMemoryClient.call('tools/call', {
+				name: 'tracekeeper.start_task',
+				arguments: {
+					goal: 'Smoke finish task with project auto memory.',
+					project_hint: 'demo',
+					project_id: 'demo-proj-id',
+					idempotency_key: 'smoke-auto-finish-start',
+				},
+			}));
 			const autoFinishQueueBefore = countReviewQueueFiles(vaultRoot);
 			const autoFinish = buildStructured(await autoMemoryClient.call('tools/call', {
 				name: 'tracekeeper.finish_task',
 				arguments: {
-					task_id: 'auto-memory-task',
+					task_id: autoFinishStart.task_id,
 					summary: 'Smoke finish task with project auto memory.',
+					status: 'completed',
 					outcomes: ['Project memory auto-write validated'],
 					next_actions: ['Keep project memory scoped'],
 					decisions: ['Project memory can save without repeated manual review'],
 					solution_changes: ['Added project memory auto-save rule'],
 					lessons: ['Prefer project-scoped automatic memory for routine work'],
 					preferences: ['Keep global memory reviewed by default'],
-					memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
 					project_hint: 'demo',
-					review_proposal_mode: 'auto_propose',
-					memory_scope: 'project',
+					project_id: 'demo-proj-id',
 					related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
 					related_sources: ['01_knowledge/sources/local-source.md'],
+					memory_candidate_records: [{
+						proposal_kind: 'project_update',
+						content: 'Project memory can save without repeated manual review.',
+						scope: 'project',
+						project_hint: 'demo',
+						project_id: 'demo-proj-id',
+						evidence: ['01_knowledge/sources/local-source.md'],
+						related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
+						related_sources: ['01_knowledge/sources/local-source.md'],
+					}],
 				},
 			}));
 			assert.equal(autoFinish.ok, true);
-			assert.equal(autoFinish.review_proposal_mode, 'auto_propose');
-				assert.equal(autoFinish.memory_closeout_status, 'auto_saved');
+			assert.equal(autoFinish.status, 'completed');
+			assert.equal(autoFinish.memory_status, 'auto_saved');
 				assert.equal(autoFinish.proposal_count, 0);
 				assert.equal(autoFinish.auto_applied_count, 1);
 				assert.equal(countReviewQueueFiles(vaultRoot), autoFinishQueueBefore);
@@ -2551,7 +2672,6 @@ async function main() {
 					'utf8'
 				);
 				assert.ok(autoProjectMemoryText.includes('Project memory can save without repeated manual review'));
-				assert.ok(autoProjectMemoryText.includes('Keep global memory reviewed by default'));
 				assert.equal(
 					fs.readFileSync(
 						path.join(vaultRoot, '01_knowledge/memory/projects/demo/memory.md'),
@@ -2562,29 +2682,46 @@ async function main() {
 			assert.equal(autoFinish.architecture_status === 'healthy' || autoFinish.architecture_status === 'needs_attention', true);
 			assert.equal(Array.isArray(autoFinish.missing_graph_bridges), true);
 
+			const autoFinishBridgeStart = buildStructured(await autoMemoryClient.call('tools/call', {
+				name: 'tracekeeper.start_task',
+				arguments: {
+					goal: 'Smoke finish task with missing wiki bridge.',
+					project_hint: 'demo',
+					project_id: 'demo-proj-id',
+					idempotency_key: 'smoke-auto-finish-bridge-start',
+				},
+			}));
 			const autoFinishBridgeFallback = buildStructured(await autoMemoryClient.call('tools/call', {
 				name: 'tracekeeper.finish_task',
 				arguments: {
-					task_id: 'auto-memory-task-no-bridge',
+					task_id: autoFinishBridgeStart.task_id,
 					summary: 'Smoke finish task with missing wiki bridge.',
+					status: 'completed',
 					outcomes: ['Project finish should use review queue'],
 					next_actions: ['Review proposal candidates'],
 					decisions: ['Wiki bridge is required for project auto save'],
 					solution_changes: ['Added fallback behavior'],
 					lessons: ['Missing wiki bridge should force review queue'],
 					preferences: ['Prefer explicit review queue fallback'],
-					memory_candidates: ['01_knowledge/memory/projects/demo/memory.md'],
 					project_hint: 'demo',
-					memory_scope: 'project',
+					project_id: 'demo-proj-id',
 					related_wiki: ['missing-wiki-demo-note'],
 					related_sources: ['01_knowledge/sources/local-source.md'],
-					review_proposal_mode: 'auto_propose',
+					memory_candidate_records: [{
+						proposal_kind: 'project_update',
+						content: 'Missing wiki bridge should force review queue.',
+						scope: 'project',
+						project_hint: 'demo',
+						project_id: 'demo-proj-id',
+						evidence: ['01_knowledge/sources/local-source.md'],
+						related_wiki: ['missing-wiki-demo-note'],
+						related_sources: ['01_knowledge/sources/local-source.md'],
+					}],
 				},
 			}));
 			assert.equal(autoFinishBridgeFallback.ok, true);
-			assert.equal(autoFinishBridgeFallback.memory_closeout_status, 'queued');
-			assert.equal(autoFinishBridgeFallback.memory_closeout_state, 'requires_wiki_bridge');
-			assert.equal(autoFinishBridgeFallback.proposal_count, 6);
+			assert.equal(autoFinishBridgeFallback.memory_status, 'requires_wiki_bridge');
+			assert.equal(autoFinishBridgeFallback.proposal_count, 1);
 			assert.equal(autoFinishBridgeFallback.auto_applied_count, 0);
 			assert.equal(autoFinishBridgeFallback.missing_wiki_bridge, true);
 			await autoMemoryClient.deleteSession();

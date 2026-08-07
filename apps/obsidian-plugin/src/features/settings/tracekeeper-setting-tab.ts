@@ -14,11 +14,9 @@ import {
 	AUTO_REFRESH_INTERVAL_OPTIONS,
 	MEMORY_PROPOSAL_RULES,
 	NOTE_CONTENT_LANGUAGES,
-	TASK_MEMORY_PROPOSAL_MODES,
 	memoryProposalRuleLabel,
 	normalizeGraphProfileValue,
 	noteContentLanguageLabel,
-	taskMemoryProposalModeLabel,
 } from './settings-model';
 import { ui } from '../../ui/localization';
 import { TRACEKEEPER_ACTIVITY_VIEW } from '../../ui/view-types';
@@ -367,8 +365,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			container,
 			ui('视图刷新', 'View refresh'),
 			ui(
-				'Agent 配置列表、活动页和知识变更审核打开时会自动同步最新状态。',
-				'When Agent configuration, Activity, or Knowledge Change Review is open, Tracekeeper keeps the visible status in sync.'
+				'Agent 配置列表和当前打开的 Tracekeeper 动态视图会自动同步最新状态。',
+				'Tracekeeper keeps Agent configuration and all open dynamic Tracekeeper views in sync.'
 			)
 		);
 		new Setting(section)
@@ -451,13 +449,13 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		const section = this.createSection(
 			container,
 			ui('记忆规则', 'Memory rules'),
-			ui('设置 Agent 提交记忆更新时的默认规则。', 'Set default rules for agent-submitted memory updates.')
+			ui('控制 Agent 提交的长期记忆如何处理。', 'Control how agent-submitted durable memory is handled.')
 		);
 		new Setting(section)
 			.setName(ui('全局记忆', 'Global memory'))
 			.setDesc(ui(
-				'通用偏好、长期决策等默认进入知识变更审核；也可以改为自动保存或不接收。',
-				'General preferences and long-term decisions go to review by default; you can also auto-save or ignore them.'
+				'用于跨项目复用的偏好、决策和经验。',
+				'Preferences, decisions, and lessons intended for reuse across projects.'
 			))
 			.addDropdown((dropdown) => {
 				for (const rule of MEMORY_PROPOSAL_RULES) {
@@ -476,8 +474,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		new Setting(section)
 			.setName(ui('项目记忆', 'Project memory'))
 			.setDesc(ui(
-				'项目、仓库或工作区相关记忆默认自动保存：在稳定项目 Hub 下为每次操作创建独立条目；缺少有效 Wiki 关联时仍进入审核，旧版共享记忆笔记不会被改写。',
-				'Project, repository, or workspace memory auto-saves by default: each operation creates its own entry under a stable project hub; items without a valid Wiki link still go to review, and legacy shared memory notes are not rewritten.'
+				'用于延续当前项目、仓库或工作区的决策、经验和上下文。',
+				'Decisions, lessons, and context that carry forward within the current project, repository, or workspace.'
 			))
 			.addDropdown((dropdown) => {
 				for (const rule of MEMORY_PROPOSAL_RULES) {
@@ -493,23 +491,28 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 							});
 					});
 			});
-		new Setting(section)
-			.setName(ui('任务结束记忆提案', 'Task closeout memory proposals'))
+		const trackingSection = this.createSection(
+			container,
+			ui('任务追踪', 'Task tracking'),
+			ui(
+				'记录任务的目标、执行过程和结果，供后续查看与继续。',
+				'Record task goals, execution, and outcomes for later review and continuation.'
+			)
+		);
+		new Setting(trackingSection)
+			.setName(ui('启用任务追踪', 'Enable task tracking'))
 			.setDesc(ui(
-				'自动会按规则创建一次不可变项目记忆条目，并让全局记忆进入知识变更审核；审核会统一进入知识变更审核；忽略不生成提案。',
-				'Auto creates one immutable project-memory entry by rule and sends global memory to Knowledge Change Review; Review sends all updates there; Ignore creates no proposals.'
+				'关闭后不再创建新的任务记录；已开始的任务仍可正常结束。',
+				'When disabled, new task records are not created; active tasks can still finish.'
 			))
-			.addDropdown((dropdown) => {
-				for (const mode of TASK_MEMORY_PROPOSAL_MODES) {
-					dropdown.addOption(mode, taskMemoryProposalModeLabel(mode));
-				}
-				dropdown
-					.setValue(this.plugin.settings.taskMemoryProposalMode)
-					.onChange((value: string) => {
-						void this.plugin.setTaskMemoryProposalMode(value)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.taskTrackingEnabled)
+					.onChange((value: boolean) => {
+						void this.plugin.setTaskTrackingEnabled(value)
 							.then(() => this.renderSettings())
 							.catch((error) => {
-								console.error('tracekeeper failed to update task memory proposal mode', error);
+								console.error('tracekeeper failed to update task tracking', error);
 							});
 					});
 			});

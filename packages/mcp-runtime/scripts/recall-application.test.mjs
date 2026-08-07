@@ -301,7 +301,31 @@ test('application owner: injected dependencies execute global, project, and hist
 	assert.equal(history.entries[0].path, '00_tracekeeper/work/sessions/atlas-session.md');
 	assert.equal(history.entries[1].path, '00_tracekeeper/work/tasks/atlas-task.md');
 	assert.equal(history.total_matches, 2);
-	assert.equal(loadCalls, 3);
+
+	const taskHistory = service.execute({
+		scope: 'task_history',
+		query: 'historyfixture',
+		maxItems: 3,
+		vaultRoot,
+		projectIdentityInput: {},
+	});
+	assert.equal(taskHistory.scope_mode, 'task_history');
+	assert.equal(taskHistory.total_matches, 1);
+	assert.equal(taskHistory.entries[0].task_id, 'task-atlas');
+	assert.equal(taskHistory.entries[0].task_path, '00_tracekeeper/work/tasks/atlas-task.md');
+	assert.equal(taskHistory.entries[0].session_path, '00_tracekeeper/work/sessions/atlas-session.md');
+
+	const exactTaskHistory = service.execute({
+		scope: 'task_history',
+		query: '',
+		taskId: 'task-atlas',
+		maxItems: 3,
+		vaultRoot,
+		projectIdentityInput: {},
+	});
+	assert.equal(exactTaskHistory.matched_count, 1);
+	assert.equal(exactTaskHistory.entries[0].status, null);
+	assert.equal(loadCalls, 5);
 	assert.equal(resolveCalls, 2);
 	assert.equal(filterCalls, 2);
 });
@@ -508,7 +532,7 @@ test('application owner: injected clock exclusively controls the existing recenc
 test('contract: Recall retains public order, schema, capability, risk, effect, idempotency, and compatibility replacements', async (t) => {
 	const contract = getContractByName('tracekeeper.recall');
 	assert.ok(contract);
-	assert.equal(contract.version, 2);
+	assert.equal(contract.version, 3);
 	assert.equal(contract.visibility, 'public');
 	assert.equal(contract.capability, 'vault.read');
 	assert.equal(contract.risk, 'read-only');
@@ -579,6 +603,14 @@ test('scope and query: default/global/project/history routing, required queries,
 	assert.equal(historyResult.payload.recall.scope, 'project_history');
 	assert.equal(historyResult.payload.recall.query, '');
 	assert.ok(historyResult.payload.matches.length > 0);
+
+	const taskHistoryResult = await successfulCall('tracekeeper.recall', {
+		scope: 'task_history',
+		task_id: 'task-atlas',
+	}, context);
+	assert.equal(taskHistoryResult.payload.recall.scope, 'task_history');
+	assert.equal(taskHistoryResult.payload.entries.length, 1);
+	assert.equal(taskHistoryResult.payload.entries[0].session_path, '00_tracekeeper/work/sessions/atlas-session.md');
 
 	for (const args of [
 		{ scope: 'global', query: '' },

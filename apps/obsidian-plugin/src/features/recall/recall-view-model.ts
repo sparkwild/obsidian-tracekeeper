@@ -1,4 +1,4 @@
-export const MEMORY_RECALL_SCOPES = ['global', 'project', 'project_history'] as const;
+export const MEMORY_RECALL_SCOPES = ['global', 'project', 'project_history', 'task_history'] as const;
 
 export type TracekeeperRecallScope = typeof MEMORY_RECALL_SCOPES[number];
 

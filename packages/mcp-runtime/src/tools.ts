@@ -113,6 +113,7 @@ import {
 	type GlobalRecallApplicationResult,
 	type ProjectHistoryRecallApplicationResult,
 	type ProjectRecallApplicationResult,
+	type TaskHistoryRecallApplicationResult,
 	type RecallApplicationScope,
 	type RecallContentOrigin,
 	type RecallRelationEvidence,
@@ -199,6 +200,7 @@ type CaptureSourceMode = 'external_reference' | 'extracted_snapshot' | 'local_co
 type ReviewProposalMode = 'off' | 'suggest' | 'review_queue' | 'auto_propose';
 type MemoryProposalRule = 'review_queue' | 'auto_write' | 'disabled';
 type MemoryScope = 'global' | 'project';
+type FinishTaskStatus = 'completed' | 'partial' | 'blocked';
 type ArchitectureStatus = 'healthy' | 'needs_attention';
 type SensitiveTextScan = { ok: true } | { ok: false; reason: string };
 type ContentLanguage = 'zh-CN' | 'en';
@@ -207,7 +209,7 @@ type ContentLanguageSource = 'setting' | 'obsidian' | 'navigator' | 'fallback';
 interface MemoryRulesContext {
 	globalMemoryRule?: unknown;
 	projectMemoryRule?: unknown;
-	taskMemoryProposalMode?: unknown;
+	taskTrackingEnabled?: unknown;
 }
 
 interface ToolContext {
@@ -410,17 +412,15 @@ interface LintArgs extends ToolArgs {
 interface FinishTaskArgs extends ProjectScopeArgs {
 	task_id?: unknown;
 	summary?: unknown;
+	status?: unknown;
 	outcomes?: unknown;
 	decisions?: unknown;
 	solution_changes?: unknown;
 	lessons?: unknown;
 	preferences?: unknown;
-	memory_candidates?: unknown;
 	memory_candidate_records?: unknown;
-	review_proposal_mode?: unknown;
 	next_actions?: unknown;
 	client?: unknown;
-	memory_scope?: unknown;
 	related_wiki?: unknown;
 	related_sources?: unknown;
 	filename?: unknown;
@@ -429,6 +429,7 @@ interface FinishTaskArgs extends ProjectScopeArgs {
 
 interface RecallArgs extends ToolArgs {
 	query?: unknown;
+	task_id?: unknown;
 	max_items?: unknown;
 	scope?: unknown;
 	project_hint?: unknown;
@@ -502,6 +503,12 @@ interface FinishTaskProposalResult {
 interface FinishTaskMemoryCandidateRecord {
 	proposal_kind: string;
 	content: string;
+	scope: MemoryScope;
+	project_hint?: string | null;
+	project_id?: string | null;
+	repo_path?: string | null;
+	related_wiki?: string[];
+	related_sources?: string[];
 	evidence: string[];
 	target_note: string | null;
 	claim_key: string | null;
@@ -525,6 +532,9 @@ interface FinishTaskMemoryCandidateRecordResult extends FinishTaskMemoryCandidat
 interface FinishTaskMemoryChange {
 	source: string;
 	change_kind: string;
+	candidate_index?: number;
+	scope?: MemoryScope;
+	reason?: string;
 	proposal_id?: string | null;
 	record_identity?: Record<string, unknown>;
 	previous_effective_state?: string | null;
@@ -829,7 +839,8 @@ function summarizeToolPayload(payload: unknown, isError: boolean): string {
 		'tool',
 		'action',
 		'scope_mode',
-		'review_proposal_mode',
+		'status',
+		'memory_status',
 		'task_id',
 		'project_id',
 		'path',
@@ -934,10 +945,8 @@ function buildWorkflowAuditMetadata(
 			: typeof payload.matched_count === 'number'
 				? payload.matched_count
 				: undefined,
-		memory_closeout_status: typeof payload.memory_closeout_state === 'string'
-			? payload.memory_closeout_state
-			: typeof payload.memory_closeout_status === 'string'
-				? payload.memory_closeout_status
+		memory_status: typeof payload.memory_status === 'string'
+			? payload.memory_status
 			: undefined,
 	};
 }
@@ -1124,7 +1133,7 @@ function buildRecallActions(
 }
 
 function canonicalMemoryCloseoutStatus(payload: Record<string, unknown>): MemoryCloseoutStatus {
-	const state = payload.memory_closeout_state;
+	const state = payload.memory_status ?? payload.memory_closeout_state;
 	if (
 		state === 'no_candidates' ||
 		state === 'disabled' ||
@@ -1277,7 +1286,7 @@ function decorateToolResult(
 		decorated.next_actions = buildStartTaskActions(decorated, context);
 	}
 	if (toolName === 'tracekeeper.recall') {
-		const scope = payload.scope_mode === 'project' || payload.scope_mode === 'project_history'
+		const scope = payload.scope_mode === 'project' || payload.scope_mode === 'project_history' || payload.scope_mode === 'task_history'
 			? payload.scope_mode
 			: 'global';
 		const matches = Array.isArray(payload.matches)
@@ -1309,7 +1318,7 @@ function decorateToolResult(
 	}
 	if (toolName === 'tracekeeper.finish_task') {
 		const memoryStatus = canonicalMemoryCloseoutStatus(payload);
-		decorated.memory_closeout_state = memoryStatus;
+		decorated.memory_status = memoryStatus;
 		decorated.workflow = {
 			mode: 'tracked_task',
 			state: 'finished',
@@ -1419,7 +1428,10 @@ function coerceRecallScope(value: unknown): RecallScope {
 	if (normalized === 'project_history' || normalized === 'history') {
 		return 'project_history';
 	}
-	throw new ToolInputError('scope must be one of: global, project, project_history.');
+	if (normalized === 'task_history' || normalized === 'tasks' || normalized === 'task') {
+		return 'task_history';
+	}
+	throw new ToolInputError('scope must be one of: global, project, project_history, task_history.');
 }
 
 type ReviewQueueAction = 'list_pending' | 'list_approved';
@@ -1548,6 +1560,17 @@ function coerceOptionalString(value: unknown): string {
 	return typeof value === 'string' ? value.trim() : '';
 }
 
+function coerceFinishTaskStatus(value: unknown): FinishTaskStatus {
+	if (value === undefined || value === null || value === '') {
+		return 'completed';
+	}
+	const normalized = coerceOptionalString(value).toLowerCase();
+	if (normalized === 'completed' || normalized === 'partial' || normalized === 'blocked') {
+		return normalized;
+	}
+	throw new ToolInputError('status must be one of: completed, partial, blocked.');
+}
+
 function coerceMemoryScope(value: unknown): MemoryScope | undefined {
 	const normalized = coerceOptionalString(value).toLowerCase();
 	if (!normalized) {
@@ -1601,7 +1624,8 @@ function normalizeFinishTaskMemoryCandidateRecords(value: unknown): FinishTaskMe
 		throw new ToolInputError('memory_candidate_records exceeds the maximum of 64 entries.');
 	}
 	const allowed = new Set([
-		'proposal_kind', 'content', 'evidence', 'target_note', 'claim_key',
+		'proposal_kind', 'content', 'scope', 'project_hint', 'project_id', 'repo_path', 'related_wiki', 'related_sources',
+		'evidence', 'target_note', 'claim_key',
 		'proposed_authority', 'proposed_confidence', 'declared_state',
 		'observed_at', 'valid_from', 'valid_to', 'last_verified_at',
 		'supersedes', 'contradicts',
@@ -1616,9 +1640,19 @@ function normalizeFinishTaskMemoryCandidateRecords(value: unknown): FinishTaskMe
 			}
 		}
 		const optional = (field: string) => coerceOptionalString(entry[field]) || null;
+		const scope = coerceMemoryScope(entry.scope);
+		if (!scope) {
+			throw new ToolInputError(`memory_candidate_records[${index}].scope must be global or project.`);
+		}
 		return {
 			proposal_kind: coerceNonEmptyString(entry.proposal_kind, true, `memory_candidate_records[${index}].proposal_kind`),
 			content: coerceNonEmptyString(entry.content, true, `memory_candidate_records[${index}].content`),
+			scope,
+			project_hint: optional('project_hint'),
+			project_id: optional('project_id'),
+			repo_path: optional('repo_path'),
+			related_wiki: normalizeMultiValueList(entry.related_wiki, `memory_candidate_records[${index}].related_wiki`),
+			related_sources: normalizeMultiValueList(entry.related_sources, `memory_candidate_records[${index}].related_sources`),
 			evidence: normalizeMultiValueList(entry.evidence, `memory_candidate_records[${index}].evidence`),
 			target_note: optional('target_note'),
 			claim_key: optional('claim_key'),
@@ -1962,7 +1996,7 @@ function normalizeReviewProposalMode(value: unknown, fallback: ReviewProposalMod
 }
 
 function defaultReviewProposalMode(context: ToolContext): ReviewProposalMode {
-	return normalizeReviewProposalMode(context.memoryRules?.taskMemoryProposalMode, DEFAULT_FINISH_TASK_REVIEW_MODE);
+	return DEFAULT_FINISH_TASK_REVIEW_MODE;
 }
 
 function normalizeMemoryProposalRule(value: unknown, fallback: MemoryProposalRule = 'review_queue'): MemoryProposalRule {
@@ -2900,6 +2934,8 @@ async function collectFinishTaskArtifacts(
 	sessionNotePath: string,
 	proposalMode: ReviewProposalMode,
 	projectHint: string,
+	projectId: string,
+	repoPath: string,
 	rawMemoryScope: unknown,
 	relatedWiki: string[],
 	relatedSources: string[],
@@ -2938,7 +2974,7 @@ async function collectFinishTaskArtifacts(
 		};
 	}
 
-	const groups: FinishTaskCloseoutGroup[] = buildFinishTaskCloseoutGroups(closeout, context);
+	const groups: FinishTaskCloseoutGroup[] = [];
 
 	const proposals: Array<ManagedProposalReference & { kind: string }> = [];
 	const suggestedMemoryUpdates: FinishTaskSuggestion[] = [];
@@ -3099,24 +3135,39 @@ async function collectFinishTaskArtifacts(
 			memoryChanges.push({ source, change_kind: 'suggested' });
 			continue;
 		}
-		const proposalContext: ToolInvocationContext = proposalMode === 'review_queue'
+		const proposalContext: ToolInvocationContext = context;
+		const candidateProjectScope = candidate.scope === 'project'
 			? {
-				...context,
-				memoryRules: {
-					...context.memoryRules,
-					globalMemoryRule: 'review_queue',
-					projectMemoryRule: 'review_queue',
-				},
+				project_hint: candidate.project_hint || projectHint || undefined,
+				project_id: candidate.project_id || projectId || undefined,
+				repo_path: candidate.repo_path || repoPath || undefined,
 			}
-			: context;
+			: {
+				project_hint: undefined,
+				project_id: undefined,
+				repo_path: undefined,
+			};
 		const rawCandidate: ProposeMemoryArgs = {
-			...candidate,
+			proposal_kind: candidate.proposal_kind,
+			content: candidate.content,
+			evidence: candidate.evidence,
+			target_note: candidate.target_note || undefined,
+			claim_key: candidate.claim_key || undefined,
+			proposed_authority: candidate.proposed_authority || undefined,
+			proposed_confidence: candidate.proposed_confidence || undefined,
+			declared_state: candidate.declared_state || undefined,
+			observed_at: candidate.observed_at || undefined,
+			valid_from: candidate.valid_from || undefined,
+			valid_to: candidate.valid_to || undefined,
+			last_verified_at: candidate.last_verified_at || undefined,
+			supersedes: candidate.supersedes,
+			contradicts: candidate.contradicts,
 			task_id: taskId,
-			project_hint: projectHint || undefined,
-			memory_scope: rawMemoryScope,
-			related_wiki: relatedWiki,
-			related_sources: relatedSources,
-			idempotency_key: `finish-task:${operationId}:memory-candidate:${index}`,
+			...candidateProjectScope,
+			memory_scope: candidate.scope,
+			related_wiki: candidate.related_wiki?.length ? candidate.related_wiki : relatedWiki,
+			related_sources: candidate.related_sources?.length ? candidate.related_sources : relatedSources,
+		idempotency_key: `finish-task:${operationId}:memory-candidate:${index}`,
 		};
 		const result = await handleProposeMemory(rawCandidate, proposalContext);
 		if (!isRecord(result)) {
@@ -3140,6 +3191,8 @@ async function collectFinishTaskArtifacts(
 		memoryChanges.push({
 			source,
 			change_kind: autoApplied ? 'record_written' : 'proposal_queued',
+			candidate_index: index,
+			scope: candidate.scope,
 			...(typeof resultRecord.proposal_id === 'string' ? { proposal_id: resultRecord.proposal_id } : {}),
 			...(recordIdentity ? { record_identity: recordIdentity } : {}),
 			previous_effective_state: null,
@@ -6868,7 +6921,7 @@ export function toolPrompts(): McpPrompt[] {
 				},
 				{
 					name: 'scope',
-					description: 'Scope for recall: global, project, or project_history.',
+					description: 'Scope for recall: global, project, project_history, or task_history.',
 				},
 				{
 					name: 'project_hint',
@@ -7107,23 +7160,24 @@ function buildRecommendedRecall(
 function buildCloseoutContract(context: ToolContext): Record<string, unknown> {
 	return {
 		required_tool: 'tracekeeper.finish_task',
-		default_mode: defaultReviewProposalMode(context),
+		default_mode: 'explicit_candidates',
 		content_language: contentLanguageFromContext(context),
 		content_language_source: contentLanguageSourceFromContext(context),
 		fields: [
 			'summary',
+			'status',
 			'outcomes',
 			'decisions',
 			'solution_changes',
 			'lessons',
 			'preferences',
 			'next_actions',
-			'memory_candidates',
+			'memory_candidate_records',
 			'related_wiki',
 			'related_sources',
 		],
 		project_hint_required_for_project_memory: true,
-		note: 'At task closeout, include durable decisions, solution changes, lessons, user preferences, next actions, and memory candidates when present. ' +
+		note: 'Task fields describe execution and remain in task history. Submit a structured memory_candidate_records entry only when information should become durable global or project memory. ' +
 			'Reuse verified wiki/source paths already gathered from recall/read_note, otherwise report review fallback.',
 	};
 }
@@ -7132,7 +7186,7 @@ function buildStartTaskNextActions(identity: ResolvedProjectIdentity, context: T
 	const actions = [
 		contentText(context, '读取单篇笔记前，先调用 tracekeeper.recall。', 'Call tracekeeper.recall before reading individual notes.'),
 		contentText(context, '只有召回摘要不够时，再使用 tracekeeper.read_note。', 'Use tracekeeper.read_note only when a recall excerpt is not enough.'),
-		contentText(context, '任务结束时调用一次 tracekeeper.finish_task，提交决策、方案调整、经验、偏好、下一步和记忆候选。', 'Call tracekeeper.finish_task once at the end with decisions, solution changes, lessons, preferences, next actions, and memory candidates.'),
+		contentText(context, '任务结束时调用一次 tracekeeper.finish_task，记录任务状态和执行细节；只有明确的长期记忆候选才提交为 memory_candidate_records。', 'Call tracekeeper.finish_task once at the end with task status and execution details; submit only explicit durable candidates as memory_candidate_records.'),
 	];
 	if (hasProjectScope(identity) && identity.confidence !== 'uncertain') {
 		actions.unshift(contentText(context, '使用相同 project_hint 和 scope="project" 做定向召回。', 'Use scope="project" with the same project_hint for targeted recall.'));
@@ -7231,6 +7285,9 @@ function buildToolOperationIdentity(
 
 async function handleStartTask(rawArgs: StartTaskArgs, context: ToolInvocationContext) {
 	const vaultRoot = configuredVaultRoot(context);
+	if (context.memoryRules?.taskTrackingEnabled === false) {
+		throw new ToolInputError('task_tracking_disabled: task tracking is disabled in Tracekeeper settings.');
+	}
 	const goal = coerceNonEmptyString(rawArgs.goal, true, 'goal');
 	const client = coerceNonEmptyString(rawArgs.client);
 	const view = await knowledgeReadViewForContext(vaultRoot, context);
@@ -7344,6 +7401,11 @@ function executeRecallApplication(
 	context: ToolInvocationContext
 ): Promise<ProjectHistoryRecallApplicationResult>;
 function executeRecallApplication(
+	scope: 'task_history',
+	rawArgs: RecallArgs,
+	context: ToolInvocationContext
+): Promise<TaskHistoryRecallApplicationResult>;
+function executeRecallApplication(
 	scope: 'global' | 'project',
 	rawArgs: RecallArgs,
 	context: ToolInvocationContext
@@ -7352,14 +7414,14 @@ function executeRecallApplication(
 	scope: RecallScope,
 	rawArgs: RecallArgs,
 	context: ToolInvocationContext
-): Promise<GlobalRecallApplicationResult | ProjectRecallApplicationResult | ProjectHistoryRecallApplicationResult>;
+): Promise<GlobalRecallApplicationResult | ProjectRecallApplicationResult | ProjectHistoryRecallApplicationResult | TaskHistoryRecallApplicationResult>;
 async function executeRecallApplication(
 	scope: RecallScope,
 	rawArgs: RecallArgs,
 	context: ToolInvocationContext
 ) {
 	const vaultRoot = configuredVaultRoot(context);
-	const query = scope === 'project_history'
+	const query = scope === 'project_history' || scope === 'task_history'
 		? coerceOptionalString(rawArgs.query)
 		: coerceNonEmptyString(rawArgs.query, true, 'query');
 	const maxItems = coercePositiveInt(
@@ -7383,6 +7445,7 @@ async function executeRecallApplication(
 		query,
 		maxItems,
 		vaultRoot,
+		taskId: coerceOptionalString(rawArgs.task_id) || undefined,
 		projectIdentityInput: rawArgs,
 	} as const;
 	return service.executeReadView(request, await knowledgeReadViewForContext(vaultRoot, context));
@@ -7409,6 +7472,14 @@ async function handleRecall(rawArgs: RecallArgs, context: ToolInvocationContext)
 				...result.scope,
 				scope,
 			},
+			scope_mode: scope,
+		};
+	}
+	if (scope === 'task_history') {
+		const result = await executeRecallApplication('task_history', rawArgs, context);
+		return {
+			...result,
+			scope: { scope },
 			scope_mode: scope,
 		};
 	}
@@ -9066,7 +9137,7 @@ function buildSessionNoteBodyWithCloseout(
 	solutionChanges: string[],
 	lessons: string[],
 	preferences: string[],
-	memoryCandidates: string[],
+	memoryCandidateRecords: FinishTaskMemoryCandidateRecord[],
 ): string {
 	const lines = [
 		contentText(context, '# 任务会话记录', '# Task Session Note'),
@@ -9093,8 +9164,10 @@ function buildSessionNoteBodyWithCloseout(
 		contentText(context, '## 偏好', '## Preferences'),
 		...formatListMarkdown(preferences).split('\n'),
 		'',
-		contentText(context, '## 记忆候选', '## Memory Candidates'),
-		...formatListMarkdown(memoryCandidates).split('\n'),
+		contentText(context, '## 长期记忆候选', '## Durable Memory Candidates'),
+		...(memoryCandidateRecords.length > 0
+			? memoryCandidateRecords.map((candidate) => `- [${candidate.scope}] ${candidate.content}`)
+			: ['- (none; task facts remain task history only)']),
 	].join('\n');
 	return lines.trim();
 }
@@ -9108,7 +9181,7 @@ function buildFinishTaskNextActions(
 ): string[] {
 	const actions: string[] = [];
 	if (!hasCloseoutCandidates) {
-		actions.push(contentText(context, '任务会话已记录；没有提交可长期沉淀的收尾记忆候选。如果之后发现遗漏的长期信息，请将其作为新的 tracekeeper.propose_memory 候选提交，不要再次调用 tracekeeper.finish_task。', 'Task session was recorded with no durable closeout memory candidates. If omitted durable information is discovered later, submit it as a new tracekeeper.propose_memory candidate; do not call tracekeeper.finish_task again.'));
+		actions.push(contentText(context, '任务追踪已记录；没有提交长期记忆候选。如果之后发现遗漏的长期信息，请将其作为新的 tracekeeper.propose_memory 候选提交，不要再次调用 tracekeeper.finish_task。', 'Task tracking was recorded with no durable memory candidates. If omitted durable information is discovered later, submit it as a new tracekeeper.propose_memory candidate; do not call tracekeeper.finish_task again.'));
 	}
 	if (reviewProposalMode === 'off') {
 		actions.push(contentText(context, '任务会话已记录；当前模式不会创建记忆建议或知识变更审核提案。', 'Task session was recorded; no memory suggestions or Knowledge Change Review proposals were created.'));
@@ -9131,7 +9204,7 @@ function buildFinishTaskNextActions(
 			actions.push(contentText(context, '部分项目记忆候选缺少 related_wiki 桥接关系，因此需要先审核。', 'Some project memory candidates need a related_wiki bridge before automatic project memory save.'));
 		}
 		if (actions.length === 0) {
-			actions.push(contentText(context, '任务会话已记录；没有产生收尾记忆候选。', 'Task session was recorded; no closeout memory candidates were produced.'));
+			actions.push(contentText(context, '任务追踪已记录；没有产生长期记忆候选。', 'Task tracking was recorded; no durable memory candidates were produced.'));
 		}
 	}
 	if (projectHint) {
@@ -9329,6 +9402,7 @@ interface FinishTaskOperationPayload {
 	projectMemoryAgentType?: ObservedClientType | 'custom';
 	taskId: string;
 	summary: string;
+	status: FinishTaskStatus;
 	outcomes: string[];
 	nextActions: string[];
 	decisions: string[];
@@ -9368,6 +9442,9 @@ function isFinishTaskOperationPayload(payload: unknown): payload is FinishTaskOp
 	if (typeof payload.summary !== 'string') {
 		return false;
 	}
+	if (payload.status !== 'completed' && payload.status !== 'partial' && payload.status !== 'blocked') {
+		return false;
+	}
 	if (!Array.isArray(payload.outcomes) || !payload.outcomes.every((item) => typeof item === 'string')) {
 		return false;
 	}
@@ -9386,13 +9463,11 @@ function isFinishTaskOperationPayload(payload: unknown): payload is FinishTaskOp
 	if (!Array.isArray(payload.preferences) || !payload.preferences.every((item) => typeof item === 'string')) {
 		return false;
 	}
-	if (!Array.isArray(payload.memoryCandidates) || !payload.memoryCandidates.every((item) => typeof item === 'string')) {
-		return false;
-	}
 	if (payload.memoryCandidateRecords !== undefined && (!Array.isArray(payload.memoryCandidateRecords) || !payload.memoryCandidateRecords.every((item) => {
 		return isRecord(item)
 			&& typeof item.proposal_kind === 'string'
 			&& typeof item.content === 'string'
+			&& (item.scope === 'global' || item.scope === 'project')
 			&& Array.isArray(item.evidence)
 			&& item.evidence.every((entry) => typeof entry === 'string')
 			&& Array.isArray(item.supersedes)
@@ -9441,25 +9516,21 @@ function projectIdentityFromFinishPayload(input: FinishTaskOperationPayload): Re
 
 function buildFinishTaskRequestSnapshot(rawArgs: FinishTaskArgs) {
 	const explicitIdentity = resolveProjectIdentity(rawArgs);
-	return {
+		return {
 		task_id: coerceNonEmptyString(rawArgs.task_id, true, 'task_id'),
 		summary: coerceNonEmptyString(rawArgs.summary, true, 'summary'),
+		status: coerceFinishTaskStatus(rawArgs.status),
 		outcomes: coerceStringOrStringArray(rawArgs.outcomes, 'outcomes'),
 		next_actions: coerceStringOrStringArray(rawArgs.next_actions, 'next_actions'),
 		decisions: coerceStringOrStringArray(rawArgs.decisions, 'decisions'),
 		solution_changes: coerceStringOrStringArray(rawArgs.solution_changes, 'solution_changes'),
 		lessons: coerceStringOrStringArray(rawArgs.lessons, 'lessons'),
 		preferences: coerceStringOrStringArray(rawArgs.preferences, 'preferences'),
-		memory_candidates: coerceStringOrStringArray(rawArgs.memory_candidates, 'memory_candidates'),
 		memory_candidate_records: normalizeFinishTaskMemoryCandidateRecords(rawArgs.memory_candidate_records),
-		review_proposal_mode: rawArgs.review_proposal_mode == null
-			? null
-			: coerceReviewProposalMode(rawArgs.review_proposal_mode, 'auto_propose'),
 		client: coerceOptionalString(rawArgs.client) || null,
 		project_hint: explicitIdentity.projectHint || null,
 		project_id: explicitIdentity.projectId || null,
 		repo_path: explicitIdentity.repoPath || null,
-		memory_scope: rawArgs.memory_scope ?? null,
 		related_wiki: normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki'),
 		related_sources: normalizeMultiValueList(rawArgs.related_sources, 'related_sources'),
 		filename: coerceOptionalString(rawArgs.filename) || null,
@@ -9476,25 +9547,23 @@ async function buildFinishTaskOperationPayload(
 	const vaultRoot = configuredVaultRoot(context);
 	const taskId = coerceNonEmptyString(rawArgs.task_id, true, 'task_id');
 	const summary = coerceNonEmptyString(rawArgs.summary, true, 'summary');
+	const status = coerceFinishTaskStatus(rawArgs.status);
 	const outcomes = coerceStringOrStringArray(rawArgs.outcomes, 'outcomes');
 	const nextActions = coerceStringOrStringArray(rawArgs.next_actions, 'next_actions');
 	const decisions = coerceStringOrStringArray(rawArgs.decisions, 'decisions');
 	const solutionChanges = coerceStringOrStringArray(rawArgs.solution_changes, 'solution_changes');
 	const lessons = coerceStringOrStringArray(rawArgs.lessons, 'lessons');
 	const preferences = coerceStringOrStringArray(rawArgs.preferences, 'preferences');
-	const memoryCandidates = coerceStringOrStringArray(rawArgs.memory_candidates, 'memory_candidates');
+	const memoryCandidates: string[] = [];
 	const memoryCandidateRecords = normalizeFinishTaskMemoryCandidateRecords(rawArgs.memory_candidate_records);
-	const reviewProposalMode = coerceReviewProposalMode(
-		rawArgs.review_proposal_mode,
-		defaultReviewProposalMode(context)
-	);
+	const reviewProposalMode: ReviewProposalMode = DEFAULT_FINISH_TASK_REVIEW_MODE;
 	const taskMetadata = await readAgentTaskMetadataAsync(vaultRoot, taskId, context);
 	const identityScan = scanVaultForContext(vaultRoot, context);
 	const explicitIdentity = resolveProjectIdentity(rawArgs, identityScan.notes);
 	const projectIdentity = mergeTaskProjectIdentity(taskId, taskMetadata, explicitIdentity);
 	const client = coerceOptionalString(rawArgs.client) || taskMetadata.client;
 	const projectHint = projectIdentity.projectHint;
-	const memoryScope = rawArgs.memory_scope === undefined ? '' : rawArgs.memory_scope;
+	const memoryScope = '';
 	const relatedWiki = normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki');
 	const relatedSources = normalizeMultiValueList(rawArgs.related_sources, 'related_sources');
 	const architectureStatus = buildArchitectureStatus(vaultRoot, context);
@@ -9512,17 +9581,7 @@ async function buildFinishTaskOperationPayload(
 		'session',
 		context
 	);
-	const closeoutGroups = buildFinishTaskCloseoutGroups(
-		{
-			decisions,
-			solution_changes: solutionChanges,
-			lessons,
-			preferences,
-			next_actions: nextActions,
-			memory_candidates: memoryCandidates,
-		},
-		context
-	);
+	const closeoutGroups: FinishTaskCloseoutGroup[] = [];
 
 	return {
 		requestHash,
@@ -9535,6 +9594,7 @@ async function buildFinishTaskOperationPayload(
 		})(),
 		taskId,
 		summary,
+		status,
 		outcomes,
 		nextActions,
 		decisions,
@@ -9560,14 +9620,7 @@ async function buildFinishTaskOperationPayload(
 		filename,
 		architectureStatus,
 		closeoutGroups,
-		hasCloseoutCandidates: memoryCandidateRecords.length > 0 || hasFinishTaskCloseoutCandidates({
-			decisions,
-			solutionChanges,
-			lessons,
-			preferences,
-			nextActions,
-			memoryCandidates,
-		}),
+		hasCloseoutCandidates: memoryCandidateRecords.length > 0,
 		contentLanguage: contentLanguageFromContext(context),
 	};
 }
@@ -9592,7 +9645,7 @@ async function writeFinishTaskSessionNote(input: FinishTaskOperationPayload, con
 		input.solutionChanges,
 		input.lessons,
 		input.preferences,
-		input.memoryCandidates
+		input.memoryCandidateRecords ?? []
 	);
 	assertNoSensitiveText([
 		{ label: 'summary', value: input.summary },
@@ -9602,7 +9655,7 @@ async function writeFinishTaskSessionNote(input: FinishTaskOperationPayload, con
 		{ label: 'solution_changes', value: input.solutionChanges.join('\n') },
 		{ label: 'lessons', value: input.lessons.join('\n') },
 		{ label: 'preferences', value: input.preferences.join('\n') },
-		{ label: 'memory_candidates', value: input.memoryCandidates.join('\n') },
+		{ label: 'memory_candidate_records', value: (input.memoryCandidateRecords ?? []).map((candidate) => candidate.content).join('\n') },
 		{ label: 'client', value: input.client },
 		{ label: 'project_hint', value: input.projectHint },
 		{ label: 'related_wiki', value: input.relatedWiki.join('\n') },
@@ -9649,13 +9702,14 @@ async function writeFinishTaskSessionNote(input: FinishTaskOperationPayload, con
 			project_identity_source: projectIdentity.source,
 			project_identity_confidence: projectIdentity.confidence,
 			project_identity_warnings: projectIdentity.warnings,
-			memory_scope: resolveMemoryScope('session_finish', '', input.projectHint, input.memoryScope),
+			summary: input.summary,
 			related_wiki: input.relatedWiki,
 			related_sources: input.relatedSources,
 			architecture_status: input.architectureStatus.architecture_status,
 			missing_graph_bridges: input.architectureStatus.missing_graph_bridges,
 			created_at: new Date().toISOString(),
-			review_proposal_mode: input.reviewProposalMode || null,
+			status: input.status,
+			memory_candidate_count: String((input.memoryCandidateRecords ?? []).length),
 			finish_operation_id: operationId,
 		},
 		body,
@@ -9946,6 +10000,8 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 		sessionNote.path,
 		input.reviewProposalMode,
 		input.projectHint,
+		input.projectId,
+		input.repoPath,
 		input.memoryScope,
 		input.rawRelatedWiki ?? input.relatedWiki,
 		input.rawRelatedSources ?? input.relatedSources,
@@ -9972,7 +10028,7 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 		input.vaultRoot,
 		input.taskId,
 		{
-			status: 'completed',
+			status: input.status,
 			finished_at: new Date().toISOString(),
 			summary: input.summary,
 			session_note: sessionNote.path,
@@ -9982,8 +10038,7 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 			solution_changes: input.solutionChanges.join(', '),
 			lessons: input.lessons.join(', '),
 			preferences: input.preferences.join(', '),
-			memory_candidates: input.memoryCandidates.join(', '),
-			review_proposal_mode: input.reviewProposalMode,
+			memory_candidate_count: String((input.memoryCandidateRecords ?? []).length),
 			project_id: input.projectId || null,
 			repo_path: input.repoPath || null,
 			project_hint: input.projectHint,
@@ -10022,8 +10077,10 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 			contentText(context, '## 偏好', '## Preferences'),
 			...formatListMarkdown(input.preferences).split('\n'),
 			'',
-			contentText(context, '## 记忆候选', '## Memory Candidates'),
-			...formatListMarkdown(input.memoryCandidates).split('\n'),
+			contentText(context, '## 长期记忆处理', '## Durable Memory Processing'),
+			...(input.memoryCandidateRecords && input.memoryCandidateRecords.length > 0
+				? input.memoryCandidateRecords.map((candidate) => `- [${candidate.scope}] ${candidate.content}`)
+				: ['- (none; task facts remain task history only)']),
 			`^finish-${operationId}`,
 		].join('\n'),
 		`^finish-${operationId}`
@@ -10071,6 +10128,8 @@ async function executeFinishTaskOperation(
 		sessionNote.path,
 		input.reviewProposalMode,
 		input.projectHint,
+		input.projectId,
+		input.repoPath,
 		input.memoryScope,
 		input.rawRelatedWiki ?? input.relatedWiki,
 		input.rawRelatedSources ?? input.relatedSources,
@@ -10110,7 +10169,8 @@ async function executeFinishTaskOperation(
 		task_path: string | null;
 		path: string;
 		activity_path: string;
-		review_proposal_mode: ReviewProposalMode;
+		status: FinishTaskStatus;
+		session_path: string;
 		content_language: ContentLanguage;
 		content_language_source: ContentLanguageSource;
 		outcome_count: number;
@@ -10129,10 +10189,7 @@ async function executeFinishTaskOperation(
 		auto_applied_memory_updates?: FinishTaskProposalResult['autoAppliedMemoryUpdates'];
 		memory_candidate_records: FinishTaskMemoryCandidateRecordResult[];
 		memory_changes: FinishTaskMemoryChange[];
-		memory_closeout_status: LegacyMemoryCloseoutStatus;
-		memory_closeout_state: MemoryCloseoutStatus;
-		memory_closeout_summary: string;
-		memory_scope?: MemoryScope;
+		memory_status: MemoryCloseoutStatus;
 		project_id?: string | null;
 		repo_path?: string | null;
 		project_hint?: string | null;
@@ -10152,15 +10209,15 @@ async function executeFinishTaskOperation(
 		task_id: input.taskId,
 		task_path: buildTaskNotePath(input.taskId),
 		path: sessionNote.path,
+		session_path: sessionNote.path,
 		activity_path: sessionNote.activity_path,
-		review_proposal_mode: input.reviewProposalMode,
+		status: input.status,
 		content_language: input.contentLanguage,
 		content_language_source: contentLanguageSourceFromContext(context),
 		outcome_count: input.outcomes.length,
 		next_action_count: input.nextActions.length,
 		memory_candidate_records: proposalResult.memoryCandidateRecords,
 		memory_changes: proposalResult.memoryChanges,
-		memory_scope: resolveMemoryScope('session_finish', '', input.projectHint, input.memoryScope),
 		project_id: input.projectId || null,
 		repo_path: input.repoPath || null,
 		project_hint: input.projectHint || null,
@@ -10170,9 +10227,7 @@ async function executeFinishTaskOperation(
 			architecture_status: input.architectureStatus.architecture_status,
 			missing_graph_bridges: input.architectureStatus.missing_graph_bridges,
 			missing_wiki_bridge: proposalResult.hasMissingWikiBridge,
-			memory_closeout_status: memoryCloseoutStatus,
-		memory_closeout_state: memoryCloseoutState,
-		memory_closeout_summary: buildMemoryCloseoutSummary(context, memoryCloseoutStatus, proposalResult),
+		memory_status: memoryCloseoutState,
 		next_actions_for_agent: buildFinishTaskNextActions(context, input.reviewProposalMode, proposalResult, input.projectHint, input.hasCloseoutCandidates),
 		};
 	if (proposalResult.hasMissingRelatedSources) {

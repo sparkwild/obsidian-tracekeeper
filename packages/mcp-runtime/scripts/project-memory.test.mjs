@@ -217,7 +217,7 @@ function createFixture(t, { generation = 41 } = {}) {
 			memoryRules: {
 				globalMemoryRule: 'review_queue',
 				projectMemoryRule: 'auto_write',
-				taskMemoryProposalMode: 'auto_propose',
+				taskTrackingEnabled: true,
 			},
 		};
 	}
@@ -368,13 +368,19 @@ function autoWriteArgs(project, {
 function finishTaskArgs(project, taskId, idempotencyKey) {
 	return {
 		task_id: taskId,
+		status: 'completed',
 		summary: 'Completed recoverable immutable project-memory closeout.',
 		decisions: ['Retain one recoverable decision.'],
 		solution_changes: ['Retain one recoverable solution change.'],
 		lessons: ['Retain one recoverable lesson.'],
 		next_actions: ['Retain one recoverable next action.'],
-		review_proposal_mode: 'auto_propose',
-		memory_scope: 'project',
+		memory_candidate_records: [{
+			proposal_kind: 'task_decision',
+			content: 'Retain one recoverable durable project decision.',
+			scope: 'project',
+			claim_key: `project:recoverable-${taskId}`,
+			evidence: [WIKI_PATH],
+		}],
 		...projectArgs(project),
 		related_wiki: [WIKI_PATH],
 		idempotency_key: idempotencyKey,
@@ -839,7 +845,26 @@ test('propose_memory recovery reuses an entry created before a repository interr
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
 });
 
-test('finish_task aggregates multiple eligible memory kinds into one immutable entry', async (t) => {
+test('start_task respects the task tracking setting', async (t) => {
+	const fixture = createFixture(t);
+	const result = await callTool('tracekeeper.start_task', {
+		goal: 'This task must not be tracked when disabled.',
+		idempotency_key: 'task-tracking-disabled',
+	}, fixture.context());
+	assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+	// The setting is supplied through the runtime context, not the tool payload.
+	const disabled = await callTool('tracekeeper.start_task', {
+		goal: 'This task must not be tracked when disabled.',
+		idempotency_key: 'task-tracking-disabled-2',
+	}, {
+		...fixture.context(),
+		memoryRules: { ...fixture.context().memoryRules, taskTrackingEnabled: false },
+	});
+	assert.equal(disabled.isError, true);
+	assert.match(String(disabled.structuredContent?.error), /task_tracking_disabled/);
+});
+
+test('finish_task keeps ordinary task fields out of durable Memory', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture, { legacy: true });
 	const legacyBefore = fixture.read(project.legacyPath);
@@ -877,18 +902,15 @@ test('finish_task aggregates multiple eligible memory kinds into one immutable e
 		'finish task with multiple closeout kinds'
 	);
 	const entryPaths = findAgentEntries(fixture);
-	assert.equal(entryPaths.length, 1);
-	const parsed = parseMarkdown(fixture.read(entryPaths[0]));
-	assert.equal(parsed.frontmatter.fields.operation_id, finished.operation_id);
-	assert.equal(parsed.frontmatter.fields.schema_version, 2);
-	assert.equal(parsed.frontmatter.fields.type, 'memory_record');
-	assert.equal(parsed.frontmatter.fields.memory_kind, 'task_closeout');
-	assert.equal(typeof parsed.frontmatter.fields.memory_id, 'string');
-	assert.equal(typeof parsed.frontmatter.fields.claim_key, 'string');
-	assert.match(parsed.body, /Retain one decision\./);
-	assert.match(parsed.body, /Retain one solution change\./);
-	assert.match(parsed.body, /Retain one lesson\./);
-	assert.match(parsed.body, /Retain one next action\./);
+	assert.equal(entryPaths.length, 0);
+	assert.equal(finished.memory_candidate_records.length, 0);
+	assert.equal(finished.memory_changes.length, 0);
+	const task = parseMarkdown(fixture.read(finished.task_path));
+	assert.equal(task.frontmatter.fields.status, 'completed');
+	assert.match(task.body, /Retain one decision\./);
+	assert.match(task.body, /Retain one solution change\./);
+	assert.match(task.body, /Retain one lesson\./);
+	assert.match(task.body, /Retain one next action\./);
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
 });
 
@@ -910,6 +932,7 @@ test('finish_task structured candidate writes one governed v2 record and exact r
 		memory_candidate_records: [{
 			proposal_kind: 'task_decision',
 			content: 'Structured closeout claims use the v2 lifecycle writer.',
+			scope: 'project',
 			claim_key: 'project:structured-closeout-writer',
 			evidence: [WIKI_PATH],
 			proposed_authority: 'agent',
@@ -958,6 +981,47 @@ test('finish_task structured candidate writes one governed v2 record and exact r
 	assert.deepEqual(findAgentEntries(fixture), entries);
 });
 
+test('finish_task routes mixed explicit candidates independently of task project context', async (t) => {
+	const fixture = createFixture(t);
+	const project = addProject(fixture, { legacy: true });
+	const context = fixture.context();
+	const started = expectSuccess(
+		await callTool('tracekeeper.start_task', {
+			goal: 'Record a task without a project and submit mixed candidates.',
+			idempotency_key: 'finish-mixed-start',
+		}, context),
+		'start mixed candidate task'
+	);
+	const finished = expectSuccess(
+		await callTool('tracekeeper.finish_task', {
+			task_id: started.task_id,
+			status: 'partial',
+			summary: 'Mixed candidate routing.',
+			memory_candidate_records: [
+				{
+					proposal_kind: 'global_preference',
+					content: 'Prefer explicit task and memory separation.',
+					scope: 'global',
+				},
+				{
+					proposal_kind: 'project_decision',
+					content: 'Project candidate carries its own project identity.',
+					scope: 'project',
+					...projectArgs(project),
+					related_wiki: [WIKI_PATH],
+				},
+			],
+			idempotency_key: 'finish-mixed-complete',
+		}, context),
+		'finish mixed candidate task'
+	);
+	assert.equal(finished.status, 'partial');
+	assert.deepEqual(finished.memory_changes.map((change) => change.scope), ['global', 'project']);
+	assert.equal(finished.memory_changes[0].change_kind, 'proposal_queued');
+	assert.equal(finished.memory_changes[1].change_kind, 'record_written');
+	assert.equal(findAgentEntries(fixture).length, 1);
+});
+
 test('finish_task structured candidate review-gates caller authority promotion', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture, { legacy: true });
@@ -977,6 +1041,7 @@ test('finish_task structured candidate review-gates caller authority promotion',
 			memory_candidate_records: [{
 				proposal_kind: 'task_decision',
 				content: 'An Agent cannot promote its own claim to user authority.',
+				scope: 'project',
 				claim_key: 'project:authority-promotion-review',
 				evidence: [WIKI_PATH],
 				proposed_authority: 'user',
@@ -1001,7 +1066,7 @@ test('finish_task structured candidate review-gates caller authority promotion',
 	assert.equal(proposal.frontmatter.fields.proposed_confidence, 'verified');
 });
 
-test('finish_task recovery before the aggregate step creates one entry in the original Agent namespace', async (t) => {
+test.skip('legacy finish_task recovery before the aggregate step is retired with implicit promotion', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture, { legacy: true });
 	const legacyBefore = fixture.read(project.legacyPath);
@@ -1088,7 +1153,7 @@ test('finish_task recovery before the aggregate step creates one entry in the or
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
 });
 
-test('finish_task recovery skips an aggregate step already journaled with its immutable receipt', async (t) => {
+test.skip('legacy finish_task aggregate receipt recovery is retired with implicit promotion', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture, { legacy: true });
 	const legacyBefore = fixture.read(project.legacyPath);
@@ -1174,7 +1239,7 @@ test('finish_task recovery skips an aggregate step already journaled with its im
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
 });
 
-test('finish_task recovery reuses an entry created before a one-shot repository failure', async (t) => {
+test.skip('legacy finish_task aggregate repository recovery is retired with implicit promotion', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture, { legacy: true });
 	const legacyBefore = fixture.read(project.legacyPath);
@@ -1252,7 +1317,7 @@ test('finish_task recovery reuses an entry created before a one-shot repository 
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
 });
 
-test('pre-upgrade finish_task journal recovery preserves legacy step names but writes one immutable entry', async (t) => {
+test.skip('legacy finish_task aggregate journal upgrade is retired with implicit promotion', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture, { legacy: true });
 	const legacyBefore = fixture.read(project.legacyPath);
@@ -1654,8 +1719,11 @@ test('finish_task immutable review fallback never proposes a legacy shared-memor
 				task_id: started.task_id,
 				summary: 'Completed review fallback characterization.',
 				decisions: ['Review this decision before assigning a project identity.'],
-				review_proposal_mode: 'auto_propose',
-				memory_scope: 'project',
+				memory_candidate_records: [{
+					proposal_kind: 'project_decision',
+					content: 'Review this decision before assigning a project identity.',
+					scope: 'project',
+				}],
 				project_hint: 'unbound-review-project',
 				related_wiki: [WIKI_PATH],
 				idempotency_key: 'project-memory-review-fallback-finish',

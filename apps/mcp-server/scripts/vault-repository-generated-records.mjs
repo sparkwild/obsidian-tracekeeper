@@ -308,7 +308,7 @@ async function main() {
 			memoryRules: {
 				globalMemoryRule: 'review_queue',
 				projectMemoryRule: 'auto_write',
-				taskMemoryProposalMode: 'off',
+				taskTrackingEnabled: true,
 			},
 		});
 		calls = vaultRepository.takeCalls();
@@ -354,12 +354,12 @@ async function main() {
 		assertAuditShardCall(calls, 'readText');
 		assertAuditShardCall(calls, 'replaceText');
 
-		const finishArgs = {
-			task_id: taskId,
-			summary: 'Finish repository port coverage.',
-			outcomes: ['Generated records use VaultRepository.'],
-			review_proposal_mode: 'off',
-			idempotency_key: 'vault-repository-frozen-finish',
+			const finishArgs = {
+				task_id: taskId,
+				summary: 'Finish repository port coverage.',
+				status: 'completed',
+				outcomes: ['Generated records use VaultRepository.'],
+				idempotency_key: 'vault-repository-frozen-finish',
 		};
 		let interrupted = false;
 		const failedFinish = await callTool('tracekeeper.finish_task', finishArgs, {

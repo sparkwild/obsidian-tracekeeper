@@ -178,6 +178,12 @@ assert.deepStrictEqual(FINISH_TASK_OUTPUT_SCHEMA, getContractByName('tracekeeper
 
 const recallContract = getContractByName('tracekeeper.recall');
 assert.match(recallContract.description, /active local Obsidian Vault/i, 'recall should identify the local Vault boundary');
+assert.deepStrictEqual(
+	recallContract.inputSchema.properties.scope.enum,
+	['global', 'project', 'project_history', 'task_history'],
+	'recall should expose task history scope',
+);
+assert(Object.prototype.hasOwnProperty.call(recallContract.inputSchema.properties, 'task_id'));
 
 const memoryContract = getContractByName('tracekeeper.memory');
 assert.equal(memoryContract.capability, 'vault.read');
@@ -211,6 +217,11 @@ assert.match(memoryContract.description, /metadata only/i);
 assert.match(memoryContract.description, /read_note/i);
 
 const finishContract = getContractByName('tracekeeper.finish_task');
+assert.equal(finishContract.version, 3);
+assert.equal(finishContract.inputSchema.properties.memory_candidates, undefined);
+assert.equal(finishContract.inputSchema.properties.review_proposal_mode, undefined);
+assert.equal(finishContract.inputSchema.properties.memory_scope, undefined);
+assert.equal(finishContract.inputSchema.properties.memory_candidate_records.items.required.includes('scope'), true);
 assert.match(
 	finishContract.inputSchema.properties.related_wiki.description,
 	/local Vault Wiki note paths/i,

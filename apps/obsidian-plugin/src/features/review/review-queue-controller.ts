@@ -482,11 +482,15 @@ async applyApprovedWriteback(
 		await this.host.refreshGovernanceViews();
 	}
 
-	async loadMemoryReviewQueueSnapshot(): Promise<MemoryReviewQueueSnapshot> {
+	async loadMemoryReviewQueueSnapshot(offset = 0): Promise<MemoryReviewQueueSnapshot> {
 		const folder = this.app.vault.getAbstractFileByPath(REVIEW_QUEUE_PATH);
 		if (!(folder instanceof TFolder)) {
 			return {
 				proposals: [],
+				totalProposalCount: 0,
+				windowOffset: 0,
+				windowLimit: 0,
+				isTruncated: false,
 				contexts: {},
 				indexState: 'initializing',
 				missingReviewQueueFolder: true,
@@ -494,14 +498,12 @@ async applyApprovedWriteback(
 			};
 		}
 
-		const files = this.records.collectMarkdownFiles(folder);
-		const [records, knowledge, tasks] = await Promise.all([
-			Promise.all(files.map((file) => this.records.readMemoryProposalFile(file))),
+		const [proposalWindow, knowledge, tasks] = await Promise.all([
+			this.records.readMemoryProposalWindow(undefined, offset),
 			this.host.loadReviewKnowledgeSnapshot(),
 			this.records.readRecentAgentTasks(200),
 		]);
-		const proposals = records
-			.filter((record): record is MemoryProposalRecord => Boolean(record))
+		const proposals = proposalWindow.records
 			.sort((a, b) => compareProposalRecords(a, b));
 		const availableKnowledge = {
 			...knowledge,
@@ -519,6 +521,10 @@ async applyApprovedWriteback(
 
 		return {
 			proposals,
+			totalProposalCount: proposalWindow.totalItems,
+			windowOffset: proposalWindow.offset,
+			windowLimit: proposalWindow.limit,
+			isTruncated: proposalWindow.isTruncated,
 			contexts: buildReviewProposalContexts({
 				proposals,
 				knowledge: availableKnowledge,

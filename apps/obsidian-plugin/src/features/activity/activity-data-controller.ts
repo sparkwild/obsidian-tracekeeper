@@ -59,6 +59,7 @@ import { ui } from '../../ui/localization';
 import { buildAgentWorkflowDiagnostics } from './activity-workflow-diagnostics';
 import { buildRecentObservedClientConnections } from './activity-observed-client';
 import { withObsidianVaultPathLock } from '../../adapters/obsidian-vault-path-lock';
+import type { MemoryProposalRecordWindow } from './activity-record-repository';
 
 type ParsedRecordValue = string | string[];
 type ParsedRecord = Record<string, ParsedRecordValue>;
@@ -68,7 +69,7 @@ export interface ActivityDataControllerHost {
 	readRecentContextPacks(limit: number): Promise<ContextPackRecord[]>;
 	readRecentSourceCaptures(limit: number): Promise<SourceCaptureRecord[]>;
 	readRecentSourceRequests(limit: number): Promise<SourceRequestRecord[]>;
-	readRecentMemoryProposals(limit: number): Promise<MemoryProposalRecord[]>;
+	readMemoryProposalWindow(): Promise<MemoryProposalRecordWindow>;
 	readActivityTimelineRecords(limit: number): Promise<ActivityTimelineRecordWindow>;
 	getStructureStatus(): TracekeeperStructureStatus;
 	getRuntimeViewStatus(): RuntimeViewStatus;
@@ -126,18 +127,19 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			recentContextPacks,
 			recentSourceCaptures,
 			recentSourceRequests,
-			reviewQueueItems,
+			reviewQueueWindow,
 			recentAuditEvents,
 		] = await Promise.all([
 			this.host.readRecentAgentTasks(MAX_TASK_ROWS),
 			this.host.readRecentContextPacks(MAX_ACTIVITY_CONTEXT_PACK_ROWS),
 			this.host.readRecentSourceCaptures(MAX_ACTIVITY_SOURCE_CAPTURE_ROWS),
 			this.host.readRecentSourceRequests(MAX_SOURCE_STATUS_ROWS),
-			this.host.readRecentMemoryProposals(Number.MAX_SAFE_INTEGER),
+			this.host.readMemoryProposalWindow(),
 			this.readRecentAuditEvents(MAX_AUDIT_ROWS),
 		]);
+		const reviewQueueItems = reviewQueueWindow.records;
 		const recentProposals = reviewQueueItems.slice(0, MAX_ACTIVITY_PROPOSAL_ROWS);
-		const reviewQueueItemCount = reviewQueueItems.length;
+		const reviewQueueItemCount = reviewQueueWindow.totalItems;
 		const incompleteReviewQueueItemCount = reviewQueueItems.filter(
 			(proposal) => getReviewProposalAttentionState(proposal) === 'incomplete'
 		).length;
@@ -184,6 +186,7 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			recentSourceRequests,
 			recentProposals,
 			reviewQueueItemCount,
+			reviewQueueCountsTruncated: reviewQueueWindow.isTruncated,
 			incompleteReviewQueueItemCount,
 			pendingReviewQueueItemCount,
 			readyToApplyReviewQueueItemCount,

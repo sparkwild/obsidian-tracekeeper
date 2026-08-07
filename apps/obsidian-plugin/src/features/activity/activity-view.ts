@@ -4,6 +4,7 @@ import type { AgentActivitySnapshot, AgentConnectionsSnapshot, AgentTaskRecord }
 import {
 	buildSuccessfullyUsedAgentSummary,
 	selectActivityPrimaryAction,
+	selectLatestTaskPlacement,
 	type ActivityPrimaryAction,
 } from './activity-view-model';
 import { MemoryRecallPreviewModal } from '../recall/memory-recall-preview-modal';
@@ -121,17 +122,13 @@ export class TracekeeperActivityView extends ItemView {
 	}
 
 	private renderLatestTaskSection(container: HTMLElement, snapshot: AgentActivitySnapshot): void {
-		const currentSection = container.createDiv({ cls: 'tracekeeper-card' });
-		currentSection.createEl('h3', { text: ui('最后一次执行的任务', 'Last task') });
-		if (!snapshot.latestTask) {
-			this.renderEmptyState(
-				currentSection,
-				ui('还没有任务记录。', 'No task records yet.'),
-				ui('AI 助手执行任务后会显示在这里。', 'Tasks appear here after your AI assistant runs.')
-			);
-		} else {
-			this.renderTaskEntry(currentSection, snapshot.latestTask, true);
+		const latestTask = snapshot.latestTask;
+		if (!latestTask || selectLatestTaskPlacement(latestTask) !== 'standalone') {
+			return;
 		}
+		const currentSection = container.createDiv({ cls: 'tracekeeper-card' });
+		currentSection.createEl('h3', { text: ui('最近一次跟踪任务', 'Latest tracked task') });
+		this.renderTaskEntry(currentSection, latestTask, true);
 	}
 
 	private renderRecentEventsSection(container: HTMLElement, snapshot: AgentActivitySnapshot): void {
@@ -249,9 +246,13 @@ export class TracekeeperActivityView extends ItemView {
 					? ui('解决端口冲突', 'Resolve port conflict')
 					: ui('恢复 MCP 服务', 'Recover MCP service');
 			case 'review_changes':
+				const actionableCount = this.reviewQueueCountLabel(
+					snapshot.actionableReviewQueueItemCount,
+					snapshot.reviewQueueCountsTruncated
+				);
 				return ui(
-					`处理知识变更 (${snapshot.actionableReviewQueueItemCount})`,
-					`Review knowledge changes (${snapshot.actionableReviewQueueItemCount})`
+					`处理知识变更 (${actionableCount})`,
+					`Review knowledge changes (${actionableCount})`
 				);
 			case 'inspect_diagnostics':
 				return ui('检查工作流异常', 'Inspect workflow issues');
@@ -363,13 +364,21 @@ export class TracekeeperActivityView extends ItemView {
 	}
 
 	private renderMemoryLoopSection(container: HTMLElement, snapshot: AgentActivitySnapshot): void {
+		const actionableCount = this.reviewQueueCountLabel(
+			snapshot.actionableReviewQueueItemCount,
+			snapshot.reviewQueueCountsTruncated
+		);
+		const completedTask = snapshot.latestTask
+			&& selectLatestTaskPlacement(snapshot.latestTask) === 'memory_loop'
+			? snapshot.latestTask
+			: null;
 		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-memory-loop-card' });
 		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
 		header.createEl('h3', { text: ui('记忆闭环', 'Memory loop') });
 		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
 		const reviewButton = actions.createEl('button', {
 			text: snapshot.actionableReviewQueueItemCount > 0
-				? ui(`处理知识变更 (${snapshot.actionableReviewQueueItemCount})`, `Review knowledge changes (${snapshot.actionableReviewQueueItemCount})`)
+				? ui(`处理知识变更 (${actionableCount})`, `Review knowledge changes (${actionableCount})`)
 				: ui(`查看知识变更 (${snapshot.reviewQueueItemCount})`, `Open knowledge changes (${snapshot.reviewQueueItemCount})`),
 			cls: [
 				'tracekeeper-review-queue-button',
@@ -393,12 +402,12 @@ export class TracekeeperActivityView extends ItemView {
 		const latestProposal = snapshot.recentProposals[0] ?? null;
 		const summary = card.createDiv({ cls: 'tracekeeper-memory-loop-summary' });
 		summary.createEl('span', { text: ui('待处理的知识变更', 'Knowledge changes requiring action') });
-		summary.createEl('strong', { text: String(snapshot.actionableReviewQueueItemCount) });
+		summary.createEl('strong', { text: actionableCount });
 		summary.createEl('p', {
 			text: snapshot.actionableReviewQueueItemCount > 0
 				? ui(
-					`信息不完整 ${snapshot.incompleteReviewQueueItemCount} · 待审核 ${snapshot.pendingReviewQueueItemCount} · 待写入 ${snapshot.readyToApplyReviewQueueItemCount} · 已退回修改 ${snapshot.revisionRequestedReviewQueueItemCount} · 全部 ${snapshot.reviewQueueItemCount}`,
-					`${snapshot.incompleteReviewQueueItemCount} incomplete · ${snapshot.pendingReviewQueueItemCount} pending review · ${snapshot.readyToApplyReviewQueueItemCount} ready to apply · ${snapshot.revisionRequestedReviewQueueItemCount} returned for revision · ${snapshot.reviewQueueItemCount} total`
+					`信息不完整 ${snapshot.incompleteReviewQueueItemCount} · 待审核 ${snapshot.pendingReviewQueueItemCount} · 待写入 ${snapshot.readyToApplyReviewQueueItemCount} · 已退回修改 ${snapshot.revisionRequestedReviewQueueItemCount} · 全部 ${snapshot.reviewQueueItemCount}${snapshot.reviewQueueCountsTruncated ? ' · 子状态为有界统计' : ''}`,
+					`${snapshot.incompleteReviewQueueItemCount} incomplete · ${snapshot.pendingReviewQueueItemCount} pending review · ${snapshot.readyToApplyReviewQueueItemCount} ready to apply · ${snapshot.revisionRequestedReviewQueueItemCount} returned for revision · ${snapshot.reviewQueueItemCount} total${snapshot.reviewQueueCountsTruncated ? ' · bounded subtype counts' : ''}`
 				)
 				: snapshot.reviewQueueItemCount > 0
 					? ui(`暂无待处理项 · 已退回修改 ${snapshot.revisionRequestedReviewQueueItemCount} · 全部 ${snapshot.reviewQueueItemCount}`, `No action needed · ${snapshot.revisionRequestedReviewQueueItemCount} returned for revision · ${snapshot.reviewQueueItemCount} total`)
@@ -412,13 +421,19 @@ export class TracekeeperActivityView extends ItemView {
 				? `${latestProposal.proposalKind} • ${this.plugin.formatDisplayTime(latestProposal.sortTimestamp)}`
 				: ui('暂无', 'None')
 		);
-		this.renderMemoryLoopDetail(
-			details,
-			ui('任务结束记录', 'Task completion record'),
-			snapshot.latestTask
-				? this.formatLatestCloseoutStatus(snapshot.latestTask)
-				: ui('暂无任务记录', 'No task records')
-		);
+		if (completedTask) {
+			this.renderMemoryLoopDetail(
+				details,
+				ui('任务结束记录', 'Task completion record'),
+				this.formatLatestCloseoutStatus(completedTask)
+			);
+			card.createEl('h4', { text: ui('最近一次跟踪任务', 'Latest tracked task') });
+			this.renderTaskEntry(card, completedTask, false);
+		}
+	}
+
+	private reviewQueueCountLabel(count: number, truncated: boolean): string {
+		return truncated && count > 0 ? `≥${count}` : String(count);
 	}
 
 	private renderWorkflowDiagnosticsSection(container: HTMLElement, diagnostics: AgentActivitySnapshot['workflowDiagnostics']): void {

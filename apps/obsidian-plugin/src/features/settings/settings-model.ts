@@ -14,13 +14,9 @@ const GRAPH_PROFILES: GraphProfile[] = ['off', 'advisory', 'strict'];
 
 export type MemoryProposalRule = 'review_queue' | 'auto_write' | 'disabled';
 
-export type TaskMemoryProposalMode = 'off' | 'suggest' | 'review_queue' | 'auto_propose';
-
-export const MEMORY_RULES_VERSION = 4;
+export const MEMORY_RULES_VERSION = 5;
 
 export const MEMORY_PROPOSAL_RULES: MemoryProposalRule[] = ['review_queue', 'auto_write', 'disabled'];
-
-export const TASK_MEMORY_PROPOSAL_MODES: TaskMemoryProposalMode[] = ['auto_propose', 'review_queue', 'off'];
 
 export const NOTE_CONTENT_LANGUAGES: NoteContentLanguageSetting[] = ['auto', 'zh-CN', 'en'];
 
@@ -62,50 +58,26 @@ export const memoryProposalRuleLabel = (rule: MemoryProposalRule): string => {
 	}
 };
 
-export const normalizeTaskMemoryProposalMode = (
-	value: unknown,
-	fallback: TaskMemoryProposalMode = 'off'
-): TaskMemoryProposalMode => {
-	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-	if (normalized === 'suggest') {
-		return 'review_queue';
-	}
-	return TASK_MEMORY_PROPOSAL_MODES.includes(normalized as TaskMemoryProposalMode)
-		? normalized as TaskMemoryProposalMode
-		: fallback;
-};
-
 export interface MemoryRuleSettings {
 	memoryRulesVersion: number;
 	globalMemoryRule: MemoryProposalRule;
 	projectMemoryRule: MemoryProposalRule;
-	taskMemoryProposalMode: TaskMemoryProposalMode;
+	taskTrackingEnabled: boolean;
 }
 
 export const normalizeMemoryRuleSettings = (
 	raw: unknown,
-	defaults: Pick<MemoryRuleSettings, 'globalMemoryRule' | 'projectMemoryRule' | 'taskMemoryProposalMode'>
+	defaults: Pick<MemoryRuleSettings, 'globalMemoryRule' | 'projectMemoryRule' | 'taskTrackingEnabled'>
 ): MemoryRuleSettings => {
 	const source = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
 	return {
 		memoryRulesVersion: MEMORY_RULES_VERSION,
 		globalMemoryRule: normalizeMemoryProposalRule(source.globalMemoryRule, defaults.globalMemoryRule),
 		projectMemoryRule: normalizeMemoryProposalRule(source.projectMemoryRule, defaults.projectMemoryRule),
-		taskMemoryProposalMode: normalizeTaskMemoryProposalMode(source.taskMemoryProposalMode, defaults.taskMemoryProposalMode),
+		taskTrackingEnabled: typeof source.taskTrackingEnabled === 'boolean'
+			? source.taskTrackingEnabled
+			: defaults.taskTrackingEnabled,
 	};
-};
-
-export const taskMemoryProposalModeLabel = (mode: TaskMemoryProposalMode): string => {
-	switch (mode) {
-		case 'review_queue':
-		case 'suggest':
-			return ui('审核', 'Review');
-		case 'auto_propose':
-			return ui('自动', 'Auto');
-		case 'off':
-		default:
-			return ui('忽略', 'Ignore');
-	}
 };
 
 export const normalizeNoteContentLanguage = (value: unknown): NoteContentLanguageSetting => {

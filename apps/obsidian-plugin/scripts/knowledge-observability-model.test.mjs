@@ -279,6 +279,40 @@ try {
 		new Set([persistedProjectPath, immutableProjectPath])
 	);
 
+	const v2ProjectPath = '01_knowledge/memory/projects/tracekeeper/agents/codex/propose_memory-op-v2.md';
+	const v2ProjectMemory = buildMemoryInspectorSnapshot({
+		index: {
+			...index,
+			notes: [note(v2ProjectPath, {
+				type: 'memory_record',
+				frontmatter: memoryV2Frontmatter('mem-project-v2', 'project:decision', {
+					scope: 'project',
+					project_id: 'tracekeeper-project',
+					global_hub: null,
+					project_hub: '01_knowledge/memory/projects/tracekeeper/index.md',
+				}),
+			})],
+		},
+		proposals: [],
+		tasks: [],
+		missingMemoryFolder: false,
+	});
+	assert.deepEqual(v2ProjectMemory.projectMemoryCounts, {
+		immutableEntries: 1,
+		legacyNotes: 0,
+	});
+
+	const conflictMemory = buildMemoryInspectorSnapshot({
+		index,
+		proposals,
+		tasks,
+		missingMemoryFolder: false,
+		query: { lifecycle: 'conflict' },
+	});
+	assert.equal(conflictMemory.lifecycle, 'conflict');
+	assert.equal(conflictMemory.totalItems, 2);
+	assert.equal(conflictMemory.records.every((record) => record.lifecycleState === 'conflict'), true);
+
 	const focusedMemory = buildMemoryInspectorSnapshot({
 		index,
 		proposals,

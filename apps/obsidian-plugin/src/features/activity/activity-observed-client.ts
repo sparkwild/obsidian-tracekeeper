@@ -109,10 +109,14 @@ export function observedClientTypeLabel(type: ObservedClientType): string {
 }
 
 function connectionEvent(event: AuditEventRecord): boolean {
-	return event.eventType === 'connection'
-		|| event.eventType === 'agent-connection-event'
-		|| event.action === 'connection'
-		|| event.action === 'mcp.initialize';
+	const eventType = event.eventType.trim().toLowerCase().replace(/_/g, '-');
+	const action = event.action.trim().toLowerCase().replace(/_/g, '-');
+	return eventType === 'mcp.connection'
+		|| eventType === 'connection'
+		|| eventType === 'agent-connection-event'
+		|| action === 'connection'
+		|| action === 'mcp.connection'
+		|| action === 'mcp.initialize';
 }
 
 function timestampValue(value: string, fallback: number): number {
@@ -210,7 +214,7 @@ export function buildRecentObservedClientConnections(
 				lastSeen: lastUsedAt,
 				lastToolCall: call.toolName,
 				connectedAt: '',
-				resultStatus: '',
+				resultStatus: call.resultStatus,
 				lastUsedAt,
 				lastSuccessfulTool: call.lastSuccessfulTool || call.toolName,
 				runtimeVersion: '',

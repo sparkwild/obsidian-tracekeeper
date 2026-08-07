@@ -225,7 +225,7 @@ const AUDIT_BODY_ARGUMENT_KEYS = new Set([
 	'evidence',
 	'goal',
 	'lessons',
-	'memory_candidates',
+	'memory_candidate_records',
 	'next_actions',
 	'outcomes',
 	'possible_preferences',

@@ -18,10 +18,22 @@ import {
 
 const FINISH_TASK_MEMORY_CANDIDATE_RECORD_SCHEMA = {
 	type: 'object',
-	required: ['proposal_kind', 'content'],
+	required: ['proposal_kind', 'content', 'scope'],
 	properties: {
 		proposal_kind: { type: 'string', description: 'Candidate proposal kind.' },
 		content: { type: 'string', description: 'Candidate content.' },
+		scope: { type: 'string', enum: ['global', 'project'], description: 'Durable memory scope for this candidate.' },
+		project_hint: { type: 'string', description: 'Optional project identity for this candidate; independent from task context.' },
+		project_id: { type: 'string', description: 'Optional project id for this candidate.' },
+		repo_path: { type: 'string', description: 'Optional repository path for this candidate.' },
+		related_wiki: {
+			oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+			description: 'Optional Wiki refs specific to this candidate.',
+		},
+		related_sources: {
+			oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+			description: 'Optional source refs specific to this candidate.',
+		},
 		evidence: {
 			oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
 			description: 'Optional evidence summary or Vault-relative evidence refs for the candidate.',
@@ -300,7 +312,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.start_task',
-		version: 2,
+		version: 3,
 		visibility: 'public',
 		capability: 'workflow.manage',
 		risk: 'low-risk-write',
@@ -310,7 +322,7 @@ export const toolContracts = [
 		workflowRole: 'task-start',
 		useCase: 'start_task',
 		description:
-			'[low-risk write] Call once when starting meaningful work. Records a bounded task and returns the recommended recall step.',
+			'[low-risk write] Call once when starting meaningful work when task tracking is enabled. Records a bounded task and returns the recommended recall step.',
 		inputSchema: withToolInput(
 			{
 				goal: { type: 'string', description: 'Task goal statement.' },
@@ -335,7 +347,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.recall',
-		version: 2,
+		version: 3,
 		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -345,12 +357,13 @@ export const toolContracts = [
 		workflowRole: 'recall',
 		useCase: 'recall',
 		description:
-			'[read-only] Find relevant memory, Wiki, and source notes in the active local Obsidian Vault before read_note. Supports global, project, and project_history scopes.',
+			'[read-only] Find relevant memory, Wiki, source, or task-tracking notes in the active local Obsidian Vault before read_note. Supports global, project, project_history, and task_history scopes.',
 		inputSchema: withToolInput({
-			query: { type: 'string', description: 'Recall query text. Required unless scope is project_history.' },
+			query: { type: 'string', description: 'Recall query text. Required unless scope is project_history or task_history.' },
+			task_id: { type: 'string', description: 'Optional exact task id for task_history recall.' },
 			scope: {
 				type: 'string',
-				enum: ['global', 'project', 'project_history'],
+				enum: ['global', 'project', 'project_history', 'task_history'],
 				description: 'Recall scope. Defaults to global.',
 			},
 			project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
@@ -747,7 +760,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.finish_task',
-		version: 2,
+		version: 3,
 		visibility: 'public',
 		capability: 'workflow.manage',
 		risk: 'low-risk-write',
@@ -757,11 +770,12 @@ export const toolContracts = [
 		workflowRole: 'task-finish',
 		useCase: 'finish_task',
 		description:
-			'[low-risk write] Required once at task closeout. Record the session and submit durable decisions, solution changes, lessons, preferences, next actions, and memory candidates according to memory rules.',
+			'[low-risk write] Record the task execution summary and explicitly submitted durable memory candidates at task closeout.',
 		inputSchema: withToolInput(
 			{
 				task_id: { type: 'string', description: 'Task id.' },
 				summary: { type: 'string', description: 'Task summary.' },
+				status: { type: 'string', enum: ['completed', 'partial', 'blocked'], description: 'Final task status.' },
 				outcomes: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Optional outcomes.' },
 				decisions: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
@@ -779,10 +793,6 @@ export const toolContracts = [
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
 					description: 'Optional user preferences.',
 				},
-				memory_candidates: {
-					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-					description: 'Optional memory candidates.',
-				},
 				memory_candidate_records: {
 					type: 'array',
 					description: 'Optional structured lifecycle-aware memory candidates.',
@@ -792,17 +802,11 @@ export const toolContracts = [
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
 					description: 'Optional next actions.',
 				},
-				review_proposal_mode: {
-					type: 'string',
-					enum: ['off', 'suggest', 'review_queue', 'auto_propose'],
-					description: 'Propose mode for closeout fields.',
-				},
 				client: { type: 'string', description: 'Optional client context.' },
 				project_hint: {
 					type: 'string',
 					description: 'Optional canonical project hint; inherited from the started task when omitted and rejected when conflicting.',
 				},
-				memory_scope: { type: 'string', enum: ['global', 'project'], description: 'Optional memory scope override.' },
 				related_wiki: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
 					description: 'Optional verified local Vault Wiki note paths, conventionally under 01_knowledge/wiki/**.',
@@ -825,7 +829,7 @@ export const toolContracts = [
 					description: 'Optional stable retry key. Reusing it with different closeout content is rejected.',
 				},
 			},
-			['task_id', 'summary'],
+			['task_id', 'summary', 'status'],
 		),
 		...withResultSchema(FINISH_TASK_OUTPUT_SCHEMA),
 	},

@@ -23,6 +23,7 @@ import {
 import { LocalToolExecutor } from './composition/local-tool-executor';
 import {
 	ARCHIVE_ROOT,
+	KNOWLEDGE_ROOT,
 	KNOWLEDGE_GLOBAL_MEMORY_DIR,
 	KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
 	KNOWLEDGE_INDEX_PATH,
@@ -43,10 +44,12 @@ import {
 	TRACEKEEPER_OPERATIONS_DIR,
 	TRACEKEEPER_PERMISSIONS_PATH,
 	TRACEKEEPER_REVIEW_QUEUE_DIR,
+	TRACEKEEPER_ROOT,
 	TRACEKEEPER_SESSIONS_DIR,
 	TRACEKEEPER_SYSTEM_PATH,
 	TRACEKEEPER_TASKS_DIR,
 	TRACEKEEPER_WORK_DIR,
+	REQUIRED_KNOWLEDGE_FILES,
 } from '@tracekeeper/core';
 import {
 	type MemoryProposalRecord,
@@ -172,13 +175,11 @@ import {
 	normalizeMemoryRuleSettings,
 	normalizeMemoryProposalRule,
 	normalizeNoteContentLanguage,
-	normalizeTaskMemoryProposalMode,
 	type GraphProfile,
 	type MemoryProposalRule,
 	type NoteContentLanguageSetting,
 	type NoteContentLanguageSource,
 	type ResolvedNoteContentLanguage,
-	type TaskMemoryProposalMode,
 } from './features/settings/settings-model';
 import {
 	REVIEW_QUEUE_PATH,
@@ -273,14 +274,7 @@ const CONTROL_FILE_PATHS = [
 	TRACEKEEPER_MEMORY_POLICY_PATH,
 	TRACEKEEPER_PERMISSIONS_PATH,
 ] as const;
-const KNOWLEDGE_ENTRY_FILE_PATHS = [
-	KNOWLEDGE_INDEX_PATH,
-	KNOWLEDGE_MEMORY_INDEX_PATH,
-	KNOWLEDGE_PROJECTS_INDEX_PATH,
-	KNOWLEDGE_WIKI_INDEX_PATH,
-	KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
-	KNOWLEDGE_SOURCES_INDEX_PATH,
-] as const;
+const KNOWLEDGE_ENTRY_FILE_PATHS = REQUIRED_KNOWLEDGE_FILES;
 const CONTROL_PATHS = {
 	root: TRACEKEEPER_CONTROL_DIR,
 	agentActivityHub: TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
@@ -460,7 +454,7 @@ type StreamableHttpRuntimeOptionsWithGraphProfile = ConstructorParameters<typeof
 	memoryRules?: {
 		globalMemoryRule: MemoryProposalRule;
 		projectMemoryRule: MemoryProposalRule;
-		taskMemoryProposalMode: TaskMemoryProposalMode;
+		taskTrackingEnabled: boolean;
 	};
 };
 
@@ -477,7 +471,7 @@ interface TracekeeperSettings {
 	graphProfile: GraphProfile;
 	globalMemoryRule: MemoryProposalRule;
 	projectMemoryRule: MemoryProposalRule;
-	taskMemoryProposalMode: TaskMemoryProposalMode;
+	taskTrackingEnabled: boolean;
 	noteContentLanguage: NoteContentLanguageSetting;
 	autoRefreshEnabled: boolean;
 	autoRefreshIntervalSeconds: number;
@@ -498,7 +492,7 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 	graphProfile: 'advisory',
 	globalMemoryRule: 'review_queue',
 	projectMemoryRule: 'auto_write',
-	taskMemoryProposalMode: 'auto_propose',
+	taskTrackingEnabled: true,
 	noteContentLanguage: 'auto',
 	autoRefreshEnabled: true,
 	autoRefreshIntervalSeconds: DEFAULT_AUTO_REFRESH_INTERVAL_SECONDS,
@@ -641,7 +635,7 @@ export default class TracekeeperPlugin extends Plugin {
 			readRecentContextPacks: (limit) => this.activityRecordRepository.readRecentContextPacks(limit),
 			readRecentSourceCaptures: (limit) => this.activityRecordRepository.readRecentSourceCaptures(limit),
 			readRecentSourceRequests: (limit) => this.activityRecordRepository.readRecentSourceRequests(limit),
-			readRecentMemoryProposals: (limit) => this.activityRecordRepository.readRecentMemoryProposals(limit),
+			readMemoryProposalWindow: () => this.activityRecordRepository.readMemoryProposalWindow(),
 			readActivityTimelineRecords: (limit) =>
 				this.activityRecordRepository.readActivityTimelineRecords(limit),
 			getStructureStatus: () => this.getStructureStatus(),
@@ -860,7 +854,7 @@ export default class TracekeeperPlugin extends Plugin {
 		next.memoryRulesVersion = memoryRules.memoryRulesVersion;
 		next.globalMemoryRule = memoryRules.globalMemoryRule;
 		next.projectMemoryRule = memoryRules.projectMemoryRule;
-		next.taskMemoryProposalMode = memoryRules.taskMemoryProposalMode;
+		next.taskTrackingEnabled = memoryRules.taskTrackingEnabled;
 		next.noteContentLanguage = normalizeNoteContentLanguage(saved.noteContentLanguage);
 		next.autoRefreshEnabled = typeof saved.autoRefreshEnabled === 'boolean'
 			? saved.autoRefreshEnabled
@@ -1103,25 +1097,23 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private hasAutoRefreshTargetViews(): boolean {
-		return this.app.workspace.getLeavesOfType(TRACEKEEPER_ACTIVITY_VIEW).length > 0
-			|| this.app.workspace.getLeavesOfType(TRACEKEEPER_REVIEW_QUEUE_VIEW).length > 0
+		return [
+			TRACEKEEPER_ACTIVITY_VIEW,
+			TRACEKEEPER_REVIEW_QUEUE_VIEW,
+			TRACEKEEPER_MEMORY_INSPECTOR_VIEW,
+			TRACEKEEPER_SOURCE_STATUS_VIEW,
+			TRACEKEEPER_RUNTIME_LOG_VIEW,
+			TRACEKEEPER_RUNTIME_STATUS_VIEW,
+			TRACEKEEPER_GRAPH_HEALTH_VIEW,
+		].some((viewType) => this.app.workspace.getLeavesOfType(viewType).length > 0)
 			|| Boolean(this.settingTab?.isAgentListVisible());
 	}
 
 	private isAutoRefreshRelevantPath(path: string): boolean {
 		const normalized = path.replace(/\\/g, '/');
-		const relevantDirs = [
-			TRACEKEEPER_REVIEW_QUEUE_DIR,
-			TRACEKEEPER_TASKS_DIR,
-			TRACEKEEPER_SESSIONS_DIR,
-			TRACEKEEPER_CONTEXT_PACKS_DIR,
-			TRACEKEEPER_AGENT_REQUESTS_DIR,
-			TRACEKEEPER_AGENT_ACTIVITY_DIR,
-			KNOWLEDGE_GLOBAL_MEMORY_DIR,
-			KNOWLEDGE_PROJECTS_MEMORY_DIR,
-		];
-		return normalized === TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH
-			|| relevantDirs.some((dir) => normalized === dir || normalized.startsWith(`${dir}/`));
+		return [TRACEKEEPER_ROOT, KNOWLEDGE_ROOT].some(
+			(root) => normalized === root || normalized.startsWith(`${root}/`)
+		);
 	}
 
 	private async refreshAutoRefreshViews(): Promise<void> {
@@ -1130,13 +1122,7 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 		this.autoRefreshInFlight = true;
 		try {
-			const tasks: Array<Promise<void>> = [];
-			if (this.app.workspace.getLeavesOfType(TRACEKEEPER_ACTIVITY_VIEW).length > 0) {
-				tasks.push(this.refreshActivityViews());
-			}
-			if (this.app.workspace.getLeavesOfType(TRACEKEEPER_REVIEW_QUEUE_VIEW).length > 0) {
-				tasks.push(this.refreshReviewQueueViews());
-			}
+			const tasks: Array<Promise<void>> = [this.refreshGovernanceViews()];
 			if (this.settingTab?.isAgentListVisible()) {
 				tasks.push(this.settingTab.refreshAgentList());
 			}
@@ -1217,7 +1203,7 @@ export default class TracekeeperPlugin extends Plugin {
 			memoryRules: {
 				globalMemoryRule: this.settings.globalMemoryRule,
 				projectMemoryRule: this.settings.projectMemoryRule,
-				taskMemoryProposalMode: this.settings.taskMemoryProposalMode,
+				taskTrackingEnabled: this.settings.taskTrackingEnabled,
 			},
 		};
 		return new StreamableHttpMcpRuntime(runtimeOptions);
@@ -2492,9 +2478,10 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.persistExplicitMemoryPolicySelection();
 	}
 
-	async setTaskMemoryProposalMode(value: unknown): Promise<void> {
-		this.settings.taskMemoryProposalMode = normalizeTaskMemoryProposalMode(value);
-		await this.persistExplicitMemoryPolicySelection();
+	async setTaskTrackingEnabled(value: unknown): Promise<void> {
+		this.settings.taskTrackingEnabled = value === true;
+		await this.saveSettings();
+		await this.restartMcpRuntime();
 	}
 
 	private async persistExplicitMemoryPolicySelection(): Promise<void> {
@@ -2713,7 +2700,7 @@ export default class TracekeeperPlugin extends Plugin {
 			memoryRules: {
 				globalMemoryRule: this.settings.globalMemoryRule,
 				projectMemoryRule: this.settings.projectMemoryRule,
-				taskMemoryProposalMode: this.settings.taskMemoryProposalMode,
+				taskTrackingEnabled: this.settings.taskTrackingEnabled,
 			},
 			contentLanguage: noteContentLanguage.language,
 			contentLanguageSource: noteContentLanguage.source,
@@ -2746,7 +2733,7 @@ export default class TracekeeperPlugin extends Plugin {
 	async runMemoryRecall(input: MemoryRecallInput): Promise<MemoryRecallResult> {
 		const query = input.query.trim();
 		const scope = this.normalizeMemoryRecallScope(input.scope);
-		if (!query && scope !== 'project_history') {
+		if (!query && scope !== 'project_history' && scope !== 'task_history') {
 			throw new Error(ui('请输入检索文本。', 'Please enter a query.'));
 		}
 
@@ -2786,6 +2773,8 @@ export default class TracekeeperPlugin extends Plugin {
 				return ui('项目', 'Project');
 			case 'project_history':
 				return ui('项目历史', 'Project history');
+			case 'task_history':
+				return ui('任务追踪', 'Task history');
 			case 'global':
 			default:
 				return ui('全局', 'Global');
@@ -3064,8 +3053,8 @@ export default class TracekeeperPlugin extends Plugin {
 		};
 	}
 
-	async loadMemoryReviewQueueSnapshot(): Promise<MemoryReviewQueueSnapshot> {
-		return this.reviewQueueController.loadMemoryReviewQueueSnapshot();
+	async loadMemoryReviewQueueSnapshot(offset = 0): Promise<MemoryReviewQueueSnapshot> {
+		return this.reviewQueueController.loadMemoryReviewQueueSnapshot(offset);
 	}
 
 
@@ -3251,6 +3240,9 @@ export default class TracekeeperPlugin extends Plugin {
 			graph_health: ui('查看图谱健康', 'Check graph health'),
 			start_task: ui('开始任务记录', 'Start task record'),
 			recall: ui('查找相关笔记', 'Find related notes'),
+			memory: ui('查看记忆生命周期', 'Inspect memory lifecycle'),
+			project_context: ui('查看项目上下文', 'View project context'),
+			project_history: ui('查看项目历史', 'View project history'),
 			read_note: ui('读取笔记', 'Read note'),
 			review_queue: ui('查看知识变更审核', 'Knowledge Change Review'),
 			list_review_queue: ui('查看待审核的知识变更', 'List knowledge changes to review'),
@@ -3259,6 +3251,8 @@ export default class TracekeeperPlugin extends Plugin {
 			agent_activity_recent: ui('查看 Agent 活动', 'Review Agent activity'),
 			source_request: ui('处理资料请求', 'Handle source requests'),
 			build_context_pack: ui('整理上下文材料', 'Prepare context material'),
+			write_context_pack: ui('写入上下文包', 'Write context pack'),
+			write_session_note: ui('写入会话记录', 'Write session note'),
 			lint: ui('检查笔记结构', 'Check note structure'),
 			finish_task: ui('记录任务结果', 'Record task results'),
 			distill_session: ui('沉淀会话摘要', 'Summarize a session'),

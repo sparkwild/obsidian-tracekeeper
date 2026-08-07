@@ -27,7 +27,7 @@ const WORK_RECORD_RECALL_PENALTY = 5;
 const PROJECT_MEMORY_RECALL_REASON = 'Project-memory location boost (+4)';
 const KNOWLEDGE_WIKI_RECALL_REASON = 'Wiki location boost (+0.75)';
 
-export type RecallApplicationScope = 'global' | 'project' | 'project_history';
+export type RecallApplicationScope = 'global' | 'project' | 'project_history' | 'task_history';
 export type RecallContentOrigin = 'captured_source' | 'tracekeeper_generated' | 'vault_note';
 
 export interface RecallProjectIdentityInput {
@@ -80,6 +80,7 @@ export interface RecallApplicationRequest {
 	maxItems: number;
 	vaultRoot: string;
 	projectIdentityInput: RecallProjectIdentityInput;
+	taskId?: string;
 }
 
 export interface RecallApplicationDependencies {
@@ -192,10 +193,47 @@ export interface ProjectHistoryRecallApplicationResult extends RecallScanProvena
 	entries: ProjectHistoryEntry[];
 }
 
+export interface TaskHistoryEntry {
+	path: string;
+	task_path: string;
+	session_path: string | null;
+	title: string;
+	note_type: string | null;
+	scope: 'task_history';
+	modifiedAt: string;
+	task_id: string;
+	status: string | null;
+	objective: string;
+	summary: string;
+	project_hint: string | null;
+	project_id: string | null;
+	repo_path: string | null;
+	why_matched: string;
+	excerpt: string;
+	content_origin: RecallContentOrigin;
+	instruction_trust: 'data_only';
+	graph_links: string[];
+	relation_evidence: RecallRelationEvidence;
+}
+
+export interface TaskHistoryRecallApplicationResult extends RecallScanProvenance {
+	ok: true;
+	read_only: true;
+	vault_root: string;
+	query: string | null;
+	task_id: string | null;
+	max_items: number;
+	matched_count: number;
+	total_matches: number;
+	scope_mode: 'task_history';
+	entries: TaskHistoryEntry[];
+}
+
 export type RecallApplicationResult =
 	| GlobalRecallApplicationResult
 	| ProjectRecallApplicationResult
-	| ProjectHistoryRecallApplicationResult;
+	| ProjectHistoryRecallApplicationResult
+	| TaskHistoryRecallApplicationResult;
 
 interface RankedRecallMatch {
 	note: ScannedNote;
@@ -700,6 +738,100 @@ function buildProjectHistoryEntries(
 	}));
 }
 
+interface TaskHistoryGroup {
+	task: ScannedNote;
+	session: ScannedNote | null;
+}
+
+function taskProjectMatches(note: ScannedNote, identity: RecallProjectIdentity): boolean {
+	const haystack = [
+		readFrontmatterString(note.frontmatter, ['project_hint', 'related_project', 'project']),
+		readFrontmatterString(note.frontmatter, ['project_id']),
+		readFrontmatterString(note.frontmatter, ['repo_path', 'repo', 'project_path']),
+		note.relativePath,
+	].join(' ').toLowerCase();
+	const tokens = collectRecallScopeTokens(identity);
+	return tokens.length > 0 && tokens.some((token) => haystack.includes(token));
+}
+
+function collectTaskHistoryGroups(
+	notes: ScannedNote[],
+	request: RecallApplicationRequest,
+	dependencies: RecallApplicationDependencies
+): TaskHistoryGroup[] {
+	const taskNotes = notes.filter((note) => note.relativePath.startsWith(`${TRACEKEEPER_TASKS_DIR}/`));
+	const sessionNotes = notes.filter((note) => note.relativePath.startsWith(`${TRACEKEEPER_SESSIONS_DIR}/`));
+	const identityInput = request.projectIdentityInput;
+	const hasProjectFilter = [
+		identityInput.project_hint,
+		identityInput.project_id,
+		identityInput.repo_path,
+		identityInput.repo,
+		identityInput.project_path,
+	].some((value) => typeof value === 'string' && value.trim());
+	const identity = hasProjectFilter
+		? dependencies.resolveProjectIdentity(identityInput, notes)
+		: null;
+	const filteredTasks = taskNotes.filter((note) => {
+		const taskId = readFrontmatterString(note.frontmatter, ['task_id', 'taskId']);
+		if (request.taskId && taskId !== request.taskId) return false;
+		if (identity && !taskProjectMatches(note, identity)) return false;
+		if (request.query && !matchesProjectQuery(note, request.query)) return false;
+		return Boolean(taskId);
+	});
+	const groups: TaskHistoryGroup[] = [];
+	for (const task of filteredTasks) {
+		const taskId = readFrontmatterString(task.frontmatter, ['task_id', 'taskId']);
+		const sessions = sessionNotes
+			.filter((note) => readFrontmatterString(note.frontmatter, ['task_id', 'taskId']) === taskId)
+			.filter((note) => !request.query || matchesProjectQuery(note, request.query))
+			.sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
+		groups.push({ task, session: sessions[0] ?? null });
+	}
+	return groups.sort((left, right) => {
+		const leftTime = Date.parse(left.session?.modifiedAt || left.task.modifiedAt);
+		const rightTime = Date.parse(right.session?.modifiedAt || right.task.modifiedAt);
+		return rightTime - leftTime || left.task.relativePath.localeCompare(right.task.relativePath);
+	});
+}
+
+function buildTaskHistoryEntries(
+	groups: TaskHistoryGroup[],
+	query: string,
+	allNotes: ScannedNote[],
+	dependencies: RecallApplicationDependencies
+): TaskHistoryEntry[] {
+	return groups.map(({ task, session }) => {
+		const taskId = readFrontmatterString(task.frontmatter, ['task_id', 'taskId']);
+		const source = session ?? task;
+		const summary = readFrontmatterString(session?.frontmatter ?? task.frontmatter, ['summary']);
+		const objective = readFrontmatterString(task.frontmatter, ['goal', 'objective', 'title']) || task.title;
+		const status = readFrontmatterString(task.frontmatter, ['status']) || null;
+		return {
+			path: task.relativePath,
+			task_path: task.relativePath,
+			session_path: session?.relativePath ?? null,
+			title: task.title,
+			note_type: task.type ?? null,
+			scope: 'task_history',
+			modifiedAt: source.modifiedAt,
+			task_id: taskId,
+			status,
+			objective,
+			summary,
+			project_hint: readFrontmatterString(task.frontmatter, ['project_hint', 'related_project', 'project']) || null,
+			project_id: readFrontmatterString(task.frontmatter, ['project_id']) || null,
+			repo_path: readFrontmatterString(task.frontmatter, ['repo_path', 'repo', 'project_path']) || null,
+			why_matched: ['Task-history recall', taskId, query ? `matched query: ${query}` : 'recent task'].filter(Boolean).join(' - '),
+			excerpt: compactNoteText([task.content, session?.content, summary].filter(Boolean).join(' ')),
+			content_origin: dependencies.contentOrigin(source.relativePath, source.type),
+			instruction_trust: 'data_only',
+			graph_links: buildRecallGraphLinks(source),
+			relation_evidence: dependencies.buildRelationEvidence(source, allNotes),
+		};
+	});
+}
+
 interface RankedCatalogMatch {
 	entry: KnowledgeCatalogEntry;
 	score: number;
@@ -757,7 +889,7 @@ function catalogMetadataProjection(entry: KnowledgeCatalogEntry): ScannedNote {
 		sections: [],
 		callouts: [],
 		edges: [],
-		text: '',
+		text: entry.excerpt,
 		content: '',
 		modifiedAt: entry.modifiedAt,
 		size: entry.size,
@@ -1074,6 +1206,9 @@ export class RecallApplicationService {
 		if (request.scope === 'project') {
 			return this.executeProject(request, scan);
 		}
+		if (request.scope === 'task_history') {
+			return this.executeTaskHistory(request, scan);
+		}
 		return this.executeProjectHistory(request, scan);
 	}
 
@@ -1090,6 +1225,10 @@ export class RecallApplicationService {
 		view: KnowledgeReadView
 	): ProjectHistoryRecallApplicationResult;
 	executeReadView(
+		request: RecallApplicationRequest & { scope: 'task_history' },
+		view: KnowledgeReadView
+	): TaskHistoryRecallApplicationResult;
+	executeReadView(
 		request: RecallApplicationRequest,
 		view: KnowledgeReadView
 	): RecallApplicationResult;
@@ -1099,6 +1238,23 @@ export class RecallApplicationService {
 	): RecallApplicationResult {
 		const allEntries = [...view.catalog.values()];
 		const metadataNotes = allEntries.map(catalogMetadataProjection);
+		if (request.scope === 'task_history') {
+			const groups = collectTaskHistoryGroups(metadataNotes, request, this.dependencies);
+			const entries = buildTaskHistoryEntries(groups.slice(0, request.maxItems), request.query, metadataNotes, this.dependencies);
+			return {
+				ok: true,
+				read_only: true,
+				vault_root: request.vaultRoot,
+				query: request.query || null,
+				task_id: request.taskId || null,
+				max_items: request.maxItems,
+				matched_count: entries.length,
+				total_matches: groups.length,
+				scope_mode: 'task_history',
+				...readViewProvenance(view),
+				entries,
+			};
+		}
 		if (request.scope === 'global') {
 			const entries = allEntries.filter((entry) => isCurrentReadViewEntry(entry, view));
 			const ranked = boundedReadViewMatches(view, entries, request.query, {
@@ -1339,6 +1495,32 @@ export class RecallApplicationService {
 				scan.notes,
 				this.dependencies
 			),
+		};
+	}
+
+	private executeTaskHistory(
+		request: RecallApplicationRequest,
+		scan: ScanResult
+	): TaskHistoryRecallApplicationResult {
+		const groups = collectTaskHistoryGroups(scan.notes, request, this.dependencies);
+		const entries = buildTaskHistoryEntries(
+			groups.slice(0, request.maxItems),
+			request.query,
+			scan.notes,
+			this.dependencies
+		);
+		return {
+			ok: true,
+			read_only: true,
+			vault_root: request.vaultRoot,
+			query: request.query || null,
+			task_id: request.taskId || null,
+			max_items: request.maxItems,
+			matched_count: entries.length,
+			total_matches: groups.length,
+			scope_mode: 'task_history',
+			...scanProvenance(scan),
+			entries,
 		};
 	}
 }

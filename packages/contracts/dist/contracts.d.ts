@@ -77,7 +77,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.start_task";
-    readonly version: 2;
+    readonly version: 3;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -86,13 +86,13 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "task-start";
     readonly useCase: "start_task";
-    readonly description: "[low-risk write] Call once when starting meaningful work. Records a bounded task and returns the recommended recall step.";
+    readonly description: "[low-risk write] Call once when starting meaningful work when task tracking is enabled. Records a bounded task and returns the recommended recall step.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.recall";
-    readonly version: 2;
+    readonly version: 3;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -101,7 +101,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "recall";
     readonly useCase: "recall";
-    readonly description: "[read-only] Find relevant memory, Wiki, and source notes in the active local Obsidian Vault before read_note. Supports global, project, and project_history scopes.";
+    readonly description: "[read-only] Find relevant memory, Wiki, source, or task-tracking notes in the active local Obsidian Vault before read_note. Supports global, project, project_history, and task_history scopes.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly outputSchema: ToolOutputSchema;
@@ -335,7 +335,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.finish_task";
-    readonly version: 2;
+    readonly version: 3;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -344,7 +344,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "task-finish";
     readonly useCase: "finish_task";
-    readonly description: "[low-risk write] Required once at task closeout. Record the session and submit durable decisions, solution changes, lessons, preferences, next actions, and memory candidates according to memory rules.";
+    readonly description: "[low-risk write] Record the task execution summary and explicitly submitted durable memory candidates at task closeout.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly deprecated: {

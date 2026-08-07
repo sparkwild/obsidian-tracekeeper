@@ -14,7 +14,7 @@ Use this route only inside `tracked_task` when the active user explicitly asks t
    - Classify the source as `web`, `file`, or `transcript`. Use the returned Source index path for relations; bounded `source_part` notes are storage members, not independent sources.
 5. Preserve raw material, quotations, and code in their original language. Write Agent-generated summaries and candidate memory text in the Runtime's returned `content_language`.
 6. Synthesize only from successfully captured source paths and verified Recall evidence. Call `tracekeeper.propose_memory` once for the intended candidate and include only valid `related_sources` and `related_wiki` paths.
-7. Call `tracekeeper.finish_task` once with the same real task id. Set `review_proposal_mode: "off"` and omit duplicate `memory_candidates`, because the candidate was already submitted through `propose_memory`.
+7. Call `tracekeeper.finish_task` once with the same real task id and the actual task status. Omit duplicate `memory_candidate_records` when the candidate was already submitted through `propose_memory`; task tracking is still recorded.
 
 ## Policy and authority
 

@@ -40,8 +40,8 @@ export class TracekeeperPermissionPolicyView extends ItemView {
 		contentEl.createEl('h2', { text: ui('权限说明', 'Permission guide'), cls: 'tracekeeper-view__title' });
 		contentEl.createEl('p', {
 			text: ui(
-				'知识库默认先读取和整理资料；任何会影响长期记忆的重要写入，都必须先经过你审核。',
-				'Tracekeeper reads and organizes material by default; important writes that affect long-term memory must be reviewed by you first.'
+				'Agent 默认先读取和整理资料；全局记忆默认由你审核，项目记忆是否自动保存由记忆规则决定。',
+				'Agents read and organize material by default. Global memory is reviewed by default, while project auto-save follows your memory rules.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
@@ -75,23 +75,23 @@ export class TracekeeperPermissionPolicyView extends ItemView {
 				],
 			},
 			{
-				title: ui('不会执行', 'Never allowed'),
+				title: ui('Agent / MCP 不会执行', 'Agent / MCP boundaries'),
 				items: [
 					ui(
-						'不会替你运行系统命令或安装软件',
-						'Will not run system commands or install software for you'
+						'Agent 不会通过 Tracekeeper 运行系统命令或安装软件',
+						'Agents cannot run system commands or install software through Tracekeeper'
 					),
 					ui(
-						'不会访问当前知识库之外的文件',
-						'Will not access files outside the current knowledge base'
+						'MCP 不会访问当前知识库之外的文件',
+						'MCP cannot access files outside the current knowledge base'
 					),
 					ui(
-						'不会修改 Obsidian 配置目录',
-						'Will not modify Obsidian settings folders'
+						'Agent 不会绕过 Obsidian 中的预览、审核或确认步骤',
+						'Agents cannot bypass preview, review, or confirmation in Obsidian'
 					),
 					ui(
-						'不会删除、移动或批量重写你的笔记',
-						'Will not delete, move, or bulk rewrite your notes'
+						'MCP 不会执行迁移、清理或批量重写；这些操作只能由你在 Obsidian 中明确发起',
+						'MCP cannot migrate, clean up, or bulk rewrite notes; only you can explicitly start those actions in Obsidian'
 					),
 					ui(
 						'未经审核不会直接写入受保护记忆',

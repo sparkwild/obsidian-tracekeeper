@@ -19,7 +19,7 @@ export interface LocalToolExecutorContext {
 	memoryRules: {
 		globalMemoryRule: string;
 		projectMemoryRule: string;
-		taskMemoryProposalMode: string;
+		taskTrackingEnabled: boolean;
 	};
 	contentLanguage: RuntimeContentLanguage;
 	contentLanguageSource: RuntimeContentLanguageSource;

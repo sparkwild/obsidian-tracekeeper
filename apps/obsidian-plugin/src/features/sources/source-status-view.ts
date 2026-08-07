@@ -211,6 +211,19 @@ export class TracekeeperSourceStatusView extends ItemView {
 		const details = item.createDiv({ cls: 'tracekeeper-detail-grid' });
 		this.renderDetail(details, ui('资料类型', 'Source type'), record.sourceKind || ui('未记录', 'Not recorded'));
 		this.renderDetail(details, ui('捕获模式', 'Capture mode'), record.mode || ui('未记录', 'Not recorded'));
+		this.renderDetail(details, ui('来源标识', 'Source ID'), record.sourceId || ui('未记录', 'Not recorded'));
+		this.renderDetail(details, ui('内容哈希', 'Content hash'), record.contentHash || ui('未记录', 'Not recorded'));
+		this.renderDetail(details, ui('存储路由', 'Storage route'), record.route || ui('旧版或未记录', 'Legacy or not recorded'));
+		this.renderDetail(
+			details,
+			ui('内容分片', 'Content parts'),
+			record.partCount > 0
+				? ui(
+					`${record.partCount} 个 · ${record.partManifest.length} 个清单项`,
+					`${record.partCount} parts · ${record.partManifest.length} manifest entries`
+				)
+				: ui('未分片', 'Inline or not partitioned')
+		);
 		this.renderDetail(
 			details,
 			ui('关系', 'Relationships'),
@@ -222,6 +235,12 @@ export class TracekeeperSourceStatusView extends ItemView {
 		if (record.source && record.source !== record.path) {
 			item.createEl('p', {
 				text: `${ui('原始来源', 'Original source')}: ${trimText(record.source, 180)}`,
+				cls: 'tracekeeper-view__description',
+			});
+		}
+		if (record.partManifest.length > 0) {
+			item.createEl('p', {
+				text: `${ui('分片清单', 'Part manifest')}: ${trimText(record.partManifest.join(', '), 240)}`,
 				cls: 'tracekeeper-view__description',
 			});
 		}

@@ -33,6 +33,16 @@ import {
 const SOURCE_REQUESTS_PATH = TRACEKEEPER_AGENT_REQUESTS_DIR;
 const CONTEXT_PACKS_PATH = TRACEKEEPER_CONTEXT_PACKS_DIR;
 const SOURCES_PATH = KNOWLEDGE_SOURCES_DIR;
+export const MEMORY_PROPOSAL_BODY_READ_LIMIT = 250;
+const MEMORY_PROPOSAL_READ_CONCURRENCY = 8;
+
+export interface MemoryProposalRecordWindow {
+	records: MemoryProposalRecord[];
+	totalItems: number;
+	offset: number;
+	limit: number;
+	isTruncated: boolean;
+}
 
 interface MemoryProposalFileSnapshot {
 	record: MemoryProposalRecord;
@@ -371,6 +381,91 @@ export class ActivityRecordRepository {
 			.filter((record): record is MemoryProposalRecord => Boolean(record))
 			.sort((a, b) => compareProposalRecords(a, b))
 			.slice(0, limit);
+	}
+
+	async readMemoryProposalWindow(
+		limit = MEMORY_PROPOSAL_BODY_READ_LIMIT,
+		offset = 0
+	): Promise<MemoryProposalRecordWindow> {
+		const folder = this.app.vault.getAbstractFileByPath(REVIEW_QUEUE_PATH);
+		if (!(folder instanceof TFolder)) {
+			return {
+				records: [],
+				totalItems: 0,
+				offset: 0,
+				limit: MEMORY_PROPOSAL_BODY_READ_LIMIT,
+				isTruncated: false,
+			};
+		}
+
+		const requestedLimit = Number.isFinite(limit)
+			? Math.floor(limit)
+			: MEMORY_PROPOSAL_BODY_READ_LIMIT;
+		const safeLimit = Math.max(1, Math.min(MEMORY_PROPOSAL_BODY_READ_LIMIT, requestedLimit));
+		const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
+		const files = this.collectMarkdownFiles(folder)
+			.map((file) => {
+				const frontmatter = this.cachedFrontmatter(file);
+				const proposalType = this.cachedFirstString(frontmatter ?? {}, ['type'])
+					.toLowerCase()
+					.replace(/_/g, '-');
+				const proposalKind = this.cachedFirstString(
+					frontmatter ?? {},
+					['proposal_kind', 'proposalKind']
+				);
+				const candidate = frontmatter === null
+					|| proposalType.includes('memory-proposal')
+					|| proposalType.includes('legacy-migration-review')
+					|| Boolean(proposalKind);
+				const status = this.cachedFirstString(
+					frontmatter ?? {},
+					['approval_status', 'approvalStatus']
+				).toLowerCase().replace(/-/g, '_');
+				const requiresAttention = !status
+					|| status === 'pending'
+					|| status === 'approved'
+					|| status === 'revision_requested';
+				return {
+					file,
+					candidate,
+					priority: requiresAttention ? 0 : 1,
+					sortTimestamp: parseTimestamp(
+						frontmatter
+							? this.cachedFirstString(frontmatter, ['created'])
+							: '',
+						file.stat?.mtime
+					),
+				};
+			})
+			.filter(({ candidate }) => candidate)
+			.sort((left, right) =>
+				left.priority - right.priority
+				|| right.sortTimestamp - left.sortTimestamp
+				|| left.file.path.localeCompare(right.file.path)
+			);
+		const lastWindowOffset = files.length > 0
+			? Math.floor((files.length - 1) / safeLimit) * safeLimit
+			: 0;
+		const normalizedOffset = Math.floor(safeOffset / safeLimit) * safeLimit;
+		const boundedOffset = Math.min(normalizedOffset, lastWindowOffset);
+		const selectedFiles = files
+			.slice(boundedOffset, boundedOffset + safeLimit)
+			.map(({ file }) => file);
+		const records: MemoryProposalRecord[] = [];
+		for (let index = 0; index < selectedFiles.length; index += MEMORY_PROPOSAL_READ_CONCURRENCY) {
+			const chunk = selectedFiles.slice(index, index + MEMORY_PROPOSAL_READ_CONCURRENCY);
+			const chunkRecords = await Promise.all(
+				chunk.map((file) => this.readMemoryProposalFile(file))
+			);
+			records.push(...chunkRecords.filter((record): record is MemoryProposalRecord => Boolean(record)));
+		}
+		return {
+			records: records.sort((left, right) => compareProposalRecords(left, right)),
+			totalItems: files.length,
+			offset: files.length > 0 ? boundedOffset : 0,
+			limit: safeLimit,
+			isTruncated: files.length > selectedFiles.length,
+		};
 	}
 
 	private async readRecentMemoryProposalsForTimeline(

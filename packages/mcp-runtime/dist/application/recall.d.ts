@@ -2,7 +2,7 @@ import { type KnowledgeReadView, type ScanResult, type ScannedNote } from '@trac
 export declare const MAX_READ_VIEW_LEXICAL_CANDIDATES = 256;
 export declare const MAX_READ_VIEW_GRAPH_EXPANSIONS = 64;
 export declare const MAX_READ_VIEW_RERANKED_ROWS = 32;
-export type RecallApplicationScope = 'global' | 'project' | 'project_history';
+export type RecallApplicationScope = 'global' | 'project' | 'project_history' | 'task_history';
 export type RecallContentOrigin = 'captured_source' | 'tracekeeper_generated' | 'vault_note';
 export interface RecallProjectIdentityInput {
     project_hint?: unknown;
@@ -43,6 +43,7 @@ export interface RecallApplicationRequest {
     maxItems: number;
     vaultRoot: string;
     projectIdentityInput: RecallProjectIdentityInput;
+    taskId?: string;
 }
 export interface RecallApplicationDependencies {
     loadScan(): ScanResult;
@@ -137,7 +138,41 @@ export interface ProjectHistoryRecallApplicationResult extends RecallScanProvena
     candidate_notes: ProjectCandidate[];
     entries: ProjectHistoryEntry[];
 }
-export type RecallApplicationResult = GlobalRecallApplicationResult | ProjectRecallApplicationResult | ProjectHistoryRecallApplicationResult;
+export interface TaskHistoryEntry {
+    path: string;
+    task_path: string;
+    session_path: string | null;
+    title: string;
+    note_type: string | null;
+    scope: 'task_history';
+    modifiedAt: string;
+    task_id: string;
+    status: string | null;
+    objective: string;
+    summary: string;
+    project_hint: string | null;
+    project_id: string | null;
+    repo_path: string | null;
+    why_matched: string;
+    excerpt: string;
+    content_origin: RecallContentOrigin;
+    instruction_trust: 'data_only';
+    graph_links: string[];
+    relation_evidence: RecallRelationEvidence;
+}
+export interface TaskHistoryRecallApplicationResult extends RecallScanProvenance {
+    ok: true;
+    read_only: true;
+    vault_root: string;
+    query: string | null;
+    task_id: string | null;
+    max_items: number;
+    matched_count: number;
+    total_matches: number;
+    scope_mode: 'task_history';
+    entries: TaskHistoryEntry[];
+}
+export type RecallApplicationResult = GlobalRecallApplicationResult | ProjectRecallApplicationResult | ProjectHistoryRecallApplicationResult | TaskHistoryRecallApplicationResult;
 interface ProjectCandidate {
     path: string;
     title: string;
@@ -156,9 +191,13 @@ export declare class RecallApplicationService {
     executeReadView(request: RecallApplicationRequest & {
         scope: 'project_history';
     }, view: KnowledgeReadView): ProjectHistoryRecallApplicationResult;
+    executeReadView(request: RecallApplicationRequest & {
+        scope: 'task_history';
+    }, view: KnowledgeReadView): TaskHistoryRecallApplicationResult;
     executeReadView(request: RecallApplicationRequest, view: KnowledgeReadView): RecallApplicationResult;
     private executeGlobal;
     private executeProject;
     private executeProjectHistory;
+    private executeTaskHistory;
 }
 export {};

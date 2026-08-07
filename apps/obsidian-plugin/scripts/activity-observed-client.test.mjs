@@ -13,14 +13,14 @@ const auditEvent = (overrides = {}) => ({
 	path: '00_tracekeeper/control/audit_log.md',
 	auditId: '',
 	actor: 'client',
-	action: 'connection',
+	action: 'mcp.connection',
 	target: '',
 	reason: '',
 	taskId: '',
 	timestamp: '2026-07-28T02:00:00.000Z',
 	sortTimestamp: Date.parse('2026-07-28T02:00:00.000Z'),
 	snippet: '',
-	eventType: 'connection',
+	eventType: 'mcp.connection',
 	principalId: 'local-user',
 	integrationId: 'integration-codex',
 	credentialId: 'credential-codex',
@@ -159,6 +159,23 @@ try {
 		lastSuccessfulTool: '',
 		sortTimestamp: Date.parse('2026-07-28T05:00:00.000Z'),
 	});
+	const toolCallOutsideConnectionWindow = toolCall({
+		principalId: 'local-user',
+		integrationId: 'integration-zcode',
+		credentialId: 'credential-zcode',
+		authMode: 'bearer',
+		agentId: 'session-zcode',
+		sessionId: 'session-zcode',
+		clientName: 'zcode',
+		observedClientNameRaw: 'zcode',
+		observedClientType: 'zcode',
+		observedClientVersion: '0.16.1',
+		toolName: 'tracekeeper.memory',
+		timestamp: '2026-07-28T05:30:00.000Z',
+		lastUsedAt: '2026-07-28T05:30:00.000Z',
+		lastSuccessfulTool: 'tracekeeper.memory',
+		sortTimestamp: Date.parse('2026-07-28T05:30:00.000Z'),
+	});
 	const pluginUiRecall = toolCall({
 		principalId: 'obsidian-plugin-ui',
 		agentId: 'tracekeeper-plugin-ui',
@@ -175,37 +192,44 @@ try {
 	});
 	const connections = buildRecentObservedClientConnections(
 		[auditEvent(), secondSession, legacyClaudeDesktop],
-		[toolCall(), failedAfterSuccess, failedOnly, pluginUiRecall]
+		[toolCall(), failedAfterSuccess, failedOnly, toolCallOutsideConnectionWindow, pluginUiRecall]
 	);
 
-	assert.equal(connections.length, 3);
-	assert.equal(connections[0].sessionId, 'session-one');
-	assert.equal(connections[0].integrationId, 'integration-codex');
-	assert.equal(connections[0].credentialId, 'credential-codex');
-	assert.equal(connections[0].authMode, 'oauth');
-	assert.equal(connections[0].observedClientType, 'codex');
-	assert.equal(connections[0].connectedAt, '2026-07-28T02:00:00.000Z');
-	assert.equal(connections[0].lastUsedAt, '2026-07-28T03:00:00.000Z');
-	assert.equal(connections[0].lastSuccessfulTool, 'tracekeeper.status');
-	assert.equal(connections[0].sortTimestamp, Date.parse('2026-07-28T03:00:00.000Z'));
+	assert.equal(connections.length, 4);
+	const codex = connections.find((connection) => connection.sessionId === 'session-one');
+	assert.equal(codex?.integrationId, 'integration-codex');
+	assert.equal(codex?.credentialId, 'credential-codex');
+	assert.equal(codex?.authMode, 'oauth');
+	assert.equal(codex?.observedClientType, 'codex');
+	assert.equal(codex?.connectedAt, '2026-07-28T02:00:00.000Z');
+	assert.equal(codex?.lastUsedAt, '2026-07-28T03:00:00.000Z');
+	assert.equal(codex?.lastSuccessfulTool, 'tracekeeper.status');
+	assert.equal(codex?.sortTimestamp, Date.parse('2026-07-28T03:00:00.000Z'));
+	const zcode = connections.find((connection) => connection.sessionId === 'session-zcode');
+	assert.equal(zcode?.observedClientType, 'zcode');
+	assert.equal(zcode?.connectedAt, '');
+	assert.equal(zcode?.resultStatus, 'success');
+	assert.equal(zcode?.lastUsedAt, '2026-07-28T05:30:00.000Z');
+	assert.equal(zcode?.lastSuccessfulTool, 'tracekeeper.memory');
 	assert.equal(connections.some((connection) => connection.sessionId === 'session-failed-only'), false);
-		assert.equal(connections.some((connection) => connection.sessionId === 'plugin-ui-session'), false);
-		assert.equal(connections[2].observedClientType, 'claude-desktop');
-		assert.equal(connections[2].connectedAt, '2026-07-28T00:00:00.000Z');
+	assert.equal(connections.some((connection) => connection.sessionId === 'plugin-ui-session'), false);
+	const claudeDesktop = connections.find((connection) => connection.sessionId === 'session-legacy');
+	assert.equal(claudeDesktop?.observedClientType, 'claude-desktop');
+	assert.equal(claudeDesktop?.connectedAt, '2026-07-28T00:00:00.000Z');
 
-		const [sessionlessConnection] = buildRecentObservedClientConnections([
-			auditEvent({
-				agentId: 'legacy-agent-id',
-				sessionId: '',
-				clientName: 'Cursor',
-				observedClientNameRaw: 'Cursor',
-				observedClientType: 'cursor',
-			}),
-		], []);
-		assert.equal(sessionlessConnection.agentId, 'legacy-agent-id');
-		assert.equal(sessionlessConnection.sessionId, '');
+	const [sessionlessConnection] = buildRecentObservedClientConnections([
+		auditEvent({
+			agentId: 'legacy-agent-id',
+			sessionId: '',
+			clientName: 'Cursor',
+			observedClientNameRaw: 'Cursor',
+			observedClientType: 'cursor',
+		}),
+	], []);
+	assert.equal(sessionlessConnection.agentId, 'legacy-agent-id');
+	assert.equal(sessionlessConnection.sessionId, '');
 
-		process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 27 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 32 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

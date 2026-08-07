@@ -231,7 +231,8 @@ function summarizeToolPayload(payload, isError) {
         'tool',
         'action',
         'scope_mode',
-        'review_proposal_mode',
+        'status',
+        'memory_status',
         'task_id',
         'project_id',
         'path',
@@ -325,11 +326,9 @@ function buildWorkflowAuditMetadata(toolName, args, payload) {
             : typeof payload.matched_count === 'number'
                 ? payload.matched_count
                 : undefined,
-        memory_closeout_status: typeof payload.memory_closeout_state === 'string'
-            ? payload.memory_closeout_state
-            : typeof payload.memory_closeout_status === 'string'
-                ? payload.memory_closeout_status
-                : undefined,
+        memory_status: typeof payload.memory_status === 'string'
+            ? payload.memory_status
+            : undefined,
     };
 }
 function toolResult(payload, isError = false) {
@@ -493,7 +492,7 @@ function buildRecallActions(payload, context, recallId, scope, matches) {
         }];
 }
 function canonicalMemoryCloseoutStatus(payload) {
-    const state = payload.memory_closeout_state;
+    const state = payload.memory_status ?? payload.memory_closeout_state;
     if (state === 'no_candidates' ||
         state === 'disabled' ||
         state === 'suggested' ||
@@ -633,7 +632,7 @@ function decorateToolResult(toolName, result, context) {
         decorated.next_actions = buildStartTaskActions(decorated, context);
     }
     if (toolName === 'tracekeeper.recall') {
-        const scope = payload.scope_mode === 'project' || payload.scope_mode === 'project_history'
+        const scope = payload.scope_mode === 'project' || payload.scope_mode === 'project_history' || payload.scope_mode === 'task_history'
             ? payload.scope_mode
             : 'global';
         const matches = Array.isArray(payload.matches)
@@ -665,7 +664,7 @@ function decorateToolResult(toolName, result, context) {
     }
     if (toolName === 'tracekeeper.finish_task') {
         const memoryStatus = canonicalMemoryCloseoutStatus(payload);
-        decorated.memory_closeout_state = memoryStatus;
+        decorated.memory_status = memoryStatus;
         decorated.workflow = {
             mode: 'tracked_task',
             state: 'finished',
@@ -763,7 +762,10 @@ function coerceRecallScope(value) {
     if (normalized === 'project_history' || normalized === 'history') {
         return 'project_history';
     }
-    throw new safety_1.ToolInputError('scope must be one of: global, project, project_history.');
+    if (normalized === 'task_history' || normalized === 'tasks' || normalized === 'task') {
+        return 'task_history';
+    }
+    throw new safety_1.ToolInputError('scope must be one of: global, project, project_history, task_history.');
 }
 function coerceReviewQueueAction(value) {
     const normalized = coerceOptionalString(value).toLowerCase();
@@ -861,6 +863,16 @@ function coerceNonEmptyString(value, required = false, field = 'value') {
 function coerceOptionalString(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
+function coerceFinishTaskStatus(value) {
+    if (value === undefined || value === null || value === '') {
+        return 'completed';
+    }
+    const normalized = coerceOptionalString(value).toLowerCase();
+    if (normalized === 'completed' || normalized === 'partial' || normalized === 'blocked') {
+        return normalized;
+    }
+    throw new safety_1.ToolInputError('status must be one of: completed, partial, blocked.');
+}
 function coerceMemoryScope(value) {
     const normalized = coerceOptionalString(value).toLowerCase();
     if (!normalized) {
@@ -905,7 +917,8 @@ function normalizeFinishTaskMemoryCandidateRecords(value) {
         throw new safety_1.ToolInputError('memory_candidate_records exceeds the maximum of 64 entries.');
     }
     const allowed = new Set([
-        'proposal_kind', 'content', 'evidence', 'target_note', 'claim_key',
+        'proposal_kind', 'content', 'scope', 'project_hint', 'project_id', 'repo_path', 'related_wiki', 'related_sources',
+        'evidence', 'target_note', 'claim_key',
         'proposed_authority', 'proposed_confidence', 'declared_state',
         'observed_at', 'valid_from', 'valid_to', 'last_verified_at',
         'supersedes', 'contradicts',
@@ -920,9 +933,19 @@ function normalizeFinishTaskMemoryCandidateRecords(value) {
             }
         }
         const optional = (field) => coerceOptionalString(entry[field]) || null;
+        const scope = coerceMemoryScope(entry.scope);
+        if (!scope) {
+            throw new safety_1.ToolInputError(`memory_candidate_records[${index}].scope must be global or project.`);
+        }
         return {
             proposal_kind: coerceNonEmptyString(entry.proposal_kind, true, `memory_candidate_records[${index}].proposal_kind`),
             content: coerceNonEmptyString(entry.content, true, `memory_candidate_records[${index}].content`),
+            scope,
+            project_hint: optional('project_hint'),
+            project_id: optional('project_id'),
+            repo_path: optional('repo_path'),
+            related_wiki: normalizeMultiValueList(entry.related_wiki, `memory_candidate_records[${index}].related_wiki`),
+            related_sources: normalizeMultiValueList(entry.related_sources, `memory_candidate_records[${index}].related_sources`),
             evidence: normalizeMultiValueList(entry.evidence, `memory_candidate_records[${index}].evidence`),
             target_note: optional('target_note'),
             claim_key: optional('claim_key'),
@@ -1207,7 +1230,7 @@ function normalizeReviewProposalMode(value, fallback = DEFAULT_FINISH_TASK_REVIE
         : fallback;
 }
 function defaultReviewProposalMode(context) {
-    return normalizeReviewProposalMode(context.memoryRules?.taskMemoryProposalMode, DEFAULT_FINISH_TASK_REVIEW_MODE);
+    return DEFAULT_FINISH_TASK_REVIEW_MODE;
 }
 function normalizeMemoryProposalRule(value, fallback = 'review_queue') {
     const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -1888,7 +1911,7 @@ async function verifyFinishTaskProjectMemoryStepReceipt(vaultRoot, operationId, 
         throw new core_1.OperationConflictError('Finish-task project-memory artifact no longer matches its operation receipt.');
     }
 }
-async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, proposalMode, projectHint, rawMemoryScope, relatedWiki, relatedSources, architectureStatus, closeout, memoryCandidateRecords, context, operationId, expectImmutableProjectMemory = false) {
+async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, proposalMode, projectHint, projectId, repoPath, rawMemoryScope, relatedWiki, relatedSources, architectureStatus, closeout, memoryCandidateRecords, context, operationId, expectImmutableProjectMemory = false) {
     const candidateResults = memoryCandidateRecords.map((candidate) => ({
         ...candidate,
         authority: null,
@@ -1909,7 +1932,7 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
             })),
         };
     }
-    const groups = buildFinishTaskCloseoutGroups(closeout, context);
+    const groups = [];
     const proposals = [];
     const suggestedMemoryUpdates = [];
     const autoAppliedMemoryUpdates = [];
@@ -2019,23 +2042,38 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
             memoryChanges.push({ source, change_kind: 'suggested' });
             continue;
         }
-        const proposalContext = proposalMode === 'review_queue'
+        const proposalContext = context;
+        const candidateProjectScope = candidate.scope === 'project'
             ? {
-                ...context,
-                memoryRules: {
-                    ...context.memoryRules,
-                    globalMemoryRule: 'review_queue',
-                    projectMemoryRule: 'review_queue',
-                },
+                project_hint: candidate.project_hint || projectHint || undefined,
+                project_id: candidate.project_id || projectId || undefined,
+                repo_path: candidate.repo_path || repoPath || undefined,
             }
-            : context;
+            : {
+                project_hint: undefined,
+                project_id: undefined,
+                repo_path: undefined,
+            };
         const rawCandidate = {
-            ...candidate,
+            proposal_kind: candidate.proposal_kind,
+            content: candidate.content,
+            evidence: candidate.evidence,
+            target_note: candidate.target_note || undefined,
+            claim_key: candidate.claim_key || undefined,
+            proposed_authority: candidate.proposed_authority || undefined,
+            proposed_confidence: candidate.proposed_confidence || undefined,
+            declared_state: candidate.declared_state || undefined,
+            observed_at: candidate.observed_at || undefined,
+            valid_from: candidate.valid_from || undefined,
+            valid_to: candidate.valid_to || undefined,
+            last_verified_at: candidate.last_verified_at || undefined,
+            supersedes: candidate.supersedes,
+            contradicts: candidate.contradicts,
             task_id: taskId,
-            project_hint: projectHint || undefined,
-            memory_scope: rawMemoryScope,
-            related_wiki: relatedWiki,
-            related_sources: relatedSources,
+            ...candidateProjectScope,
+            memory_scope: candidate.scope,
+            related_wiki: candidate.related_wiki?.length ? candidate.related_wiki : relatedWiki,
+            related_sources: candidate.related_sources?.length ? candidate.related_sources : relatedSources,
             idempotency_key: `finish-task:${operationId}:memory-candidate:${index}`,
         };
         const result = await handleProposeMemory(rawCandidate, proposalContext);
@@ -2060,6 +2098,8 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
         memoryChanges.push({
             source,
             change_kind: autoApplied ? 'record_written' : 'proposal_queued',
+            candidate_index: index,
+            scope: candidate.scope,
             ...(typeof resultRecord.proposal_id === 'string' ? { proposal_id: resultRecord.proposal_id } : {}),
             ...(recordIdentity ? { record_identity: recordIdentity } : {}),
             previous_effective_state: null,
@@ -4931,7 +4971,7 @@ function toolPrompts() {
                 },
                 {
                     name: 'scope',
-                    description: 'Scope for recall: global, project, or project_history.',
+                    description: 'Scope for recall: global, project, project_history, or task_history.',
                 },
                 {
                     name: 'project_hint',
@@ -5136,23 +5176,24 @@ function buildRecommendedRecall(goal, identity, context) {
 function buildCloseoutContract(context) {
     return {
         required_tool: 'tracekeeper.finish_task',
-        default_mode: defaultReviewProposalMode(context),
+        default_mode: 'explicit_candidates',
         content_language: contentLanguageFromContext(context),
         content_language_source: contentLanguageSourceFromContext(context),
         fields: [
             'summary',
+            'status',
             'outcomes',
             'decisions',
             'solution_changes',
             'lessons',
             'preferences',
             'next_actions',
-            'memory_candidates',
+            'memory_candidate_records',
             'related_wiki',
             'related_sources',
         ],
         project_hint_required_for_project_memory: true,
-        note: 'At task closeout, include durable decisions, solution changes, lessons, user preferences, next actions, and memory candidates when present. ' +
+        note: 'Task fields describe execution and remain in task history. Submit a structured memory_candidate_records entry only when information should become durable global or project memory. ' +
             'Reuse verified wiki/source paths already gathered from recall/read_note, otherwise report review fallback.',
     };
 }
@@ -5160,7 +5201,7 @@ function buildStartTaskNextActions(identity, context) {
     const actions = [
         contentText(context, '读取单篇笔记前，先调用 tracekeeper.recall。', 'Call tracekeeper.recall before reading individual notes.'),
         contentText(context, '只有召回摘要不够时，再使用 tracekeeper.read_note。', 'Use tracekeeper.read_note only when a recall excerpt is not enough.'),
-        contentText(context, '任务结束时调用一次 tracekeeper.finish_task，提交决策、方案调整、经验、偏好、下一步和记忆候选。', 'Call tracekeeper.finish_task once at the end with decisions, solution changes, lessons, preferences, next actions, and memory candidates.'),
+        contentText(context, '任务结束时调用一次 tracekeeper.finish_task，记录任务状态和执行细节；只有明确的长期记忆候选才提交为 memory_candidate_records。', 'Call tracekeeper.finish_task once at the end with task status and execution details; submit only explicit durable candidates as memory_candidate_records.'),
     ];
     if (hasProjectScope(identity) && identity.confidence !== 'uncertain') {
         actions.unshift(contentText(context, '使用相同 project_hint 和 scope="project" 做定向召回。', 'Use scope="project" with the same project_hint for targeted recall.'));
@@ -5247,6 +5288,9 @@ function buildToolOperationIdentity(tool, rawIdempotencyKey, payload, context) {
 }
 async function handleStartTask(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
+    if (context.memoryRules?.taskTrackingEnabled === false) {
+        throw new safety_1.ToolInputError('task_tracking_disabled: task tracking is disabled in Tracekeeper settings.');
+    }
     const goal = coerceNonEmptyString(rawArgs.goal, true, 'goal');
     const client = coerceNonEmptyString(rawArgs.client);
     const view = await knowledgeReadViewForContext(vaultRoot, context);
@@ -5342,7 +5386,7 @@ async function handleStartTask(rawArgs, context) {
 }
 async function executeRecallApplication(scope, rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
-    const query = scope === 'project_history'
+    const query = scope === 'project_history' || scope === 'task_history'
         ? coerceOptionalString(rawArgs.query)
         : coerceNonEmptyString(rawArgs.query, true, 'query');
     const maxItems = coercePositiveInt(rawArgs.max_items, scope === 'global' ? 6 : MAX_PROJECT_TOOL_ITEMS, 1, MAX_PROJECT_TOOL_ITEMS);
@@ -5361,6 +5405,7 @@ async function executeRecallApplication(scope, rawArgs, context) {
         query,
         maxItems,
         vaultRoot,
+        taskId: coerceOptionalString(rawArgs.task_id) || undefined,
         projectIdentityInput: rawArgs,
     };
     return service.executeReadView(request, await knowledgeReadViewForContext(vaultRoot, context));
@@ -5386,6 +5431,14 @@ async function handleRecall(rawArgs, context) {
                 ...result.scope,
                 scope,
             },
+            scope_mode: scope,
+        };
+    }
+    if (scope === 'task_history') {
+        const result = await executeRecallApplication('task_history', rawArgs, context);
+        return {
+            ...result,
+            scope: { scope },
             scope_mode: scope,
         };
     }
@@ -6607,7 +6660,7 @@ function buildSessionNoteBody(context, summary, outcomes, nextActions) {
     ].join('\n');
     return lines.trim();
 }
-function buildSessionNoteBodyWithCloseout(context, summary, outcomes, nextActions, decisions, solutionChanges, lessons, preferences, memoryCandidates) {
+function buildSessionNoteBodyWithCloseout(context, summary, outcomes, nextActions, decisions, solutionChanges, lessons, preferences, memoryCandidateRecords) {
     const lines = [
         contentText(context, '# 任务会话记录', '# Task Session Note'),
         `- created_at: ${new Date().toISOString()}`,
@@ -6633,15 +6686,17 @@ function buildSessionNoteBodyWithCloseout(context, summary, outcomes, nextAction
         contentText(context, '## 偏好', '## Preferences'),
         ...formatListMarkdown(preferences).split('\n'),
         '',
-        contentText(context, '## 记忆候选', '## Memory Candidates'),
-        ...formatListMarkdown(memoryCandidates).split('\n'),
+        contentText(context, '## 长期记忆候选', '## Durable Memory Candidates'),
+        ...(memoryCandidateRecords.length > 0
+            ? memoryCandidateRecords.map((candidate) => `- [${candidate.scope}] ${candidate.content}`)
+            : ['- (none; task facts remain task history only)']),
     ].join('\n');
     return lines.trim();
 }
 function buildFinishTaskNextActions(context, reviewProposalMode, proposalResult, projectHint, hasCloseoutCandidates) {
     const actions = [];
     if (!hasCloseoutCandidates) {
-        actions.push(contentText(context, '任务会话已记录；没有提交可长期沉淀的收尾记忆候选。如果之后发现遗漏的长期信息，请将其作为新的 tracekeeper.propose_memory 候选提交，不要再次调用 tracekeeper.finish_task。', 'Task session was recorded with no durable closeout memory candidates. If omitted durable information is discovered later, submit it as a new tracekeeper.propose_memory candidate; do not call tracekeeper.finish_task again.'));
+        actions.push(contentText(context, '任务追踪已记录；没有提交长期记忆候选。如果之后发现遗漏的长期信息，请将其作为新的 tracekeeper.propose_memory 候选提交，不要再次调用 tracekeeper.finish_task。', 'Task tracking was recorded with no durable memory candidates. If omitted durable information is discovered later, submit it as a new tracekeeper.propose_memory candidate; do not call tracekeeper.finish_task again.'));
     }
     if (reviewProposalMode === 'off') {
         actions.push(contentText(context, '任务会话已记录；当前模式不会创建记忆建议或知识变更审核提案。', 'Task session was recorded; no memory suggestions or Knowledge Change Review proposals were created.'));
@@ -6660,7 +6715,7 @@ function buildFinishTaskNextActions(context, reviewProposalMode, proposalResult,
             actions.push(contentText(context, '部分项目记忆候选缺少 related_wiki 桥接关系，因此需要先审核。', 'Some project memory candidates need a related_wiki bridge before automatic project memory save.'));
         }
         if (actions.length === 0) {
-            actions.push(contentText(context, '任务会话已记录；没有产生收尾记忆候选。', 'Task session was recorded; no closeout memory candidates were produced.'));
+            actions.push(contentText(context, '任务追踪已记录；没有产生长期记忆候选。', 'Task tracking was recorded; no durable memory candidates were produced.'));
         }
     }
     if (projectHint) {
@@ -6806,6 +6861,9 @@ function isFinishTaskOperationPayload(payload) {
     if (typeof payload.summary !== 'string') {
         return false;
     }
+    if (payload.status !== 'completed' && payload.status !== 'partial' && payload.status !== 'blocked') {
+        return false;
+    }
     if (!Array.isArray(payload.outcomes) || !payload.outcomes.every((item) => typeof item === 'string')) {
         return false;
     }
@@ -6824,13 +6882,11 @@ function isFinishTaskOperationPayload(payload) {
     if (!Array.isArray(payload.preferences) || !payload.preferences.every((item) => typeof item === 'string')) {
         return false;
     }
-    if (!Array.isArray(payload.memoryCandidates) || !payload.memoryCandidates.every((item) => typeof item === 'string')) {
-        return false;
-    }
     if (payload.memoryCandidateRecords !== undefined && (!Array.isArray(payload.memoryCandidateRecords) || !payload.memoryCandidateRecords.every((item) => {
         return (0, protocol_1.isRecord)(item)
             && typeof item.proposal_kind === 'string'
             && typeof item.content === 'string'
+            && (item.scope === 'global' || item.scope === 'project')
             && Array.isArray(item.evidence)
             && item.evidence.every((entry) => typeof entry === 'string')
             && Array.isArray(item.supersedes)
@@ -6874,22 +6930,18 @@ function buildFinishTaskRequestSnapshot(rawArgs) {
     return {
         task_id: coerceNonEmptyString(rawArgs.task_id, true, 'task_id'),
         summary: coerceNonEmptyString(rawArgs.summary, true, 'summary'),
+        status: coerceFinishTaskStatus(rawArgs.status),
         outcomes: coerceStringOrStringArray(rawArgs.outcomes, 'outcomes'),
         next_actions: coerceStringOrStringArray(rawArgs.next_actions, 'next_actions'),
         decisions: coerceStringOrStringArray(rawArgs.decisions, 'decisions'),
         solution_changes: coerceStringOrStringArray(rawArgs.solution_changes, 'solution_changes'),
         lessons: coerceStringOrStringArray(rawArgs.lessons, 'lessons'),
         preferences: coerceStringOrStringArray(rawArgs.preferences, 'preferences'),
-        memory_candidates: coerceStringOrStringArray(rawArgs.memory_candidates, 'memory_candidates'),
         memory_candidate_records: normalizeFinishTaskMemoryCandidateRecords(rawArgs.memory_candidate_records),
-        review_proposal_mode: rawArgs.review_proposal_mode == null
-            ? null
-            : coerceReviewProposalMode(rawArgs.review_proposal_mode, 'auto_propose'),
         client: coerceOptionalString(rawArgs.client) || null,
         project_hint: explicitIdentity.projectHint || null,
         project_id: explicitIdentity.projectId || null,
         repo_path: explicitIdentity.repoPath || null,
-        memory_scope: rawArgs.memory_scope ?? null,
         related_wiki: normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki'),
         related_sources: normalizeMultiValueList(rawArgs.related_sources, 'related_sources'),
         filename: coerceOptionalString(rawArgs.filename) || null,
@@ -6899,35 +6951,29 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
     const vaultRoot = configuredVaultRoot(context);
     const taskId = coerceNonEmptyString(rawArgs.task_id, true, 'task_id');
     const summary = coerceNonEmptyString(rawArgs.summary, true, 'summary');
+    const status = coerceFinishTaskStatus(rawArgs.status);
     const outcomes = coerceStringOrStringArray(rawArgs.outcomes, 'outcomes');
     const nextActions = coerceStringOrStringArray(rawArgs.next_actions, 'next_actions');
     const decisions = coerceStringOrStringArray(rawArgs.decisions, 'decisions');
     const solutionChanges = coerceStringOrStringArray(rawArgs.solution_changes, 'solution_changes');
     const lessons = coerceStringOrStringArray(rawArgs.lessons, 'lessons');
     const preferences = coerceStringOrStringArray(rawArgs.preferences, 'preferences');
-    const memoryCandidates = coerceStringOrStringArray(rawArgs.memory_candidates, 'memory_candidates');
+    const memoryCandidates = [];
     const memoryCandidateRecords = normalizeFinishTaskMemoryCandidateRecords(rawArgs.memory_candidate_records);
-    const reviewProposalMode = coerceReviewProposalMode(rawArgs.review_proposal_mode, defaultReviewProposalMode(context));
+    const reviewProposalMode = DEFAULT_FINISH_TASK_REVIEW_MODE;
     const taskMetadata = await readAgentTaskMetadataAsync(vaultRoot, taskId, context);
     const identityScan = scanVaultForContext(vaultRoot, context);
     const explicitIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs, identityScan.notes);
     const projectIdentity = mergeTaskProjectIdentity(taskId, taskMetadata, explicitIdentity);
     const client = coerceOptionalString(rawArgs.client) || taskMetadata.client;
     const projectHint = projectIdentity.projectHint;
-    const memoryScope = rawArgs.memory_scope === undefined ? '' : rawArgs.memory_scope;
+    const memoryScope = '';
     const relatedWiki = normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki');
     const relatedSources = normalizeMultiValueList(rawArgs.related_sources, 'related_sources');
     const architectureStatus = buildArchitectureStatus(vaultRoot, context);
     const bridgeMetadata = resolveProjectMemoryBridgeMetadata(vaultRoot, resolveMemoryScope('session_finish', '', projectHint, memoryScope), projectHint, relatedWiki, relatedSources, context);
     const filename = buildSafeFilename(rawArgs.filename || `finish-${taskId}-${operationId}`, 'session', context);
-    const closeoutGroups = buildFinishTaskCloseoutGroups({
-        decisions,
-        solution_changes: solutionChanges,
-        lessons,
-        preferences,
-        next_actions: nextActions,
-        memory_candidates: memoryCandidates,
-    }, context);
+    const closeoutGroups = [];
     return {
         requestHash,
         requestSnapshot,
@@ -6939,6 +6985,7 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
         })(),
         taskId,
         summary,
+        status,
         outcomes,
         nextActions,
         decisions,
@@ -6964,14 +7011,7 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
         filename,
         architectureStatus,
         closeoutGroups,
-        hasCloseoutCandidates: memoryCandidateRecords.length > 0 || hasFinishTaskCloseoutCandidates({
-            decisions,
-            solutionChanges,
-            lessons,
-            preferences,
-            nextActions,
-            memoryCandidates,
-        }),
+        hasCloseoutCandidates: memoryCandidateRecords.length > 0,
         contentLanguage: contentLanguageFromContext(context),
     };
 }
@@ -6982,7 +7022,7 @@ function resolveFinishTaskSessionNotePath(input, context) {
 }
 async function writeFinishTaskSessionNote(input, context, operationId) {
     const projectIdentity = projectIdentityFromFinishPayload(input);
-    const body = buildSessionNoteBodyWithCloseout(context, input.summary, input.outcomes, input.nextActions, input.decisions, input.solutionChanges, input.lessons, input.preferences, input.memoryCandidates);
+    const body = buildSessionNoteBodyWithCloseout(context, input.summary, input.outcomes, input.nextActions, input.decisions, input.solutionChanges, input.lessons, input.preferences, input.memoryCandidateRecords ?? []);
     assertNoSensitiveText([
         { label: 'summary', value: input.summary },
         { label: 'outcomes', value: input.outcomes.join('\n') },
@@ -6991,7 +7031,7 @@ async function writeFinishTaskSessionNote(input, context, operationId) {
         { label: 'solution_changes', value: input.solutionChanges.join('\n') },
         { label: 'lessons', value: input.lessons.join('\n') },
         { label: 'preferences', value: input.preferences.join('\n') },
-        { label: 'memory_candidates', value: input.memoryCandidates.join('\n') },
+        { label: 'memory_candidate_records', value: (input.memoryCandidateRecords ?? []).map((candidate) => candidate.content).join('\n') },
         { label: 'client', value: input.client },
         { label: 'project_hint', value: input.projectHint },
         { label: 'related_wiki', value: input.relatedWiki.join('\n') },
@@ -7026,13 +7066,14 @@ async function writeFinishTaskSessionNote(input, context, operationId) {
         project_identity_source: projectIdentity.source,
         project_identity_confidence: projectIdentity.confidence,
         project_identity_warnings: projectIdentity.warnings,
-        memory_scope: resolveMemoryScope('session_finish', '', input.projectHint, input.memoryScope),
+        summary: input.summary,
         related_wiki: input.relatedWiki,
         related_sources: input.relatedSources,
         architecture_status: input.architectureStatus.architecture_status,
         missing_graph_bridges: input.architectureStatus.missing_graph_bridges,
         created_at: new Date().toISOString(),
-        review_proposal_mode: input.reviewProposalMode || null,
+        status: input.status,
+        memory_candidate_count: String((input.memoryCandidateRecords ?? []).length),
         finish_operation_id: operationId,
     }, body, input.taskId, context, sessionAuditMetadata, operationId);
     return note.path;
@@ -7180,7 +7221,7 @@ async function updateFinishTaskRecord(input, context, operationId) {
     if (!sessionNote) {
         throw new safety_1.ToolInputError(`Session note is missing for finish-task operation: ${notePath}`);
     }
-    const proposalResult = await collectFinishTaskArtifacts(input.vaultRoot, input.taskId, sessionNote.path, input.reviewProposalMode, input.projectHint, input.memoryScope, input.rawRelatedWiki ?? input.relatedWiki, input.rawRelatedSources ?? input.relatedSources, input.architectureStatus, {
+    const proposalResult = await collectFinishTaskArtifacts(input.vaultRoot, input.taskId, sessionNote.path, input.reviewProposalMode, input.projectHint, input.projectId, input.repoPath, input.memoryScope, input.rawRelatedWiki ?? input.relatedWiki, input.rawRelatedSources ?? input.relatedSources, input.architectureStatus, {
         decisions: input.decisions,
         solution_changes: input.solutionChanges,
         lessons: input.lessons,
@@ -7193,7 +7234,7 @@ async function updateFinishTaskRecord(input, context, operationId) {
     const proposalIds = proposalResult.proposals.map((proposal) => proposal.proposalId);
     const autoWritePaths = proposalResult.autoAppliedMemoryUpdates.map((update) => update.path);
     const taskPath = await updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, {
-        status: 'completed',
+        status: input.status,
         finished_at: new Date().toISOString(),
         summary: input.summary,
         session_note: sessionNote.path,
@@ -7203,8 +7244,7 @@ async function updateFinishTaskRecord(input, context, operationId) {
         solution_changes: input.solutionChanges.join(', '),
         lessons: input.lessons.join(', '),
         preferences: input.preferences.join(', '),
-        memory_candidates: input.memoryCandidates.join(', '),
-        review_proposal_mode: input.reviewProposalMode,
+        memory_candidate_count: String((input.memoryCandidateRecords ?? []).length),
         project_id: input.projectId || null,
         repo_path: input.repoPath || null,
         project_hint: input.projectHint,
@@ -7240,8 +7280,10 @@ async function updateFinishTaskRecord(input, context, operationId) {
         contentText(context, '## 偏好', '## Preferences'),
         ...formatListMarkdown(input.preferences).split('\n'),
         '',
-        contentText(context, '## 记忆候选', '## Memory Candidates'),
-        ...formatListMarkdown(input.memoryCandidates).split('\n'),
+        contentText(context, '## 长期记忆处理', '## Durable Memory Processing'),
+        ...(input.memoryCandidateRecords && input.memoryCandidateRecords.length > 0
+            ? input.memoryCandidateRecords.map((candidate) => `- [${candidate.scope}] ${candidate.content}`)
+            : ['- (none; task facts remain task history only)']),
         `^finish-${operationId}`,
     ].join('\n'), `^finish-${operationId}`);
     await updateManagedProposalReferences(input.vaultRoot, sessionNote.path, proposalResult.proposals, context);
@@ -7256,7 +7298,7 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
     if (!sessionNote) {
         throw new safety_1.ToolInputError(`Session note is missing for finish-task operation: ${resolveFinishTaskSessionNotePath(input, context)}`);
     }
-    const proposalResult = await collectFinishTaskArtifacts(input.vaultRoot, input.taskId, sessionNote.path, input.reviewProposalMode, input.projectHint, input.memoryScope, input.rawRelatedWiki ?? input.relatedWiki, input.rawRelatedSources ?? input.relatedSources, input.architectureStatus, {
+    const proposalResult = await collectFinishTaskArtifacts(input.vaultRoot, input.taskId, sessionNote.path, input.reviewProposalMode, input.projectHint, input.projectId, input.repoPath, input.memoryScope, input.rawRelatedWiki ?? input.relatedWiki, input.rawRelatedSources ?? input.relatedSources, input.architectureStatus, {
         decisions: input.decisions,
         solution_changes: input.solutionChanges,
         lessons: input.lessons,
@@ -7275,15 +7317,15 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         task_id: input.taskId,
         task_path: buildTaskNotePath(input.taskId),
         path: sessionNote.path,
+        session_path: sessionNote.path,
         activity_path: sessionNote.activity_path,
-        review_proposal_mode: input.reviewProposalMode,
+        status: input.status,
         content_language: input.contentLanguage,
         content_language_source: contentLanguageSourceFromContext(context),
         outcome_count: input.outcomes.length,
         next_action_count: input.nextActions.length,
         memory_candidate_records: proposalResult.memoryCandidateRecords,
         memory_changes: proposalResult.memoryChanges,
-        memory_scope: resolveMemoryScope('session_finish', '', input.projectHint, input.memoryScope),
         project_id: input.projectId || null,
         repo_path: input.repoPath || null,
         project_hint: input.projectHint || null,
@@ -7293,9 +7335,7 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         architecture_status: input.architectureStatus.architecture_status,
         missing_graph_bridges: input.architectureStatus.missing_graph_bridges,
         missing_wiki_bridge: proposalResult.hasMissingWikiBridge,
-        memory_closeout_status: memoryCloseoutStatus,
-        memory_closeout_state: memoryCloseoutState,
-        memory_closeout_summary: buildMemoryCloseoutSummary(context, memoryCloseoutStatus, proposalResult),
+        memory_status: memoryCloseoutState,
         next_actions_for_agent: buildFinishTaskNextActions(context, input.reviewProposalMode, proposalResult, input.projectHint, input.hasCloseoutCandidates),
     };
     if (proposalResult.hasMissingRelatedSources) {

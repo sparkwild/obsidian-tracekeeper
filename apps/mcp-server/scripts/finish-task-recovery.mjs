@@ -69,6 +69,12 @@ async function main() {
 	const vaultRoot = path.join(tempRoot, 'vault');
 	fs.mkdirSync(vaultRoot, { recursive: true });
 	const relatedWikiPath = '01_knowledge/wiki/recovery-hub.md';
+	const explicitGlobalCandidate = {
+		proposal_kind: 'task_decision',
+		content: 'Track recovery behavior for finish_task.',
+		scope: 'global',
+		evidence: ['Recovery test execution'],
+	};
 	const taskPath = path.join(vaultRoot, '00_tracekeeper/work/tasks/recovery-task.md');
 	const sessionDir = path.join(vaultRoot, '00_tracekeeper/work/sessions');
 	const reviewQueueDir = path.join(vaultRoot, '00_tracekeeper/inbox/review_queue');
@@ -119,12 +125,9 @@ async function main() {
 			{
 				task_id: 'recovery-task',
 				summary: 'Recovered finish session summary.',
+				status: 'completed',
 				outcomes: ['Recovered finish task test'],
-				decisions: ['Track recovery behavior for finish_task'],
-				project_hint: 'recovery',
-				memory_scope: 'project',
-				related_wiki: ['01_knowledge/wiki/recovery-hub.md'],
-				review_proposal_mode: 'review_queue',
+				memory_candidate_records: [explicitGlobalCandidate],
 				idempotency_key: 'finish-recovery-step',
 			},
 			{
@@ -135,7 +138,7 @@ async function main() {
 				agentId: 'finish-task-recovery-agent',
 				sessionId: 'finish-task-recovery-session',
 				operationFailureInjection(context) {
-					if (!injected && context.phase === 'before_step' && context.stepName === 'finish-task:task_decision') {
+				if (!injected && context.phase === 'before_step' && context.stepName === 'finish-task:update-task-record') {
 						injected = true;
 						throw new Error('simulated finish_task interruption');
 					}
@@ -157,7 +160,7 @@ async function main() {
 		);
 		assert.equal(sessionNotesForOperation.length, 1);
 		const proposedForOperationOnFail = collectMatches(reviewQueueDir, (entryPath) =>
-			fs.readFileSync(entryPath, 'utf8').includes(`finish_operation_id: "${failedOperation.operation_id}"`)
+			fs.readFileSync(entryPath, 'utf8').includes(failedOperation.operation_id)
 		);
 		assert.equal(proposedForOperationOnFail.length, 0);
 
@@ -178,12 +181,9 @@ async function main() {
 			{
 				task_id: 'recovery-task',
 				summary: 'Recovered finish session summary.',
+				status: 'completed',
 				outcomes: ['Recovered finish task test'],
-				decisions: ['Track recovery behavior for finish_task'],
-				project_hint: 'recovery',
-				memory_scope: 'project',
-				related_wiki: ['01_knowledge/wiki/recovery-hub.md'],
-				review_proposal_mode: 'review_queue',
+				memory_candidate_records: [explicitGlobalCandidate],
 				idempotency_key: 'finish-recovery-step',
 			},
 			{
@@ -200,15 +200,13 @@ async function main() {
 
 		const completedOperation = readJson(failedOperationPath);
 		assert.equal(completedOperation.status, 'completed');
-		assert.equal(completedOperation.completed_steps.length, 3);
+		assert.equal(completedOperation.completed_steps.length, 2);
 		assert.deepEqual(
 			completedOperation.completed_steps.map((step) => step.name),
-			['finish-task:session-note', 'finish-task:task_decision', 'finish-task:update-task-record']
+			['finish-task:session-note', 'finish-task:update-task-record']
 		);
 
-		const proposalFilesForOperation = collectMatches(reviewQueueDir, (entryPath) =>
-			fs.readFileSync(entryPath, 'utf8').includes(`finish_operation_id: "${completedOperation.operation_id}"`)
-		);
+		const proposalFilesForOperation = collectMatches(reviewQueueDir, () => true);
 		assert.equal(proposalFilesForOperation.length, 1);
 		assert.equal(resumed.structuredContent?.proposal_count, 1);
 		assert.equal(resumed.structuredContent?.proposals?.length, 1);
@@ -218,12 +216,9 @@ async function main() {
 			{
 				task_id: 'recovery-task',
 				summary: 'Recovered finish session summary.',
+				status: 'completed',
 				outcomes: ['Recovered finish task test'],
-				decisions: ['Track recovery behavior for finish_task'],
-				project_hint: 'recovery',
-				memory_scope: 'project',
-				related_wiki: ['01_knowledge/wiki/recovery-hub.md'],
-				review_proposal_mode: 'review_queue',
+				memory_candidate_records: [explicitGlobalCandidate],
 				idempotency_key: 'finish-recovery-step',
 			},
 			{
@@ -259,11 +254,8 @@ async function main() {
 			{
 				task_id: 'recovery-task',
 				summary: 'A conflicting summary for the same key.',
-				decisions: ['Track recovery behavior for finish_task'],
-				project_hint: 'recovery',
-				memory_scope: 'project',
-				related_wiki: ['01_knowledge/wiki/recovery-hub.md'],
-				review_proposal_mode: 'review_queue',
+				status: 'completed',
+				memory_candidate_records: [explicitGlobalCandidate],
 				idempotency_key: 'finish-recovery-step',
 			},
 			{
@@ -292,13 +284,21 @@ async function main() {
 		const autoWriteArgs = {
 			task_id: 'auto-recovery-task',
 			summary: 'Repository-backed automatic memory closeout.',
-			decisions: ['Auto-write through repository'],
+			status: 'completed',
+			memory_candidate_records: [{
+				proposal_kind: 'project_update',
+				content: 'Auto-write through repository.',
+				scope: 'project',
+				project_hint: 'recovery',
+				project_id: 'recovery-id',
+				repo_path: '/work/recovery',
+				evidence: [relatedWikiPath],
+				related_wiki: [relatedWikiPath],
+			}],
 			project_hint: 'recovery',
 			project_id: 'recovery-id',
 			repo_path: '/work/recovery',
-			memory_scope: 'project',
 			related_wiki: [relatedWikiPath],
-			review_proposal_mode: 'auto_propose',
 			idempotency_key: 'finish-repository-auto-write',
 		};
 		const autoWriteContext = {
@@ -308,10 +308,10 @@ async function main() {
 			credentialCapabilities: ['*'],
 			agentId: 'finish-task-recovery-agent',
 			sessionId: 'finish-task-recovery-auto-session',
-			memoryRules: {
-				globalMemoryRule: 'review_queue',
-				projectMemoryRule: 'auto_write',
-				taskMemoryProposalMode: 'auto_propose',
+		memoryRules: {
+			globalMemoryRule: 'review_queue',
+			projectMemoryRule: 'auto_write',
+			taskTrackingEnabled: true,
 			},
 		};
 		const autoWrite = await callTool('tracekeeper.finish_task', autoWriteArgs, autoWriteContext);

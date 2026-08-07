@@ -64,6 +64,7 @@ try {
 	const {
 		buildActivityAgentSummary,
 		buildSuccessfullyUsedAgentSummary,
+		selectLatestTaskPlacement,
 		selectActivityPrimaryAction,
 	} = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 
@@ -106,6 +107,13 @@ try {
 		'none'
 	);
 	assert.equal(selectActivityPrimaryAction(actionInput()), 'none');
+	assert.equal(selectLatestTaskPlacement(null), 'hidden');
+	for (const status of ['completed', 'done', 'success']) {
+		assert.equal(selectLatestTaskPlacement({ status }), 'memory_loop');
+	}
+	for (const status of ['active', 'running', 'failed', 'error', 'interrupted', 'unknown']) {
+		assert.equal(selectLatestTaskPlacement({ status }), 'standalone');
+	}
 
 	assert.deepEqual(buildActivityAgentSummary([]), {
 		state: 'not_observed',
@@ -192,7 +200,7 @@ try {
 		]),
 		{
 			state: 'observed',
-			observedAgentCount: 1,
+			observedAgentCount: 2,
 			agentGroups: [
 				{
 					displayName: 'Codex',
@@ -202,11 +210,19 @@ try {
 					lastUsedAt: Date.parse('2026-07-28T03:00:00.000Z'),
 					sortTimestamp: Date.parse('2026-07-28T03:00:00.000Z'),
 				},
+				{
+					displayName: 'Cursor',
+					observedClientType: 'cursor',
+					sessionCount: 1,
+					lastConnectedAt: 0,
+					lastUsedAt: Date.parse('2026-07-28T03:00:00.000Z'),
+					sortTimestamp: Date.parse('2026-07-28T03:00:00.000Z'),
+				},
 			],
 		}
 	);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 15 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 19 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

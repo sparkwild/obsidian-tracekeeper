@@ -25,7 +25,7 @@ export class GraphHealthController {
 async loadGraphHealthSnapshot(): Promise<GraphHealthSnapshot> {
 		const profile = this.host.getGraphProfile();
 		try {
-			const result = await this.host.executeLocalTool('tracekeeper.graph_health', {
+			const result = await this.host.executeLocalTool('tracekeeper.lint', {
 				max_items: MAX_GRAPH_HEALTH_ITEMS,
 				graph_profile: profile,
 			});
@@ -51,7 +51,7 @@ async createGraphHealthReviewProposal(snapshot: GraphHealthSnapshot): Promise<st
 			filename: `graph_health_improvement_${timestamp}`,
 			target_note: snapshot.missingRecommendedEntry || KNOWLEDGE_INDEX_PATH,
 			risk_level: snapshot.profile === 'strict' ? 'medium' : 'low',
-			evidence: `tracekeeper.graph_health ${snapshot.scannedAt || snapshot.updatedAt}`,
+			evidence: `tracekeeper.lint ${snapshot.scannedAt || snapshot.updatedAt}`,
 			content,
 		});
 		await this.host.refreshGovernanceViews();
@@ -93,36 +93,41 @@ private emptyGraphHealthSnapshot(profile: GraphProfile, errorMessage = ''): Grap
 	}
 
 private toGraphHealthSnapshot(result: Record<string, unknown>, profile: GraphProfile): GraphHealthSnapshot {
-		const resultProfile = normalizeGraphProfileValue(this.stringFromRecord(result, 'profile') || profile);
+		const graphHealth = isRecord(result.graph_health) ? result.graph_health : result;
+		const resultProfile = normalizeGraphProfileValue(
+			this.stringFromRecord(graphHealth, 'profile')
+			|| this.stringFromRecord(result, 'profile')
+			|| profile
+		);
 		const snapshot: GraphHealthSnapshot = {
 			ok: result.ok !== false,
 			readOnly: result.read_only !== false,
 			profile: resultProfile,
-			disabled: result.disabled === true || resultProfile === 'off',
+			disabled: graphHealth.disabled === true || result.graph_profile_disabled === true || resultProfile === 'off',
 			vaultRoot: this.stringFromRecord(result, 'vault_root') || this.host.getVaultRoot(),
 			scannedAt: this.stringFromRecord(result, 'scanned_at'),
 			updatedAt: new Date().toISOString(),
 			errorMessage: '',
-			noteCount: this.numberFromRecord(result, 'note_count'),
-			wikilinkEdgeCount: this.numberFromRecord(result, 'wikilink_edge_count'),
-			resolvedEdgeCount: this.numberFromRecord(result, 'resolved_edge_count'),
-			unresolvedEdgeCount: this.numberFromRecord(result, 'unresolved_edge_count'),
-			largestComponentNodeCount: this.numberFromRecord(result, 'largest_component_node_count'),
-			componentCount: this.numberFromRecord(result, 'component_count'),
-			isolatedNodes: this.stringArrayFromRecord(result, 'isolated_nodes'),
-			isolatedNodeCount: this.numberFromRecord(result, 'isolated_node_count'),
-			onlyInboundNodes: this.stringArrayFromRecord(result, 'only_inbound_nodes'),
-			onlyInboundNodeCount: this.numberFromRecord(result, 'only_inbound_node_count'),
-			onlyOutboundNodes: this.stringArrayFromRecord(result, 'only_outbound_nodes'),
-			onlyOutboundNodeCount: this.numberFromRecord(result, 'only_outbound_node_count'),
-			hubCandidates: this.graphHubCandidatesFromRecord(result, 'hub_candidates'),
-			hubCandidateCount: this.numberFromRecord(result, 'hub_candidate_count'),
-			missingRecommendedEntry: this.stringFromRecord(result, 'missing_recommended_entry'),
-			missingRecommendedHubs: this.stringArrayFromRecord(result, 'missing_recommended_hubs'),
-			missingRecommendedHubCount: this.numberFromRecord(result, 'missing_recommended_hub_count'),
-			recommendations: this.stringArrayFromRecord(result, 'recommendations'),
-			recommendationCount: this.numberFromRecord(result, 'recommendation_count'),
-			profileIssues: this.graphProfileIssuesFromRecord(result, 'profile_issues'),
+			noteCount: this.numberFromRecord(graphHealth, 'note_count'),
+			wikilinkEdgeCount: this.numberFromRecord(graphHealth, 'wikilink_edge_count'),
+			resolvedEdgeCount: this.numberFromRecord(graphHealth, 'resolved_edge_count'),
+			unresolvedEdgeCount: this.numberFromRecord(graphHealth, 'unresolved_edge_count'),
+			largestComponentNodeCount: this.numberFromRecord(graphHealth, 'largest_component_node_count'),
+			componentCount: this.numberFromRecord(graphHealth, 'component_count'),
+			isolatedNodes: this.stringArrayFromRecord(graphHealth, 'isolated_nodes'),
+			isolatedNodeCount: this.numberFromRecord(graphHealth, 'isolated_node_count'),
+			onlyInboundNodes: this.stringArrayFromRecord(graphHealth, 'only_inbound_nodes'),
+			onlyInboundNodeCount: this.numberFromRecord(graphHealth, 'only_inbound_node_count'),
+			onlyOutboundNodes: this.stringArrayFromRecord(graphHealth, 'only_outbound_nodes'),
+			onlyOutboundNodeCount: this.numberFromRecord(graphHealth, 'only_outbound_node_count'),
+			hubCandidates: this.graphHubCandidatesFromRecord(graphHealth, 'hub_candidates'),
+			hubCandidateCount: this.numberFromRecord(graphHealth, 'hub_candidate_count'),
+			missingRecommendedEntry: this.stringFromRecord(graphHealth, 'missing_recommended_entry'),
+			missingRecommendedHubs: this.stringArrayFromRecord(graphHealth, 'missing_recommended_hubs'),
+			missingRecommendedHubCount: this.numberFromRecord(graphHealth, 'missing_recommended_hub_count'),
+			recommendations: this.stringArrayFromRecord(graphHealth, 'recommendations'),
+			recommendationCount: this.numberFromRecord(graphHealth, 'recommendation_count'),
+			profileIssues: this.graphProfileIssuesFromRecord(graphHealth, 'profile_issues'),
 		};
 		if (snapshot.profileIssues.length === 0 && !snapshot.disabled) {
 			snapshot.profileIssues = this.evaluateGraphProfile(snapshot);

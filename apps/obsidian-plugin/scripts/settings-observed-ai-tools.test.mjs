@@ -74,7 +74,7 @@ assert.ok(
 		> source.indexOf('this.renderAdvancedMaintenanceSection(containerEl, snapshot);'),
 	'Agent configuration focus must run after the complete settings page is laid out'
 );
-assert.ok(source.includes('Agent 配置列表、活动页和知识变更审核打开时会自动同步最新状态。'));
+assert.ok(source.includes('Agent 配置列表和当前打开的 Tracekeeper 动态视图会自动同步最新状态。'));
 assert.ok(mainSource.includes('private settingTab: TracekeeperSettingTab | null = null'));
 assert.ok(mainSource.includes('Boolean(this.settingTab?.isAgentListVisible())'));
 assert.ok(mainSource.includes('tasks.push(this.settingTab.refreshAgentList())'));

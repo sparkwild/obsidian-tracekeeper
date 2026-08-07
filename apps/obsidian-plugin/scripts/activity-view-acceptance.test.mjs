@@ -26,11 +26,16 @@ for (const call of orderedCalls) {
 
 assert.ok(activitySource.includes('selectActivityPrimaryAction'));
 assert.ok(activitySource.includes('buildSuccessfullyUsedAgentSummary'));
+assert.ok(activitySource.includes('selectLatestTaskPlacement'));
 assert.ok(activitySource.includes("createEl('details'"));
 assert.ok(activitySource.includes("ui('高级诊断', 'Advanced diagnostics')"));
 assert.equal(activitySource.includes('tracekeeper-review-queue-button--action'), false);
 assert.equal((activitySource.match(/cls: 'mod-cta'/g) || []).length, 1);
 assert.ok(activitySource.includes("ui('最近 Agent 使用', 'Recent Agent usage')"));
+assert.ok(activitySource.includes("ui('最近一次跟踪任务', 'Latest tracked task')"));
+assert.ok(activitySource.includes('this.renderTaskEntry(card, completedTask, false)'));
+assert.equal(activitySource.includes("ui('最后一次执行的任务', 'Last task')"), false);
+assert.equal(activitySource.includes("ui('还没有任务记录。', 'No task records yet.')"), false);
 assert.ok(activitySource.includes('最近活动时间'));
 assert.ok(activitySource.includes('Latest activity'));
 assert.ok(activitySource.includes('sessionCount'));
