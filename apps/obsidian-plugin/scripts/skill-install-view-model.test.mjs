@@ -39,6 +39,7 @@ try {
 		skillFileChangeLabel,
 		skillInstallActionLabel,
 		skillInstallPlanDetail,
+		skillVerificationFailureDetail,
 	} = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 	const localize = (zh) => zh;
 	const english = (_zh, en) => en;
@@ -113,8 +114,28 @@ try {
 	const conflict = buildSkillInstallPrompt(state({ state: 'location_conflict', installedVersion: '', fileVerified: false }), localize);
 	assert.equal(conflict.action, null);
 	assert.equal(conflict.currentVersion, '多个位置，无法确认');
+	assert.equal(
+		skillVerificationFailureDetail(state({ state: 'modified', fileVerified: false }), localize),
+		'已安装 Skill 的版本与插件内置版本一致，但内容不一致。'
+	);
+	assert.equal(
+		skillVerificationFailureDetail(state({ state: 'modified', installedVersion: '', fileVerified: false }), english),
+		'The selected Skill content failed integrity verification.'
+	);
+	assert.equal(
+		skillVerificationFailureDetail(state({ state: 'not_installed', installedVersion: '', fileVerified: false }), localize),
+		'所选目录中未找到 Tracekeeper Skill。'
+	);
+	assert.equal(
+		skillVerificationFailureDetail(state({ state: 'update_available', installedVersion: '2.0.0', expectedVersion: '2.1.0', fileVerified: true }), localize),
+		'所选 Skill 版本低于插件内置版本，无法作为当前版本验证。'
+	);
+	assert.equal(
+		skillVerificationFailureDetail(state({ state: 'newer_than_bundled', installedVersion: '3.0.0', fileVerified: true }), english),
+		'The selected Skill is newer than the embedded version and cannot be verified as current.'
+	);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 29 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 34 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

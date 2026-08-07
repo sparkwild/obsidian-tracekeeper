@@ -1,13 +1,11 @@
-import { App, Menu, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { App, Menu, Notice, PluginSettingTab, Setting, SettingGroup } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import type { AgentConnectionsSnapshot } from '../activity/activity-model';
 import type { GeneratedClientConfig } from '../client-config/client-config';
 import type { AgentIntegrationSnapshot } from './agent-integrations';
 import { ConnectAiToolModal } from '../client-config/client-config-modals';
-import { MemoryRecallPreviewModal } from '../recall/memory-recall-preview-modal';
 import { McpCapabilitiesModal } from '../runtime/mcp-capabilities-modal';
 import { RuntimeAccessResetModal } from '../runtime/runtime-access-reset-modal';
-import { RuntimeLogCleanupModal } from '../runtime/runtime-log-view';
 import { DEFAULT_MCP_HOST, DEFAULT_MCP_PORT } from '../runtime/runtime-defaults';
 import { runtimeToneBadgeClass, runtimeViewModel } from '../runtime/runtime-view-model';
 import {
@@ -19,18 +17,21 @@ import {
 	noteContentLanguageLabel,
 } from './settings-model';
 import { ui } from '../../ui/localization';
-import { TRACEKEEPER_ACTIVITY_VIEW } from '../../ui/view-types';
 import { renderClientSkillPrompt } from '../skill-installation/client-skill-prompt';
 import { buildAgentConfigurationViewModel } from './agent-configuration-view-model';
-import { hasDetectedSkillEvidence } from '../../adapters/client-skill-adapter';
+
+const AGENT_CONFIGURATION_FOCUS_SETTLE_DELAY_MS = 200;
 
 export class TracekeeperSettingTab extends PluginSettingTab {
 	private visible = false;
 	private renderVersion = 0;
 	private agentListHostEl: HTMLElement | null = null;
 	private agentListFingerprint = '';
-	private agentListRefreshInFlight = false;
+	private agentListRefreshPending = false;
+	private agentListRefreshPromise: Promise<void> | null = null;
 	private agentConfigurationFocusPending = false;
+	private agentConfigurationFocusFrame: number | null = null;
+	private agentConfigurationFocusTimer: number | null = null;
 
 	constructor(
 		app: App,
@@ -52,8 +53,17 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	hide(): void {
 		this.visible = false;
 		this.renderVersion += 1;
+		if (this.agentConfigurationFocusFrame !== null) {
+			window.cancelAnimationFrame(this.agentConfigurationFocusFrame);
+			this.agentConfigurationFocusFrame = null;
+		}
+		if (this.agentConfigurationFocusTimer !== null) {
+			window.clearTimeout(this.agentConfigurationFocusTimer);
+			this.agentConfigurationFocusTimer = null;
+		}
 		this.agentListHostEl = null;
 		this.agentListFingerprint = '';
+		this.agentListRefreshPending = false;
 		this.agentConfigurationFocusPending = false;
 		super.hide();
 	}
@@ -68,21 +78,39 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	}
 
 	async refreshAgentList(): Promise<void> {
-		const host = this.agentListHostEl;
-		if (!this.visible || !host?.isConnected || this.agentListRefreshInFlight) return;
-		this.agentListRefreshInFlight = true;
+		if (!this.visible || !this.agentListHostEl?.isConnected) return;
+		this.agentListRefreshPending = true;
+		if (this.agentListRefreshPromise) return this.agentListRefreshPromise;
+		const refreshPromise = this.drainAgentListRefreshes();
+		this.agentListRefreshPromise = refreshPromise;
 		try {
-			const snapshot = await this.plugin.loadAgentConnectionsSnapshot();
-			if (!this.visible || host !== this.agentListHostEl || !host.isConnected) return;
-			const fingerprint = this.buildAgentListFingerprint(snapshot);
-			if (fingerprint === this.agentListFingerprint) return;
-			host.empty();
-			this.renderAgentClientConfigSection(host, snapshot);
-			this.agentListFingerprint = fingerprint;
+			await refreshPromise;
 		} catch (error) {
 			console.error('tracekeeper failed to refresh Agent settings list', error);
 		} finally {
-			this.agentListRefreshInFlight = false;
+			if (this.agentListRefreshPromise === refreshPromise) {
+				this.agentListRefreshPromise = null;
+			}
+			if (this.agentListRefreshPending && this.visible) {
+				await this.refreshAgentList();
+			}
+		}
+	}
+
+	private async drainAgentListRefreshes(): Promise<void> {
+		while (this.agentListRefreshPending) {
+			this.agentListRefreshPending = false;
+			const host = this.agentListHostEl;
+			if (!this.visible || !host?.isConnected) return;
+			const snapshot = await this.plugin.loadAgentConnectionsSnapshot();
+			if (!this.visible || host !== this.agentListHostEl || !host.isConnected) continue;
+			const fingerprint = this.buildAgentListFingerprint(snapshot);
+			if (fingerprint === this.agentListFingerprint) continue;
+			const stagingEl = host.ownerDocument.createElement('div');
+			const replacement = this.renderAgentClientConfigSection(stagingEl, snapshot);
+			host.replaceWith(replacement);
+			this.agentListHostEl = replacement;
+			this.agentListFingerprint = fingerprint;
 		}
 	}
 
@@ -91,19 +119,17 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		const snapshot = await this.plugin.loadAgentConnectionsSnapshot();
 		if (!this.visible || renderVersion !== this.renderVersion) return;
 		const { containerEl } = this;
+		const previousScrollTop = containerEl.scrollTop;
 		containerEl.empty();
 		containerEl.addClass('tracekeeper-settings-root');
 		this.renderConnectionInfoSection(containerEl, snapshot);
-		this.agentListHostEl = containerEl.createDiv({
-			cls: 'tracekeeper-settings-agent-list-host',
-			attr: { 'data-tracekeeper-section': 'agent-configuration' },
-		});
-		this.renderAgentClientConfigSection(this.agentListHostEl, snapshot);
+		this.agentListHostEl = this.renderAgentClientConfigSection(containerEl, snapshot);
 		this.agentListFingerprint = this.buildAgentListFingerprint(snapshot);
 		this.renderViewRefreshSection(containerEl);
 		this.renderNoteContentSection(containerEl);
 		this.renderMemoryRulesSection(containerEl);
 		this.renderAdvancedMaintenanceSection(containerEl, snapshot);
+		containerEl.scrollTop = previousScrollTop;
 		this.applyAgentConfigurationFocus();
 	}
 
@@ -120,515 +146,485 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	private applyAgentConfigurationFocus(): void {
 		const target = this.agentListHostEl;
 		if (!this.agentConfigurationFocusPending || !this.visible || !target?.isConnected) return;
-		this.agentConfigurationFocusPending = false;
-		window.requestAnimationFrame(() => {
-			if (!target.isConnected) return;
-			target.scrollIntoView({ block: 'start', behavior: 'auto' });
-			target.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+		if (this.agentConfigurationFocusFrame !== null) {
+			window.cancelAnimationFrame(this.agentConfigurationFocusFrame);
+		}
+		if (this.agentConfigurationFocusTimer !== null) {
+			window.clearTimeout(this.agentConfigurationFocusTimer);
+		}
+		this.agentConfigurationFocusFrame = window.requestAnimationFrame(() => {
+			this.agentConfigurationFocusFrame = window.requestAnimationFrame(() => {
+				this.agentConfigurationFocusFrame = null;
+				this.agentConfigurationFocusTimer = window.setTimeout(() => {
+					this.agentConfigurationFocusTimer = null;
+					if (
+						!this.agentConfigurationFocusPending
+						|| !this.visible
+						|| this.agentListHostEl !== target
+						|| !target.isConnected
+					) return;
+					this.agentConfigurationFocusPending = false;
+					target.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+					target.scrollIntoView({ block: 'start', behavior: 'auto' });
+				}, AGENT_CONFIGURATION_FOCUS_SETTLE_DELAY_MS);
+			});
 		});
 	}
 
-	private renderAgentClientConfigSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
+	private renderAgentClientConfigSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): HTMLElement {
 		const { visibleAgents, candidateConfigs } = buildAgentConfigurationViewModel(
 			snapshot.clientConfigs,
 			snapshot.recentAgents,
 			snapshot.integrations,
 			snapshot.pendingOAuthRequests
 		);
-		const skillOnlyConfigs = candidateConfigs.filter((config) => {
-			const state = this.plugin.getSkillInstallState(config.clientId).state;
-			return hasDetectedSkillEvidence(state);
-		});
-		const section = this.createSection(
-			container,
-			ui('Agent 配置', 'Agent configuration'),
-		);
-		const sectionHeader = section.querySelector<HTMLElement>('.tracekeeper-settings-section__header');
-		const sectionActions = (sectionHeader ?? section).createDiv({
-			cls: 'tracekeeper-settings-agent-actions',
-		});
-		const addAgent = sectionActions.createEl('button', {
-			text: ui('添加 Agent ▾', 'Add Agent ▾'),
-			cls: 'mod-cta tracekeeper-settings-add-agent',
-			attr: {
-				'aria-label': ui('添加 Agent', 'Add Agent'),
-				'aria-haspopup': 'menu',
-				'aria-expanded': 'false',
-			},
-		});
-		addAgent.disabled = candidateConfigs.length === 0;
-		addAgent.addEventListener('click', () => {
-			const menu = new Menu().setNoIcon();
-			for (const config of candidateConfigs) {
-				menu.addItem((item) => {
-					item
-						.setTitle(config.displayName)
-						.onClick(() => {
-							new ConnectAiToolModal(
-								this.app,
-								this.plugin,
-								config,
-								'add',
-								() => { void this.refreshAgentList(); }
-							).open();
+		const group = this.createGroup(container, ui('Agent 配置', 'Agent configuration'))
+			.addClass('tracekeeper-settings-agent-list-host');
+		const groupEl = container.lastElementChild;
+		if (!(groupEl instanceof HTMLElement)) {
+			throw new Error('Tracekeeper failed to create the Agent settings group.');
+		}
+		groupEl.setAttribute('data-tracekeeper-section', 'agent-configuration');
+		group.addExtraButton((button) => {
+			const addAgent = button.extraSettingsEl;
+			addAgent.setAttribute('aria-label', ui('添加 Agent', 'Add Agent'));
+			addAgent.setAttribute('aria-haspopup', 'menu');
+			addAgent.setAttribute('aria-expanded', 'false');
+			button
+				.setIcon('plus')
+				.setTooltip(ui('添加 Agent', 'Add Agent'))
+				.setDisabled(candidateConfigs.length === 0)
+				.onClick(() => {
+					const menu = new Menu().setNoIcon();
+					for (const config of candidateConfigs) {
+						menu.addItem((item) => {
+							item
+								.setTitle(config.displayName)
+								.onClick(() => {
+									new ConnectAiToolModal(
+										this.app,
+										this.plugin,
+										config,
+										'add',
+										() => this.refreshAgentList(),
+										() => this.renderSettings()
+									).open();
+								});
 						});
+					}
+					const rect = addAgent.getBoundingClientRect();
+					addAgent.setAttribute('aria-expanded', 'true');
+					menu.onHide(() => addAgent.setAttribute('aria-expanded', 'false'));
+					menu.showAtPosition({
+						x: rect.left,
+						y: rect.bottom,
+						width: rect.width,
+						overlap: false,
+					}, addAgent.ownerDocument);
 				});
-			}
-			const rect = addAgent.getBoundingClientRect();
-			addAgent.setAttribute('aria-expanded', 'true');
-			menu.onHide(() => addAgent.setAttribute('aria-expanded', 'false'));
-			menu.showAtPosition({
-				x: rect.left,
-				y: rect.bottom,
-				width: rect.width,
-				overlap: false,
-			}, addAgent.ownerDocument);
 		});
-		const grid = section.createDiv({ cls: 'tracekeeper-settings-grid' });
-		if (visibleAgents.length === 0 && skillOnlyConfigs.length === 0) {
-			const empty = grid.createDiv({ cls: 'tracekeeper-empty-state' });
-			empty.createEl('strong', {
-				text: ui('尚无 Agent 卡片', 'No Agent cards yet'),
+		if (visibleAgents.length === 0) {
+			group.addSetting((setting) => {
+				setting
+					.setName(ui('尚无 Agent 卡片', 'No Agent cards yet'))
+					.setDesc(ui(
+						'使用分组标题右侧的添加按钮创建 Agent。',
+						'Use the add button beside the group heading to create an Agent.'
+					));
 			});
-			empty.createEl('p', {
-				text: ui(
-					'点击“添加 Agent”即可立即创建卡片；复制、授权和使用状态随后分别更新。',
-					'Click “Add Agent” to create a card immediately; setup, authorization, and usage update independently.'
-				),
-			});
-			return;
+			return groupEl;
 		}
 		for (const { agent, config, presentation } of visibleAgents) {
-			this.renderClientConfigRow(grid, config, agent, presentation);
+			group.addSetting((setting) => {
+				setting.settingEl.empty();
+				setting.settingEl.addClass('tracekeeper-settings-client-item');
+				this.renderClientConfigRow(setting.settingEl, config, agent, presentation);
+			});
 		}
-		for (const config of skillOnlyConfigs) {
-			this.renderSkillOnlyRow(grid, config);
-		}
+		return groupEl;
 	}
 
 	private renderConnectionInfoSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
-		const section = this.createSection(
-			container,
-			ui('MCP 服务', 'MCP service'),
-			ui('查看 Obsidian 托管的本机服务状态，并在需要时恢复连接。', 'Review the local service hosted by Obsidian and recover it when needed.')
-		);
-		this.renderRuntimeEnabledSetting(section, snapshot);
+		const group = this.createGroup(container, ui('MCP 服务', 'MCP service'));
+		this.renderRuntimeEnabledSetting(group, snapshot);
 		this.renderEndpointSetting(
-			section,
+			group,
 			snapshot.runtimeStatus.endpoint,
 			snapshot.runtimeStatus.accessProtected
 		);
-		this.renderCapabilitiesSetting(section);
+		this.renderCapabilitiesSetting(group);
 	}
 
-	private renderRuntimeEnabledSetting(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
+	private renderRuntimeEnabledSetting(group: SettingGroup, snapshot: AgentConnectionsSnapshot): void {
 		const enabled = this.plugin.settings.mcpRuntimeEnabled;
 		const runtime = runtimeViewModel(snapshot.runtimeStatus, ui);
-		const setting = new Setting(container)
-			.setName(ui('服务状态', 'Service status'))
-			.setDesc(runtime.detail)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(enabled)
-					.setDisabled(runtime.busy)
-					.onChange((value: boolean) => {
-						void this.plugin.setMcpRuntimeEnabled(value)
-							.then(() => this.renderSettings())
-							.catch((error) => {
-								console.error('tracekeeper failed to toggle MCP service', error);
-							});
-					})
-			);
-		setting.nameEl.addClass('tracekeeper-settings-runtime-name');
-		setting.nameEl.createEl('span', {
-			text: runtime.label,
-			cls: `tracekeeper-badge ${runtimeToneBadgeClass(runtime.tone)}`,
+		group.addSetting((setting) => {
+			setting
+				.setName(ui('服务状态', 'Service status'))
+				.setDesc(runtime.detail)
+				.addToggle((toggle) =>
+					toggle
+						.setValue(enabled)
+						.setDisabled(runtime.busy)
+						.onChange((value: boolean) => {
+							void this.plugin.setMcpRuntimeEnabled(value)
+								.then(() => this.renderSettings())
+								.catch((error) => {
+									console.error('tracekeeper failed to toggle MCP service', error);
+								});
+						})
+				);
+			setting.nameEl.addClass('tracekeeper-settings-runtime-name');
+			setting.nameEl.createEl('span', {
+				text: runtime.label,
+				cls: `tracekeeper-badge ${runtimeToneBadgeClass(runtime.tone)}`,
+			});
 		});
 		if (runtime.primaryAction === 'retry') {
-			new Setting(container)
-				.setName(ui('恢复服务', 'Recover service'))
-				.setDesc(ui(
-					'重新创建由当前 Obsidian Vault 托管的 MCP Runtime。',
-					'Recreate the MCP Runtime hosted by the current Obsidian vault.'
-				))
-				.addButton((button) => button
-					.setButtonText(ui('重新启动', 'Retry start'))
-					.setCta()
-					.onClick(() => {
-						button.setDisabled(true);
-						void this.plugin.ensureMcpRuntimeRunning()
-							.then(() => this.renderSettings())
-							.catch((error) => {
-								console.error('tracekeeper failed to recover MCP service', error);
-								button.setDisabled(false);
-								new Notice(error instanceof Error ? error.message : ui('MCP 服务启动失败。', 'Failed to start MCP service.'));
-							});
-					}));
+			group.addSetting((setting) => {
+				setting
+					.setName(ui('恢复服务', 'Recover service'))
+					.setDesc(ui(
+						'重新创建由当前 Obsidian Vault 托管的 MCP Runtime。',
+						'Recreate the MCP Runtime hosted by the current Obsidian vault.'
+					))
+					.addButton((button) => button
+						.setButtonText(ui('重新启动', 'Retry start'))
+						.setCta()
+						.onClick(() => {
+							button.setDisabled(true);
+							void this.plugin.ensureMcpRuntimeRunning()
+								.then(() => this.renderSettings())
+								.catch((error) => {
+									console.error('tracekeeper failed to recover MCP service', error);
+									button.setDisabled(false);
+									new Notice(error instanceof Error ? error.message : ui('MCP 服务启动失败。', 'Failed to start MCP service.'));
+								});
+						}));
+			});
 		}
 	}
 
-	private renderCapabilitiesSetting(container: HTMLElement): void {
-		new Setting(container)
-			.setName(ui('服务功能', 'Capabilities'))
-			.setDesc(ui('查看 AI 工具可以调用的 MCP 服务功能。', 'View the MCP service capabilities available to agents.'))
-			.addButton((button) =>
-				button
-					.setButtonText(ui('查看功能', 'View capabilities'))
-					.onClick(() => {
-						new McpCapabilitiesModal(this.app).open();
-					})
-			);
+	private renderCapabilitiesSetting(group: SettingGroup): void {
+		group.addSetting((setting) => {
+			setting
+				.setName(ui('服务功能', 'Capabilities'))
+				.setDesc(ui('查看 AI 工具可以调用的 MCP 服务功能。', 'View the MCP service capabilities available to agents.'))
+				.addButton((button) =>
+					button
+						.setButtonText(ui('查看功能', 'View capabilities'))
+						.onClick(() => {
+							new McpCapabilitiesModal(this.app).open();
+						})
+				);
+		});
 	}
 
 	private renderEndpointSetting(
-		container: HTMLElement,
+		group: SettingGroup,
 		endpoint: string,
 		accessProtected: boolean
 	): void {
-		const setting = new Setting(container)
-			.setName(ui('MCP 端点', 'MCP endpoint'));
-		const advanced = container.createDiv({
-			cls: 'tracekeeper-settings-endpoint-advanced',
-			attr: {
-				id: 'tracekeeper-mcp-endpoint-advanced',
-				'aria-label': ui('MCP 端点高级选项', 'MCP endpoint advanced options'),
-			},
-		});
-		advanced.hidden = true;
-		this.renderPortSetting(advanced, endpoint);
-		setting.descEl.createEl('code', {
-			text: endpoint,
-			attr: {
-				'aria-label': ui('本机 MCP 端点', 'Local MCP endpoint'),
-			},
-		});
-		const accessSummary = setting.descEl.createDiv({
-			cls: 'tracekeeper-settings-endpoint-access',
-		});
-		const accessHeading = accessSummary.createDiv({
-			cls: 'tracekeeper-settings-runtime-name',
-		});
-		accessHeading.createSpan({
-			text: ui('全部 Agent 访问', 'All Agent access'),
-		});
-		accessHeading.createSpan({
-			text: accessProtected
-				? ui('本机访问已保护', 'Local access protected')
-				: ui('保护不可用', 'Protection unavailable'),
-			cls: `tracekeeper-badge ${
-				accessProtected
-					? 'tracekeeper-badge--success'
-					: 'tracekeeper-badge--error'
-			}`,
-		});
-		accessSummary.createEl('small', {
-			text: ui(
-				'每个 Agent 使用独立的 OAuth 或手动访问令牌；状态和撤销按卡片管理。',
-				'Each Agent uses an independent OAuth or manual access token; status and revocation are managed per card.'
-			),
-		});
-		setting
-			.addExtraButton((button) =>
-				button
-					.setIcon('copy')
-					.setTooltip(ui('复制 MCP 端点', 'Copy MCP endpoint'))
-					.onClick(() => {
-						void this.plugin.copyToClipboard(
-							endpoint,
-							ui('MCP 端点已复制。', 'MCP endpoint copied.')
-						).catch((error) => {
-							console.error('tracekeeper failed to copy MCP endpoint', error);
-							new Notice(ui('复制 MCP 端点失败。', 'Failed to copy MCP endpoint.'));
-						});
-					})
-			)
-			.addButton((button) => {
-				button.buttonEl.setAttribute('aria-controls', advanced.id);
-				button.buttonEl.setAttribute('aria-expanded', 'false');
-				button
-					.setButtonText(ui('高级选项', 'Advanced options'))
-					.onClick(() => {
-						advanced.hidden = !advanced.hidden;
-						button.buttonEl.setAttribute('aria-expanded', String(!advanced.hidden));
-						button.setButtonText(advanced.hidden
-							? ui('高级选项', 'Advanced options')
-							: ui('收起选项', 'Hide options'));
-						if (!advanced.hidden) {
-							advanced.querySelector('input')?.focus({ preventScroll: true });
-						}
-					});
+		let advancedSetting: Setting | null = null;
+		let advancedVisible = false;
+		group.addSetting((setting) => {
+			setting.setName(ui('MCP 端点', 'MCP endpoint'));
+			setting.descEl.createEl('code', {
+				text: endpoint,
+				attr: {
+					'aria-label': ui('本机 MCP 端点', 'Local MCP endpoint'),
+				},
 			});
+			const accessSummary = setting.descEl.createDiv({
+				cls: 'tracekeeper-settings-endpoint-access',
+			});
+			const accessHeading = accessSummary.createDiv({
+				cls: 'tracekeeper-settings-runtime-name',
+			});
+			accessHeading.createSpan({
+				text: ui('全部 Agent 访问', 'All Agent access'),
+			});
+			accessHeading.createSpan({
+				text: accessProtected
+					? ui('本机访问已保护', 'Local access protected')
+					: ui('保护不可用', 'Protection unavailable'),
+				cls: `tracekeeper-badge ${
+					accessProtected
+						? 'tracekeeper-badge--success'
+						: 'tracekeeper-badge--error'
+				}`,
+			});
+			accessSummary.createEl('small', {
+				text: ui(
+					'每个 Agent 使用独立的 OAuth 或手动访问令牌；状态和撤销按卡片管理。',
+					'Each Agent uses an independent OAuth or manual access token; status and revocation are managed per card.'
+				),
+			});
+			setting
+				.addExtraButton((button) =>
+					button
+						.setIcon('copy')
+						.setTooltip(ui('复制 MCP 端点', 'Copy MCP endpoint'))
+						.onClick(() => {
+							void this.plugin.copyToClipboard(
+								endpoint,
+								ui('MCP 端点已复制。', 'MCP endpoint copied.')
+							).catch((error) => {
+								console.error('tracekeeper failed to copy MCP endpoint', error);
+								new Notice(ui('复制 MCP 端点失败。', 'Failed to copy MCP endpoint.'));
+							});
+						})
+				)
+				.addButton((button) => {
+					button.buttonEl.setAttribute('aria-controls', 'tracekeeper-mcp-endpoint-advanced');
+					button.buttonEl.setAttribute('aria-expanded', 'false');
+					button
+						.setButtonText(ui('高级选项', 'Advanced options'))
+						.onClick(() => {
+							if (!advancedSetting) return;
+							advancedVisible = !advancedVisible;
+							if (advancedVisible) {
+								advancedSetting.settingEl.show();
+								advancedSetting.controlEl.querySelector('input')?.focus({ preventScroll: true });
+							} else {
+								advancedSetting.settingEl.hide();
+							}
+							button.buttonEl.setAttribute('aria-expanded', String(advancedVisible));
+							button.setButtonText(advancedVisible
+								? ui('收起选项', 'Hide options')
+								: ui('高级选项', 'Advanced options'));
+						});
+				});
+		});
+		group.addSetting((setting) => {
+			advancedSetting = setting;
+			setting.setClass('tracekeeper-settings-endpoint-advanced');
+			setting.settingEl.id = 'tracekeeper-mcp-endpoint-advanced';
+			setting.settingEl.setAttribute('aria-label', ui('MCP 端点高级选项', 'MCP endpoint advanced options'));
+			setting.settingEl.hide();
+			this.renderPortSetting(setting, endpoint);
+		});
 	}
 
 	private renderViewRefreshSection(container: HTMLElement): void {
-		const section = this.createSection(
-			container,
-			ui('视图刷新', 'View refresh'),
-			ui(
-				'Agent 配置列表和当前打开的 Tracekeeper 动态视图会自动同步最新状态。',
-				'Tracekeeper keeps Agent configuration and all open dynamic Tracekeeper views in sync.'
-			)
-		);
-		new Setting(section)
-			.setName(ui('自动刷新', 'Auto refresh'))
-			.setDesc(ui(
-				'开启后按下方间隔刷新当前打开的 Tracekeeper 视图，并在相关文件变化时触发刷新。',
-				'Refreshes open Tracekeeper views at the interval below and after related file changes.'
-			))
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.autoRefreshEnabled)
-					.onChange((value: boolean) => {
-						void this.plugin.setAutoRefreshEnabled(value)
-							.then(() => this.renderSettings())
-							.catch((error) => {
-								console.error('tracekeeper failed to update auto refresh setting', error);
-							});
-					})
-			);
-		new Setting(section)
-			.setName(ui('刷新间隔', 'Refresh interval'))
-			.setDesc(ui(
-				`当前为 ${this.plugin.settings.autoRefreshIntervalSeconds} 秒；文件变化会额外触发即时刷新。`,
-				`Current interval is ${this.plugin.settings.autoRefreshIntervalSeconds} seconds; file changes also trigger a near-immediate refresh.`
-			))
-			.addDropdown((dropdown) => {
-				const intervals = Array.from(new Set([
-					...AUTO_REFRESH_INTERVAL_OPTIONS,
-					this.plugin.settings.autoRefreshIntervalSeconds,
-				])).sort((a, b) => a - b);
-				for (const seconds of intervals) {
-					dropdown.addOption(String(seconds), ui(`${seconds} 秒`, `${seconds}s`));
-				}
-				dropdown
-					.setValue(String(this.plugin.settings.autoRefreshIntervalSeconds))
-					.onChange((value: string) => {
-						const parsed = Number.parseInt(value, 10);
-						void this.plugin.setAutoRefreshIntervalSeconds(parsed)
-							.then(() => this.renderSettings())
-							.catch((error) => {
-								console.error('tracekeeper failed to update auto refresh interval', error);
-							});
-					});
-			});
+		const group = this.createGroup(container, ui('视图刷新', 'View refresh'));
+		group.addSetting((setting) => {
+			setting
+				.setName(ui('自动刷新', 'Auto refresh'))
+				.setDesc(ui(
+					'自动同步 Agent 配置和已打开的 Tracekeeper 动态视图。',
+					'Keep Agent configuration and open Tracekeeper views in sync.'
+				))
+				.addToggle((toggle) =>
+					toggle
+						.setValue(this.plugin.settings.autoRefreshEnabled)
+						.onChange((value: boolean) => {
+							void this.plugin.setAutoRefreshEnabled(value)
+								.then(() => this.renderSettings())
+								.catch((error) => {
+									console.error('tracekeeper failed to update auto refresh setting', error);
+								});
+						})
+				);
+		});
+		group.addSetting((setting) => {
+			setting
+				.setName(ui('刷新间隔', 'Refresh interval'))
+				.setDesc(ui(
+					'文件变化时也会立即刷新。',
+					'File changes also trigger an immediate refresh.'
+				))
+				.addDropdown((dropdown) => {
+					const intervals = Array.from(new Set([
+						...AUTO_REFRESH_INTERVAL_OPTIONS,
+						this.plugin.settings.autoRefreshIntervalSeconds,
+					])).sort((a, b) => a - b);
+					for (const seconds of intervals) {
+						dropdown.addOption(String(seconds), ui(`${seconds} 秒`, `${seconds}s`));
+					}
+					dropdown
+						.setValue(String(this.plugin.settings.autoRefreshIntervalSeconds))
+						.onChange((value: string) => {
+							const parsed = Number.parseInt(value, 10);
+							void this.plugin.setAutoRefreshIntervalSeconds(parsed)
+								.then(() => this.renderSettings())
+								.catch((error) => {
+									console.error('tracekeeper failed to update auto refresh interval', error);
+								});
+						});
+				});
+		});
 	}
 
 	private renderNoteContentSection(container: HTMLElement): void {
 		const resolved = this.plugin.resolveNoteContentLanguage();
-		const section = this.createSection(
-			container,
-			ui('笔记内容', 'Note content'),
-			ui(
-				`控制 Tracekeeper 新生成笔记的标题和说明语言；当前生效：${resolved.language}。不会翻译用户或 Agent 提交的正文。`,
-				`Controls headings and helper text in newly generated Tracekeeper notes; active: ${resolved.language}. User and agent-submitted content is not translated.`
-			)
-		);
-		new Setting(section)
-			.setName(ui('笔记内容语言', 'Note content language'))
-			.setDesc(ui(
-				'自动会优先跟随 Obsidian 语言，也可以固定为中文或英文。',
-				'Auto follows Obsidian language first, or you can pin Chinese or English.'
-			))
-			.addDropdown((dropdown) => {
-				for (const language of NOTE_CONTENT_LANGUAGES) {
-					dropdown.addOption(language, noteContentLanguageLabel(language));
-				}
-				dropdown
-					.setValue(this.plugin.settings.noteContentLanguage)
-					.onChange((value: string) => {
-						void this.plugin.setNoteContentLanguage(value)
-							.then(() => this.renderSettings())
-							.catch((error) => {
-								console.error('tracekeeper failed to update note content language', error);
-							});
-					});
-			});
+		const group = this.createGroup(container, ui('笔记内容', 'Note content'));
+		group.addSetting((setting) => {
+			setting
+				.setName(ui('笔记内容语言', 'Note content language'))
+				.setDesc(ui(
+					`用于新生成笔记的标题和说明；当前生效：${resolved.language}。`,
+					`Used for headings and helper text in new notes; active: ${resolved.language}.`
+				))
+				.addDropdown((dropdown) => {
+					for (const language of NOTE_CONTENT_LANGUAGES) {
+						dropdown.addOption(language, noteContentLanguageLabel(language));
+					}
+					dropdown
+						.setValue(this.plugin.settings.noteContentLanguage)
+						.onChange((value: string) => {
+							void this.plugin.setNoteContentLanguage(value)
+								.then(() => this.renderSettings())
+								.catch((error) => {
+									console.error('tracekeeper failed to update note content language', error);
+								});
+						});
+				});
+		});
 	}
 
 	private renderMemoryRulesSection(container: HTMLElement): void {
-		const section = this.createSection(
-			container,
-			ui('记忆规则', 'Memory rules'),
-			ui('控制 Agent 提交的长期记忆如何处理。', 'Control how agent-submitted durable memory is handled.')
-		);
-		new Setting(section)
-			.setName(ui('全局记忆', 'Global memory'))
-			.setDesc(ui(
-				'用于跨项目复用的偏好、决策和经验。',
-				'Preferences, decisions, and lessons intended for reuse across projects.'
-			))
-			.addDropdown((dropdown) => {
-				for (const rule of MEMORY_PROPOSAL_RULES) {
-					dropdown.addOption(rule, memoryProposalRuleLabel(rule));
-				}
-				dropdown
-					.setValue(this.plugin.settings.globalMemoryRule)
-					.onChange((value: string) => {
-						void this.plugin.setGlobalMemoryRule(value)
-							.then(() => this.renderSettings())
-							.catch((error) => {
-								console.error('tracekeeper failed to update global memory rule', error);
-							});
-					});
-			});
-		new Setting(section)
-			.setName(ui('项目记忆', 'Project memory'))
-			.setDesc(ui(
-				'用于延续当前项目、仓库或工作区的决策、经验和上下文。',
-				'Decisions, lessons, and context that carry forward within the current project, repository, or workspace.'
-			))
-			.addDropdown((dropdown) => {
-				for (const rule of MEMORY_PROPOSAL_RULES) {
-					dropdown.addOption(rule, memoryProposalRuleLabel(rule));
-				}
-				dropdown
-					.setValue(this.plugin.settings.projectMemoryRule)
-					.onChange((value: string) => {
-						void this.plugin.setProjectMemoryRule(value)
-							.then(() => this.renderSettings())
-							.catch((error) => {
-								console.error('tracekeeper failed to update project memory rule', error);
-							});
-					});
-			});
-		const trackingSection = this.createSection(
-			container,
-			ui('任务追踪', 'Task tracking'),
-			ui(
-				'记录任务的目标、执行过程和结果，供后续查看与继续。',
-				'Record task goals, execution, and outcomes for later review and continuation.'
-			)
-		);
-		new Setting(trackingSection)
-			.setName(ui('启用任务追踪', 'Enable task tracking'))
-			.setDesc(ui(
-				'关闭后不再创建新的任务记录；已开始的任务仍可正常结束。',
-				'When disabled, new task records are not created; active tasks can still finish.'
-			))
-			.addToggle((toggle) => {
-				toggle
-					.setValue(this.plugin.settings.taskTrackingEnabled)
-					.onChange((value: boolean) => {
-						void this.plugin.setTaskTrackingEnabled(value)
-							.then(() => this.renderSettings())
-							.catch((error) => {
-								console.error('tracekeeper failed to update task tracking', error);
-							});
-					});
-			});
+		const group = this.createGroup(container, ui('记忆规则', 'Memory rules'));
+		group.addSetting((setting) => {
+			setting
+				.setName(ui('全局记忆', 'Global memory'))
+				.setDesc(ui(
+					'用于跨项目复用的偏好、决策和经验。',
+					'Preferences, decisions, and lessons intended for reuse across projects.'
+				))
+				.addDropdown((dropdown) => {
+					for (const rule of MEMORY_PROPOSAL_RULES) {
+						dropdown.addOption(rule, memoryProposalRuleLabel(rule));
+					}
+					dropdown
+						.setValue(this.plugin.settings.globalMemoryRule)
+						.onChange((value: string) => {
+							void this.plugin.setGlobalMemoryRule(value)
+								.then(() => this.renderSettings())
+								.catch((error) => {
+									console.error('tracekeeper failed to update global memory rule', error);
+								});
+						});
+				});
+		});
+		group.addSetting((setting) => {
+			setting
+				.setName(ui('项目记忆', 'Project memory'))
+				.setDesc(ui(
+					'用于延续当前项目、仓库或工作区的决策、经验和上下文。',
+					'Decisions, lessons, and context that carry forward within the current project, repository, or workspace.'
+				))
+				.addDropdown((dropdown) => {
+					for (const rule of MEMORY_PROPOSAL_RULES) {
+						dropdown.addOption(rule, memoryProposalRuleLabel(rule));
+					}
+					dropdown
+						.setValue(this.plugin.settings.projectMemoryRule)
+						.onChange((value: string) => {
+							void this.plugin.setProjectMemoryRule(value)
+								.then(() => this.renderSettings())
+								.catch((error) => {
+									console.error('tracekeeper failed to update project memory rule', error);
+								});
+						});
+				});
+		});
+		const trackingGroup = this.createGroup(container, ui('任务追踪', 'Task tracking'));
+		trackingGroup.addSetting((setting) => {
+			setting
+				.setName(ui('启用任务追踪', 'Enable task tracking'))
+				.setDesc(ui(
+					'记录任务的目标、执行过程和结果，供后续查看与继续。',
+					'Record task goals, execution, and outcomes for later review and continuation.'
+				))
+				.addToggle((toggle) => {
+					toggle
+						.setValue(this.plugin.settings.taskTrackingEnabled)
+						.onChange((value: boolean) => {
+							void this.plugin.setTaskTrackingEnabled(value)
+								.then(() => this.renderSettings())
+								.catch((error) => {
+									console.error('tracekeeper failed to update task tracking', error);
+								});
+						});
+				});
+		});
 	}
 
 	private renderAdvancedMaintenanceSection(
 		container: HTMLElement,
 		snapshot: AgentConnectionsSnapshot
 	): void {
-		const details = container.createEl('details', {
-			cls: 'tracekeeper-settings-section tracekeeper-settings-advanced',
-		});
-		details.createEl('summary', {
-			text: ui('高级维护', 'Advanced maintenance'),
-			cls: 'tracekeeper-settings-advanced__summary',
-		});
-		const section = details.createDiv({ cls: 'tracekeeper-settings-advanced__body' });
-		section.createEl('p', {
-			text: ui(
-				'管理重启诊断、Agent 活动和全局访问保护。',
-				'Manage restart diagnostics, Agent activity, and global access protection.'
-			),
-			cls: 'tracekeeper-settings-section__description',
-		});
-		new Setting(section)
-			.setName(ui('Agent 活动', 'Agent activity'))
-			.setDesc(ui('查看 MCP 连接、认证结果、工具调用和错误记录。', 'Review MCP connections, authentication results, tool calls, and errors.'))
-			.addButton((button) =>
-				button
-					.setButtonText(ui('打开活动', 'Open activity'))
-					.onClick(() => {
-						void this.plugin.openPluginView(TRACEKEEPER_ACTIVITY_VIEW);
-					})
-			)
-			.addButton((button) =>
-				button
-					.setButtonText(ui('清理日志', 'Clear logs'))
-					.onClick(() => {
-						new RuntimeLogCleanupModal(this.app, this.plugin, async () => undefined).open();
-					})
-			);
+		const group = this.createGroup(container, ui('高级维护', 'Advanced maintenance'));
 		const runtime = runtimeViewModel(snapshot.runtimeStatus, ui);
-		new Setting(section)
-			.setName(ui('服务诊断', 'Service diagnostics'))
-			.setDesc(ui(
-				'重启会结束现有 MCP Session；AI 工具需要重新连接。',
-				'Restarting ends existing MCP sessions. AI tools must reconnect.'
-			))
-			.addButton((button) =>
-				button
-					.setButtonText(ui('重启服务', 'Restart service'))
-					.setDisabled(!snapshot.runtimeStatus.enabled || runtime.busy)
-					.onClick(() => {
-						button.setDisabled(true);
-						void this.plugin.restartMcpRuntime()
-							.then(() => this.renderSettings())
-							.catch((error) => {
-								console.error('tracekeeper failed to restart MCP service', error);
-								button.setDisabled(false);
-								new Notice(ui('MCP 服务重启失败。', 'Failed to restart MCP service.'));
-							});
-					})
-			);
-		new Setting(section)
-			.setName(ui('召回预览', 'Recall preview'))
-			.setDesc(ui('输入关键词，查看 Agent 可能读取到的记忆。', 'Enter keywords to see which memories an agent may read.'))
-			.addButton((button) =>
-				button
-					.setButtonText(ui('测试召回', 'Test recall'))
-					.onClick(() => {
-						new MemoryRecallPreviewModal(this.app, this.plugin).open();
-					})
-			);
-		new Setting(section)
-			.setName(ui('全部 Agent 访问', 'All Agent access'))
-			.setDesc(ui(
-				'撤销会移除全部 Agent 卡片、清空凭据并终止 Session，但保留 Skill。',
-				'Revocation removes all Agent cards, clears credentials, and ends Sessions while retaining Skills.'
-			))
-			.addButton((button) => {
-				button
-					.setButtonText(ui('撤销全部 Agent 访问', 'Revoke all Agent access'))
-					.onClick(() => {
-						new RuntimeAccessResetModal(this.app, this.plugin, () => {
-							void this.renderSettings();
-						}).open();
-					});
-				button.buttonEl.addClass('mod-warning');
-			});
-		new Setting(section)
-			.setName(ui('知识图谱检查', 'Graph health profile'))
-			.setDesc(ui(
-				'关闭：仅保留手动查看；建议：只给出优化建议；严格：会把入口、中心节点、孤立节点和未解析链接标为阻塞问题。',
-				'Off: manual inspection only; Advisory: reports suggestions; Strict: marks missing entries, hubs, isolated nodes, and unresolved links as blocking issues.'
-			))
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption('off', ui('关闭', 'Off'))
-					.addOption('advisory', ui('建议', 'Advisory'))
-					.addOption('strict', ui('严格', 'Strict'))
-					.setValue(this.plugin.settings.graphProfile)
-					.onChange((value: string) => {
-						this.plugin.settings.graphProfile = normalizeGraphProfileValue(value);
-						void this.plugin.saveSettings()
-							.then(() => this.plugin.restartMcpRuntime())
-							.catch((error) => {
-								console.error('tracekeeper failed to update graph profile', error);
-							});
-					})
-			);
+		group.addSetting((setting) => {
+			setting
+				.setName(ui('服务诊断', 'Service diagnostics'))
+				.setDesc(ui(
+					'重启会结束现有 MCP Session；AI 工具需要重新连接。',
+					'Restarting ends existing MCP sessions. AI tools must reconnect.'
+				))
+				.addButton((button) =>
+					button
+						.setButtonText(ui('重启服务', 'Restart service'))
+						.setDisabled(!snapshot.runtimeStatus.enabled || runtime.busy)
+						.onClick(() => {
+							button.setDisabled(true);
+							void this.plugin.restartMcpRuntime()
+								.then(() => this.renderSettings())
+								.catch((error) => {
+									console.error('tracekeeper failed to restart MCP service', error);
+									button.setDisabled(false);
+									new Notice(ui('MCP 服务重启失败。', 'Failed to restart MCP service.'));
+								});
+						})
+				);
+		});
+		group.addSetting((setting) => {
+			setting
+				.setName(ui('全部 Agent 访问', 'All Agent access'))
+				.setDesc(ui(
+					'撤销会删除全部 Agent 配置、凭据和 Skill 状态记录，并终止 Session。',
+					'Revocation deletes all Agent configurations, credentials, and Skill state records, and ends Sessions.'
+				))
+				.addButton((button) => {
+					button
+						.setButtonText(ui('撤销全部 Agent 访问', 'Revoke all Agent access'))
+						.onClick(() => {
+							new RuntimeAccessResetModal(this.app, this.plugin, () => this.renderSettings()).open();
+						});
+					button.buttonEl.addClass('mod-warning');
+				});
+		});
+		group.addSetting((setting) => {
+			setting
+				.setName(ui('知识图谱检查', 'Graph health profile'))
+				.setDesc(ui(
+					'关闭：仅保留手动查看；建议：只给出优化建议；严格：会把入口、中心节点、孤立节点和未解析链接标为阻塞问题。',
+					'Off: manual inspection only; Advisory: reports suggestions; Strict: marks missing entries, hubs, isolated nodes, and unresolved links as blocking issues.'
+				))
+				.addDropdown((dropdown) =>
+					dropdown
+						.addOption('off', ui('关闭', 'Off'))
+						.addOption('advisory', ui('建议', 'Advisory'))
+						.addOption('strict', ui('严格', 'Strict'))
+						.setValue(this.plugin.settings.graphProfile)
+						.onChange((value: string) => {
+							this.plugin.settings.graphProfile = normalizeGraphProfileValue(value);
+							void this.plugin.saveSettings()
+								.then(() => this.plugin.restartMcpRuntime())
+								.catch((error) => {
+									console.error('tracekeeper failed to update graph profile', error);
+								});
+						})
+				);
+		});
 	}
 
-	private renderPortSetting(container: HTMLElement, connectionUrl: string): void {
+	private renderPortSetting(setting: Setting, connectionUrl: string): void {
 		let draftPort = String(this.plugin.settings.mcpPort);
 		let applyButton: HTMLButtonElement | null = null;
-		const setting = new Setting(container)
+		setting
 			.setName(ui('端口号', 'Port'))
 			.setDesc(ui(
 				`端点：${connectionUrl}。修改端口后需要点击“应用并重启”。`,
@@ -724,7 +720,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				this.plugin,
 				config,
 				'manage',
-				() => { void this.refreshAgentList(); }
+				() => this.refreshAgentList(),
+				() => this.renderSettings()
 			).open();
 		});
 		renderClientSkillPrompt({
@@ -732,23 +729,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			plugin: this.plugin,
 			container: row,
 			config,
-			onChanged: () => {
-				void this.refreshAgentList();
-			},
+			onChanged: () => this.refreshAgentList(),
 		});
-	}
-
-	private renderSkillOnlyRow(container: HTMLElement, config: GeneratedClientConfig): void {
-		const row = container.createDiv({ cls: 'tracekeeper-settings-client-row' });
-		const info = row.createDiv({ cls: 'tracekeeper-settings-client-row__info' });
-		const title = info.createDiv({ cls: 'tracekeeper-config-row__title' });
-		title.createEl('strong', { text: config.displayName });
-		title.createEl('span', { text: ui('仅 Skill', 'Skill only'), cls: 'tracekeeper-badge tracekeeper-badge--muted' });
-		info.createEl('p', { text: ui('已检测到 Skill，但尚无 MCP 集成卡片。', 'A Skill was detected, but no MCP integration card exists yet.'), cls: 'tracekeeper-view__description' });
-		const actions = row.createDiv({ cls: 'tracekeeper-settings-client-row__actions' });
-		const configure = actions.createEl('button', { text: ui('配置 MCP', 'Configure MCP'), cls: 'mod-cta' });
-		configure.addEventListener('click', () => new ConnectAiToolModal(this.app, this.plugin, config, 'add', () => { void this.refreshAgentList(); }).open());
-		renderClientSkillPrompt({ app: this.app, plugin: this.plugin, container: row, config, onChanged: () => { void this.refreshAgentList(); } });
 	}
 
 	private connectionStateLabel(state: import('../client-config/agent-connection-view-model').ConnectionUiState): string {
@@ -766,12 +748,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private createSection(container: HTMLElement, title: string, description?: string): HTMLElement {
-		const section = container.createDiv({ cls: 'tracekeeper-settings-section' });
-		const header = section.createDiv({ cls: 'tracekeeper-settings-section__header' });
-		header.createEl('h3', { text: title, cls: 'tracekeeper-settings-section__title' });
-		if (description) header.createEl('p', { text: description, cls: 'tracekeeper-settings-section__description' });
-		return section;
+	private createGroup(container: HTMLElement, title: string): SettingGroup {
+		return new SettingGroup(container).setHeading(title);
 	}
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {

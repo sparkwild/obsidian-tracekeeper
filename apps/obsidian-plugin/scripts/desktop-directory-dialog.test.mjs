@@ -46,10 +46,11 @@ try {
 	assert.ok(chooseFlowStart >= 0 && verifyFlowStart > chooseFlowStart);
 	assert.doesNotMatch(modalSource.slice(verifyFlowStart), /pickSkillDirectory/);
 	assert.match(mainSource, /properties: \['openDirectory', 'createDirectory', 'showHiddenFiles'\]/);
+	assert.match(mainSource, /skillVerificationFailureDetail\(detected, ui\)/);
 	assert.match(stylesSource, /\.tracekeeper-skill-directory-row \{[\s\S]*?flex/);
 	assert.match(stylesSource, /\.tracekeeper-skill-directory-row input \{[\s\S]*?text-overflow: ellipsis/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 19 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 20 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

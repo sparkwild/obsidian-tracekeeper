@@ -4,6 +4,7 @@ import fs from 'node:fs';
 
 const settingsSource = fs.readFileSync('src/features/settings/tracekeeper-setting-tab.ts', 'utf8');
 const modalSource = fs.readFileSync('src/features/client-config/client-config-modals.ts', 'utf8');
+const skillModalSource = fs.readFileSync('src/features/skill-installation/skill-install-modals.ts', 'utf8');
 const stylesSource = fs.readFileSync('styles.css', 'utf8');
 
 assert.equal(settingsSource.includes('renderConnectAiToolSetting'), false);
@@ -16,6 +17,8 @@ assert.match(settingsSource, /integration/);
 
 for (const required of [
 	'private async ensureIntegration',
+	"await this.refreshSettings('structure')",
+	"await this.refreshSettings('content')",
 	'!this.config.supportedAuthModes.includes(existing.authMode) && !existing.credential',
 	'this.plugin.setAgentAuthMode(existing.integrationId, defaultMode)',
 	'private renderAuthMode',
@@ -66,8 +69,8 @@ for (const required of [
 	'urlOrigin(pending.redirectUri)',
 	'完整 JSON 只在当前弹窗中显示',
 	'complete JSON is shown only in this modal',
-	'不会自动修改客户端配置',
-	'never edits client configuration automatically',
+	'撤销会删除 Tracekeeper 中的 MCP 配置、授权和 Skill 状态记录',
+	'Revocation deletes MCP setup, authorization, and Skill state records from Tracekeeper',
 	"'aria-live': 'polite'",
 	"'aria-atomic': 'true'",
 ]) {
@@ -98,8 +101,14 @@ const revokeFlowStart = modalSource.indexOf("ui('撤销 Agent 访问', 'Revoke A
 const revokeFlowEnd = modalSource.indexOf('const close =', revokeFlowStart);
 const revokeFlowSource = modalSource.slice(revokeFlowStart, revokeFlowEnd);
 assert.match(revokeFlowSource, /revokeAndRemoveAgentIntegration/);
+assert.match(revokeFlowSource, /await this\.refreshSettings\('structure'\)/);
 assert.match(revokeFlowSource, /this\.close\(\)/);
 assert.equal(revokeFlowSource.includes('forgetAgentIntegration'), false);
+assert.match(modalSource, /structure: this\.onStructureChanged/);
+assert.match(modalSource, /content: this\.onChanged/);
+assert.match(modalSource, /createAgentIntegration[\s\S]*await this\.refreshSettings\('structure'\)/);
+assert.match(skillModalSource, /confirmSkillWrite[\s\S]*await this\.onChanged\?\.\(\)[\s\S]*this\.close\(\)/);
+assert.match(skillModalSource, /verifyExternalSkill[\s\S]*await this\.onChanged\?\.\(\)[\s\S]*this\.close\(\)/);
 
 for (const forbidden of [
 	'issueAgentPairingTicket',
@@ -154,4 +163,4 @@ assert.doesNotMatch(stylesSource, /\.tracekeeper-connect-ai-tool-modal__selector
 assert.match(stylesSource, /max-width:\s*min\(720px,\s*calc\(100vw - 32px\)\)/);
 assert.match(stylesSource, /@media \(max-width: 520px\)/);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 59 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 68 })}\n`);

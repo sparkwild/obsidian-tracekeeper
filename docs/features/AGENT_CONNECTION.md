@@ -47,16 +47,16 @@ Each card renders four independent axes:
 - **Skill:** location required, not installed, installed, update available,
   newer than bundled, modified, legacy, conflict, or unavailable.
 
-Skill actions never create or alter credentials. Revoking MCP access never
-uninstalls Skill files. **Revoke Agent access** is one atomic per-card action:
-it invalidates the credential, closes bound Sessions, clears pending approval
-decisions, and removes the integration card. The Skill card and its files stay
-available independently.
+Skill actions never create or alter credentials. **Revoke Agent access** is one
+atomic per-card action: it invalidates the credential, closes bound Sessions,
+clears pending approval decisions, removes the integration card, deletes that
+client's Skill receipt, and clears related onboarding evidence. It does not
+delete files from the client-owned Skill directory.
 
 Changing the Runtime port marks affected cards `needs_update`; it does not
-silently revoke credentials. A Skill-only card remains visible when a receipt is
-present without an MCP integration, and scanning can recreate that card after an
-integration is removed.
+silently revoke credentials. Agent Configuration shows only persistent
+integration cards; a Skill receipt without an integration never creates a
+standalone card.
 
 ## Credentials and sessions
 
@@ -120,9 +120,11 @@ OAuth discovery starts from Protected Resource Metadata and authorization
 server metadata, then uses Authorization Code with PKCE `S256` and RFC 8707
 `resource` binding.
 
-Single-card revoke affects only that integration. **Revoke all Agent access**
-removes every integration card, clears every active credential and pending OAuth
-decision, closes all Sessions, and preserves Skill files. The OAuth protocol's
+Single-card revoke affects only that integration and its Tracekeeper-owned Skill
+state. **Revoke all Agent access** removes every integration card, clears every
+active credential, pending OAuth decision, Skill receipt, onboarding Skill
+evidence, and pending Skill write plan, and closes all Sessions. Client-owned
+Skill files remain untouched. The OAuth protocol's
 `/oauth/revoke` endpoint remains credential-only so a client logout does not
 delete the user's integration metadata; the Obsidian management action is the
 explicit UI path for removing that card. Runtime startup after migration is

@@ -17,7 +17,7 @@ export class SkillInstallPreviewModal extends Modal {
 		app: App,
 		private plugin: TracekeeperPlugin,
 		private clientId: string,
-		private onChanged?: () => void
+		private onChanged?: () => void | Promise<void>
 	) {
 		super(app);
 	}
@@ -143,8 +143,8 @@ export class SkillInstallPreviewModal extends Modal {
 		confirm.addEventListener('click', () => {
 			confirm.disabled = true;
 			back.disabled = true;
-			void this.plugin.confirmSkillWrite(plan.planId, this.clientId).then(() => {
-				this.onChanged?.();
+			void this.plugin.confirmSkillWrite(plan.planId, this.clientId).then(async () => {
+				await this.onChanged?.();
 				this.close();
 			}).catch(() => {
 				confirm.disabled = false;
@@ -169,7 +169,7 @@ export class SkillAiAssistantModal extends Modal {
 		app: App,
 		private plugin: TracekeeperPlugin,
 		private clientId: string,
-		private onChanged?: () => void
+		private onChanged?: () => void | Promise<void>
 	) {
 		super(app);
 	}
@@ -210,7 +210,7 @@ export class SkillAiAssistantModal extends Modal {
 			copy.disabled = true;
 			void this.plugin.copyToClipboard(context.prompt, ui('AI 安装提示词已复制。', 'AI installation prompt copied.'))
 				.then(() => this.plugin.markOnboardingSkillAssistantPromptCopied())
-				.then(() => { this.onChanged?.(); })
+				.then(() => this.onChanged?.())
 				.catch(() => new Notice(ui('复制失败，请重试。', 'Copy failed. Try again.')))
 				.finally(() => { copy.disabled = false; });
 		});
@@ -249,10 +249,10 @@ export class SkillAiAssistantModal extends Modal {
 			this.selectedDirectory = selectedDirectory;
 			directoryInput.title = selectedDirectory;
 			verify.disabled = true;
-			void this.plugin.verifyExternalSkill(this.clientId, selectedDirectory).then((result) => {
+			void this.plugin.verifyExternalSkill(this.clientId, selectedDirectory).then(async (result) => {
 				if (!result) return;
 				new Notice(ui('Skill 已验证。', 'Skill verified.'));
-				this.onChanged?.();
+				await this.onChanged?.();
 				this.close();
 			}).catch((error) => new Notice(error instanceof Error ? error.message : ui('Skill 验证失败。', 'Skill verification failed.')))
 				.finally(() => { verify.disabled = false; });

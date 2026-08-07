@@ -65,8 +65,9 @@ The plugin persists one integration record per client profile and at most one
 active credential digest per record. Runtime composition receives a verifier,
 revalidates the Bearer on every MCP request, and binds each Session to the
 integration and credential that created it. A single-card revoke closes only
-that card's Sessions; global revoke clears all credentials and pending approval
-state while retaining cards and Skill files.
+that card's Sessions and removes its integration and Skill-state records;
+global revoke clears all integration records, credentials, pending approval
+state, and Skill-state records. Client-owned Skill files are not deleted.
 
 The same listener publishes protected-resource metadata, authorization-server
 metadata, public-client registration, authorization-code, token, and revoke

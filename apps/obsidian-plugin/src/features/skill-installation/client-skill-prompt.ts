@@ -13,7 +13,7 @@ export interface ClientSkillPromptOptions {
 	presentation?: 'compact' | 'optional' | 'modal-collapsible';
 	expanded?: boolean;
 	onExpandedChange?: (expanded: boolean) => void;
-	onChanged?: () => void;
+	onChanged?: () => void | Promise<void>;
 }
 
 export function renderClientSkillPrompt({

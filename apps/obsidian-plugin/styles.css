@@ -255,63 +255,6 @@
 	min-width: fit-content;
 }
 
-.tracekeeper-settings-root {
-	display: grid;
-	gap: 12px;
-}
-
-.tracekeeper-settings-section {
-	padding: 10px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	background: var(--background-secondary);
-}
-
-.tracekeeper-settings-section__header {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 8px;
-	margin-bottom: 8px;
-}
-
-.tracekeeper-settings-section__title {
-	margin: 0;
-	font-size: 14px;
-	line-height: 1.4;
-}
-
-.tracekeeper-settings-section__description {
-	margin: 4px 0 0;
-	color: var(--text-muted);
-	font-size: 12px;
-}
-
-.tracekeeper-settings-advanced {
-	padding: 0;
-}
-
-.tracekeeper-settings-advanced__summary {
-	padding: 10px;
-	cursor: pointer;
-	font-size: 14px;
-	font-weight: 600;
-}
-
-.tracekeeper-settings-advanced[open] > .tracekeeper-settings-advanced__summary {
-	border-bottom: 1px solid var(--background-modifier-border);
-}
-
-.tracekeeper-settings-advanced__body {
-	padding: 0 10px 10px;
-}
-
-.tracekeeper-settings-grid {
-	display: grid;
-	gap: 8px;
-}
-
 .tracekeeper-settings-runtime-name {
 	display: flex;
 	flex-wrap: wrap;
@@ -331,10 +274,8 @@
 	color: var(--text-muted);
 }
 
-.tracekeeper-settings-agent-actions {
-	display: flex;
-	justify-content: flex-end;
-	margin: 0;
+.tracekeeper-settings-client-item {
+	display: block;
 }
 
 .tracekeeper-settings-client-row {
@@ -342,10 +283,7 @@
 	grid-template-columns: minmax(0, 1fr) auto;
 	gap: 10px;
 	align-items: start;
-	padding: 8px 10px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	background: var(--background-primary);
+	width: 100%;
 }
 
 .tracekeeper-settings-client-row__info {
@@ -2083,10 +2021,6 @@ button.tracekeeper-review-queue-button--action:focus {
 	.tracekeeper-settings-client-row,
 	.tracekeeper-runtime-log-row {
 		grid-template-columns: 1fr;
-	}
-
-	.tracekeeper-settings-agent-actions {
-		justify-content: flex-start;
 	}
 
 	.tracekeeper-task-card__header,

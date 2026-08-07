@@ -70,9 +70,11 @@ the user-facing data statement remains in [PRIVACY.md](../../PRIVACY.md).
   replacement close only the bound integration's Sessions.
 - Fixed resources and capability-filtered prompts cannot grant capabilities.
 - Removing one client through its client-native entry requires revocation first;
-  it removes metadata without deleting Skill files. Global revoke clears all
-  active credentials and pending approvals, terminates all Sessions,
-  and requires every configured client to be reauthorized.
+  the Obsidian management action removes the integration and its Tracekeeper-owned
+  Skill-state records without deleting client-owned Skill files. Global revoke
+  clears all integrations, active credentials, pending approvals, and Skill-state
+  records, terminates all Sessions, and requires every client to be configured
+  again.
 
 ## Filesystem Boundary
 

@@ -88,6 +88,10 @@ try {
 	assert.equal(normalized['claude-code-user'], undefined);
 	assert.equal(recorded['claude-code-user'].skillVersion, '2.1.1-rc.1');
 	assert.equal(recorded['claude-code-user'].provenance, 'external_verified');
+	const removed = receipts.removeSkillInstallReceipt(recorded, 'codex-user');
+	assert.equal(removed['codex-user'], undefined);
+	assert.equal(removed['claude-code-user'], recorded['claude-code-user']);
+	assert.equal(receipts.removeSkillInstallReceipt(removed, 'missing-target'), removed);
 	assert.throws(() => receipts.recordSkillInstallReceipt(normalized, {
 		schemaVersion: 2,
 		targetId: 'Invalid',
@@ -97,7 +101,7 @@ try {
 		installedAt: '2026-07-25T00:01:00.000Z',
 		provenance: 'tracekeeper_install',
 	}));
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 10 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 13 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

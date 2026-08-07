@@ -15,6 +15,10 @@ product and a bounded Agent integration.
 - Plugin UI defaults to native Obsidian primitives and local styles. A UI
   dependency requires a real-plugin proof for bundle size, theme variables, CSS
   isolation, keyboard behavior, accessibility, and cleanup.
+- Settings groups use the public `SettingGroup` API, so the plugin requires
+  Obsidian 1.11.0 or later. Business-specific badges and complex Agent rows may
+  add local styles inside native setting groups, but must not replace native
+  group containers, row spacing, separators, controls, or theme surfaces.
 
 ## Storage
 

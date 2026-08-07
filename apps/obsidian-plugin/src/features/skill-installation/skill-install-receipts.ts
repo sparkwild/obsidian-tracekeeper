@@ -45,6 +45,16 @@ export const recordSkillInstallReceipt = (
 	};
 };
 
+export const removeSkillInstallReceipt = (
+	receipts: SkillInstallReceipts,
+	targetId: string
+): SkillInstallReceipts => {
+	if (!Object.prototype.hasOwnProperty.call(receipts, targetId)) return receipts;
+	const next = { ...receipts };
+	delete next[targetId];
+	return next;
+};
+
 function normalizeReceipt(
 	value: Record<string, unknown>,
 	targetId: string,

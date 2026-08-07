@@ -3,6 +3,7 @@ import type { OAuthDecision } from '@tracekeeper/mcp-runtime';
 import type TracekeeperPlugin from '../../main';
 import { ui } from '../../ui/localization';
 import { renderClientSkillPrompt } from '../skill-installation/client-skill-prompt';
+import { refreshAgentConfiguration, type AgentConfigurationRefreshKind } from '../settings/agent-configuration-refresh';
 import type { AgentIntegrationSnapshot } from '../settings/agent-integrations';
 import { buildManualMcpJsonConfig, type ClientAuthMode, type GeneratedClientConfig } from './client-config';
 
@@ -20,7 +21,8 @@ export class ConnectAiToolModal extends Modal {
 		private plugin: TracekeeperPlugin,
 		private config: GeneratedClientConfig,
 		private mode: 'add' | 'manage',
-		private onChanged?: () => void
+		private onChanged?: () => void | Promise<void>,
+		private onStructureChanged?: () => void | Promise<void>
 	) {
 		super(app);
 		this.selectedAuthMode = config.supportedAuthModes[0] ?? 'bearer';
@@ -35,7 +37,7 @@ export class ConnectAiToolModal extends Modal {
 		this.contentEl.addClass('tracekeeper-connect-ai-tool-modal');
 		this.setTitle(this.mode === 'add' ? ui(`添加 ${this.config.displayName}`, `Add ${this.config.displayName}`) : ui(`管理 ${this.config.displayName}`, `Manage ${this.config.displayName}`));
 		this.contentEl.createEl('p', {
-			text: ui('MCP 配置、授权和 Skill 状态彼此独立。Tracekeeper 不会自动修改客户端配置。', 'MCP setup, authorization, and Skill state are independent. Tracekeeper never edits client configuration automatically.'),
+			text: ui('撤销会删除 Tracekeeper 中的 MCP 配置、授权和 Skill 状态记录，但不会删除客户端目录中的文件。', 'Revocation deletes MCP setup, authorization, and Skill state records from Tracekeeper, but does not delete files from the client directory.'),
 			cls: 'tracekeeper-view__description',
 		});
 		this.panelEl = this.contentEl.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__panel' });
@@ -50,7 +52,6 @@ export class ConnectAiToolModal extends Modal {
 		this.skillExpanded = false;
 		this.panelEl = null;
 		this.contentEl.empty();
-		this.onChanged?.();
 	}
 
 	private async ensureIntegration(): Promise<void> {
@@ -60,7 +61,7 @@ export class ConnectAiToolModal extends Modal {
 			if (!this.config.supportedAuthModes.includes(existing.authMode) && !existing.credential) {
 				try {
 					existing = await this.plugin.setAgentAuthMode(existing.integrationId, defaultMode);
-					this.onChanged?.();
+					await this.refreshSettings('content');
 				} catch (error) {
 					new Notice(error instanceof Error ? error.message : ui('无法修正 Agent 配置方式。', 'Unable to correct the Agent setup mode.'));
 				}
@@ -73,7 +74,7 @@ export class ConnectAiToolModal extends Modal {
 		if (this.mode === 'add') {
 			try {
 				this.integration = await this.plugin.createAgentIntegration(this.config.clientId, this.selectedAuthMode);
-				this.onChanged?.();
+				await this.refreshSettings('structure');
 			} catch (error) {
 				new Notice(error instanceof Error ? error.message : ui('无法创建 Agent 集成。', 'Unable to create the Agent integration.'));
 			}
@@ -90,9 +91,10 @@ export class ConnectAiToolModal extends Modal {
 			const configure = container.createEl('button', { text: ui('配置 MCP', 'Configure MCP'), cls: 'mod-cta' });
 			configure.addEventListener('click', () => {
 				configure.disabled = true;
-				void this.plugin.createAgentIntegration(this.config.clientId, this.selectedAuthMode).then((entry) => {
+				void this.plugin.createAgentIntegration(this.config.clientId, this.selectedAuthMode).then(async (entry) => {
 					this.integration = entry;
 					this.renderPanel();
+					await this.refreshSettings('structure');
 				}).catch((error) => {
 					configure.disabled = false;
 					new Notice(error instanceof Error ? error.message : ui('无法创建 Agent 集成。', 'Unable to create the Agent integration.'));
@@ -135,7 +137,11 @@ export class ConnectAiToolModal extends Modal {
 				}
 				this.selectedAuthMode = mode;
 				if (this.integration && this.integration.authMode !== mode) {
-					void this.plugin.setAgentAuthMode(this.integration.integrationId, mode).then((entry) => { this.integration = entry; this.renderPanel(); }).catch((error) => new Notice(error instanceof Error ? error.message : ui('无法切换授权方式。', 'Unable to switch authorization mode.')));
+					void this.plugin.setAgentAuthMode(this.integration.integrationId, mode).then(async (entry) => {
+						this.integration = entry;
+						this.renderPanel();
+						await this.refreshSettings('content');
+					}).catch((error) => new Notice(error instanceof Error ? error.message : ui('无法切换授权方式。', 'Unable to switch authorization mode.')));
 				} else this.renderPanel();
 			});
 		}
@@ -145,6 +151,7 @@ export class ConnectAiToolModal extends Modal {
 		const section = container.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__section' });
 		const markCopied = async (): Promise<void> => {
 			if (this.integration) this.integration = await this.plugin.markAgentSetupCommandCopied(this.integration.integrationId);
+			await this.refreshSettings('content');
 		};
 		section.createEl('p', { text: ui('只复制客户端原生配置命令或本机端点；复制不会证明客户端已连接。', 'Copy the client-native setup command or local endpoint. Copying does not prove the client connected.'), cls: 'tracekeeper-view__description' });
 		this.renderCopyableCommand(
@@ -173,6 +180,7 @@ export class ConnectAiToolModal extends Modal {
 		const section = container.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__section tracekeeper-connect-ai-tool-modal__manual-bearer' });
 		const markCopied = async (): Promise<void> => {
 			if (this.integration) this.integration = await this.plugin.markAgentSetupCommandCopied(this.integration.integrationId);
+			await this.refreshSettings('content');
 		};
 		if (!this.bearerToken) {
 			section.createEl('p', {
@@ -217,6 +225,7 @@ export class ConnectAiToolModal extends Modal {
 			this.bearerToken = await this.plugin.issueManualBearerCredential(this.integration.integrationId);
 			this.integration = this.plugin.getAgentIntegrationsSnapshot().find((entry) => entry.integrationId === this.integration?.integrationId) ?? this.integration;
 			this.renderPanel();
+			await this.refreshSettings('content');
 		} catch (error) {
 			new Notice(error instanceof Error ? error.message : ui('无法生成完整 JSON。', 'Unable to generate the complete JSON.'));
 		} finally {
@@ -307,10 +316,10 @@ export class ConnectAiToolModal extends Modal {
 			const revoke = actions.createEl('button', { text: ui('撤销 Agent 访问', 'Revoke Agent access') });
 			revoke.addEventListener('click', () => {
 				revoke.disabled = true;
-				void this.plugin.revokeAndRemoveAgentIntegration(this.integration?.integrationId ?? '').then(() => {
+				void this.plugin.revokeAndRemoveAgentIntegration(this.integration?.integrationId ?? '').then(async () => {
 					this.bearerToken = null;
 					this.integration = null;
-					this.onChanged?.();
+					await this.refreshSettings('structure');
 					this.close();
 				}).catch((error) => {
 					revoke.disabled = false;
@@ -336,14 +345,17 @@ export class ConnectAiToolModal extends Modal {
 			presentation: 'modal-collapsible',
 			expanded: this.skillExpanded,
 			onExpandedChange: (expanded) => { this.skillExpanded = expanded; },
-			onChanged: () => { this.onChanged?.(); this.renderPanel(); },
+			onChanged: async () => {
+				await this.refreshSettings('content');
+				this.renderPanel();
+			},
 		});
 	}
 
 	private async decide(requestId: string, decision: NonNullable<OAuthDecision>): Promise<void> {
 		try {
 			await this.plugin.decideOAuthRequest(requestId, decision);
-			this.onChanged?.();
+			await this.refreshSettings('content');
 			this.renderPanel();
 			new Notice(decision.decision === 'allow'
 				? ui('授权确认已提交，正在等待客户端完成连接。', 'Authorization submitted. Waiting for the client to finish connecting.')
@@ -352,6 +364,13 @@ export class ConnectAiToolModal extends Modal {
 			new Notice(error instanceof Error ? error.message : ui('无法更新 OAuth 审批。', 'Unable to update OAuth approval.'));
 			this.renderPanel();
 		}
+	}
+
+	private async refreshSettings(kind: AgentConfigurationRefreshKind): Promise<void> {
+		await refreshAgentConfiguration(kind, {
+			content: this.onChanged,
+			structure: this.onStructureChanged,
+		});
 	}
 
 	private statusLabel(): string {

@@ -161,7 +161,9 @@ try {
 	assert.ok(capabilitiesModalSource.includes('人工审核和确认写入仍在 Obsidian 中完成'));
 	assert.ok(capabilitiesModalSource.includes('Human review and confirmed writeback remain in Obsidian'));
 	assert.equal(capabilitiesModalSource.includes('Connected agents can call the capabilities below'), false);
-	assert.ok(settingsSource.includes("section.querySelector<HTMLElement>('.tracekeeper-settings-section__header')"));
+	assert.ok(settingsSource.includes('new SettingGroup(container).setHeading(title)'));
+	assert.ok(settingsSource.includes('group.addExtraButton'));
+	assert.equal(settingsSource.includes('tracekeeper-settings-section__header'), false);
 	assert.equal(settingsSource.includes('持久 Agent 卡片独立展示 MCP 配置、授权、连接、使用和 Skill 状态。'), false);
 	assert.equal(settingsSource.includes('Persistent Agent cards show MCP setup, authorization, connection, usage, and Skill state independently.'), false);
 	assert.equal(settingsSource.includes('renderOnboardingSection'), false);

@@ -117,8 +117,10 @@ import { exportEmbeddedTracekeeperSkillSource } from './features/skill-installat
 import {
 	normalizeSkillInstallReceipts,
 	recordSkillInstallReceipt,
+	removeSkillInstallReceipt,
 	type SkillInstallReceipts,
 } from './features/skill-installation/skill-install-receipts';
+import { skillVerificationFailureDetail } from './features/skill-installation/skill-install-view-model';
 import { legacySkillTargetDirectoryForId } from './adapters/client-skill-target-registry';
 import {
 	generateRuntimeSecuritySecret,
@@ -504,7 +506,10 @@ export default class TracekeeperPlugin extends Plugin {
 	private agentCredentialOperation: Promise<void> = Promise.resolve();
 	private readonly pendingOAuthDecisions = new Map<string, OAuthDecision>();
 	private readonly pendingOAuthRequests = new Map<string, PendingOAuthRequest>();
-	private readonly skillPlanActions = new Map<string, Extract<SkillInstallAction, 'install' | 'update' | 'migrate'>>();
+	private readonly skillPlanActions = new Map<string, {
+		action: Extract<SkillInstallAction, 'install' | 'update' | 'migrate'>;
+		clientId: string;
+	}>();
 	private localToolExecutor!: LocalToolExecutor;
 	private vaultRepository!: ObsidianVaultRepository;
 	private knowledgeIndex: ObsidianKnowledgeIndexAdapter | null = null;
@@ -2224,13 +2229,29 @@ export default class TracekeeperPlugin extends Plugin {
 	async revokeAndRemoveAgentIntegration(integrationId: string): Promise<void> {
 		await this.enqueueAgentCredentialOperation(async () => {
 			const previous = this.settings.agentIntegrations;
-			if (!previous.some((candidate) => candidate.integrationId === integrationId)) return;
+			const current = previous.find((candidate) => candidate.integrationId === integrationId);
+			if (!current) return;
+			const targetId = this.getClientSkillProfile(current.clientProfileId).targetId;
+			const previousReceipts = this.settings.skillInstallReceipts;
+			const previousOnboarding = this.settings.onboarding;
 			this.settings.agentIntegrations = previous.filter((candidate) => candidate.integrationId !== integrationId);
+			this.settings.skillInstallReceipts = removeSkillInstallReceipt(previousReceipts, targetId);
+			if (previousOnboarding.selectedClientId === current.clientProfileId) {
+				this.settings.onboarding = {
+					...clearOnboardingClientEvidence(previousOnboarding),
+					lastUpdatedAt: new Date().toISOString(),
+				};
+			}
 			try {
 				await this.saveSettings();
 			} catch (error) {
 				this.settings.agentIntegrations = previous;
+				this.settings.skillInstallReceipts = previousReceipts;
+				this.settings.onboarding = previousOnboarding;
 				throw error;
+			}
+			for (const [planId, plan] of this.skillPlanActions) {
+				if (plan.clientId === current.clientProfileId) this.skillPlanActions.delete(planId);
 			}
 			this.pendingOAuthRequests.forEach((_request, requestId) => {
 				const decision = this.pendingOAuthDecisions.get(requestId);
@@ -2246,14 +2267,23 @@ export default class TracekeeperPlugin extends Plugin {
 	async revokeAllAgentAccess(): Promise<void> {
 		await this.enqueueAgentCredentialOperation(async () => {
 			const previous = this.settings.agentIntegrations;
+			const previousReceipts = this.settings.skillInstallReceipts;
+			const previousOnboarding = this.settings.onboarding;
 			const integrationIds = previous.map((entry) => entry.integrationId);
 			this.settings.agentIntegrations = [];
+			this.settings.skillInstallReceipts = {};
+			this.settings.onboarding = {
+				...clearOnboardingClientEvidence(previousOnboarding),
+				lastUpdatedAt: new Date().toISOString(),
+			};
 			const previousDecisions = new Map(this.pendingOAuthDecisions);
 			const previousRequests = new Map(this.pendingOAuthRequests);
 			try {
 				await this.saveSettings();
 			} catch (error) {
 				this.settings.agentIntegrations = previous;
+				this.settings.skillInstallReceipts = previousReceipts;
+				this.settings.onboarding = previousOnboarding;
 				this.pendingOAuthDecisions.clear();
 				previousDecisions.forEach((decision, requestId) => this.pendingOAuthDecisions.set(requestId, decision));
 				this.pendingOAuthRequests.clear();
@@ -2262,6 +2292,7 @@ export default class TracekeeperPlugin extends Plugin {
 			}
 			this.pendingOAuthDecisions.clear();
 			this.pendingOAuthRequests.clear();
+			this.skillPlanActions.clear();
 			const runtime = this.mcpRuntimeLifecycle.getRuntime();
 			for (const integrationId of integrationIds) runtime?.closeSessionsForIntegration?.(integrationId);
 			this.scheduleAgentStateViewRefresh();
@@ -2843,22 +2874,25 @@ export default class TracekeeperPlugin extends Plugin {
 		const detected = adapter.detect(profile);
 		if (detected.state === 'legacy_install') {
 			const plan = adapter.previewMigrate(profile);
-			if (plan.action === 'migrate') this.skillPlanActions.set(plan.planId, 'migrate');
+			if (plan.action === 'migrate') this.skillPlanActions.set(plan.planId, { action: 'migrate', clientId });
 			return plan;
 		}
 		if (detected.state === 'update_available' || detected.state === 'modified' || detected.state === 'installed' || detected.state === 'newer_than_bundled') {
 			const plan = adapter.previewUpdate(profile);
-			if (plan.action === 'update') this.skillPlanActions.set(plan.planId, 'update');
+			if (plan.action === 'update') this.skillPlanActions.set(plan.planId, { action: 'update', clientId });
 			return plan;
 		}
 		const plan = adapter.previewInstall(profile);
-		if (plan.action === 'install') this.skillPlanActions.set(plan.planId, 'install');
+		if (plan.action === 'install') this.skillPlanActions.set(plan.planId, { action: 'install', clientId });
 		return plan;
 	}
 
 	async confirmSkillWrite(planId: string, clientId: string): Promise<SkillInstallResult> {
-		const action = this.skillPlanActions.get(planId);
-		if (!action) throw new ClientSkillPlanConflictError('Skill install plan is missing or no longer actionable.');
+		const pendingPlan = this.skillPlanActions.get(planId);
+		if (!pendingPlan || pendingPlan.clientId !== clientId) {
+			throw new ClientSkillPlanConflictError('Skill install plan is missing or no longer actionable.');
+		}
+		const { action } = pendingPlan;
 		let result: SkillInstallResult;
 		try {
 			const adapter = this.requireClientSkillAdapter();
@@ -2955,7 +2989,7 @@ export default class TracekeeperPlugin extends Plugin {
 		const profile = this.getClientSkillProfile(clientId, selection.targetDirectory);
 		const detected = adapter.detect(profile);
 		if (detected.state !== 'installed') {
-			throw new Error(detected.detail || ui('目录中的 Skill 与当前版本不匹配。', 'The Skill in this directory does not match the bundled version.'));
+			throw new Error(skillVerificationFailureDetail(detected, ui));
 		}
 		const now = new Date().toISOString();
 		const previousReceipts = this.settings.skillInstallReceipts;

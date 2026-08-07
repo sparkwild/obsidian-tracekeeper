@@ -54,6 +54,31 @@ export function skillInstallPlanDetail(plan: SkillInstallPlan, localize: Localiz
 	);
 }
 
+export function skillVerificationFailureDetail(state: SkillInstallState, localize: Localize): string {
+	switch (state.state) {
+		case 'location_required':
+			return localize('请先选择 Skill 目录。', 'Choose a Skill directory first.');
+		case 'not_installed':
+			return localize('所选目录中未找到 Tracekeeper Skill。', 'No Tracekeeper Skill was found in the selected directory.');
+		case 'update_available':
+			return localize('所选 Skill 版本低于插件内置版本，无法作为当前版本验证。', 'The selected Skill is older than the embedded version and cannot be verified as current.');
+		case 'newer_than_bundled':
+			return localize('所选 Skill 版本高于插件内置版本，无法作为当前版本验证。', 'The selected Skill is newer than the embedded version and cannot be verified as current.');
+		case 'modified':
+			return state.installedVersion === state.expectedVersion
+				? localize('已安装 Skill 的版本与插件内置版本一致，但内容不一致。', 'The installed Skill version matches the embedded version, but its content does not.')
+				: localize('所选 Skill 内容未通过完整性校验。', 'The selected Skill content failed integrity verification.');
+		case 'legacy_install':
+			return localize('检测到旧位置的 Skill，请选择当前安装目录。', 'A Skill was found in a legacy location. Choose the current installation directory.');
+		case 'location_conflict':
+			return localize('检测到多个 Skill 位置，无法确认要验证的目录。', 'Multiple Skill locations were detected, so the directory to verify is unclear.');
+		case 'unavailable':
+			return localize('当前无法读取 Skill 目录。', 'The Skill directory cannot be read right now.');
+		case 'installed':
+			return localize('Skill 已验证。', 'Skill verified.');
+	}
+}
+
 const currentVersionLabel = (state: SkillInstallState, localize: Localize): string => {
 	switch (state.state) {
 		case 'location_required':
