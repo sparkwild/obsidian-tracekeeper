@@ -2,13 +2,19 @@
 
 [简体中文说明](./README.zh-CN.md)
 
-Tracekeeper is an Obsidian plugin for a local Agent Knowledge System that combines Memory and Wiki in one vault structure.
+Tracekeeper is an Obsidian-native, local-first knowledge and AI-memory system. It lets explicitly connected AI agents recall scoped vault context and propose durable updates through a loopback-only, credential-protected MCP Runtime, while Obsidian remains the human workspace and the vault remains the source of truth.
 
-It turns AI-assisted work into reviewable traces: task memories, session records, and proposals stay visible inside Obsidian.
+## What Tracekeeper Does
+
+- Connects AI tools to the active vault through a local MCP Runtime while desktop Obsidian is open.
+- Recalls selected vault context and builds bounded context packs without exposing unrestricted filesystem access.
+- Sends global memory and knowledge updates through human review, preview, and explicit writeback confirmation.
+- Optionally saves project memory as immutable, linked Markdown entries with retry-safe operation identity.
+- Keeps durable knowledge in ordinary vault files with no hosted Tracekeeper backend or external database.
 
 ## Installation
 
-After Tracekeeper is listed in the Obsidian Community Plugins directory:
+Install Tracekeeper from the Obsidian Community Plugins directory:
 
 1. Open **Settings** in Obsidian.
 2. Go to **Community plugins**.
