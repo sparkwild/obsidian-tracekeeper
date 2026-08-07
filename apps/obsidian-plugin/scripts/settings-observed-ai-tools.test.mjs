@@ -65,11 +65,12 @@ assert.equal(source.includes("ui('连接 AI 工具', 'Connect AI tool')"), false
 assert.equal(agentSection.includes('for (const config of snapshot.clientConfigs)'), false);
 assert.equal(agentSection.includes('snapshot.clientConfigs.find'), false);
 assert.equal(agentSection.includes("createEl('select'"), false);
-assert.ok(source.includes('async refreshAgentList(): Promise<void>'));
+assert.ok(source.includes('async refreshAgentList(force = false): Promise<void>'));
 assert.ok(source.includes('isAgentListVisible(): boolean'));
 assert.ok(source.includes('tracekeeper-settings-agent-list-host'));
 assert.ok(source.includes('buildAgentListFingerprint'));
 assert.ok(source.includes('agentListRefreshPending'));
+assert.ok(source.includes('agentListForceRefreshPending'));
 assert.ok(source.includes('agentListRefreshPromise'));
 assert.ok(source.includes('drainAgentListRefreshes'));
 assert.ok(source.includes('if (this.agentListRefreshPromise) return this.agentListRefreshPromise'));
@@ -80,6 +81,7 @@ assert.ok(source.includes('this.renderAgentClientConfigSection(containerEl, snap
 assert.ok(source.includes(".addClass('tracekeeper-settings-agent-list-host')"));
 assert.ok(source.includes("host.ownerDocument.createElement('div')"));
 assert.ok(source.includes('host.replaceWith(replacement)'));
+assert.ok(source.includes('shouldReplaceAgentConfiguration(this.agentListFingerprint, fingerprint, force)'));
 assert.equal(source.includes("containerEl.createDiv({\n\t\t\tcls: 'tracekeeper-settings-agent-list-host'"), false);
 assert.ok(source.includes("scrollIntoView({ block: 'start', behavior: 'auto' })"));
 const settingsRender = methodBody('async renderSettings', 'buildAgentListFingerprint');

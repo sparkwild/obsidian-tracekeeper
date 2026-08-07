@@ -47,10 +47,19 @@ try {
 	assert.doesNotMatch(modalSource.slice(verifyFlowStart), /pickSkillDirectory/);
 	assert.match(mainSource, /properties: \['openDirectory', 'createDirectory', 'showHiddenFiles'\]/);
 	assert.match(mainSource, /skillVerificationFailureDetail\(detected, ui\)/);
+	const confirmSkillWriteStart = mainSource.indexOf('async confirmSkillWrite');
+	const prepareAiSkillAssistantStart = mainSource.indexOf('async prepareAiSkillAssistant', confirmSkillWriteStart);
+	const confirmSkillWriteSource = mainSource.slice(confirmSkillWriteStart, prepareAiSkillAssistantStart);
+	assert.match(confirmSkillWriteSource, /detect\(\{[\s\S]*legacyTargetDirectories: \[\][\s\S]*verified\.state !== 'installed'/);
+	assert.ok(
+		confirmSkillWriteSource.indexOf("verified.state !== 'installed'")
+			< confirmSkillWriteSource.indexOf('recordSkillInstallReceipt'),
+		'Direct Skill writes must be verified before the install receipt is recorded'
+	);
 	assert.match(stylesSource, /\.tracekeeper-skill-directory-row \{[\s\S]*?flex/);
 	assert.match(stylesSource, /\.tracekeeper-skill-directory-row input \{[\s\S]*?text-overflow: ellipsis/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 20 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 22 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

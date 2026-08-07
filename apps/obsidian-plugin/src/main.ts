@@ -525,6 +525,7 @@ export default class TracekeeperPlugin extends Plugin {
 	private autoRefreshDebounceId: number | null = null;
 	private autoRefreshInFlight = false;
 	private agentStateViewRefreshQueued = false;
+	private readonly agentStateListeners = new Set<() => void>();
 	private settingTab: TracekeeperSettingTab | null = null;
 	private runtimeStatus: StreamableHttpRuntimeStatus = {
 		state: 'stopped',
@@ -1144,6 +1145,7 @@ export default class TracekeeperPlugin extends Plugin {
 		this.agentStateViewRefreshQueued = true;
 		window.setTimeout(() => {
 			this.agentStateViewRefreshQueued = false;
+			this.notifyAgentStateListeners();
 			const tasks: Array<Promise<void>> = [this.refreshActivityViews()];
 			if (this.settingTab?.isAgentListVisible()) {
 				tasks.push(this.settingTab.refreshAgentList());
@@ -1152,6 +1154,23 @@ export default class TracekeeperPlugin extends Plugin {
 				console.error('tracekeeper failed to refresh Agent state views', error);
 			});
 		}, 0);
+	}
+
+	subscribeAgentStateChanges(listener: () => void): () => void {
+		this.agentStateListeners.add(listener);
+		return () => {
+			this.agentStateListeners.delete(listener);
+		};
+	}
+
+	private notifyAgentStateListeners(): void {
+		for (const listener of [...this.agentStateListeners]) {
+			try {
+				listener();
+			} catch (error) {
+				console.error('tracekeeper failed to refresh an Agent state listener', error);
+			}
+		}
 	}
 
 	private async startMcpRuntime(): Promise<void> {
@@ -2912,6 +2931,22 @@ export default class TracekeeperPlugin extends Plugin {
 		this.skillPlanActions.delete(planId);
 
 		const profile = this.getClientSkillProfile(result.clientId, result.targetDirectory);
+		const verified = this.requireClientSkillAdapter().detect({
+			...profile,
+			legacyTargetDirectories: [],
+		});
+		if (verified.state !== 'installed' || !verified.fileVerified) {
+			const detail = skillVerificationFailureDetail(verified, ui);
+			console.error('tracekeeper failed to verify client Skill after writing it', {
+				clientId: result.clientId,
+				targetDirectory: result.targetDirectory,
+				state: verified.state,
+			});
+			throw new Error(ui(
+				`强化技能文件已经写入，但自动验证失败：${detail}`,
+				`The Skill files were written, but automatic verification failed: ${detail}`
+			));
+		}
 		let receiptPersisted = true;
 		const previousReceipts = this.settings.skillInstallReceipts;
 		const previousOnboarding = this.settings.onboarding;
@@ -2987,7 +3022,10 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 		const selection = normalizeSkillDirectorySelection(selectedDirectory, desktopApi.path.join.bind(desktopApi.path));
 		const profile = this.getClientSkillProfile(clientId, selection.targetDirectory);
-		const detected = adapter.detect(profile);
+		const detected = adapter.detect({
+			...profile,
+			legacyTargetDirectories: [],
+		});
 		if (detected.state !== 'installed') {
 			throw new Error(skillVerificationFailureDetail(detected, ui));
 		}

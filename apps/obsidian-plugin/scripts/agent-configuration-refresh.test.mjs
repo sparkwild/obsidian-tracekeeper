@@ -18,7 +18,7 @@ try {
 		format: 'esm',
 		logLevel: 'silent',
 	});
-	const { refreshAgentConfiguration } = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
+	const { refreshAgentConfiguration, shouldReplaceAgentConfiguration } = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 	const calls = [];
 	let release;
 	const blocked = new Promise((resolve) => { release = resolve; });
@@ -46,8 +46,11 @@ try {
 		content: () => { calls.push('fallback'); },
 	});
 	assert.equal(calls.at(-1), 'fallback');
+	assert.equal(shouldReplaceAgentConfiguration('same', 'same', false), false);
+	assert.equal(shouldReplaceAgentConfiguration('before', 'after', false), true);
+	assert.equal(shouldReplaceAgentConfiguration('same', 'same', true), true);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 4 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 7 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

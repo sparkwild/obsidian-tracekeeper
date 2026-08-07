@@ -19,6 +19,7 @@ import {
 import { ui } from '../../ui/localization';
 import { renderClientSkillPrompt } from '../skill-installation/client-skill-prompt';
 import { buildAgentConfigurationViewModel } from './agent-configuration-view-model';
+import { shouldReplaceAgentConfiguration } from './agent-configuration-refresh';
 
 const AGENT_CONFIGURATION_FOCUS_SETTLE_DELAY_MS = 200;
 
@@ -28,6 +29,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	private agentListHostEl: HTMLElement | null = null;
 	private agentListFingerprint = '';
 	private agentListRefreshPending = false;
+	private agentListForceRefreshPending = false;
 	private agentListRefreshPromise: Promise<void> | null = null;
 	private agentConfigurationFocusPending = false;
 	private agentConfigurationFocusFrame: number | null = null;
@@ -64,6 +66,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		this.agentListHostEl = null;
 		this.agentListFingerprint = '';
 		this.agentListRefreshPending = false;
+		this.agentListForceRefreshPending = false;
 		this.agentConfigurationFocusPending = false;
 		super.hide();
 	}
@@ -77,9 +80,10 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		this.applyAgentConfigurationFocus();
 	}
 
-	async refreshAgentList(): Promise<void> {
+	async refreshAgentList(force = false): Promise<void> {
 		if (!this.visible || !this.agentListHostEl?.isConnected) return;
 		this.agentListRefreshPending = true;
+		this.agentListForceRefreshPending ||= force;
 		if (this.agentListRefreshPromise) return this.agentListRefreshPromise;
 		const refreshPromise = this.drainAgentListRefreshes();
 		this.agentListRefreshPromise = refreshPromise;
@@ -100,12 +104,14 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	private async drainAgentListRefreshes(): Promise<void> {
 		while (this.agentListRefreshPending) {
 			this.agentListRefreshPending = false;
+			const force = this.agentListForceRefreshPending;
+			this.agentListForceRefreshPending = false;
 			const host = this.agentListHostEl;
 			if (!this.visible || !host?.isConnected) return;
 			const snapshot = await this.plugin.loadAgentConnectionsSnapshot();
 			if (!this.visible || host !== this.agentListHostEl || !host.isConnected) continue;
 			const fingerprint = this.buildAgentListFingerprint(snapshot);
-			if (fingerprint === this.agentListFingerprint) continue;
+			if (!shouldReplaceAgentConfiguration(this.agentListFingerprint, fingerprint, force)) continue;
 			const stagingEl = host.ownerDocument.createElement('div');
 			const replacement = this.renderAgentClientConfigSection(stagingEl, snapshot);
 			host.replaceWith(replacement);
@@ -206,7 +212,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 										this.plugin,
 										config,
 										'add',
-										() => this.refreshAgentList(),
+										() => this.refreshAgentList(true),
 										() => this.renderSettings()
 									).open();
 								});
@@ -720,7 +726,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				this.plugin,
 				config,
 				'manage',
-				() => this.refreshAgentList(),
+				() => this.refreshAgentList(true),
 				() => this.renderSettings()
 			).open();
 		});
@@ -729,7 +735,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			plugin: this.plugin,
 			container: row,
 			config,
-			onChanged: () => this.refreshAgentList(),
+			onChanged: () => this.refreshAgentList(true),
 		});
 	}
 

@@ -15,6 +15,7 @@ export class ConnectAiToolModal extends Modal {
 	private selectedAuthMode: ClientAuthMode;
 	private skillExpanded = false;
 	private closed = false;
+	private stopAgentStateSubscription: (() => void) | null = null;
 
 	constructor(
 		app: App,
@@ -31,6 +32,8 @@ export class ConnectAiToolModal extends Modal {
 	onOpen(): void {
 		this.closed = false;
 		this.skillExpanded = false;
+		this.stopAgentStateSubscription?.();
+		this.stopAgentStateSubscription = this.plugin.subscribeAgentStateChanges(() => this.refreshAgentState());
 		this.modalEl.setAttribute('role', 'dialog');
 		this.modalEl.setAttribute('aria-modal', 'true');
 		this.contentEl.empty();
@@ -47,6 +50,8 @@ export class ConnectAiToolModal extends Modal {
 
 	onClose(): void {
 		this.closed = true;
+		this.stopAgentStateSubscription?.();
+		this.stopAgentStateSubscription = null;
 		this.integration = null;
 		this.bearerToken = null;
 		this.skillExpanded = false;
@@ -78,6 +83,26 @@ export class ConnectAiToolModal extends Modal {
 			} catch (error) {
 				new Notice(error instanceof Error ? error.message : ui('无法创建 Agent 集成。', 'Unable to create the Agent integration.'));
 			}
+		}
+		this.renderPanel();
+	}
+
+	private refreshAgentState(): void {
+		if (this.closed) return;
+		const integrationId = this.integration?.integrationId;
+		const current = this.plugin.getAgentIntegrationsSnapshot().find((entry) =>
+			integrationId
+				? entry.integrationId === integrationId
+				: entry.clientProfileId === this.config.clientId
+		);
+		if (current) {
+			this.integration = current;
+			if (this.config.supportedAuthModes.includes(current.authMode)) {
+				this.selectedAuthMode = current.authMode;
+			}
+		} else if (integrationId) {
+			this.integration = null;
+			this.bearerToken = null;
 		}
 		this.renderPanel();
 	}

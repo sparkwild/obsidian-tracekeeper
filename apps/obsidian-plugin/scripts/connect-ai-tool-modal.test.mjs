@@ -25,6 +25,7 @@ for (const required of [
 	'private renderSetup',
 	'private renderManualBearer',
 	'private renderAuthorization',
+	'private refreshAgentState',
 	'private renderMaintenance',
 	'private renderSkill',
 	'createAgentIntegration',
@@ -73,6 +74,8 @@ for (const required of [
 	'Revocation deletes MCP setup, authorization, and Skill state records from Tracekeeper',
 	"'aria-live': 'polite'",
 	"'aria-atomic': 'true'",
+	'this.plugin.subscribeAgentStateChanges',
+	'this.stopAgentStateSubscription?.()',
 ]) {
 	assert.ok(modalSource.includes(required), `${required} must be present`);
 }
@@ -91,6 +94,8 @@ for (const forbiddenCredentialMetadata of ['credentialId', 'issuedAt', 'tokenDig
 	assert.equal(modalSource.includes(forbiddenCredentialMetadata), false, `${forbiddenCredentialMetadata} must stay out of the management modal`);
 }
 assert.match(modalSource, /this\.setTitle\(this\.mode === 'add'/);
+assert.match(modalSource, /subscribeAgentStateChanges\(\(\) => this\.refreshAgentState\(\)\)/);
+assert.match(modalSource, /refreshAgentState\(\)[\s\S]*getAgentIntegrationsSnapshot\(\)\.find[\s\S]*this\.renderPanel\(\)/);
 assert.equal(modalSource.includes("this.contentEl.createEl('h2'"), false);
 assert.equal(modalSource.includes("section.createEl('h4'"), false);
 const copyFlowStart = modalSource.indexOf('private renderCopyableCommand');
@@ -109,6 +114,9 @@ assert.match(modalSource, /content: this\.onChanged/);
 assert.match(modalSource, /createAgentIntegration[\s\S]*await this\.refreshSettings\('structure'\)/);
 assert.match(skillModalSource, /confirmSkillWrite[\s\S]*await this\.onChanged\?\.\(\)[\s\S]*this\.close\(\)/);
 assert.match(skillModalSource, /verifyExternalSkill[\s\S]*await this\.onChanged\?\.\(\)[\s\S]*this\.close\(\)/);
+assert.match(settingsSource, /'add',\s*\(\) => this\.refreshAgentList\(true\),/);
+assert.match(settingsSource, /'manage',\s*\(\) => this\.refreshAgentList\(true\),/);
+assert.match(settingsSource, /renderClientSkillPrompt\([\s\S]*onChanged: \(\) => this\.refreshAgentList\(true\)/);
 
 for (const forbidden of [
 	'issueAgentPairingTicket',
@@ -163,4 +171,4 @@ assert.doesNotMatch(stylesSource, /\.tracekeeper-connect-ai-tool-modal__selector
 assert.match(stylesSource, /max-width:\s*min\(720px,\s*calc\(100vw - 32px\)\)/);
 assert.match(stylesSource, /@media \(max-width: 520px\)/);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 68 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 75 })}\n`);

@@ -5,6 +5,14 @@ export interface AgentConfigurationRefreshCallbacks {
 	structure?: () => void | Promise<void>;
 }
 
+export function shouldReplaceAgentConfiguration(
+	currentFingerprint: string,
+	nextFingerprint: string,
+	force: boolean
+): boolean {
+	return force || currentFingerprint !== nextFingerprint;
+}
+
 export async function refreshAgentConfiguration(
 	kind: AgentConfigurationRefreshKind,
 	callbacks: AgentConfigurationRefreshCallbacks

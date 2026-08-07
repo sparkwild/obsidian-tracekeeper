@@ -94,6 +94,9 @@ try {
 	assert.match(mainSource, /issueManualBearerCredential\(integrationId:\s*string\)/);
 	assert.match(mainSource, /decideOAuthRequest\(requestId:\s*string/);
 	assert.match(mainSource, /filter\(\(request\)\s*=>\s*!this\.pendingOAuthDecisions\.has\(request\.requestId\)\)/);
+	assert.match(mainSource, /subscribeAgentStateChanges\(listener:\s*\(\)\s*=>\s*void\):\s*\(\)\s*=>\s*void/);
+	assert.match(mainSource, /private notifyAgentStateListeners\(\):\s*void/);
+	assert.match(mainSource, /this\.notifyAgentStateListeners\(\)/);
 	const decisionStart = mainSource.indexOf('async decideOAuthRequest');
 	const decisionEnd = mainSource.indexOf('private buildOAuthIntegrationPort', decisionStart);
 	assert.match(mainSource.slice(decisionStart, decisionEnd), /this\.scheduleAgentStateViewRefresh\(\)/);
@@ -108,7 +111,7 @@ try {
 	assert.doesNotMatch(mainSource, /regenerateRuntimeToken|rotateRuntimeCredential|setRuntimeCredentialProfile/);
 	assert.doesNotMatch(mainSource, /issueAgentPairingTicket|getAgentPairingTicketStatus|serviceToken|getSharedBearerToken|supportsLocalOAuth|markClientConfigured/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 31 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 34 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }
