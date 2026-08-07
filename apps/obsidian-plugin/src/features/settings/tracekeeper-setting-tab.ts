@@ -516,10 +516,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		group.addSetting((setting) => {
 			setting
 				.setName(ui('项目记忆', 'Project memory'))
-				.setDesc(ui(
-					'用于延续当前项目、仓库或工作区的决策、经验和上下文。',
-					'Decisions, lessons, and context that carry forward within the current project, repository, or workspace.'
-				))
+				.setDesc(this.projectMemoryRuleDescription())
 				.addDropdown((dropdown) => {
 					for (const rule of MEMORY_PROPOSAL_RULES) {
 						dropdown.addOption(rule, memoryProposalRuleLabel(rule));
@@ -555,6 +552,21 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						});
 				});
 		});
+	}
+
+	private projectMemoryRuleDescription(): string {
+		switch (this.plugin.settings.projectMemoryRule) {
+			case 'review_queue':
+				return ui('项目记忆保存前进入知识变更审核。', 'Review project memory before saving.');
+			case 'disabled':
+				return ui('不接收新的项目记忆。', 'Do not accept new project memory.');
+			case 'auto_write':
+			default:
+				return ui(
+					'自动保存符合条件的项目记忆；用户权威、冲突和生命周期变更仍需审核。',
+					'Automatically save eligible project memory; user authority, conflicts, and lifecycle changes still require review.'
+				);
+		}
 	}
 
 	private renderAdvancedMaintenanceSection(

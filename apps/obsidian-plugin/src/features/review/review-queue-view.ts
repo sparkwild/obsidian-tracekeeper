@@ -505,6 +505,12 @@ export class TracekeeperReviewQueueView extends ItemView {
 		const summary = container.createDiv({ cls: 'tracekeeper-review-inbox__summary' });
 		summary.createEl('strong', { text: ui('变更理由', 'Change rationale') });
 		summary.createEl('p', { text: proposal.rationale || this.reviewReason(proposal) });
+		const reviewRequirement = this.reviewRequirementMessage(proposal);
+		if (reviewRequirement) {
+			const requirement = container.createDiv({ cls: 'tracekeeper-review-inbox__notice tracekeeper-review-inbox__notice--warning' });
+			requirement.createEl('strong', { text: ui('进入审核的原因', 'Why review is required') });
+			requirement.createEl('p', { text: reviewRequirement });
+		}
 
 		this.renderDecisionContext(container, proposal, context);
 
@@ -1054,6 +1060,44 @@ export class TracekeeperReviewQueueView extends ItemView {
 			);
 		}
 		return trimText(proposal.snippet, 360) || ui('该变更需要你确认处理结果。', 'This change needs your confirmation.');
+	}
+
+	private reviewRequirementMessage(proposal: MemoryProposalRecord): string {
+		const reason = proposal.reviewReason;
+		switch (reason) {
+			case 'memory_rule_requires_human_review':
+				return ui('当前记忆规则要求写入前由你确认。', 'The current memory rule requires your confirmation before writeback.');
+			case 'missing_wiki_bridge':
+				return ui('项目记忆缺少可验证的 Wiki 关联，不能自动保存。', 'The project memory has no verified Wiki relation and cannot be saved automatically.');
+			case 'user_authority_requires_human_review':
+				return ui('提案申请用户权威，必须由你确认。', 'The proposal requests user authority and must be confirmed by you.');
+			case 'lifecycle_transition_requires_human_review':
+				return ui('提案会改变既有记忆的生命周期状态，必须由你确认。', 'The proposal changes an existing memory lifecycle state and must be confirmed by you.');
+			case 'unresolved_claim_conflict':
+				return ui('同一声明已有当前记录，且提案没有给出明确的取代或矛盾关系。', 'A current record already exists for this claim, without an explicit supersession or contradiction relation.');
+			case 'missing_exact_project_identity':
+			case 'invalid_repo_path':
+			case 'explicit_project_id_not_found':
+			case 'conflicting_project_identity':
+			case 'project_hint_conflict':
+			case 'derived_project_key_occupied':
+			case 'project_snapshot_incomplete':
+				return ui('运行时无法唯一确认项目身份或项目记忆目录，需要你核对目标。', 'Runtime could not uniquely confirm the project identity or memory location; verify the target.');
+			default:
+				if (proposal.reviewWarnings.length > 0) {
+					return proposal.reviewWarnings.join(' ');
+				}
+				if (proposal.proposedAuthority === 'user') {
+					return ui('提案申请用户权威，必须由你确认。', 'The proposal requests user authority and must be confirmed by you.');
+				}
+				if (proposal.declaredState && proposal.declaredState !== 'active') {
+					return ui('提案会改变记忆的生命周期状态，必须由你确认。', 'The proposal changes a memory lifecycle state and must be confirmed by you.');
+				}
+				if (proposal.proposedConfidence === 'verified') {
+					return ui('该提案申请“已验证”可信度，因此创建时进入了人工审核。', 'This proposal requested verified confidence, so it entered human review when it was created.');
+				}
+				return '';
+		}
 	}
 
 	private rowMeta(proposal: MemoryProposalRecord): string {

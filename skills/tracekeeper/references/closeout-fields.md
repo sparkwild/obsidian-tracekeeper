@@ -11,6 +11,7 @@ Provide accurate values for the fields exposed by the current `tracekeeper.finis
 - unresolved items: risks, blockers, or intentionally deferred work.
 - next steps: concrete follow-up that remains useful after the current session.
 - `memory_candidate_records`: optional explicit durable-memory candidates. Every record must declare `scope: "global"` or `scope: "project"`; candidate project identity is independent from task context.
+- For an ordinary evidence-backed Agent candidate, use `proposed_authority: "agent"` and `proposed_confidence: "supported"`. Do not claim `user` authority or `verified` confidence on the user's behalf.
 - `related_wiki`: reuse only `relation_evidence.related_wiki[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
 - `related_sources`: reuse only `relation_evidence.related_sources[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
 
@@ -22,6 +23,7 @@ Review semantics:
 - Pending content is not durable memory or an applied Wiki update.
 - Apply an approved proposal only when the user explicitly requests the apply action.
 - Missing Wiki context routes the proposal to review rather than weakening the boundary.
+- Project auto-save caps an Agent `verified` request to `supported`; user authority, lifecycle transitions, unresolved claim conflicts, and uncertain project identity still require review.
 
 Task tracking and durable Memory are independent. A task without project identity
 can still submit a project candidate when that candidate supplies its own project

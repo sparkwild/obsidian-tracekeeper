@@ -914,7 +914,7 @@ test('finish_task keeps ordinary task fields out of durable Memory', async (t) =
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
 });
 
-test('finish_task structured candidate writes one governed v2 record and exact retry reuses it', async (t) => {
+test('finish_task caps Agent verified confidence, writes one governed v2 record, and reuses it', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture, { legacy: true });
 	const context = fixture.context();
@@ -936,7 +936,7 @@ test('finish_task structured candidate writes one governed v2 record and exact r
 			claim_key: 'project:structured-closeout-writer',
 			evidence: [WIKI_PATH],
 			proposed_authority: 'agent',
-			proposed_confidence: 'supported',
+			proposed_confidence: 'verified',
 			declared_state: 'active',
 			observed_at: FIXED_TIME,
 		}],
@@ -1059,11 +1059,13 @@ test('finish_task structured candidate review-gates caller authority promotion',
 	assert.equal(findAgentEntries(fixture).length, 0);
 	assert.equal(finished.proposal_count, 1);
 	assert.equal(finished.memory_changes[0].change_kind, 'proposal_queued');
+	assert.equal(finished.memory_changes[0].reason, 'user_authority_requires_human_review');
 	assert.equal(finished.memory_candidate_records[0].effective_state, 'review');
 	const proposal = parseMarkdown(fixture.read(finished.proposals[0].path));
 	assert.equal(proposal.frontmatter.fields.claim_key, 'project:authority-promotion-review');
 	assert.equal(proposal.frontmatter.fields.proposed_authority, 'user');
 	assert.equal(proposal.frontmatter.fields.proposed_confidence, 'verified');
+	assert.equal(proposal.frontmatter.fields.review_reason, 'user_authority_requires_human_review');
 });
 
 test.skip('legacy finish_task recovery before the aggregate step is retired with implicit promotion', async (t) => {
@@ -1470,6 +1472,36 @@ test('propose_memory writes a governed v2 record and derives effective authority
 	assert.equal(parsed.frontmatter.fields.confidence_level, 'supported');
 });
 
+test('propose_memory caps Agent verified confidence and keeps project auto-save automatic', async (t) => {
+	const fixture = createFixture(t);
+	const project = addProject(fixture);
+	const result = expectSuccess(
+		await callTool(
+			'tracekeeper.propose_memory',
+			{
+				...autoWriteArgs(project, {
+					content: 'Agent evidence supports this project claim.',
+					idempotencyKey: 'project-memory-v2-cap-agent-verified',
+				}),
+				claim_key: 'architecture:agent-confidence-cap',
+				proposed_authority: 'agent',
+				proposed_confidence: 'verified',
+				evidence: [WIKI_PATH],
+			},
+			fixture.context()
+		),
+		'Agent verified confidence cap'
+	);
+	assert.equal(result.auto_applied, true);
+	assert.equal(result.predicted_record.authority, 'agent');
+	assert.equal(result.predicted_record.confidence_level, 'supported');
+	assert.equal(result.predicted_state, 'current');
+	assert.equal(findAgentEntries(fixture).length, 1);
+	const parsed = parseMarkdown(fixture.read(result.path));
+	assert.equal(parsed.frontmatter.fields.authority, 'agent');
+	assert.equal(parsed.frontmatter.fields.confidence_level, 'supported');
+});
+
 test('propose_memory review-gates self-promotion and unresolved claim conflicts', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture);
@@ -1491,7 +1523,16 @@ test('propose_memory review-gates self-promotion and unresolved claim conflicts'
 	);
 	assert.equal(promoted.auto_applied, false);
 	assert.equal(typeof promoted.proposal_id, 'string');
+	assert.equal(promoted.review_reason, 'user_authority_requires_human_review');
+	assert.deepEqual(promoted.review_warnings, [
+		'Agent-originated memory cannot self-assign user authority.',
+	]);
 	assert.equal(findAgentEntries(fixture).length, 0);
+	const promotedProposal = parseMarkdown(fixture.read(promoted.proposal_path));
+	assert.equal(promotedProposal.frontmatter.fields.review_reason, 'user_authority_requires_human_review');
+	assert.deepEqual(promotedProposal.frontmatter.fields.review_warnings, [
+		'Agent-originated memory cannot self-assign user authority.',
+	]);
 
 	const first = expectSuccess(
 		await callTool(

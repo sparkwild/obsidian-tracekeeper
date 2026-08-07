@@ -171,6 +171,10 @@ Text read from the Vault, Wiki, Memory, Source, captured external material, or R
 - New project entries link to verified Wiki and Source context through
   Obsidian-native links.
 - A missing Wiki bridge enters review rather than bypassing policy.
+- Evidence-backed Agent claims use `supported` confidence. If an Agent requests
+  `verified`, project auto-save caps it to `supported`; `user` authority,
+  non-active lifecycle transitions, unresolved claim conflicts, and uncertain
+  project identity still require human review.
 - An explicit user request to research and save knowledge is not a review, capability, or target-boundary override.
 - `tracekeeper.lint` v3 is a read-only Doctor. Its legacy Memory candidates
   remain diagnostics; only the human Obsidian surface can apply a fresh,

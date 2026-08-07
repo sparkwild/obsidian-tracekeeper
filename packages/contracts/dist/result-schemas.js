@@ -1266,6 +1266,8 @@ const PROPOSE_MEMORY_COMMON_PROPERTIES = {
     proposal_id: NULLABLE_STRING_SCHEMA,
     proposal_path: NULLABLE_STRING_SCHEMA,
     proposal_link_target: { type: 'string', minLength: 1 },
+    review_reason: NULLABLE_STRING_SCHEMA,
+    review_warnings: STRING_ARRAY_SCHEMA,
 };
 exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = {
     type: 'object',
@@ -1288,7 +1290,7 @@ exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = {
                 'activity_path', 'warnings', 'auto_applied', 'duplicate', 'proposal_id', 'proposal_path',
                 'proposal_link_target', 'memory_rule', 'memory_scope', 'project_hint', 'related_wiki',
                 'related_sources', 'missing_related_sources', 'architecture_status', 'missing_graph_bridges',
-                'missing_wiki_bridge',
+                'missing_wiki_bridge', 'review_reason', 'review_warnings',
             ],
             properties: { ...PROPOSE_MEMORY_COMMON_PROPERTIES, auto_applied: { const: false, type: 'boolean' }, proposal_id: { type: 'string', minLength: 1 }, proposal_path: { type: 'string', minLength: 1 } },
             additionalProperties: false,

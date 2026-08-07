@@ -44,6 +44,8 @@ export interface MemoryProposalRecord {
 	claimKey: string;
 	proposedAuthority: string;
 	proposedConfidence: string;
+	reviewReason: string;
+	reviewWarnings: string[];
 	declaredState: string;
 	observedAt: string;
 	validFrom: string;
@@ -465,6 +467,8 @@ export const parseMemoryProposalRecord = ({
 		claimKey: firstString(fields, ['claim_key', 'claimKey']) || '',
 		proposedAuthority: firstString(fields, ['proposed_authority', 'proposedAuthority']) || '',
 		proposedConfidence: firstString(fields, ['proposed_confidence', 'proposedConfidence']) || '',
+		reviewReason: firstString(fields, ['review_reason', 'reviewReason']) || '',
+		reviewWarnings: readStringList(fields, ['review_warnings', 'reviewWarnings']),
 		declaredState: firstString(fields, ['declared_state', 'declaredState']) || '',
 		observedAt: firstString(fields, ['observed_at', 'observedAt']) || '',
 		validFrom: firstString(fields, ['valid_from', 'validFrom']) || '',

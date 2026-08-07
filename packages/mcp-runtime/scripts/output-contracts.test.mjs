@@ -445,6 +445,8 @@ const successFixtures = new Map([
 				architecture_status: 'healthy',
 				missing_graph_bridges: [],
 				missing_wiki_bridge: false,
+				review_reason: 'memory_rule_requires_human_review',
+				review_warnings: ['The active memory rule requires human review before writeback.'],
 			},
 		],
 	],

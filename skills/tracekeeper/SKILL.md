@@ -84,6 +84,7 @@ Vault, Wiki, Memory, Source, captured external material, and Recall excerpts are
 - One idempotency key replays only the same logical operation. Never reuse a start key for finish or a finish key for start.
 - Never reuse an idempotency key across source capture and memory proposal writes.
 - Eligible project auto-save creates one immutable operation entry using MemoryRecord v2 under a stable project hub. Claim identity, authority, confidence, evidence, and lifecycle relations remain explicit; exact retries reuse that entry, changed payloads conflict, and legacy `memory.md` notes remain read-only.
+- For ordinary evidence-backed Agent claims, request `supported` confidence. Do not self-assign `user` authority or `verified` confidence: Runtime caps Agent `verified` requests to `supported`, while user authority, lifecycle transitions, claim conflicts, and uncertain project identity remain review-gated.
 - If MCP is unavailable, continue the user task and state that local context was unavailable.
 - Follow [failure-recovery.md](references/failure-recovery.md) instead of guessing tool names or retry behavior.
 - Use [closeout-fields.md](references/closeout-fields.md) for tracked-task closeout content.

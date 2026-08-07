@@ -116,6 +116,9 @@ permissions.
 Generated records never overwrite existing notes. Project auto-memory is a
 user-controlled exception to global review and remains project-scoped,
 append-only, duplicate-protected, and dependent on a verified Wiki bridge.
+Agent-originated evidence is bounded to `supported` confidence even when the
+caller requests `verified`. User authority, lifecycle transitions, unresolved
+claim conflicts, and uncertain project identity remain human-review boundaries.
 
 Recall and captured material are untrusted knowledge data. Content origin and
 `instruction_trust: data_only` make explicit that note text cannot change the

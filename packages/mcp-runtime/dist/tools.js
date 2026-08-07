@@ -2100,6 +2100,9 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
             change_kind: autoApplied ? 'record_written' : 'proposal_queued',
             candidate_index: index,
             scope: candidate.scope,
+            ...(typeof resultRecord.review_reason === 'string'
+                ? { reason: resultRecord.review_reason }
+                : {}),
             ...(typeof resultRecord.proposal_id === 'string' ? { proposal_id: resultRecord.proposal_id } : {}),
             ...(recordIdentity ? { record_identity: recordIdentity } : {}),
             previous_effective_state: null,
@@ -3969,11 +3972,11 @@ async function writeImmutableProjectMemory(vaultRoot, input) {
     if (project.status === 'review_required') {
         return project;
     }
-    if (input.proposedAuthority === 'user' || input.proposedConfidence === 'verified') {
+    if (input.proposedAuthority === 'user') {
         return {
             status: 'review_required',
-            reason: 'authority_or_verification_requires_human_review',
-            warnings: ['Agent-originated memory cannot self-assign user authority or verified confidence.'],
+            reason: 'user_authority_requires_human_review',
+            warnings: ['Agent-originated memory cannot self-assign user authority.'],
         };
     }
     if (input.declaredState && input.declaredState !== 'active') {
@@ -4000,7 +4003,8 @@ async function writeImmutableProjectMemory(vaultRoot, input) {
             ...input.relatedWiki,
         ])];
     const authority = input.proposedAuthority === 'source' && evidence.length > 0 ? 'source' : 'agent';
-    const confidenceLevel = input.proposedConfidence === 'supported' && evidence.length > 0
+    const confidenceLevel = (input.proposedConfidence === 'supported' || input.proposedConfidence === 'verified')
+        && evidence.length > 0
         ? 'supported'
         : input.proposedConfidence === 'uncertain'
             ? 'uncertain'

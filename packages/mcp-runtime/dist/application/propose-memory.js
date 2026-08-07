@@ -196,9 +196,20 @@ class ProposeMemoryApplicationService {
             { label: 'contradicts', value: snapshot.contradicts.join('\n') },
         ]);
         const memoryRule = dependencies.memoryRule(proposalKind, targetNote, projectHint, memoryScope);
-        let immutableReviewRequired = false;
+        let reviewRequirement = memoryRule === 'review_queue'
+            ? {
+                reason: 'memory_rule_requires_human_review',
+                warnings: ['The active memory rule requires human review before writeback.'],
+            }
+            : null;
         if (memoryRule === 'auto_write') {
             const canAutoWrite = !(memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge);
+            if (!canAutoWrite) {
+                reviewRequirement = {
+                    reason: 'missing_wiki_bridge',
+                    warnings: ['Project auto-save requires a verified Wiki bridge.'],
+                };
+            }
             if (canAutoWrite && memoryScope === 'project') {
                 const useResolvedIdentity = resolvedProjectIdentity && resolvedProjectIdentity.confidence !== 'uncertain';
                 const immutable = await dependencies.writeImmutableProjectMemory({
@@ -298,7 +309,7 @@ class ProposeMemoryApplicationService {
                         proposal_path: null,
                     };
                 }
-                immutableReviewRequired = true;
+                reviewRequirement = immutable;
             }
             const autoTarget = canAutoWrite && memoryScope === 'global'
                 ? dependencies.resolveAutoMemoryTarget(proposalKind, targetNote, projectHint, memoryScope)
@@ -406,7 +417,7 @@ class ProposeMemoryApplicationService {
                 });
             }
         }
-        const proposalTargetNote = immutableReviewRequired && memoryScope === 'project'
+        const proposalTargetNote = reviewRequirement && memoryScope === 'project'
             ? governedRecordTarget
             : targetNote || governedRecordTarget;
         const body = [
@@ -435,6 +446,8 @@ class ProposeMemoryApplicationService {
             bridgeMetadata.missing_wiki_bridge ? '- missing_wiki_bridge: true' : '',
             bridgeMetadata.missing_related_wiki.length ? `- missing_related_wiki: ${JSON.stringify(bridgeMetadata.missing_related_wiki)}` : '',
             bridgeMetadata.missing_related_sources.length ? `- missing_related_sources: ${JSON.stringify(bridgeMetadata.missing_related_sources)}` : '',
+            reviewRequirement ? `- review_reason: ${reviewRequirement.reason}` : '',
+            reviewRequirement?.warnings.length ? `- review_warnings: ${JSON.stringify(reviewRequirement.warnings)}` : '',
             '',
             dependencies.renderText('## 写回内容', '## Writeback'),
             content,
@@ -471,6 +484,8 @@ class ProposeMemoryApplicationService {
                 missing_wiki_bridge: bridgeMetadata.missing_wiki_bridge,
                 missing_related_wiki: bridgeMetadata.missing_related_wiki,
                 missing_related_sources: bridgeMetadata.missing_related_sources,
+                review_reason: reviewRequirement?.reason || null,
+                review_warnings: reviewRequirement ? [...reviewRequirement.warnings] : [],
                 created_at: now,
                 task_id: taskId || null,
                 project_id: resolvedProjectIdentity?.projectId || snapshot.project_id || null,
@@ -540,7 +555,7 @@ class ProposeMemoryApplicationService {
             status: note.status,
             path: note.path,
             activity_path: note.activity_path,
-            warnings: note.warnings,
+            warnings: [...note.warnings, ...(reviewRequirement?.warnings ?? [])],
             auto_applied: false,
             duplicate: false,
             proposal_id: proposalId,
@@ -559,6 +574,8 @@ class ProposeMemoryApplicationService {
             predicted_record: predictedRecord,
             predicted_state: 'review',
             proposal_transition_preview: proposalTransitionPreview,
+            review_reason: reviewRequirement?.reason || null,
+            review_warnings: reviewRequirement ? [...reviewRequirement.warnings] : [],
         };
         if (memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge && memoryRule === 'auto_write') {
             response.memory_rule = 'review_queue';

@@ -71,6 +71,8 @@ try {
 			claim_key: 'project:review-lifecycle',
 			proposed_authority: 'user',
 			proposed_confidence: 'verified',
+			review_reason: 'user_authority_requires_human_review',
+			review_warnings: ['Agent-originated memory cannot self-assign user authority.'],
 			declared_state: 'active',
 			observed_at: '2026-08-06T00:00:00.000Z',
 			supersedes: ['memory-old'],
@@ -97,6 +99,10 @@ try {
 	assert.equal(memoryProposal?.claimKey, 'project:review-lifecycle');
 	assert.equal(memoryProposal?.proposedAuthority, 'user');
 	assert.equal(memoryProposal?.proposedConfidence, 'verified');
+	assert.equal(memoryProposal?.reviewReason, 'user_authority_requires_human_review');
+	assert.deepEqual(memoryProposal?.reviewWarnings, [
+		'Agent-originated memory cannot self-assign user authority.',
+	]);
 	assert.deepEqual(memoryProposal?.supersedes, ['memory-old']);
 	assert.deepEqual(memoryProposal?.contradicts, ['memory-conflict']);
 	const lifecycleCreateValidity = reviewModule.getReviewProposalValidity(memoryProposal, { exists: false });

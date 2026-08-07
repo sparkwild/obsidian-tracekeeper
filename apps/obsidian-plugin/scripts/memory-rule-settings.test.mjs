@@ -61,7 +61,10 @@ try {
 	}
 
 	assert.ok(settingsSource.includes('用于跨项目复用的偏好、决策和经验。'));
-	assert.ok(settingsSource.includes('用于延续当前项目、仓库或工作区的决策、经验和上下文。'));
+	assert.ok(settingsSource.includes('自动保存符合条件的项目记忆；用户权威、冲突和生命周期变更仍需审核。'));
+	assert.ok(settingsSource.includes('项目记忆保存前进入知识变更审核。'));
+	assert.ok(settingsSource.includes('不接收新的项目记忆。'));
+	assert.ok(settingsSource.includes('setDesc(this.projectMemoryRuleDescription())'));
 	assert.ok(settingsSource.includes("ui('任务追踪', 'Task tracking')"));
 	assert.ok(settingsSource.includes('记录任务的目标、执行过程和结果，供后续查看与继续。'));
 	assert.ok(settingsSource.includes("ui('启用任务追踪', 'Enable task tracking')"));
@@ -69,7 +72,7 @@ try {
 	assert.equal(settingsSource.includes('旧版共享记忆笔记不会被改写'), false);
 	assert.equal(settingsSource.includes("ui('任务结束记忆提案', 'Task closeout memory proposals')"), false);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 18 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 21 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

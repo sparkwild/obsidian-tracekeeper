@@ -110,6 +110,8 @@ export interface ProposeMemoryImmutableWriteInput {
 }
 export type ProposeMemoryImmutableWriteResult = {
     status: 'review_required';
+    reason: string;
+    warnings: readonly string[];
 } | {
     status: 'created' | 'exact_retry';
     path: string;
@@ -258,6 +260,8 @@ export declare class ProposeMemoryApplicationService {
             proposal_id: string;
             proposal_path: string;
         };
+        review_reason: string | null;
+        review_warnings: string[];
     } | {
         ok: boolean;
         tool: string;

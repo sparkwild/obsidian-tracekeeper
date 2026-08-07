@@ -268,7 +268,14 @@ for (const property of ['project_id', 'repo_path']) {
 		`propose_memory should expose ${property}`,
 	);
 }
-for (const property of ['record_identity', 'predicted_record', 'predicted_state', 'proposal_transition_preview']) {
+for (const property of [
+	'record_identity',
+	'predicted_record',
+	'predicted_state',
+	'proposal_transition_preview',
+	'review_reason',
+	'review_warnings',
+]) {
 	assert(
 		hasSchemaProperty(proposeMemoryContract.outputSchema, property),
 		`propose_memory output should expose ${property}`,

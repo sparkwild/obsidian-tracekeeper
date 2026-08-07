@@ -59,7 +59,11 @@ test('ProposeMemoryApplicationService owns normalization, journaling, and propos
 		resolveProjectIdentity: () => null,
 		assertAllowed: () => undefined,
 		memoryRule: () => 'review_queue',
-		writeImmutableProjectMemory: async () => ({ status: 'review_required' }),
+		writeImmutableProjectMemory: async () => ({
+			status: 'review_required',
+			reason: 'test_review_required',
+			warnings: ['Test review requirement.'],
+		}),
 		resolveAutoMemoryTarget: () => null,
 		appendAutoMemoryWrite: async () => {
 			throw new Error('unexpected auto write');

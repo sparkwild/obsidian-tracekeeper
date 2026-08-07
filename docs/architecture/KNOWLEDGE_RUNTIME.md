@@ -59,6 +59,13 @@ relations. The read model resolves these immutable records into `current`,
 cyclic, duplicate-current, or unresolved records fail into review diagnostics
 instead of an arbitrary winner.
 
+Agent-originated evidence may establish at most `supported` confidence during
+project auto-save. A requested `verified` level is capped to `supported` rather
+than forcing an otherwise eligible project candidate into the queue. User
+authority, non-active lifecycle transitions, unresolved current-claim
+conflicts, and uncertain project identity remain review-gated. Queued proposals
+persist the policy reason and warnings shown by the Obsidian review surface.
+
 One stable `project_id` owns a project hub at
 `01_knowledge/memory/projects/<project-key>/index.md`. The display hint and
 observed Agent type are metadata, not authorization or identity. A missing hub
