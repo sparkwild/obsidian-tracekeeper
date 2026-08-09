@@ -18,14 +18,32 @@ const coreStub = {
 		}));
 		buildContext.onLoad(
 			{ filter: /.*/, namespace: 'tracekeeper-core-stub' },
-			() => ({
-				loader: 'js',
-				contents: `
-					export const TRACEKEEPER_REVIEW_QUEUE_DIR = '00_tracekeeper/inbox/review_queue';
-					export const ARCHIVE_REVIEW_QUEUE_DIR = '02_archive/review_queue';
-				`,
-			})
-		);
+				() => ({
+					loader: 'js',
+					contents: `
+						export const TRACEKEEPER_REVIEW_QUEUE_DIR = '00_tracekeeper/inbox/review_queue';
+						export const ARCHIVE_REVIEW_QUEUE_DIR = '02_archive/review_queue';
+						export const isKnowledgeWikiPath = (path) => path.startsWith('01_knowledge/wiki/');
+						export const isKnowledgeMemoryPath = (path) => path.startsWith('01_knowledge/memory/');
+						export const normalizeVaultRelativePath = (value) => {
+							const replaced = String(value).split(String.fromCharCode(92)).join('/').trim();
+							if (
+								!replaced ||
+								replaced.includes('\\0') ||
+								replaced.startsWith('/') ||
+								/^[A-Za-z]:/.test(replaced)
+							) {
+								throw new Error('Unsafe Vault-relative path');
+							}
+							const normalized = replaced.split('/').filter(Boolean).join('/');
+							if (!normalized || normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
+								throw new Error('Unsafe Vault-relative path');
+							}
+							return normalized;
+						};
+					`,
+				})
+			);
 	},
 };
 
@@ -116,6 +134,7 @@ try {
 		selectActivityPrimaryAction,
 		selectTaskDurableOutputPresentationStatus,
 		selectTaskExecutionPresentationStatus,
+		projectDurableOutputTargetPaths,
 		taskProposalNavigationPaths,
 		taskSnapshotProposalIdsAreFullyApplied,
 	} = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
@@ -325,6 +344,24 @@ try {
 			'02_archive/review_queue/processed.md',
 		]
 	);
+	assert.deepEqual(
+		projectDurableOutputTargetPaths(task({
+			durableOutputTargetPaths: [
+				'01_knowledge/wiki/alpha.md',
+				'01_knowledge/wiki/../forbidden.md',
+				'01_knowledge/memory/beta.md',
+				'01_knowledge/wiki/./bad.md',
+				'03_sources/file.md',
+				'/01_knowledge/wiki/abs.md',
+				'notes.txt',
+				'01_knowledge/wiki/alpha.md',
+			],
+		})),
+		[
+			'01_knowledge/wiki/alpha.md',
+			'01_knowledge/memory/beta.md',
+		]
+	);
 	assert.equal(
 		countTaskDurableMemoryWrites(task({
 			memoryWrites: [
@@ -467,7 +504,7 @@ try {
 		}
 	);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 66 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 67 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

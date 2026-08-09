@@ -3,6 +3,7 @@ import type TracekeeperPlugin from '../../main';
 import type { AgentActivitySnapshot, AgentConnectionsSnapshot, AgentTaskRecord } from './activity-model';
 import {
 	buildSuccessfullyUsedAgentSummary,
+	projectDurableOutputTargetPaths,
 	countTaskDurableMemoryWrites,
 	countTaskProposalReferences,
 	countTaskSourceCaptureEvidence,
@@ -14,6 +15,7 @@ import {
 	type ActivityPrimaryAction,
 } from './activity-view-model';
 import { MemoryRecallPreviewModal } from '../recall/memory-recall-preview-modal';
+import { DurableOutputTargetsModal } from './durable-output-targets-modal';
 import { AgentActivityDetailsModal, RuntimeLogCleanupModal } from '../runtime/runtime-log-view';
 import { pluginDisplayName, ui } from '../../ui/localization';
 import { trimText } from '../shared/markdown-record-parser';
@@ -662,13 +664,14 @@ export class TracekeeperActivityView extends ItemView {
 			ui('来源证据', 'Source evidence'),
 			this.formatSourceCaptureEvidenceCount(task)
 		);
-		if (task.durableOutputTargetPaths.length > 0) {
+		const summaryDurableOutputTargetPaths = this.taskDurableOutputTargetPaths(task);
+		if (summaryDurableOutputTargetPaths.length > 0) {
 			this.renderTaskInfoItem(
 				focus,
 				ui('持久化目标', 'Durable output targets'),
 				ui(
-					`${task.durableOutputTargetPaths.length} 条 · 目标证据，不代表已写入`,
-					`${task.durableOutputTargetPaths.length} items · target evidence, not proof of writeback`
+					`${summaryDurableOutputTargetPaths.length} 条 · 目标证据，不代表已写入`,
+					`${summaryDurableOutputTargetPaths.length} items · target evidence, not proof of writeback`
 				)
 			);
 		}
@@ -718,7 +721,8 @@ export class TracekeeperActivityView extends ItemView {
 				void this.openTaskChange(task, 'memory_proposals');
 			});
 		}
-		if (task.durableOutputTargetPaths.length > 0) {
+		const durableOutputTargetPaths = this.taskDurableOutputTargetPaths(task);
+		if (durableOutputTargetPaths.length > 0) {
 			const targetButton = footer.createEl('button', {
 				text: ui('查看持久化目标', 'View durable output targets'),
 			});
@@ -747,7 +751,7 @@ export class TracekeeperActivityView extends ItemView {
 			{ kind: 'memory_writes', label: ui('写入记忆', 'Memory writes'), value: this.taskDurableMemoryWriteCount(task) },
 			{ kind: 'source_captures', label: ui('来源证据', 'Source captures'), value: this.sourceCaptureEvidenceCount(task) },
 			{ kind: 'memory_proposals', label: ui('记忆提案', 'Memory proposals'), value: countTaskProposalReferences(task) },
-			{ kind: 'durable_targets', label: ui('持久化目标', 'Durable output targets'), value: task.durableOutputTargetPaths.length },
+			{ kind: 'durable_targets', label: ui('持久化目标', 'Durable output targets'), value: this.taskDurableOutputTargetPaths(task).length },
 		];
 		return items.filter((item) => item.value > 0);
 	}
@@ -838,12 +842,25 @@ export class TracekeeperActivityView extends ItemView {
 				await this.plugin.openPluginView(TRACEKEEPER_REVIEW_QUEUE_VIEW);
 				return;
 			case 'durable_targets':
-				await this.plugin.openMemoryInspector({
-					focusPaths: task.durableOutputTargetPaths,
-					taskId: task.taskId,
-				});
+				const durableOutputTargetPaths = this.taskDurableOutputTargetPaths(task);
+				if (durableOutputTargetPaths.length === 1) {
+					const exactFile = this.app.vault.getAbstractFileByPath(durableOutputTargetPaths[0]);
+					if (exactFile instanceof TFile) {
+						await this.app.workspace.getLeaf(false).openFile(exactFile);
+						return;
+					}
+				}
+				new DurableOutputTargetsModal(
+					this.app,
+					durableOutputTargetPaths,
+					task.taskId
+				).open();
 				return;
 		}
+	}
+
+	private taskDurableOutputTargetPaths(task: Pick<AgentTaskRecord, 'durableOutputTargetPaths'>): string[] {
+		return projectDurableOutputTargetPaths(task);
 	}
 
 	private taskProposalFiles(task: AgentTaskRecord): TFile[] {

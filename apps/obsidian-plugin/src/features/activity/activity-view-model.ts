@@ -1,4 +1,10 @@
-import { ARCHIVE_REVIEW_QUEUE_DIR, TRACEKEEPER_REVIEW_QUEUE_DIR } from '@tracekeeper/core';
+import {
+	ARCHIVE_REVIEW_QUEUE_DIR,
+	isKnowledgeMemoryPath,
+	isKnowledgeWikiPath,
+	normalizeVaultRelativePath,
+	TRACEKEEPER_REVIEW_QUEUE_DIR,
+} from '@tracekeeper/core';
 import type { RuntimeViewModelInput } from '../runtime/runtime-view-model';
 import { runtimeViewModel } from '../runtime/runtime-view-model';
 import type { StructureState } from '../structure/legacy-migration-controller';
@@ -172,6 +178,44 @@ export function taskProposalNavigationPaths(
 				path === prefix || path.startsWith(`${prefix}/`)
 			)
 		))];
+}
+
+const isSafeDurableTargetPath = (value: string): string | null => {
+	const trimmed = value.trim().replace(/\\/g, '/');
+	if (!trimmed) {
+		return null;
+	}
+	const normalizedInput = trimmed.replace(/\/+/g, '/');
+	if (normalizedInput.split('/').some((segment) => segment === '.' || segment === '..')) {
+		return null;
+	}
+	if (!trimmed.toLowerCase().endsWith('.md')) {
+		return null;
+	}
+	let normalized: string;
+	try {
+		normalized = normalizeVaultRelativePath(normalizedInput);
+	} catch {
+		return null;
+	}
+	if (!isKnowledgeWikiPath(normalized) && !isKnowledgeMemoryPath(normalized)) {
+		return null;
+	}
+	return normalized;
+};
+
+export function projectDurableOutputTargetPaths(
+	task: Pick<AgentTaskRecord, 'durableOutputTargetPaths'>
+): string[] {
+	const accepted = new Set<string>();
+	for (const target of task.durableOutputTargetPaths) {
+		const normalized = isSafeDurableTargetPath(target);
+		if (!normalized) {
+			continue;
+		}
+		accepted.add(normalized);
+	}
+	return [...accepted];
 }
 
 export function selectTaskDurableOutputPresentationStatus(

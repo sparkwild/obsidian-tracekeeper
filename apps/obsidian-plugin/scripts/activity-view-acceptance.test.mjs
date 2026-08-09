@@ -62,11 +62,13 @@ assert.ok(activitySource.includes("ui('打开提案记录', 'Open proposal recor
 assert.ok(activitySource.includes('paths.length !== 1'));
 assert.ok(activitySource.includes('exactProposalFiles.length === 1'));
 assert.ok(activitySource.includes('openFile(exactProposalFiles[0])'));
+assert.ok(activitySource.includes('projectDurableOutputTargetPaths(task)'));
+assert.ok(activitySource.includes('new DurableOutputTargetsModal('));
 assert.ok(activitySource.includes('evidence only, not applied knowledge'));
 assert.ok(activitySource.includes('target evidence, not proof of writeback'));
 assert.ok(activitySource.includes("ui('查看持久化目标', 'View durable output targets')"));
 assert.ok(activitySource.includes("this.openTaskChange(task, 'durable_targets')"));
-assert.ok(activitySource.includes('focusPaths: task.durableOutputTargetPaths'));
+assert.ok(activitySource.includes('durableOutputTargetPaths.length === 1'));
 assert.equal(activitySource.includes('text: task.status ||'), false);
 assert.equal(activitySource.includes('taskStatusClass'), false);
 assert.equal(activitySource.includes("ui('最后一次执行的任务', 'Last task')"), false);
@@ -130,4 +132,4 @@ assert.equal(
 	false
 );
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 95 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 97 })}\n`);
