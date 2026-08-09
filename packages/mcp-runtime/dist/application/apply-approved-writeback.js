@@ -47,7 +47,8 @@ function boundedWritebackPayload(payload) {
         || typeof payload.taskHadProposalReference !== 'boolean'
         || (payload.effectKind !== undefined
             && payload.effectKind !== 'append'
-            && payload.effectKind !== 'create_memory_record')
+            && payload.effectKind !== 'create_memory_record'
+            && payload.effectKind !== 'create_wiki_note')
         || (hasPartialStableProposalReferenceFlags && !hasStableProposalReferenceFlags)
         || (payload.taskId === null
             && (payload.taskPath !== null
@@ -124,7 +125,8 @@ function boundedWritebackPayload(payload) {
 function isWritebackBoundaryConflict(error) {
     return error instanceof core_1.OperationConflictError
         || error instanceof core_1.ProposalTransitionValidationError
-        || error instanceof core_1.ProposalTransitionStateError;
+        || error instanceof core_1.ProposalTransitionStateError
+        || error instanceof core_1.ProposalTransitionConflictError;
 }
 function failureStatusForWritebackBoundary(error) {
     return isWritebackBoundaryConflict(error)

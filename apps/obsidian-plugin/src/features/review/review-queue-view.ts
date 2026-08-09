@@ -1,6 +1,10 @@
 import { ItemView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import {
+	KNOWLEDGE_WIKI_DIR,
+	startsWithPathPrefix,
+} from '@tracekeeper/core';
+import {
 	getReviewProposalAttentionState,
 	getReviewProposalValidity,
 	type MemoryProposalRecord,
@@ -28,6 +32,7 @@ import type {
 	ReviewProposalContext,
 	ReviewSourceContext,
 	ReviewTargetCandidate,
+	ReviewTargetContext,
 } from './review-context-model';
 import { ui } from '../../ui/localization';
 import { TRACEKEEPER_REVIEW_QUEUE_VIEW } from '../../ui/view-types';
@@ -50,10 +55,16 @@ export const reviewStatusFailureReason = (error: unknown): string => {
 			return ui('目标笔记不在允许的 Memory 或 Wiki 范围内。', 'The target note is outside the allowed Memory or Wiki area.');
 		}
 		if (/target does not exist/i.test(message)) {
-			return ui('目标笔记不存在，且该提案不是新建记忆记录。', 'The target note does not exist, and this proposal does not create a new memory record.');
+			return ui('目标笔记不存在，请确认是否允许新建该目标。', 'The target note does not exist; confirm whether this proposal can create a new target.');
+		}
+		if (/target already exists/i.test(message)) {
+			return ui('目标笔记已存在，但该提案配置为新建写回，无法追加到现有目标。', 'The target note already exists, but this proposal is configured to create a new writeback target.');
 		}
 		if (/writeback content is required/i.test(message)) {
 			return ui('提案缺少拟写入内容。', 'The proposal has no writeback content.');
+		}
+		if (/writeback effect/i.test(message)) {
+			return ui('提案写回方式不支持。请填写 append、create_wiki_note 或 create_memory_record。', 'The proposal writeback effect is not supported. Use append, create_wiki_note, or create_memory_record.');
 		}
 		if (/frontmatter is required|frontmatter is invalid/i.test(message)) {
 			return ui('提案元数据缺失或格式无效。', 'The proposal metadata is missing or invalid.');
@@ -575,7 +586,9 @@ export class TracekeeperReviewQueueView extends ItemView {
 		}
 
 		const preview = container.createDiv({ cls: 'tracekeeper-review-inbox__writeback' });
-		preview.createEl('strong', { text: ui('预计追加差异', 'Expected append diff') });
+		const previewLabel = this.expectedDiffModeLabel(proposal, context?.target);
+		const previewTitle = preview.createEl('strong');
+		previewTitle.setText(previewLabel.advanced);
 		preview.createEl('small', {
 			text: ui(
 				'这是审核前的差异视图；通过审核不会写入。最终写入仍会重新生成预览并要求确认。',
@@ -1002,6 +1015,18 @@ export class TracekeeperReviewQueueView extends ItemView {
 				'The target is outside the supported local knowledge area. Select an existing Memory/Wiki candidate or return the proposal for revision.'
 			);
 		}
+		if (validity.invalidWritebackEffect) {
+			return ui(
+				'该提案包含不支持的写回模式。请在提案中修正 writeback_effect（append、create_wiki_note 或 create_memory_record）。',
+				'This proposal has an unsupported writeback effect. Correct writeback_effect to append, create_wiki_note, or create_memory_record in the proposal.'
+			);
+		}
+		if (validity.effectTargetMismatch) {
+			return ui(
+				'写回方式与目标类型不匹配：create_wiki_note 只支持 Wiki 目标，create_memory_record 只支持 Memory 目标。',
+				'The writeback mode is incompatible with target type: create_wiki_note supports Wiki targets only, create_memory_record supports Memory targets only.'
+			);
+		}
 		if (validity.missingTargetEvidence) {
 			return ui(
 				'目标路径已填写，但对应 Markdown 不存在。请选择现有 Memory/Wiki 候选后再审核。',
@@ -1021,6 +1046,39 @@ export class TracekeeperReviewQueueView extends ItemView {
 			return this.reviewQueueItemTypeLabel(proposal.classification);
 		}
 		return this.proposalKindLabel(proposal.proposalKind);
+	}
+
+	private expectedDiffModeLabel(
+		proposal: MemoryProposalRecord,
+		target?: ReviewTargetContext
+	): {
+		advanced: string;
+	} {
+		const targetIsWiki = Boolean(
+			target?.path
+			&& startsWithPathPrefix(target.path, KNOWLEDGE_WIKI_DIR)
+		);
+		const targetMissing = !target?.exists;
+		if (proposal.writebackEffect === 'create_memory_record') {
+			return {
+				advanced: ui('预计新建 MemoryRecord', 'Expected MemoryRecord create diff'),
+			};
+		}
+		if (
+			proposal.writebackEffect === 'create_wiki_note'
+			|| (
+				proposal.writebackEffect === undefined
+				&& targetMissing
+				&& targetIsWiki
+			)
+		) {
+			return {
+				advanced: ui('预计新建 Wiki 差异', 'Expected create diff'),
+			};
+		}
+		return {
+			advanced: ui('预计追加差异', 'Expected append diff'),
+		};
 	}
 
 	private proposalKindLabel(kind: string): string {

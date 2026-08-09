@@ -193,6 +193,7 @@ export interface ProposeMemoryApplicationDependencies {
         value: string;
     }>): void;
     renderText(zh: string, en: string): string;
+    isTargetNoteMissing?(targetNote: string): Promise<boolean>;
 }
 export interface ProposeMemoryApplicationRequest {
     rawArgs: ProposeMemoryRawRequest;

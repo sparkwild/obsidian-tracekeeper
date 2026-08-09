@@ -47,7 +47,11 @@ For approved writeback, the evidence must additionally prove:
   hash;
 - the opaque confirmation token is authenticated, canonical, expiring, and
   bound to the proposal revision, semantic content and complete file hash,
-  target, optional task, complete touched-note set, and bounded activity context;
+  concrete append or create effect, target state, optional task, complete
+  touched-note set, and bounded activity context;
+- a create effect is restricted to its exact governed knowledge root, requires
+  an absent target, never degrades into append, and can recover or compensate
+  only when the target content proves exact operation ownership;
 - missing, malformed, tampered, expired, replayed, or drifted confirmation
   state is rejected before any new write;
 - target and task compensation removes only effects owned by the operation and

@@ -76,6 +76,11 @@ function readAuditText(vaultRoot) {
 		.join('\n');
 }
 
+function assertWikiCreatePreview(value) {
+	assert.ok(value.includes('<!-- writeback operation: writeback-'), 'create_wiki_note preview should include owned marker');
+	assert.ok(value.includes(MARKER), 'create_wiki_note preview should include the proposal marker');
+}
+
 function renderFrontmatterValue(value) {
 	if (Array.isArray(value)) {
 		return JSON.stringify(value);
@@ -93,8 +98,12 @@ function approvedProposalTransition({
 	taskId = 'atomic-task',
 	targetPath = TARGET_PATH,
 	writeback = DEFAULT_WRITEBACK,
+	writeback_effect = undefined,
 	operationId = `review-approve-${proposalId}`,
 } = {}) {
+	const isCreateEffect = writeback_effect === 'create_wiki_note'
+		|| writeback_effect === 'create_memory_record';
+	const pendingWritebackEffect = writeback_effect === undefined ? undefined : { writebackEffect: writeback_effect };
 	const pending = {
 		path: proposalPath,
 		classification: 'memory_proposal',
@@ -108,6 +117,7 @@ function approvedProposalTransition({
 		revisionRequestedAt: '',
 		revisionRequestedBy: '',
 		archived: false,
+		...pendingWritebackEffect,
 	};
 	return transitionProposal(
 		pending,
@@ -121,12 +131,14 @@ function approvedProposalTransition({
 			now: APPROVAL_TIME,
 			actor: 'atomic-test-reviewer',
 			targetAllowed: () => true,
-			targetExists: () => true,
+			targetExists: () => !isCreateEffect,
+			targetCreationAllowed: () => true,
 		}
 	);
 }
 
 function proposalText(overrides = {}) {
+	const includeApprovalReceipt = overrides.includeApprovalReceipt !== false;
 	const baseFields = {
 		type: 'memory-proposal',
 		proposal_id: 'atomic-proposal',
@@ -138,19 +150,22 @@ function proposalText(overrides = {}) {
 		risk_level: 'medium',
 		...overrides.fields,
 	};
-	const approval = approvedProposalTransition({
-		proposalPath: overrides.path || PROPOSAL_PATH,
-		proposalId: String(baseFields.proposal_id),
-		proposalKind: String(baseFields.proposal_kind),
-		taskId: String(baseFields.task_id),
-		targetPath: String(baseFields.target_note),
-		writeback: overrides.writeback ?? DEFAULT_WRITEBACK,
-	});
-	const fields = overrides.includeApprovalReceipt === false
-		? baseFields
+	const fields = includeApprovalReceipt
+		? {
+			...baseFields,
+			...approvedProposalTransition({
+				proposalPath: overrides.path || PROPOSAL_PATH,
+				proposalId: String(baseFields.proposal_id),
+				proposalKind: String(baseFields.proposal_kind),
+				taskId: String(baseFields.task_id),
+				targetPath: String(baseFields.target_note),
+				writeback: overrides.writeback ?? DEFAULT_WRITEBACK,
+				writeback_effect: overrides.fields?.writeback_effect || overrides.fields?.writebackEffect,
+			}).frontmatter,
+			...overrides.fields,
+		}
 		: {
 			...baseFields,
-			...approval.frontmatter,
 			...overrides.fields,
 		};
 	const frontmatter = Object.entries(fields)
@@ -393,7 +408,7 @@ function assertRejectedWithoutWrite(fixture, result, targetPaths = [fixture.targ
 	assert.equal(result.isError, true, 'stale or invalid confirmation must be rejected');
 	assert.match(
 		String(result.structuredContent?.error || ''),
-		/stale|expired|confirmation|conflict|changed|allowed target|approval|receipt|corrupt|authentication|protected Vault boundary/i
+		/stale|expired|confirmation|conflict|changed|allowed target|approval|receipt|corrupt|authentication|protected Vault boundary|Writeback target does not exist|does not exist|unavailable/i
 	);
 	for (const targetPath of targetPaths) {
 		if (fs.existsSync(fixture.absolute(targetPath))) {
@@ -1091,6 +1106,509 @@ test('writeback target policy is a positive Memory or Wiki allowlist', async (t)
 	assert.equal(previewResult.isError, true);
 	assert.match(String(previewResult.structuredContent?.error || ''), /allowed target|memory|wiki|protected/i);
 	assert.equal(fixture.read(outsideTarget).includes('^writeback-'), false);
+});
+
+test('legacy missing wiki proposal defaults to create_wiki_note', async (t) => {
+	const wikiPath = '01_knowledge/wiki/legacy-missing-wiki-note.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assertWikiCreatePreview(dryRun.structuredContent.writeback_preview);
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.equal(countOccurrences(fixture.read(wikiPath), `<!-- writeback operation: writeback-`), 1);
+	assert.ok(fixture.read(wikiPath).includes(MARKER));
+});
+
+test('legacy existing wiki proposal still appends', async (t) => {
+	const wikiPath = '01_knowledge/wiki/legacy-existing-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assert.ok(dryRun.structuredContent.writeback_preview.includes(`## Approved Writeback: atomic-proposal`));
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.equal(countOccurrences(fixture.read(wikiPath), `## Approved Writeback: atomic-proposal`), 1);
+});
+
+test('legacy existing wiki proposal with claim_key still appends', async (t) => {
+	const wikiPath = '01_knowledge/wiki/legacy-claim-key-existing.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				claim_key: 'legacy-wiki-claim',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assert.ok(dryRun.structuredContent.writeback_preview.includes(`## Approved Writeback: atomic-proposal`));
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.equal(countOccurrences(fixture.read(wikiPath), `## Approved Writeback: atomic-proposal`), 1);
+});
+
+test('legacy missing wiki proposal with claim_key creates missing wiki file', async (t) => {
+	const wikiPath = '01_knowledge/wiki/legacy-claim-key-missing.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				claim_key: 'legacy-wiki-claim-missing',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assertWikiCreatePreview(dryRun.structuredContent.writeback_preview);
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.equal(countOccurrences(fixture.read(wikiPath), `<!-- writeback operation: writeback-`), 1);
+	assert.ok(fixture.read(wikiPath).includes(MARKER));
+});
+
+test('explicit create_wiki_note rejects when target exists', async (t) => {
+	const wikiPath = '01_knowledge/wiki/existing-wiki-fence.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create_wiki_note',
+			},
+		})
+	);
+	fixture.write(wikiPath, '# Existing wiki note\n');
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, true);
+	assert.match(
+		String(dryRun.structuredContent?.error || ''),
+		/create_wiki_note target already exists|create wiki note writeback requires a missing target/i
+	);
+});
+
+test('review queue does not advertise an occupied create_wiki_note target as ready', async (t) => {
+	const wikiPath = '01_knowledge/wiki/occupied-wiki-listing.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		proposalFields: {
+			writeback_effect: 'create_wiki_note',
+		},
+	});
+	const result = await callTool(
+		'tracekeeper.review_queue',
+		{ action: 'list_approved' },
+		fixture.context
+	);
+	assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+	const entry = result.structuredContent.entries.find(
+		(candidate) => candidate.proposal_id === 'atomic-proposal'
+	);
+	assert.ok(entry, 'approved proposal should be present in the review queue');
+	assert.equal(entry.ready_to_apply, false);
+	assert.match(String(entry.blocker || ''), /create_wiki_note.*already exists/i);
+});
+
+test('review queue advertises a missing create_wiki_note target as ready', async (t) => {
+	const wikiPath = '01_knowledge/wiki/missing-wiki-listing.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+		proposalFields: {
+			writeback_effect: 'create_wiki_note',
+		},
+	});
+	const result = await callTool(
+		'tracekeeper.review_queue',
+		{ action: 'list_approved' },
+		fixture.context
+	);
+	assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+	const entry = result.structuredContent.entries.find(
+		(candidate) => candidate.proposal_id === 'atomic-proposal'
+	);
+	assert.ok(entry, 'approved proposal should be present in the review queue');
+	assert.equal(entry.ready_to_apply, true);
+	assert.equal(entry.blocker, null);
+});
+
+test('explicit append rejects when wiki target is missing', async (t) => {
+	const wikiPath = '01_knowledge/wiki/missing-wiki-append.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'append',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assertRejectedWithoutWrite(fixture, dryRun, [wikiPath]);
+	assert.match(
+		String(dryRun.structuredContent?.error || ''),
+		/does not exist|does not.*exist/i
+	);
+});
+
+test('explicit create_wiki_note succeeds when wiki target is missing', async (t) => {
+	const wikiPath = '01_knowledge/wiki/missing-wiki-create.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create_wiki_note',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.equal(countOccurrences(fixture.read(wikiPath), `<!-- writeback operation: writeback-`), 1);
+	assert.ok(fixture.read(wikiPath).includes(MARKER));
+	assert.equal(countOccurrences(fixture.readAudit(), 'action: wiki_note.create'), 1);
+});
+
+test('competing create_wiki_note previews cannot share or compensate target ownership', async (t) => {
+	const wikiPath = '01_knowledge/wiki/competing-create-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create_wiki_note',
+			},
+		})
+	);
+	const firstPreview = await preview(fixture);
+	const competingPreview = await preview(fixture);
+	assert.equal(firstPreview.isError, false, JSON.stringify(firstPreview.structuredContent));
+	assert.equal(competingPreview.isError, false, JSON.stringify(competingPreview.structuredContent));
+	assert.notEqual(tokenFrom(firstPreview), tokenFrom(competingPreview));
+	assert.notEqual(
+		firstPreview.structuredContent.writeback_preview,
+		competingPreview.structuredContent.writeback_preview
+	);
+
+	const firstApplied = await apply(fixture, tokenFrom(firstPreview));
+	assert.equal(firstApplied.isError, false, JSON.stringify(firstApplied.structuredContent));
+	const ownedTarget = fixture.read(wikiPath);
+	assert.equal(ownedTarget, firstPreview.structuredContent.writeback_preview);
+
+	const competingApply = await apply(fixture, tokenFrom(competingPreview));
+	assert.equal(competingApply.isError, true);
+	assert.match(
+		String(competingApply.structuredContent?.error || ''),
+		/already exists|stale|conflict|changed|is applied/i
+	);
+	assert.equal(fixture.read(wikiPath), ownedTarget);
+	assert.equal(countOccurrences(ownedTarget, '<!-- writeback operation: writeback-'), 1);
+	assert.equal(countOccurrences(ownedTarget, MARKER), 1);
+});
+
+test('unknown writeback_effect is fail-closed', async (t) => {
+	const wikiPath = '01_knowledge/wiki/unknown-effect-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			includeApprovalReceipt: false,
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create-unknown',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, true);
+	assert.match(String(dryRun.structuredContent?.error || ''), /unknown writeback_effect value/i);
+});
+
+test('non-string writeback_effect is fail-closed', async (t) => {
+	const wikiPath = '01_knowledge/wiki/non-string-effect-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			includeApprovalReceipt: false,
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: ['append'],
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, true);
+	assert.match(String(dryRun.structuredContent?.error || ''), /writeback_effect must be a string/i);
+});
+
+test('object writeback_effect is fail-closed', async (t) => {
+	const wikiPath = '01_knowledge/wiki/object-effect-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			includeApprovalReceipt: false,
+			fields: {
+				target_note: wikiPath,
+				writebackEffect: { mode: 'create_wiki_note' },
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, true);
+	assert.match(String(dryRun.structuredContent?.error || ''), /writeback_effect must be a string/i);
+});
+
+test('conflicting writeback effect aliases are fail-closed', async (t) => {
+	const wikiPath = '01_knowledge/wiki/alias-conflict-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			includeApprovalReceipt: false,
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'append',
+				writebackEffect: 'create_wiki_note',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, true);
+	assert.match(String(dryRun.structuredContent?.error || ''), /Proposal writeback effect fields conflict/i);
+});
+
+test('create_wiki_note exact retry is deduplicated', async (t) => {
+	const wikiPath = '01_knowledge/wiki/retry-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+			},
+			writeback: DEFAULT_WRITEBACK,
+		})
+	);
+	const dryRun = await preview(fixture);
+	const token = tokenFrom(dryRun);
+	const first = await apply(fixture, token);
+	const second = await apply(fixture, token);
+	assert.equal(first.isError, false);
+	assert.deepEqual(second.structuredContent, first.structuredContent);
+	assert.equal(countOccurrences(fixture.readAudit(), 'action: wiki_note.create'), 1);
+	assert.equal(countOccurrences(fixture.read(wikiPath), MARKER), 1);
+});
+
+test('create_wiki_note proposal conflict triggers exact-hash rollback', async (t) => {
+	const wikiPath = '01_knowledge/wiki/rollback-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	fixture.context.operationFailureInjection = (context) => {
+		if (context.phase === 'before_step' && context.stepName === 'mark_proposal_applied') {
+			fixture.write(
+				PROPOSAL_PATH,
+				proposalText({
+					writeback: 'Mutated proposal to force transition conflict.',
+					fields: {
+						target_note: wikiPath,
+						writeback_effect: 'create_wiki_note',
+					},
+				})
+			);
+		}
+	};
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.equal(fs.existsSync(fixture.absolute(wikiPath)), false);
+	assert.equal((await operationRecord(fixture)).status, 'conflicted');
+});
+
+test('create_wiki_note compensation preserves a target changed after owned creation', async (t) => {
+	const wikiPath = '01_knowledge/wiki/changed-owned-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create_wiki_note',
+			},
+		})
+	);
+	const originalTask = fixture.read(TASK_PATH);
+	const dryRun = await preview(fixture);
+	fixture.context.operationFailureInjection = (context) => {
+		if (context.phase === 'before_step' && context.stepName === 'mark_proposal_applied') {
+			fixture.write(wikiPath, `${fixture.read(wikiPath)}\nUser change after creation.\n`);
+			fixture.write(
+				PROPOSAL_PATH,
+				proposalText({
+					writeback: 'Mutated proposal after the owned Wiki target changed.',
+					fields: {
+						target_note: wikiPath,
+						writeback_effect: 'create_wiki_note',
+					},
+				})
+			);
+		}
+	};
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(String(result.structuredContent?.error || ''), /conflict|compensat|changed/i);
+	assert.match(fixture.read(wikiPath), /User change after creation/);
+	assert.equal(fixture.read(TASK_PATH), originalTask);
+	assert.match(fixture.read(PROPOSAL_PATH), /approval_status: approved/);
+	assert.equal((await operationRecord(fixture)).status, 'conflicted');
+});
+
+test('create_wiki_note refuses to mark the proposal applied when its owned target disappears', async (t) => {
+	const wikiPath = '01_knowledge/wiki/disappearing-created-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create_wiki_note',
+			},
+		})
+	);
+	const originalTask = fixture.read(TASK_PATH);
+	const dryRun = await preview(fixture);
+	fixture.context.operationFailureInjection = (context) => {
+		if (context.phase === 'before_step' && context.stepName === 'mark_proposal_applied') {
+			fs.unlinkSync(fixture.absolute(wikiPath));
+		}
+	};
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(
+		String(result.structuredContent?.error || ''),
+		/not created|does not exist|unavailable|conflict|disappeared/i
+	);
+	assert.equal(fs.existsSync(fixture.absolute(wikiPath)), false);
+	assert.equal(fixture.read(TASK_PATH), originalTask);
+	assert.match(fixture.read(PROPOSAL_PATH), /approval_status: approved/);
+	assert.equal((await operationRecord(fixture)).status, 'conflicted');
+});
+
+test('create_wiki_note recovery resumes without duplicating the target', async (t) => {
+	const wikiPath = '01_knowledge/wiki/recovery-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	const token = tokenFrom(dryRun);
+	let interrupted = false;
+	fixture.context.operationFailureInjection = (context) => {
+		if (!interrupted && context.phase === 'after_step' && context.stepName === 'apply_target') {
+			interrupted = true;
+			throw new Error('interrupt after wiki create');
+		}
+	};
+	const interruptedResult = await apply(fixture, token);
+	assert.equal(interruptedResult.isError, true);
+	const beforeRecovery = fixture.read(wikiPath);
+	delete fixture.context.operationFailureInjection;
+	const recovery = await recoverPendingOperations(fixture.vaultRoot, fixture.context);
+	assert.equal(recovery.recovered.length, 1);
+	assert.equal(recovery.failed.length, 0);
+	assert.equal(recovery.skipped.length, 0);
+	assert.equal(fixture.read(wikiPath), beforeRecovery);
+	const completed = await operationRecord(fixture);
+	assert.equal(completed.status, 'completed');
 });
 
 test('exact apply retry returns one receipt and one durable effect', async (t) => {

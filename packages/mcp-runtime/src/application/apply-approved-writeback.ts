@@ -38,7 +38,7 @@ export interface ApplyApprovedWritebackPayload {
 	activityAgentId: string;
 	activitySessionId: string;
 	activityClientName: string;
-	effectKind?: 'append' | 'create_memory_record';
+	effectKind?: 'append' | 'create_memory_record' | 'create_wiki_note';
 }
 
 export interface ApplyApprovedWritebackCommand {
@@ -146,7 +146,8 @@ function boundedWritebackPayload(
 		|| typeof payload.taskHadProposalReference !== 'boolean'
 		|| (payload.effectKind !== undefined
 			&& payload.effectKind !== 'append'
-			&& payload.effectKind !== 'create_memory_record')
+			&& payload.effectKind !== 'create_memory_record'
+			&& payload.effectKind !== 'create_wiki_note')
 		|| (hasPartialStableProposalReferenceFlags && !hasStableProposalReferenceFlags)
 		|| (
 			payload.taskId === null
@@ -233,7 +234,8 @@ function boundedWritebackPayload(
 function isWritebackBoundaryConflict(error: unknown): boolean {
 	return error instanceof OperationConflictError
 		|| error instanceof ProposalTransitionValidationError
-		|| error instanceof ProposalTransitionStateError;
+		|| error instanceof ProposalTransitionStateError
+		|| error instanceof ProposalTransitionConflictError;
 }
 
 function failureStatusForWritebackBoundary(error: unknown): 'conflicted' | 'failed' {

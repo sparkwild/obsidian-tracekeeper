@@ -308,6 +308,13 @@ export const buildReviewTargetCandidates = (
 	return unique;
 };
 
+const shouldCreateWikiNote = (proposal: MemoryProposalRecord): boolean =>
+	proposal.writebackEffect === 'create_wiki_note'
+	|| (
+		proposal.writebackEffect === undefined
+		&& startsWithPathPrefix(proposal.targetNote, KNOWLEDGE_WIKI_DIR)
+	);
+
 export const buildReviewDiffPreview = (
 	proposal: MemoryProposalRecord,
 	target: ReviewTargetContext
@@ -325,6 +332,26 @@ export const buildReviewDiffPreview = (
 			`^writeback-${marker}`,
 		]
 		: ['(writeback content is not provided yet)'];
+	const isCreateProposal = shouldCreateWikiNote(proposal) && !target.exists;
+	const isCreateConflict = proposal.writebackEffect === 'create_wiki_note' && target.exists;
+	if (isCreateProposal) {
+		const contentLines = proposal.writebackContent
+			? [...proposal.writebackContent.split('\n'), '', `^writeback-${marker}`]
+			: ['(writeback content is not provided yet)', '', `^writeback-${marker}`];
+		return [
+			'--- /dev/null',
+			`+++ ${target.path || 'selected target'}`,
+			...contentLines.flatMap((line) => [`+${line}`]),
+		].join('\n');
+	}
+	if (isCreateConflict) {
+		return [
+			`[Blocked] target already exists for create_wiki_note`,
+			`Target path: ${target.path || 'selected target'}`,
+			'Expected to create a new Wiki note, but the target already exists.',
+			'Approval will still be blocked unless the proposal target is changed.',
+		].join('\n');
+	}
 	return [
 		`--- ${target.path || 'unresolved target'} (current)`,
 		`+++ ${target.path || 'selected target'} (after explicit apply)`,

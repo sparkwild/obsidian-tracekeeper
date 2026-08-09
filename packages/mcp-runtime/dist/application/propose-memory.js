@@ -105,6 +105,10 @@ function validOperationPayload(payload) {
     const request = snapshot;
     return typeof value.requestHash === 'string'
         && value.requestHash.length > 0
+        && (value.writebackEffect === undefined
+            || value.writebackEffect === 'append'
+            || value.writebackEffect === 'create_wiki_note'
+            || value.writebackEffect === 'create_memory_record')
         && typeof request.proposal_kind === 'string'
         && request.proposal_kind.length > 0
         && typeof request.content === 'string'
@@ -117,6 +121,23 @@ function validOperationPayload(payload) {
         && !Number.isNaN(Date.parse(value.projectMemoryCreatedAt))
         && typeof value.projectMemoryAgentType === 'string'
         && value.projectMemoryAgentType.length > 0;
+}
+function buildWritebackEffect(targetNote, claimKey, targetMissing) {
+    if (targetNote) {
+        if (!targetMissing) {
+            return 'append';
+        }
+        if ((0, core_1.isKnowledgeWikiPath)(targetNote)) {
+            return 'create_wiki_note';
+        }
+    }
+    if (claimKey) {
+        return 'create_memory_record';
+    }
+    return 'append';
+}
+function deriveReviewQueueClaimKey(proposalKind, content) {
+    return `${proposalKind}:${(0, core_1.computePayloadHash)(content).replace(/^sha256:/, '').slice(0, 32)}`;
 }
 class ProposeMemoryApplicationService {
     constructor(dependencies) {
@@ -142,12 +163,22 @@ class ProposeMemoryApplicationService {
             operationPayload = existing.payload;
         }
         else {
+            const proposalKind = snapshot.proposal_kind;
+            const targetNote = snapshot.target_note || '';
+            const projectHint = snapshot.project_hint || '';
+            const claimKey = snapshot.claim_key || deriveReviewQueueClaimKey(proposalKind, snapshot.content);
+            const memoryScope = this.dependencies.resolveMemoryScope(proposalKind, targetNote, projectHint, snapshot.memory_scope);
+            this.dependencies.assertAllowed(proposalKind, targetNote, projectHint, memoryScope);
             operationPayload = {
                 requestHash,
                 requestSnapshot: snapshot,
                 projectMemoryCreatedAt: this.dependencies.now(),
                 projectMemoryAgentType: this.dependencies.observedAgentType,
             };
+            const targetMissing = targetNote && this.dependencies.isTargetNoteMissing
+                ? await this.dependencies.isTargetNoteMissing(targetNote)
+                : false;
+            operationPayload.writebackEffect = buildWritebackEffect(targetNote, claimKey, targetMissing);
         }
         const runner = new core_1.RecoverableOperationRunner({
             operationId: identity.operationId,
@@ -156,11 +187,11 @@ class ProposeMemoryApplicationService {
             journal: this.dependencies.journal,
             failureInjection: this.dependencies.failureInjection,
             steps: [],
-            finalize: () => this.finalize(operationPayload.requestSnapshot, identity, operationPayload.projectMemoryCreatedAt, operationPayload.projectMemoryAgentType),
+            finalize: () => this.finalize(operationPayload.requestSnapshot, operationPayload, identity, operationPayload.projectMemoryCreatedAt, operationPayload.projectMemoryAgentType),
         });
         return runner.run();
     }
-    async finalize(snapshot, identity, operationCreatedAt, projectMemoryAgentType) {
+    async finalize(snapshot, operationPayload, identity, operationCreatedAt, projectMemoryAgentType) {
         const { dependencies } = this;
         const proposalKind = snapshot.proposal_kind;
         const content = snapshot.content;
@@ -172,8 +203,7 @@ class ProposeMemoryApplicationService {
         const taskId = snapshot.task_id || null;
         const projectHint = snapshot.project_hint || '';
         const proposalId = (0, core_1.buildStableProposalId)(`${identity.operationId}\0${proposalKind}`);
-        const claimKey = snapshot.claim_key
-            || `${proposalKind}:${(0, core_1.computePayloadHash)(content).replace(/^sha256:/, '').slice(0, 32)}`;
+        const claimKey = snapshot.claim_key || deriveReviewQueueClaimKey(proposalKind, content);
         const lifecycleClaimKey = /(^|\/)wiki(\/|$)/i.test(targetNote) ? null : claimKey;
         const memoryScope = dependencies.resolveMemoryScope(proposalKind, targetNote, projectHint, snapshot.memory_scope);
         const architectureStatus = dependencies.buildArchitectureStatus();
@@ -183,6 +213,7 @@ class ProposeMemoryApplicationService {
             : null;
         const now = dependencies.now();
         dependencies.assertAllowed(proposalKind, targetNote, projectHint, memoryScope);
+        const writebackEffect = operationPayload.writebackEffect;
         dependencies.assertSafeText([
             { label: 'content', value: content },
             { label: 'evidence', value: evidence.join('\n') },
@@ -430,6 +461,7 @@ class ProposeMemoryApplicationService {
             projectHint ? `- project_hint: ${projectHint}` : '',
             bridgeMetadata.related_wiki.length ? `- related_wiki: ${JSON.stringify(bridgeMetadata.related_wiki)}` : '',
             bridgeMetadata.related_sources.length ? `- related_sources: ${JSON.stringify(bridgeMetadata.related_sources)}` : '',
+            writebackEffect ? `- writeback_effect: ${writebackEffect}` : '',
             lifecycleClaimKey ? `- claim_key: ${lifecycleClaimKey}` : '',
             snapshot.proposed_authority ? `- proposed_authority: ${snapshot.proposed_authority}` : '',
             snapshot.proposed_confidence ? `- proposed_confidence: ${snapshot.proposed_confidence}` : '',
@@ -490,6 +522,7 @@ class ProposeMemoryApplicationService {
                 task_id: taskId || null,
                 project_id: resolvedProjectIdentity?.projectId || snapshot.project_id || null,
                 proposal_operation_id: identity.operationId,
+                ...(writebackEffect ? { writeback_effect: writebackEffect } : {}),
             },
             body,
             taskId,

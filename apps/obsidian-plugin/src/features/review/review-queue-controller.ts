@@ -363,6 +363,7 @@ export interface ApprovedWritebackPreview {
 	target_note: string;
 	touched_notes: string[];
 	writeback_preview: string;
+	writeback_effect: 'append' | 'create_wiki_note' | 'create_memory_record';
 	confirmation_token: string;
 	confirmation_expires_at: string;
 }
@@ -444,6 +445,11 @@ private isApprovedWritebackPreview(value: unknown): value is ApprovedWritebackPr
 			&& typeof value.proposal_path === 'string'
 			&& typeof value.target_note === 'string'
 			&& typeof value.writeback_preview === 'string'
+			&& (
+				value.writeback_effect === 'append'
+				|| value.writeback_effect === 'create_wiki_note'
+				|| value.writeback_effect === 'create_memory_record'
+			)
 			&& typeof value.confirmation_token === 'string'
 			&& value.confirmation_token.length > 0
 			&& typeof value.confirmation_expires_at === 'string'

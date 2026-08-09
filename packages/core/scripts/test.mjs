@@ -1847,6 +1847,420 @@ async function run() {
 			),
 			/target does not exist/i
 		);
+		const explicitCreateWikiMissing = {
+			...proposalSnapshot,
+			proposalId: 'proposal-explicit-create-wiki-missing',
+			targetPath: '01_knowledge/wiki/new-create-wiki-note.md',
+			writebackEffect: 'create_wiki_note',
+		};
+		const explicitCreateWikiMissingDecision =
+			proposalTransitionModule.transitionProposal(
+				explicitCreateWikiMissing,
+				{
+					expectedRevision:
+						proposalTransitionModule.computeProposalRevision(explicitCreateWikiMissing),
+					expectedContentHash:
+						proposalTransitionModule.computeProposalContentHash(explicitCreateWikiMissing),
+					operationId: 'review-create-wiki-note-missing',
+					action: { kind: 'status', nextStatus: 'approved' },
+				},
+				transitionEnvironment
+			);
+		assert.equal(explicitCreateWikiMissingDecision.state.status, 'approved');
+		assert.equal(
+			explicitCreateWikiMissingDecision.state.targetPath,
+			explicitCreateWikiMissing.targetPath
+		);
+		assert.throws(
+			() => proposalTransitionModule.transitionProposal(
+				{
+					...proposalSnapshot,
+					proposalId: 'proposal-create-wiki-occupied',
+					targetPath: '01_knowledge/wiki/topic.md',
+					writebackEffect: 'create_wiki_note',
+				},
+				{
+					expectedRevision: proposalTransitionModule.computeProposalRevision({
+						...proposalSnapshot,
+						proposalId: 'proposal-create-wiki-occupied',
+						targetPath: '01_knowledge/wiki/topic.md',
+						writebackEffect: 'create_wiki_note',
+					}),
+					expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+						...proposalSnapshot,
+						proposalId: 'proposal-create-wiki-occupied',
+						targetPath: '01_knowledge/wiki/topic.md',
+						writebackEffect: 'create_wiki_note',
+					}),
+					operationId: 'review-create-wiki-note-occupied',
+					action: { kind: 'status', nextStatus: 'approved' },
+				},
+				transitionEnvironment
+			),
+			/target already exists/i
+		);
+		assert.throws(
+			() => proposalTransitionModule.transitionProposal(
+				{
+					...proposalSnapshot,
+					proposalId: 'proposal-append-missing',
+					targetPath: '01_knowledge/wiki/missing-append.md',
+					writebackEffect: 'append',
+				},
+				{
+					expectedRevision: proposalTransitionModule.computeProposalRevision({
+						...proposalSnapshot,
+						proposalId: 'proposal-append-missing',
+						targetPath: '01_knowledge/wiki/missing-append.md',
+						writebackEffect: 'append',
+					}),
+					expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+						...proposalSnapshot,
+						proposalId: 'proposal-append-missing',
+						targetPath: '01_knowledge/wiki/missing-append.md',
+						writebackEffect: 'append',
+					}),
+					operationId: 'review-append-missing',
+					action: { kind: 'status', nextStatus: 'approved' },
+				},
+				transitionEnvironment
+			),
+			/target does not exist/i
+		);
+		const explicitCreateMemoryWithClaim = proposalTransitionModule.transitionProposal(
+			{
+				...proposalSnapshot,
+				proposalId: 'proposal-create-memory-with-claim',
+				targetPath: '01_knowledge/memory/new-memory-with-claim.md',
+				writebackEffect: 'create_memory_record',
+			},
+			{
+				expectedRevision: proposalTransitionModule.computeProposalRevision({
+					...proposalSnapshot,
+					proposalId: 'proposal-create-memory-with-claim',
+					targetPath: '01_knowledge/memory/new-memory-with-claim.md',
+					writebackEffect: 'create_memory_record',
+				}),
+				expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+					...proposalSnapshot,
+					proposalId: 'proposal-create-memory-with-claim',
+					targetPath: '01_knowledge/memory/new-memory-with-claim.md',
+					writebackEffect: 'create_memory_record',
+				}),
+				operationId: 'review-create-memory-with-claim',
+				action: { kind: 'status', nextStatus: 'approved' },
+			},
+			{
+				...transitionEnvironment,
+				targetCreationAllowed: () => true,
+			}
+		);
+		assert.equal(explicitCreateMemoryWithClaim.state.status, 'approved');
+		assert.throws(
+			() => proposalTransitionModule.transitionProposal(
+				{
+					...proposalSnapshot,
+					proposalId: 'proposal-create-memory-no-claim',
+					targetPath: '01_knowledge/memory/new-memory-no-claim.md',
+					writebackEffect: 'create_memory_record',
+				},
+				{
+					expectedRevision: proposalTransitionModule.computeProposalRevision({
+						...proposalSnapshot,
+						proposalId: 'proposal-create-memory-no-claim',
+						targetPath: '01_knowledge/memory/new-memory-no-claim.md',
+						writebackEffect: 'create_memory_record',
+					}),
+					expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+						...proposalSnapshot,
+						proposalId: 'proposal-create-memory-no-claim',
+						targetPath: '01_knowledge/memory/new-memory-no-claim.md',
+						writebackEffect: 'create_memory_record',
+					}),
+					operationId: 'review-create-memory-no-claim',
+					action: { kind: 'status', nextStatus: 'approved' },
+				},
+				transitionEnvironment
+			),
+			/target does not exist/i
+		);
+		assert.throws(
+			() => proposalTransitionModule.transitionProposal(
+				{
+					...proposalSnapshot,
+					proposalId: 'proposal-create-memory-occupied',
+					targetPath: '01_knowledge/memory/projects/demo/memory.md',
+					writebackEffect: 'create_memory_record',
+				},
+				{
+					expectedRevision: proposalTransitionModule.computeProposalRevision({
+						...proposalSnapshot,
+						proposalId: 'proposal-create-memory-occupied',
+						targetPath: '01_knowledge/memory/projects/demo/memory.md',
+						writebackEffect: 'create_memory_record',
+					}),
+					expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+						...proposalSnapshot,
+						proposalId: 'proposal-create-memory-occupied',
+						targetPath: '01_knowledge/memory/projects/demo/memory.md',
+						writebackEffect: 'create_memory_record',
+					}),
+					operationId: 'review-create-memory-occupied',
+					action: { kind: 'status', nextStatus: 'approved' },
+				},
+				{
+					...transitionEnvironment,
+					targetCreationAllowed: () => true,
+				}
+			),
+			/target already exists/i
+		);
+		assert.throws(
+			() => proposalTransitionModule.transitionProposal(
+				{
+					...proposalSnapshot,
+					proposalId: 'proposal-legacy-missing-memory-no-claim',
+					targetPath: '01_knowledge/memory/new-legacy-memory.md',
+				},
+				{
+					expectedRevision: proposalTransitionModule.computeProposalRevision({
+						...proposalSnapshot,
+						proposalId: 'proposal-legacy-missing-memory-no-claim',
+						targetPath: '01_knowledge/memory/new-legacy-memory.md',
+					}),
+					expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+						...proposalSnapshot,
+						proposalId: 'proposal-legacy-missing-memory-no-claim',
+						targetPath: '01_knowledge/memory/new-legacy-memory.md',
+					}),
+					operationId: 'review-legacy-missing-memory-no-claim',
+					action: { kind: 'status', nextStatus: 'approved' },
+				},
+				{
+					...transitionEnvironment,
+					targetCreationAllowed: () => false,
+				}
+			),
+			/target does not exist/i
+		);
+		const legacyMemoryWithClaim = proposalTransitionModule.transitionProposal(
+			{
+				...proposalSnapshot,
+				proposalId: 'proposal-legacy-missing-memory-with-claim',
+				targetPath: '01_knowledge/memory/new-legacy-memory-with-claim.md',
+			},
+			{
+				expectedRevision: proposalTransitionModule.computeProposalRevision({
+					...proposalSnapshot,
+					proposalId: 'proposal-legacy-missing-memory-with-claim',
+					targetPath: '01_knowledge/memory/new-legacy-memory-with-claim.md',
+				}),
+				expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+					...proposalSnapshot,
+					proposalId: 'proposal-legacy-missing-memory-with-claim',
+					targetPath: '01_knowledge/memory/new-legacy-memory-with-claim.md',
+				}),
+				operationId: 'review-legacy-missing-memory-with-claim',
+				action: { kind: 'status', nextStatus: 'approved' },
+			},
+			{
+				...transitionEnvironment,
+				targetCreationAllowed: (targetPath) =>
+					targetPath === '01_knowledge/memory/new-legacy-memory-with-claim.md',
+			}
+		);
+		assert.equal(legacyMemoryWithClaim.state.status, 'approved');
+		const legacyMissingWiki = proposalTransitionModule.transitionProposal(
+			{
+				...proposalSnapshot,
+				proposalId: 'proposal-legacy-missing-wiki',
+				targetPath: '01_knowledge/wiki/new-legacy-wiki.md',
+			},
+			{
+				expectedRevision: proposalTransitionModule.computeProposalRevision({
+					...proposalSnapshot,
+					proposalId: 'proposal-legacy-missing-wiki',
+					targetPath: '01_knowledge/wiki/new-legacy-wiki.md',
+				}),
+				expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+					...proposalSnapshot,
+					proposalId: 'proposal-legacy-missing-wiki',
+					targetPath: '01_knowledge/wiki/new-legacy-wiki.md',
+				}),
+				operationId: 'review-legacy-missing-wiki',
+				action: { kind: 'status', nextStatus: 'approved' },
+			},
+			transitionEnvironment
+		);
+		assert.equal(legacyMissingWiki.state.status, 'approved');
+		const legacyExistingWiki = proposalTransitionModule.transitionProposal(
+			{
+				...proposalSnapshot,
+				proposalId: 'proposal-legacy-existing-wiki',
+				targetPath: '01_knowledge/wiki/topic.md',
+				writebackContent: '- updated from legacy existing wiki',
+			},
+			{
+				expectedRevision: proposalTransitionModule.computeProposalRevision({
+					...proposalSnapshot,
+					proposalId: 'proposal-legacy-existing-wiki',
+					targetPath: '01_knowledge/wiki/topic.md',
+					writebackContent: '- updated from legacy existing wiki',
+				}),
+				expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+					...proposalSnapshot,
+					proposalId: 'proposal-legacy-existing-wiki',
+					targetPath: '01_knowledge/wiki/topic.md',
+					writebackContent: '- updated from legacy existing wiki',
+				}),
+				operationId: 'review-legacy-existing-wiki',
+				action: { kind: 'status', nextStatus: 'approved' },
+			},
+			{
+				...transitionEnvironment,
+				targetCreationAllowed: () => false,
+			}
+		);
+		assert.equal(legacyExistingWiki.state.status, 'approved');
+		assert.throws(
+			() => proposalTransitionModule.transitionProposal(
+				{
+					...proposalSnapshot,
+					proposalId: 'proposal-legacy-unsupported-effect',
+					targetPath: '01_knowledge/wiki/topic.md',
+					writebackEffect: 'create-wiki-note',
+				},
+				{
+					expectedRevision: proposalTransitionModule.computeProposalRevision({
+						...proposalSnapshot,
+						proposalId: 'proposal-legacy-unsupported-effect',
+						targetPath: '01_knowledge/wiki/topic.md',
+						writebackEffect: 'create-wiki-note',
+					}),
+					expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+						...proposalSnapshot,
+						proposalId: 'proposal-legacy-unsupported-effect',
+						targetPath: '01_knowledge/wiki/topic.md',
+						writebackEffect: 'create-wiki-note',
+					}),
+					operationId: 'review-legacy-unsupported-effect',
+					action: { kind: 'status', nextStatus: 'approved' },
+				},
+				transitionEnvironment
+			),
+			(error) => error instanceof proposalTransitionModule.ProposalTransitionValidationError
+		);
+		assert.throws(
+			() => proposalTransitionModule.transitionProposal(
+				{
+					...proposalSnapshot,
+					proposalId: 'proposal-legacy-bad-effect-type',
+					targetPath: '01_knowledge/wiki/topic.md',
+					writebackEffect: false,
+				},
+				{
+					expectedRevision: proposalTransitionModule.computeProposalRevision({
+						...proposalSnapshot,
+						proposalId: 'proposal-legacy-bad-effect-type',
+						targetPath: '01_knowledge/wiki/topic.md',
+						writebackEffect: false,
+					}),
+					expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+						...proposalSnapshot,
+						proposalId: 'proposal-legacy-bad-effect-type',
+						targetPath: '01_knowledge/wiki/topic.md',
+						writebackEffect: false,
+					}),
+					operationId: 'review-legacy-bad-effect-type',
+					action: { kind: 'status', nextStatus: 'approved' },
+				},
+				transitionEnvironment
+			),
+			(error) => error instanceof proposalTransitionModule.ProposalTransitionValidationError
+		);
+		const snapshotWithoutEffect = { ...proposalSnapshot };
+		const snapshotWithEffect = { ...proposalSnapshot, writebackEffect: 'append' };
+		const snapshotWithExplicitlyMissingEffect = { ...proposalSnapshot, writebackEffect: undefined };
+		assert.equal(
+			proposalTransitionModule.computeProposalRevision(snapshotWithoutEffect),
+			proposalTransitionModule.computeProposalRevision(snapshotWithExplicitlyMissingEffect)
+		);
+		assert.equal(
+			proposalTransitionModule.computeProposalRevision(snapshotWithoutEffect) !==
+			proposalTransitionModule.computeProposalRevision(snapshotWithEffect),
+			true
+		);
+		assert.equal(
+			proposalTransitionModule.computeProposalContentHash(snapshotWithoutEffect),
+			proposalTransitionModule.computeProposalContentHash(snapshotWithExplicitlyMissingEffect)
+		);
+		assert.equal(
+			proposalTransitionModule.computeProposalContentHash(snapshotWithoutEffect) !==
+			proposalTransitionModule.computeProposalContentHash(snapshotWithEffect),
+			true
+		);
+		assert.throws(
+			() => proposalTransitionModule.transitionProposal(
+				{
+					...proposalSnapshot,
+					proposalId: 'proposal-explicit-create-missing-index',
+					targetPath: '01_knowledge/index.md',
+					writebackEffect: 'create_wiki_note',
+				},
+				{
+					expectedRevision: proposalTransitionModule.computeProposalRevision({
+						...proposalSnapshot,
+						proposalId: 'proposal-explicit-create-missing-index',
+						targetPath: '01_knowledge/index.md',
+						writebackEffect: 'create_wiki_note',
+					}),
+					expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+						...proposalSnapshot,
+						proposalId: 'proposal-explicit-create-missing-index',
+						targetPath: '01_knowledge/index.md',
+						writebackEffect: 'create_wiki_note',
+					}),
+					operationId: 'review-create-wiki-index',
+					action: { kind: 'status', nextStatus: 'approved' },
+				},
+				{
+					...transitionEnvironment,
+					targetCreationAllowed: () => true,
+				}
+			),
+			/target does not exist/i
+		);
+		assert.throws(
+			() => proposalTransitionModule.transitionProposal(
+				{
+					...proposalSnapshot,
+					proposalId: 'proposal-create-wiki-to-memory',
+					targetPath: '01_knowledge/memory/topics/memory.md',
+					writebackEffect: 'create_wiki_note',
+				},
+				{
+					expectedRevision: proposalTransitionModule.computeProposalRevision({
+						...proposalSnapshot,
+						proposalId: 'proposal-create-wiki-to-memory',
+						targetPath: '01_knowledge/memory/topics/memory.md',
+						writebackEffect: 'create_wiki_note',
+					}),
+					expectedContentHash: proposalTransitionModule.computeProposalContentHash({
+						...proposalSnapshot,
+						proposalId: 'proposal-create-wiki-to-memory',
+						targetPath: '01_knowledge/memory/topics/memory.md',
+						writebackEffect: 'create_wiki_note',
+					}),
+					operationId: 'review-create-wiki-to-memory',
+					action: { kind: 'status', nextStatus: 'approved' },
+				},
+				{
+					...transitionEnvironment,
+					targetCreationAllowed: () => true,
+				}
+			),
+			/target does not exist/i
+		);
 		assert.throws(
 			() => proposalTransitionModule.proposalTransitionReceiptFromFrontmatter({
 				review_transition_id: 'incomplete',
@@ -2032,11 +2446,11 @@ async function run() {
 
 		for (const incomplete of [
 			{ targetPath: '' },
-			{ writebackContent: '' },
-			{ writebackContent: 'unknown' },
-			{ targetPath: '05_misc/outside.md' },
-			{ targetPath: '01_knowledge/wiki/missing.md' },
-		]) {
+				{ writebackContent: '' },
+				{ writebackContent: 'unknown' },
+				{ targetPath: '05_misc/outside.md' },
+				{ targetPath: '01_knowledge/memory/missing.md' },
+			]) {
 			const current = { ...proposalSnapshot, ...incomplete };
 			await assert.rejects(
 				async () => proposalTransitionModule.transitionProposal(

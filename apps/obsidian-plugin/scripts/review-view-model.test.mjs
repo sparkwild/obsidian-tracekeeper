@@ -108,6 +108,122 @@ try {
 	const lifecycleCreateValidity = reviewModule.getReviewProposalValidity(memoryProposal, { exists: false });
 	assert.equal(lifecycleCreateValidity.isComplete, true);
 	assert.equal(lifecycleCreateValidity.missingTargetEvidence, false);
+
+	const missingMemoryAppendWithoutClaim = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/missing-memory-append-no-claim.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'append-without-claim',
+			target_note: '01_knowledge/memory/projects/tracekeeper/memory.md',
+			writeback_effect: 'append',
+			writeback_content: 'append legacy',
+		},
+		body: '# Missing claim append\n',
+	});
+	const appendWithoutClaimValidity = reviewModule.getReviewProposalValidity(
+		{
+			...(missingMemoryAppendWithoutClaim || {}),
+			claimKey: '',
+		},
+		{ exists: false }
+	);
+	assert.equal(appendWithoutClaimValidity.isComplete, false);
+	assert.equal(appendWithoutClaimValidity.missingTargetEvidence, true);
+
+	const wikiCreateMissing = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/wiki-create-missing.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'wiki-create-missing',
+			target_note: '01_knowledge/wiki/new-topic.md',
+			writeback_content: 'new wiki content',
+		},
+		body: '# Missing wiki create\n',
+	});
+	assert.equal(wikiCreateMissing?.invalidWritebackEffect, false);
+	const wikiMissingCreateValidity = reviewModule.getReviewProposalValidity(wikiCreateMissing, { exists: false });
+	assert.equal(wikiMissingCreateValidity.isComplete, true);
+
+	const wikiCreateConflict = reviewModule.getReviewProposalValidity({
+		...wikiCreateMissing,
+		writebackEffect: 'create_wiki_note',
+	}, { exists: true });
+	assert.equal(wikiCreateConflict.isComplete, false);
+	assert.equal(wikiCreateConflict.effectTargetMismatch, false);
+
+	const wikiCreateTargetedMemory = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/wiki-create-memory.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'wiki-create-memory',
+			target_note: '01_knowledge/memory/projects/tracekeeper/memory.md',
+			writeback_effect: 'create_wiki_note',
+			writeback_content: 'should not be able',
+		},
+		body: '# Wiki create against memory target\n',
+	});
+	assert.equal(
+		reviewModule.getReviewProposalValidity(wikiCreateTargetedMemory, { exists: false }).isComplete,
+		false
+	);
+	assert.equal(
+		reviewModule.getReviewProposalValidity(wikiCreateTargetedMemory, { exists: false }).effectTargetMismatch,
+		true
+	);
+	const wikiCreateTargetedMemoryExisting = reviewModule.getReviewProposalValidity(
+		wikiCreateTargetedMemory,
+		{ exists: true }
+	);
+	assert.equal(wikiCreateTargetedMemoryExisting.effectTargetMismatch, true);
+	assert.equal(wikiCreateTargetedMemoryExisting.isComplete, false);
+	assert.equal(wikiCreateTargetedMemoryExisting.missingTargetEvidence, false);
+
+	const memoryCreateTargetedWikiExisting = reviewModule.getReviewProposalValidity(
+		reviewModule.parseMemoryProposalRecord({
+			filePath: 'review_queue/memory-create-to-wiki.md',
+			fields: {
+				type: 'memory-proposal',
+				proposal_id: 'memory-create-to-wiki',
+				target_note: '01_knowledge/wiki/topics/memory-like-target.md',
+				writeback_effect: 'create_memory_record',
+				writeback_content: 'this is wrong target type',
+			},
+			body: '# MemoryRecord create against wiki target',
+		}),
+		{ exists: true }
+	);
+	assert.equal(memoryCreateTargetedWikiExisting.effectTargetMismatch, true);
+	assert.equal(memoryCreateTargetedWikiExisting.isComplete, false);
+
+	const writebackEffectConflict = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/writeback-effect-conflict.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'writeback-effect-conflict',
+			target_note: '01_knowledge/wiki/conflict.md',
+			writeback_effect: 'append',
+			writebackEffect: 'create_memory_record',
+			writeback_content: 'content',
+		},
+		body: '# Effect conflict\n',
+	});
+	assert.ok(writebackEffectConflict);
+	assert.equal(writebackEffectConflict?.invalidWritebackEffect, true);
+	const writebackEffectArray = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/writeback-effect-array.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'writeback-effect-array',
+			target_note: '01_knowledge/wiki/conflict-array.md',
+			writeback_effect: ['append', 'create_wiki_note'],
+			writeback_content: 'content',
+		},
+		body: '# Effect array\n',
+	});
+	assert.ok(writebackEffectArray);
+	assert.equal(writebackEffectArray?.invalidWritebackEffect, true);
+	assert.equal(writebackEffectArray?.writebackEffect, undefined);
+
 	assert.equal(memoryProposal?.riskLevel, 'low');
 	assert.equal(memoryProposal?.revisionRequestedBy, 'agent');
 	assert.equal(memoryProposal?.evidence.length, 2);
@@ -249,7 +365,7 @@ try {
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...invalidTarget, approvalStatus: 'pending' }), 'incomplete');
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...legacyProposal, approvalStatus: 'approved' }), 'completed');
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 43 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 45 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

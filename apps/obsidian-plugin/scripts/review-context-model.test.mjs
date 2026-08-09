@@ -35,6 +35,7 @@ const proposal = {
 	revisionRequestedBy: '',
 	writebackContent: '- Keep approval and apply separate.',
 };
+const existingWikiCreateConflictPath = '01_knowledge/wiki/guide-for-existing-target.md';
 
 const knowledgeNotes = [
 	{
@@ -176,6 +177,77 @@ try {
 	assert.match(context.diffPreview, /after explicit apply/);
 	assert.match(context.diffPreview, /\+## Approved Writeback: proposal-42/);
 
+	const wikiCreateProposal = {
+		...proposal,
+		path: 'review_queue/wiki-create-preview.md',
+		proposalId: 'wiki-create-preview',
+		targetNote: '01_knowledge/wiki/create-preview.md',
+		writebackContent: '- create new wiki note',
+		writebackEffect: undefined,
+	};
+	const wikiCreateContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [wikiCreateProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set(),
+	});
+	assert.equal(wikiCreateContexts[wikiCreateProposal.path].validity.isComplete, true);
+	assert.equal(wikiCreateContexts[wikiCreateProposal.path].target.exists, false);
+	assert.match(wikiCreateContexts[wikiCreateProposal.path].diffPreview, /--- \/dev\/null/);
+	assert.match(wikiCreateContexts[wikiCreateProposal.path].diffPreview, /\+\+\+ 01_knowledge\/wiki\/create-preview\.md/);
+	assert.match(wikiCreateContexts[wikiCreateProposal.path].diffPreview, /\^writeback-wiki-create-preview/);
+	assert.match(wikiCreateContexts[wikiCreateProposal.path].diffPreview, /\+\- create new wiki note/);
+	assert.doesNotMatch(wikiCreateContexts[wikiCreateProposal.path].diffPreview, /\+## Approved Writeback:/);
+
+	const wikiCreateMultilineProposal = {
+		...proposal,
+		path: 'review_queue/wiki-create-multiline.md',
+		proposalId: 'wiki-create-multiline',
+		targetNote: '01_knowledge/wiki/create-multiline.md',
+		writebackContent: '- line 1\n- line 2\nline 3',
+		writebackEffect: undefined,
+	};
+	const wikiCreateMultilineContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [wikiCreateMultilineProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set(),
+	});
+	const multilineDiff = wikiCreateMultilineContexts[wikiCreateMultilineProposal.path].diffPreview;
+	assert.match(multilineDiff, /--- \/dev\/null/);
+	assert.match(multilineDiff, /\+\+\+ 01_knowledge\/wiki\/create-multiline\.md/);
+	const expectedMultilineDiffLines = [
+		'--- /dev/null',
+		'+++ 01_knowledge/wiki/create-multiline.md',
+		'+- line 1',
+		'+- line 2',
+		'+line 3',
+		'+',
+		'+^writeback-wiki-create-multiline',
+	];
+	assert.deepStrictEqual(multilineDiff.split('\n'), expectedMultilineDiffLines);
+
+	const wikiCreateConflictProposal = {
+		...proposal,
+		path: 'review_queue/wiki-create-conflict.md',
+		proposalId: 'wiki-create-conflict',
+		targetNote: existingWikiCreateConflictPath,
+		writebackContent: '- conflicting create',
+		writebackEffect: 'create_wiki_note',
+	};
+	const occupiedCreateContext = reviewModule.buildReviewProposalContexts({
+		proposals: [wikiCreateConflictProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set([existingWikiCreateConflictPath]),
+	});
+	const conflictDiff = occupiedCreateContext[wikiCreateConflictProposal.path].diffPreview;
+	assert.equal(occupiedCreateContext[wikiCreateConflictProposal.path].validity.isComplete, false);
+	assert.equal(occupiedCreateContext[wikiCreateConflictProposal.path].validity.missingTargetEvidence, false);
+	assert.match(conflictDiff, /\[Blocked\] target already exists for create_wiki_note/);
+	assert.doesNotMatch(conflictDiff, /\+\+\+ [\s\S]*create-preview\.md/);
+	assert.doesNotMatch(conflictDiff, /\+conflicting create/);
+
 	const completedProposal = {
 		...proposal,
 		targetNote: '01_knowledge/memory/projects/tracekeeper/memory.md',
@@ -210,7 +282,7 @@ try {
 	assert.equal(reviewModule.isReviewRemediationTargetPath('01_knowledge/sources/a.md'), false);
 	assert.equal(reviewModule.isReviewRemediationTargetPath('01_knowledge/wiki/../sources/a.md'), false);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 20 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 21 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

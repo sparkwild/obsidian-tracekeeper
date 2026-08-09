@@ -210,6 +210,7 @@ function isProposeMemoryOperationPayload(payload) {
         && typeof payload.projectMemoryAgentType === 'string'
         && payload.projectMemoryAgentType.length > 0;
 }
+const CREATE_WIKI_NOTE_EFFECT = 'create_wiki_note';
 function truncateSummaryText(value, maxLength = 900) {
     const normalized = value.replace(/\s+/g, ' ').trim();
     if (normalized.length <= maxLength) {
@@ -2494,12 +2495,120 @@ function extractMarkdownSection(body, allowedHeadings) {
     }
     return collected.join('\n').trim();
 }
-function buildWritebackPlan(proposal) {
+function readWritebackPlanEffectValue(frontmatter) {
+    const keys = ['writeback_effect', 'writebackEffect'];
+    const values = [];
+    for (const key of keys) {
+        const value = frontmatter[key];
+        if (value === undefined || value === null) {
+            continue;
+        }
+        if (typeof value !== 'string') {
+            throw new safety_1.ToolInputError(`writeback_effect must be a string: ${key}`);
+        }
+        const normalized = stripYamlQuotes(value.trim().toLowerCase());
+        if (normalized.length > 0) {
+            values.push(normalized);
+        }
+    }
+    const uniqueValues = [...new Set(values)];
+    if (!values.length) {
+        return null;
+    }
+    if (uniqueValues.length > 1) {
+        throw new safety_1.ToolInputError('Proposal writeback effect fields conflict.');
+    }
+    return uniqueValues[0] || null;
+}
+function normalizeWritebackPlanEffect(effectValue) {
+    const normalized = effectValue;
+    if (!normalized) {
+        return null;
+    }
+    switch (normalized) {
+        case 'append':
+            return 'append';
+        case 'create_memory_record':
+            return 'create_memory_record';
+        case 'create_wiki_note':
+            return CREATE_WIKI_NOTE_EFFECT;
+        default:
+            return null;
+    }
+}
+function isWritebackCreationConflict(error) {
+    if (error instanceof core_1.OperationConflictError) {
+        return true;
+    }
+    if (error instanceof Error) {
+        const errno = error;
+        if (errno.code === 'EEXIST' || errno.code === '409') {
+            return true;
+        }
+        const status = typeof error.statusCode === 'number'
+            ? error.statusCode
+            : typeof error.status === 'number'
+                ? error.status
+                : undefined;
+        if (status === 409 || status === 412) {
+            return true;
+        }
+        const name = error.name;
+        if (typeof name === 'string' && /conflict/i.test(name)) {
+            return true;
+        }
+    }
+    return false;
+}
+function resolveWritebackPlanEffect(proposal, targetState) {
+    const effectValue = readWritebackPlanEffectValue(proposal.frontmatter);
+    const declared = normalizeWritebackPlanEffect(effectValue);
+    if (declared === null && effectValue !== null) {
+        throw new safety_1.ToolInputError(`Unknown writeback_effect value: ${effectValue}`);
+    }
+    if (declared) {
+        return declared;
+    }
+    if (proposal.targetNote && (0, core_1.isKnowledgeWikiPath)(proposal.targetNote) && targetState === null) {
+        return 'create_wiki_note';
+    }
+    const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
+    if (claimKey && (!proposal.targetNote || !(0, core_1.isKnowledgeWikiPath)(proposal.targetNote))) {
+        return 'create_memory_record';
+    }
+    return 'append';
+}
+function buildWritebackPlanForTarget(proposal, targetState) {
+    let writebackEffect;
+    try {
+        writebackEffect = resolveWritebackPlanEffect(proposal, targetState);
+    }
+    catch (error) {
+        if (error instanceof safety_1.ToolInputError) {
+            return {
+                proposal,
+                targetNote: proposal.targetNote,
+                writebackContent: extractMarkdownSection(proposal.body, [
+                    'writeback',
+                    'approved writeback',
+                    'writeback content',
+                    '写回',
+                    '已批准写回',
+                    '写回内容',
+                ]),
+                ready: false,
+                reason: error.message,
+                effectKind: undefined,
+            };
+        }
+        throw error;
+    }
     const frontmatterWriteback = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['writeback_content', 'writebackContent']));
     const writebackContent = frontmatterWriteback ||
         extractMarkdownSection(proposal.body, ['writeback', 'approved writeback', 'writeback content', '写回', '已批准写回', '写回内容']);
-    const createsMemoryRecord = Boolean(stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key'])));
-    if (!proposal.targetNote && !createsMemoryRecord) {
+    const createsMemoryRecord = writebackEffect === 'create_memory_record';
+    const createsWikiNote = writebackEffect === 'create_wiki_note';
+    if (!proposal.targetNote && !createsMemoryRecord && !createsWikiNote) {
         return {
             proposal,
             targetNote: proposal.targetNote,
@@ -2526,12 +2635,22 @@ function buildWritebackPlan(proposal) {
             reason: 'approved proposal must include ## Writeback content',
         };
     }
+    if (createsWikiNote && targetState) {
+        return {
+            proposal,
+            targetNote: proposal.targetNote,
+            writebackContent,
+            ready: false,
+            reason: 'create_wiki_note target already exists',
+            effectKind: writebackEffect,
+        };
+    }
     return {
         proposal,
         targetNote: proposal.targetNote,
         writebackContent,
         ready: true,
-        effectKind: createsMemoryRecord ? 'create_memory_record' : 'append',
+        effectKind: writebackEffect,
     };
 }
 const WRITEBACK_CONFIRMATION_SCHEMA_VERSION = 1;
@@ -2639,6 +2758,11 @@ function proposalTransitionSnapshot(proposal) {
         throw new core_1.ProposalTransitionValidationError('Proposal is not a memory proposal.');
     }
     const frontmatterWriteback = proposalMultilineField(frontmatter, ['writeback_content', 'writebackContent'], 'Proposal writeback content');
+    const rawWritebackEffect = readWritebackPlanEffectValue(frontmatter);
+    const writebackEffect = normalizeWritebackPlanEffect(rawWritebackEffect);
+    if (rawWritebackEffect !== null && writebackEffect === null) {
+        throw new core_1.ProposalTransitionValidationError(`Unknown writeback_effect value: ${rawWritebackEffect}`);
+    }
     const bodyWriteback = extractMarkdownSection(parsed.body, ['writeback', 'approved writeback', 'writeback content', '写回', '已批准写回', '写回内容']);
     if (frontmatterWriteback
         && bodyWriteback
@@ -2656,6 +2780,7 @@ function proposalTransitionSnapshot(proposal) {
         status: proposalTransitionStatus(frontmatter),
         targetPath: proposalScalarField(frontmatter, ['target_note', 'targetNote', 'target_path', 'targetPath'], 'Proposal target'),
         writebackContent: frontmatterWriteback || bodyWriteback,
+        writebackEffect: writebackEffect || undefined,
         revisionComment: proposalMultilineField(frontmatter, ['revision_comment', 'revisionComment'], 'Revision comment'),
         revisionRequestedAt: proposalScalarField(frontmatter, ['revision_requested_at', 'revisionRequestedAt'], 'Revision request time'),
         revisionRequestedBy: proposalScalarField(frontmatter, ['revision_requested_by', 'revisionRequestedBy'], 'Revision requester'),
@@ -2813,7 +2938,8 @@ function isWritebackConfirmationBinding(value) {
         && Number.isSafeInteger(value.expiresAt)
         && (value.effectKind === undefined
             || value.effectKind === 'append'
-            || value.effectKind === 'create_memory_record');
+            || value.effectKind === 'create_memory_record'
+            || value.effectKind === 'create_wiki_note');
 }
 function createWritebackConfirmationToken(binding, context) {
     const payload = Buffer.from(JSON.stringify(binding), 'utf8').toString('base64url');
@@ -2894,6 +3020,13 @@ function buildApprovedWritebackBlock(proposalId, writebackContent) {
         marker,
     };
 }
+function buildApprovedWikiNoteWritebackBlock(proposalId, writebackContent, operationId) {
+    const marker = `^writeback-${proposalId.replace(/[^A-Za-z0-9._-]/g, '-')}`;
+    return {
+        block: `${writebackContent.trim()}\n\n<!-- writeback operation: ${operationId} -->\n${marker}`,
+        marker,
+    };
+}
 function writebackTargetFrame(writebackBlock) {
     return `\n\n${writebackBlock}\n`;
 }
@@ -2919,7 +3052,7 @@ function resolveWritebackTaskId(rawArgs, proposal) {
     }
     return explicit || proposal.taskId || null;
 }
-function validateApprovedWritebackTransition(snapshot, operationId, targetPath, targetExists, context, now) {
+function validateApprovedWritebackTransition(snapshot, operationId, targetPath, context, now, targetExists, targetCreationAllowed) {
     const approval = snapshot.lastTransition;
     if (!approval
         || approval.kind !== 'status'
@@ -2936,7 +3069,8 @@ function validateApprovedWritebackTransition(snapshot, operationId, targetPath, 
         now,
         actor: context.agentId || 'tracekeeper-runtime',
         targetAllowed: core_1.isAllowedProposalTargetPath,
-        targetExists: (relativePath) => targetExists && relativePath === targetPath,
+        targetExists: (relativePath) => relativePath === targetPath && targetExists(relativePath),
+        targetCreationAllowed: (relativePath) => relativePath === targetPath && targetCreationAllowed(relativePath),
     });
 }
 async function resolveApprovedMemoryRecordTargetPath(vaultRoot, proposal, context) {
@@ -3069,7 +3203,18 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
         : plan.targetNote, pathSafetyOptions(context));
     assertAllowedWritebackTarget(targetPath);
     const target = await readCurrentVaultTextState(vaultRoot, targetPath, context);
-    if (!target && plan.effectKind !== 'create_memory_record') {
+    if (!target && !plan.effectKind) {
+        throw new safety_1.ToolInputError('Writeback effect is missing from proposal plan.');
+    }
+    if (plan.effectKind === CREATE_WIKI_NOTE_EFFECT) {
+        if (target) {
+            throw new safety_1.ToolInputError('Create wiki note writeback requires a missing target.');
+        }
+        if (!(0, core_1.isKnowledgeWikiPath)(targetPath)) {
+            throw new safety_1.ToolInputError(`Create wiki note writeback requires a wiki target: ${targetPath}`);
+        }
+    }
+    else if (!target && plan.effectKind !== 'create_memory_record') {
         throw new safety_1.ToolInputError(`Writeback target does not exist: ${targetPath}`);
     }
     const taskPath = taskId ? buildTaskNotePath(taskId) : null;
@@ -3103,13 +3248,28 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
         : task?.content || '';
     const proposalRevision = (0, core_1.computeProposalRevision)(snapshot);
     const identity = buildApprovedWritebackOperationIdentity(proposal, proposalRevision, previewNonce);
-    validateApprovedWritebackTransition(snapshot, identity.operationId, targetPath, plan.effectKind === 'create_memory_record' || Boolean(target), context, new Date(issuedAt).toISOString());
+    const createsMemoryRecord = plan.effectKind === 'create_memory_record';
+    const createsWikiNote = plan.effectKind === CREATE_WIKI_NOTE_EFFECT;
+    const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
+    validateApprovedWritebackTransition(snapshot, identity.operationId, targetPath, context, new Date(issuedAt).toISOString(), (relativePath) => {
+        if (relativePath !== targetPath) {
+            return false;
+        }
+        if (plan.effectKind === 'create_memory_record'
+            || plan.effectKind === CREATE_WIKI_NOTE_EFFECT) {
+            return false;
+        }
+        return Boolean(target);
+    }, (relativePath) => relativePath === targetPath
+        && (createsWikiNote || (createsMemoryRecord && Boolean(claimKey))));
     const writeback = plan.effectKind === 'create_memory_record'
         ? {
             block: buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, targetPath, identity.operationId, context),
             marker: `memory-record:${snapshot.proposalId}`,
         }
-        : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
+        : plan.effectKind === CREATE_WIKI_NOTE_EFFECT
+            ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, identity.operationId)
+            : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
     const touchedNotes = [
         targetPath,
         proposal.path,
@@ -3266,7 +3426,8 @@ function isApplyApprovedWritebackPayload(value) {
         && new Set(value.touchedNotes).size === value.touchedNotes.length
         && (value.effectKind === undefined
             || value.effectKind === 'append'
-            || value.effectKind === 'create_memory_record');
+            || value.effectKind === 'create_memory_record'
+            || value.effectKind === 'create_wiki_note');
 }
 function formatFrontmatterUpdateValue(value) {
     if (Array.isArray(value)) {
@@ -5819,7 +5980,7 @@ async function handleListApprovedWritebacks(rawArgs, context) {
             continue;
         }
         const proposal = memoryProposalDocumentFromText(vaultRoot, note.path, content, context);
-        candidates.push(buildWritebackPlan(proposal));
+        candidates.push(await resolveApplyWritebackPlan(vaultRoot, proposal, context));
     }
     const entries = candidates
         .sort((a, b) => a.proposal.path.localeCompare(b.proposal.path))
@@ -5916,12 +6077,16 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
     }, context);
     const snapshot = proposalTransitionSnapshot(proposal);
     const createsMemoryRecord = payload.effectKind === 'create_memory_record';
+    const createsWikiNote = payload.effectKind === CREATE_WIKI_NOTE_EFFECT;
+    const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
     const writeback = createsMemoryRecord
         ? {
             block: buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, payload.targetPath, operationId, context),
             marker: `memory-record:${snapshot.proposalId}`,
         }
-        : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
+        : createsWikiNote
+            ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, operationId)
+            : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
     const currentTaskPath = payload.taskId ? buildTaskNotePath(payload.taskId) : null;
     const currentTask = currentTaskPath
         ? await readCurrentVaultTextState(vaultRoot, currentTaskPath, context)
@@ -5941,10 +6106,20 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
         || writeback.marker !== payload.writebackMarker
         || currentTaskPath !== payload.taskPath
         || (currentTask?.contentHash || '') !== payload.taskContentHash
-        || (!createsMemoryRecord && !target)) {
+        || (!createsMemoryRecord && !createsWikiNote && !target)) {
         throw new core_1.OperationConflictError('Writeback confirmation is stale because current proposal or task state changed.');
     }
-    validateApprovedWritebackTransition(snapshot, operationId, payload.targetPath, createsMemoryRecord || Boolean(target), context, new Date(writebackConfirmationNow(context)).toISOString());
+    validateApprovedWritebackTransition(snapshot, operationId, payload.targetPath, context, new Date(writebackConfirmationNow(context)).toISOString(), (relativePath) => {
+        if (relativePath !== payload.targetPath) {
+            return false;
+        }
+        if (payload.effectKind === 'create_memory_record'
+            || payload.effectKind === CREATE_WIKI_NOTE_EFFECT) {
+            return false;
+        }
+        return Boolean(target);
+    }, (relativePath) => relativePath === payload.targetPath
+        && (createsWikiNote || (createsMemoryRecord && Boolean(claimKey))));
     const touchedNotes = [
         payload.targetPath,
         payload.proposalPath,
@@ -5954,17 +6129,17 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
     if ((0, core_1.computePayloadHash)(touchedNotes) !== (0, core_1.computePayloadHash)(payload.touchedNotes)) {
         throw new core_1.OperationConflictError('Writeback confirmation touched-note plan changed.');
     }
-    if (createsMemoryRecord) {
+    if (createsMemoryRecord || createsWikiNote) {
         if (!target) {
             return { target: null, writebackBlock: writeback.block, alreadyApplied: false };
         }
         if (target.contentHash === hashText(writeback.block)) {
             return { target, writebackBlock: writeback.block, alreadyApplied: true };
         }
-        throw new core_1.OperationConflictError('Approved memory record path already exists with different content.');
+        throw new core_1.OperationConflictError('Approved writeback target already exists with different content.');
     }
     if (!target) {
-        throw new core_1.OperationConflictError('Writeback target is unavailable.');
+        throw new core_1.OperationConflictError(`Writeback target does not exist: ${payload.targetPath}`);
     }
     if (reversibleWritebackTargetPrefix(target.content, payload) !== null) {
         return {
@@ -5987,6 +6162,7 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
     };
 }
 async function rollbackRuntimeWritebackTarget(vaultRoot, payload, context) {
+    const createsWikiNote = payload.effectKind === CREATE_WIKI_NOTE_EFFECT;
     if (payload.effectKind === 'create_memory_record') {
         const repository = projectMemoryRepository(vaultRoot, context);
         const target = await repository.readText(payload.targetPath);
@@ -5997,6 +6173,37 @@ async function rollbackRuntimeWritebackTarget(vaultRoot, payload, context) {
             throw new core_1.OperationConflictError('Approved memory record changed after creation and cannot be safely compensated.');
         }
         await repository.deleteText(payload.targetPath, target.version);
+        return;
+    }
+    if (createsWikiNote) {
+        const repository = context.vaultRepository;
+        const target = repository
+            ? await repository.readText(payload.targetPath)
+            : await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
+        if (!target) {
+            return;
+        }
+        if (hashText(target.content) !== payload.writebackBlockHash) {
+            throw new core_1.OperationConflictError('Approved wiki note was changed after creation and cannot be safely compensated.');
+        }
+        if (repository) {
+            if (!target.version) {
+                throw new core_1.OperationConflictError('Approved wiki note version is unavailable for compensation.');
+            }
+            await repository.deleteText(payload.targetPath, target.version);
+            return;
+        }
+        const targetAbsolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, payload.targetPath, pathSafetyOptions(context));
+        (0, safety_1.assertNoSymlinkSegments)(vaultRoot, targetAbsolute);
+        try {
+            fs.unlinkSync(targetAbsolute);
+        }
+        catch (error) {
+            if (error instanceof Error && error.code === 'ENOENT') {
+                return;
+            }
+            throw error;
+        }
         return;
     }
     const target = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
@@ -6024,6 +6231,20 @@ async function commitRuntimeProposalApplyTransition(vaultRoot, payload, operatio
         operationId,
         action: { kind: 'apply' },
     };
+    const createsMemoryRecord = payload.effectKind === 'create_memory_record';
+    const createsWikiNote = payload.effectKind === CREATE_WIKI_NOTE_EFFECT;
+    const isCreate = createsMemoryRecord || createsWikiNote;
+    const targetForTransition = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
+    if (isCreate) {
+        if (!targetForTransition) {
+            throw new core_1.ProposalTransitionValidationError('Writeback target was not created for approved writeback.');
+        }
+        if (targetForTransition.contentHash !== payload.writebackBlockHash) {
+            throw new core_1.ProposalTransitionValidationError('Writeback target changed after create draft was prepared.');
+        }
+    }
+    const ownedCreateTargetPath = isCreate ? payload.targetPath : null;
+    const ownedCreateTargetContentHash = isCreate ? payload.writebackBlockHash : null;
     if (context.proposalTransitionPort) {
         const decision = await context.proposalTransitionPort.transition({
             ...transition,
@@ -6031,6 +6252,8 @@ async function commitRuntimeProposalApplyTransition(vaultRoot, payload, operatio
             expectedFileHash: payload.proposalFileHash,
             now: new Date().toISOString(),
             actor: context.agentId || 'tracekeeper-runtime',
+            ownedCreateTargetPath: isCreate ? ownedCreateTargetPath : null,
+            ownedCreateTargetContentHash: isCreate ? ownedCreateTargetContentHash : null,
         });
         return decision.receipt;
     }
@@ -6039,13 +6262,14 @@ async function commitRuntimeProposalApplyTransition(vaultRoot, payload, operatio
         throw new core_1.ProposalTransitionConflictError('Writeback proposal does not exist.');
     }
     const proposal = memoryProposalDocumentFromText(vaultRoot, payload.proposalPath, proposalState.content, context);
-    const target = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
+    const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
     const decision = (0, core_1.transitionProposal)(proposalTransitionSnapshot(proposal), transition, {
         now: new Date().toISOString(),
         actor: context.agentId || 'tracekeeper-runtime',
         targetAllowed: core_1.isAllowedProposalTargetPath,
-        targetExists: (relativePath) => relativePath === payload.targetPath
-            && (payload.effectKind === 'create_memory_record' || target !== null),
+        targetExists: (relativePath) => relativePath === payload.targetPath && (!isCreate ? Boolean(targetForTransition) : false),
+        targetCreationAllowed: (relativePath) => relativePath === payload.targetPath
+            && (createsWikiNote || (createsMemoryRecord && Boolean(claimKey))),
     });
     if (decision.replayed) {
         return decision.receipt;
@@ -6084,13 +6308,28 @@ function assertJournaledWritebackRequest(rawArgs, payload, context) {
         throw new core_1.OperationConflictError('Writeback request task changed from the journaled operation.');
     }
 }
+async function resolveApplyWritebackPlan(vaultRoot, proposal, context) {
+    const normalizedTarget = proposal.targetNote
+        ? (0, safety_1.normalizeNotePath)(proposal.targetNote, pathSafetyOptions(context))
+        : '';
+    if (proposal.targetNote) {
+        assertAllowedWritebackTarget(normalizedTarget);
+    }
+    const targetState = proposal.targetNote
+        ? await readCurrentVaultTextState(vaultRoot, normalizedTarget, context)
+        : null;
+    const normalizedProposal = proposal.targetNote
+        ? { ...proposal, targetNote: normalizedTarget }
+        : proposal;
+    return buildWritebackPlanForTarget(normalizedProposal, targetState);
+}
 async function handleApplyApprovedWriteback(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
     const dryRun = coerceBoolean(rawArgs.dry_run, 'dry_run', false);
     if (dryRun) {
         const proposal = await resolveMemoryProposalFromArgs(vaultRoot, rawArgs, context);
         const taskId = resolveWritebackTaskId(rawArgs, proposal);
-        const plan = buildWritebackPlan(proposal);
+        const plan = await resolveApplyWritebackPlan(vaultRoot, proposal, context);
         if (!plan.ready || !plan.writebackContent) {
             throw new safety_1.ToolInputError(plan.reason || 'approved writeback is not ready to apply.');
         }
@@ -6111,6 +6350,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
             proposal_path: proposal.path,
             target_note: prepared.binding.targetPath,
             touched_notes: prepared.binding.touchedNotes,
+            writeback_effect: prepared.binding.effectKind || 'append',
             writeback_preview: prepared.writebackBlock,
             confirmation_token: confirmationToken,
             confirmation_expires_at: new Date(prepared.binding.expiresAt).toISOString(),
@@ -6188,7 +6428,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
         }
         const proposal = await resolveMemoryProposalFromArgs(vaultRoot, rawArgs, context);
         const taskId = resolveWritebackTaskId(rawArgs, proposal);
-        const plan = buildWritebackPlan(proposal);
+        const plan = await resolveApplyWritebackPlan(vaultRoot, proposal, context);
         if (!plan.ready || !plan.writebackContent) {
             throw new safety_1.ToolInputError(plan.reason || 'approved writeback is not ready to apply.');
         }
@@ -6217,11 +6457,45 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
                         await repository.createText(currentPayload.targetPath, effect.writebackBlock);
                     }
                     catch (error) {
-                        if (!(error instanceof core_1.OperationConflictError))
+                        if (!isWritebackCreationConflict(error))
                             throw error;
                         const existingTarget = await repository.readText(currentPayload.targetPath);
                         if (existingTarget?.content !== effect.writebackBlock)
                             throw error;
+                    }
+                    return;
+                }
+                if (currentPayload.effectKind === CREATE_WIKI_NOTE_EFFECT) {
+                    if (context.vaultRepository) {
+                        try {
+                            await context.vaultRepository.createText(currentPayload.targetPath, effect.writebackBlock);
+                            return;
+                        }
+                        catch (error) {
+                            if (!isWritebackCreationConflict(error))
+                                throw error;
+                            const existing = await context.vaultRepository.readText(currentPayload.targetPath);
+                            if (existing?.content !== effect.writebackBlock) {
+                                throw error;
+                            }
+                        }
+                        return;
+                    }
+                    const writable = (0, safety_1.resolveSafeWritableNotePath)(vaultRoot, currentPayload.targetPath, core_1.KNOWLEDGE_WIKI_DIR, pathSafetyOptions(context));
+                    try {
+                        (0, safety_1.assertNoSymlinkSegments)(vaultRoot, writable.absolutePath);
+                        fs.mkdirSync(path.dirname(writable.absolutePath), { recursive: true });
+                        fs.writeFileSync(writable.absolutePath, effect.writebackBlock, { encoding: 'utf8', flag: 'wx' });
+                        return;
+                    }
+                    catch (error) {
+                        if (!(error instanceof Error) || error.code !== 'EEXIST') {
+                            throw error;
+                        }
+                        const existing = await readCurrentVaultTextState(vaultRoot, currentPayload.targetPath, context);
+                        if (!existing || existing.content !== effect.writebackBlock) {
+                            throw new core_1.OperationConflictError('Approved wiki note was not created exactly.');
+                        }
                     }
                     return;
                 }
@@ -6266,9 +6540,11 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
                     sessionId: currentPayload.activitySessionId || undefined,
                     clientName: currentPayload.activityClientName || undefined,
                     metadata: {
-                        action: currentPayload.effectKind === 'create_memory_record'
-                            ? 'memory_record.apply'
-                            : 'writeback.apply',
+                        action: currentPayload.effectKind === CREATE_WIKI_NOTE_EFFECT
+                            ? 'wiki_note.create'
+                            : currentPayload.effectKind === 'create_memory_record'
+                                ? 'memory_record.apply'
+                                : 'writeback.apply',
                         proposal_id: currentPayload.proposalId,
                         proposal_path: currentPayload.proposalPath,
                         permission_level: 'review-gated apply',
@@ -6433,6 +6709,10 @@ async function handleProposeMemory(rawArgs, context) {
             context,
         }),
         findOwnedProposalNote: async (filename, operationId) => findOperationOwnedNoteAsync(vaultRoot, MEMORY_PROPOSAL_DIR, filename, 'proposal_operation_id', operationId, context),
+        isTargetNoteMissing: async (targetNote) => {
+            const state = await readCurrentVaultTextState(vaultRoot, targetNote, context);
+            return !state;
+        },
         writeProposalNote: (input) => buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.propose_memory', MEMORY_PROPOSAL_DIR, input.filename, input.frontmatter, input.body, input.taskId, context, input.metadata, input.operationId),
         ensureOwnedProposalIdentity: (proposalPath, proposalId, operationId) => ensureOperationOwnedProposalIdentity(vaultRoot, proposalPath, proposalId, 'proposal_operation_id', operationId, context),
         updateTaskMemoryWrite: async (taskId, memoryPath) => {

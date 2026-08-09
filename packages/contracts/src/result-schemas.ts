@@ -1085,7 +1085,7 @@ export const APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA: JsonSchema2020 = {
 			type: 'object',
 			required: [
 				'schema_version', 'ok', 'tool', 'read_only', 'dry_run', 'permission_level',
-				'proposal_id', 'proposal_path', 'target_note', 'touched_notes', 'writeback_preview',
+				'proposal_id', 'proposal_path', 'target_note', 'touched_notes', 'writeback_effect', 'writeback_preview',
 				'confirmation_token', 'confirmation_expires_at',
 			],
 			properties: {
@@ -1099,6 +1099,10 @@ export const APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA: JsonSchema2020 = {
 				proposal_path: { type: 'string', minLength: 1 },
 				target_note: { type: 'string', minLength: 1 },
 				touched_notes: STRING_ARRAY_SCHEMA,
+				writeback_effect: {
+					type: 'string',
+					enum: ['append', 'create_wiki_note', 'create_memory_record'],
+				},
 				writeback_preview: { type: 'string', minLength: 1 },
 				confirmation_token: { type: 'string', minLength: 1 },
 				confirmation_expires_at: { type: 'string', minLength: 1 },

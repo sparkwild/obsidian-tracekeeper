@@ -75,6 +75,25 @@ const INVALID_PROPOSAL_TEXT = new Set([
     '未填',
     '未关联',
 ]);
+const normalizeWritebackEffect = (effect) => {
+    if (effect === '' || effect === undefined) {
+        return undefined;
+    }
+    if (typeof effect !== 'string') {
+        throw new ProposalTransitionValidationError('Proposal writeback effect is invalid.');
+    }
+    const normalized = effect.trim().toLowerCase();
+    if (normalized === 'append') {
+        return 'append';
+    }
+    if (normalized === 'create_wiki_note') {
+        return 'create_wiki_note';
+    }
+    if (normalized === 'create_memory_record') {
+        return 'create_memory_record';
+    }
+    throw new ProposalTransitionValidationError('Proposal writeback effect is not supported.');
+};
 const normalizeText = (value) => value.replace(/\r\n/g, '\n').trim();
 const isMeaningfulProposalText = (value) => {
     const normalized = normalizeText(value).toLowerCase().replace(/\s+/g, ' ');
@@ -150,6 +169,7 @@ const revisionContent = (snapshot) => ({
     revisionCommentHash: (0, operation_journal_1.computePayloadHash)(normalizeText(snapshot.revisionComment)),
     revisionRequestedAt: snapshot.revisionRequestedAt,
     revisionRequestedBy: snapshot.revisionRequestedBy,
+    ...(snapshot.writebackEffect ? { writebackEffect: snapshot.writebackEffect } : {}),
     archived: Boolean(snapshot.archived),
     appliedOperationId: snapshot.appliedOperationId || '',
 });
@@ -187,39 +207,62 @@ function computeProposalTransitionPayloadHash(action) {
     }
 }
 const ensureSnapshotIdentity = (snapshot) => {
-    if (normalizeRelativeMarkdownPath(snapshot.path, 'Proposal path') !== snapshot.path) {
+    const normalized = {
+        ...snapshot,
+        writebackEffect: normalizeWritebackEffect(snapshot.writebackEffect),
+    };
+    if (normalizeRelativeMarkdownPath(normalized.path, 'Proposal path') !== normalized.path) {
         throw new ProposalTransitionValidationError('Proposal path is not normalized.');
     }
-    if (normalizeIdentifier(snapshot.proposalId, 'Proposal id') !== snapshot.proposalId) {
+    if (normalizeIdentifier(normalized.proposalId, 'Proposal id') !== normalized.proposalId) {
         throw new ProposalTransitionValidationError('Proposal id is not normalized.');
     }
-    if (normalizeIdentifier(snapshot.proposalKind, 'Proposal kind') !== snapshot.proposalKind) {
+    if (normalizeIdentifier(normalized.proposalKind, 'Proposal kind') !== normalized.proposalKind) {
         throw new ProposalTransitionValidationError('Proposal kind is not normalized.');
     }
-    if (!CLASSIFICATIONS.has(snapshot.classification)) {
+    if (!CLASSIFICATIONS.has(normalized.classification)) {
         throw new ProposalTransitionValidationError('Proposal classification is invalid.');
     }
-    if (!STATUSES.has(snapshot.status)) {
+    if (!STATUSES.has(normalized.status)) {
         throw new ProposalTransitionValidationError('Proposal status is invalid.');
     }
-    if (snapshot.taskId) {
-        if (normalizeIdentifier(snapshot.taskId, 'Task id') !== snapshot.taskId) {
+    if (normalized.taskId) {
+        if (normalizeIdentifier(normalized.taskId, 'Task id') !== normalized.taskId) {
             throw new ProposalTransitionValidationError('Task id is not normalized.');
         }
     }
-    if (snapshot.lastTransition) {
-        const receipt = snapshot.lastTransition;
+    if (normalized.lastTransition) {
+        const receipt = normalized.lastTransition;
         if (receipt.schemaVersion !== exports.PROPOSAL_TRANSITION_SCHEMA_VERSION
-            || receipt.proposalPath !== snapshot.path
-            || receipt.proposalId !== snapshot.proposalId
-            || receipt.taskId !== snapshot.taskId
-            || receipt.nextStatus !== snapshot.status
-            || receipt.committedRevision !== computeProposalRevision(snapshot)) {
+            || receipt.proposalPath !== normalized.path
+            || receipt.proposalId !== normalized.proposalId
+            || receipt.taskId !== normalized.taskId
+            || receipt.nextStatus !== normalized.status
+            || receipt.committedRevision !== computeProposalRevision(normalized)) {
             throw new ProposalTransitionConflictError('Proposal transition receipt does not match the current proposal.');
         }
     }
+    return normalized;
 };
-const ensureAllowedTarget = (targetPath, environment, allowCreation = false) => {
+const supportsWritebackCreationForTarget = (targetPath, snapshot) => {
+    const isAllowedWritebackTarget = isAllowedProposalTargetPath(targetPath);
+    if (!isAllowedWritebackTarget) {
+        return false;
+    }
+    if (snapshot.writebackEffect === 'append') {
+        return false;
+    }
+    if (snapshot.writebackEffect === 'create_memory_record') {
+        return (0, knowledge_architecture_1.startsWithPathPrefix)(targetPath, knowledge_architecture_1.KNOWLEDGE_MEMORY_DIR);
+    }
+    if (snapshot.writebackEffect === 'create_wiki_note') {
+        return (0, knowledge_architecture_1.startsWithPathPrefix)(targetPath, knowledge_architecture_1.KNOWLEDGE_WIKI_DIR);
+    }
+    // Legacy records are treated as wiki-create capable when target is a wiki note,
+    // so existing review proposals can continue to pass without explicit writeback_effect.
+    return snapshot.writebackEffect === undefined && (0, knowledge_architecture_1.startsWithPathPrefix)(targetPath, knowledge_architecture_1.KNOWLEDGE_WIKI_DIR);
+};
+const ensureAllowedTarget = (targetPath, environment, allowCreation = false, snapshot) => {
     const normalized = normalizeProposalTargetPath(targetPath);
     if (!normalized) {
         throw new ProposalTransitionValidationError('Proposal target is required.');
@@ -231,8 +274,14 @@ const ensureAllowedTarget = (targetPath, environment, allowCreation = false) => 
         throw new ProposalTransitionValidationError('Proposal target is outside the allowed Memory or Wiki boundary.');
     }
     const exists = Boolean(environment.targetExists?.(normalized));
-    const creationAllowed = allowCreation
-        && Boolean(environment.targetCreationAllowed?.(normalized));
+    const supportsCreation = supportsWritebackCreationForTarget(normalized, snapshot);
+    const supportsLegacyCreation = Boolean(!snapshot.writebackEffect
+        && ((0, knowledge_architecture_1.startsWithPathPrefix)(normalized, knowledge_architecture_1.KNOWLEDGE_WIKI_DIR)
+            || (0, knowledge_architecture_1.startsWithPathPrefix)(normalized, knowledge_architecture_1.KNOWLEDGE_MEMORY_DIR))
+        && environment.targetCreationAllowed?.(normalized));
+    const creationAllowed = allowCreation && ((snapshot.writebackEffect === 'create_memory_record')
+        ? (supportsCreation && Boolean(environment.targetCreationAllowed?.(normalized)))
+        : (supportsCreation || supportsLegacyCreation));
     if (!exists && !creationAllowed) {
         throw new ProposalTransitionValidationError('Proposal target does not exist.');
     }
@@ -242,7 +291,12 @@ const ensureCompleteMemoryProposal = (snapshot, environment) => {
     if (snapshot.classification !== 'memory_proposal') {
         throw new ProposalTransitionValidationError('Only memory proposals can use the writeback transition.');
     }
-    const targetPath = ensureAllowedTarget(snapshot.targetPath, environment, true);
+    const targetPath = ensureAllowedTarget(snapshot.targetPath, environment, true, snapshot);
+    if ((snapshot.writebackEffect === 'create_wiki_note' || snapshot.writebackEffect === 'create_memory_record')
+        && environment.targetExists
+        && Boolean(environment.targetExists(targetPath))) {
+        throw new ProposalTransitionValidationError('Proposal writeback target already exists.');
+    }
     if (!isMeaningfulProposalText(snapshot.writebackContent)) {
         throw new ProposalTransitionValidationError('Proposal writeback content is required.');
     }
@@ -368,7 +422,7 @@ function proposalTransitionReceiptFromFrontmatter(frontmatter) {
     return receipt;
 }
 function transitionProposal(current, command, environment) {
-    ensureSnapshotIdentity(current);
+    const normalized = ensureSnapshotIdentity(current);
     const operationId = normalizeIdentifier(command.operationId, 'Operation id');
     if (operationId !== command.operationId) {
         throw new ProposalTransitionValidationError('Operation id is not normalized.');
@@ -388,55 +442,55 @@ function transitionProposal(current, command, environment) {
         throw new ProposalTransitionValidationError('Transition time is invalid.');
     }
     const payloadHash = computeProposalTransitionPayloadHash(command.action);
-    if (current.archived) {
+    if (normalized.archived) {
         throw new ProposalTransitionStateError('Archived proposals cannot be changed.');
     }
-    const replayReceipt = sameReceipt(current, command, payloadHash);
+    const replayReceipt = sameReceipt(normalized, command, payloadHash);
     if (replayReceipt) {
         return {
-            state: current,
+            state: normalized,
             receipt: replayReceipt,
             frontmatter: {},
             replayed: true,
         };
     }
-    const previousRevision = computeProposalRevision(current);
+    const previousRevision = computeProposalRevision(normalized);
     if (previousRevision !== expectedRevision) {
         throw new ProposalTransitionConflictError('Proposal revision changed before the transition.');
     }
     const next = {
-        ...current,
+        ...normalized,
         lastTransition: undefined,
     };
     const mutation = {};
     switch (command.action.kind) {
         case 'status': {
             if (command.action.nextStatus === 'applied') {
-                if (current.classification === 'memory_proposal') {
+                if (normalized.classification === 'memory_proposal') {
                     throw new ProposalTransitionStateError('Applied status requires the writeback apply transition.');
                 }
-                if (current.status !== 'pending') {
-                    throw new ProposalTransitionStateError(`Proposal transition ${current.status} -> applied is not allowed.`);
+                if (normalized.status !== 'pending') {
+                    throw new ProposalTransitionStateError(`Proposal transition ${normalized.status} -> applied is not allowed.`);
                 }
             }
-            else if (current.status === 'revision_requested'
+            else if (normalized.status === 'revision_requested'
                 && command.action.nextStatus === 'revision_requested') {
                 if (!normalizeText(command.action.revisionComment || '')) {
                     throw new ProposalTransitionStateError('Updating a revision request requires a revision comment.');
                 }
             }
             else {
-                ensureStatusEdge(current.status, command.action.nextStatus);
+                ensureStatusEdge(normalized.status, command.action.nextStatus);
             }
             if (command.action.nextStatus === 'approved'
-                && current.classification === 'memory_proposal') {
+                && normalized.classification === 'memory_proposal') {
                 if (!expectedContentHash) {
                     throw new ProposalTransitionValidationError('Approval requires the expected proposal content hash.');
                 }
-                if (computeProposalContentHash(current) !== expectedContentHash) {
+                if (computeProposalContentHash(normalized) !== expectedContentHash) {
                     throw new ProposalTransitionConflictError('Proposal content changed before approval.');
                 }
-                next.targetPath = ensureCompleteMemoryProposal(current, environment);
+                next.targetPath = ensureCompleteMemoryProposal(normalized, environment);
                 assignCanonicalTarget(mutation, next.targetPath);
             }
             next.status = command.action.nextStatus;
@@ -471,17 +525,17 @@ function transitionProposal(current, command, environment) {
             if (!expectedContentHash) {
                 throw new ProposalTransitionValidationError('Draft update requires the expected proposal content hash.');
             }
-            if (computeProposalContentHash(current) !== expectedContentHash) {
+            if (computeProposalContentHash(normalized) !== expectedContentHash) {
                 throw new ProposalTransitionConflictError('Proposal content changed before the draft update.');
             }
-            if (current.classification !== 'memory_proposal') {
+            if (normalized.classification !== 'memory_proposal') {
                 throw new ProposalTransitionValidationError('Only memory proposals can be edited.');
             }
-            if (current.status !== 'pending' && current.status !== 'revision_requested') {
+            if (normalized.status !== 'pending' && normalized.status !== 'revision_requested') {
                 throw new ProposalTransitionStateError('Only pending or revision-requested proposals can be edited.');
             }
             const targetPath = command.action.targetPath.trim()
-                ? ensureAllowedTarget(command.action.targetPath, environment)
+                ? ensureAllowedTarget(command.action.targetPath, environment, false, normalized)
                 : '';
             next.targetPath = targetPath;
             next.writebackContent = normalizeText(command.action.writebackContent);
@@ -493,11 +547,11 @@ function transitionProposal(current, command, environment) {
             if (!expectedContentHash) {
                 throw new ProposalTransitionValidationError('Apply requires the expected proposal content hash.');
             }
-            if (computeProposalContentHash(current) !== expectedContentHash) {
+            if (computeProposalContentHash(normalized) !== expectedContentHash) {
                 throw new ProposalTransitionConflictError('Proposal content changed before apply.');
             }
-            ensureStatusEdge(current.status, 'applied');
-            next.targetPath = ensureCompleteMemoryProposal(current, environment);
+            ensureStatusEdge(normalized.status, 'applied');
+            next.targetPath = ensureCompleteMemoryProposal(normalized, environment);
             next.status = 'applied';
             next.appliedOperationId = command.operationId;
             assignCanonicalTarget(mutation, next.targetPath);
@@ -508,16 +562,16 @@ function transitionProposal(current, command, environment) {
             break;
         }
     }
-    const previousContentHash = computeProposalContentHash(current);
+    const previousContentHash = computeProposalContentHash(normalized);
     const receiptSeed = {
         schemaVersion: exports.PROPOSAL_TRANSITION_SCHEMA_VERSION,
         operationId: command.operationId,
         payloadHash,
         kind: command.action.kind,
-        proposalPath: current.path,
-        proposalId: current.proposalId,
-        taskId: current.taskId,
-        previousStatus: current.status,
+        proposalPath: normalized.path,
+        proposalId: normalized.proposalId,
+        taskId: normalized.taskId,
+        previousStatus: normalized.status,
         nextStatus: next.status,
         expectedRevision,
         expectedContentHash,

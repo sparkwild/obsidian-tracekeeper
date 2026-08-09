@@ -28,7 +28,7 @@ export interface ApplyApprovedWritebackPayload {
     activityAgentId: string;
     activitySessionId: string;
     activityClientName: string;
-    effectKind?: 'append' | 'create_memory_record';
+    effectKind?: 'append' | 'create_memory_record' | 'create_wiki_note';
 }
 export interface ApplyApprovedWritebackCommand {
     operationId: string;

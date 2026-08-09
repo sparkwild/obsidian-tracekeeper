@@ -111,7 +111,7 @@ permissions.
 | --- | --- | --- |
 | Read-only | Inspect Vault-local state without changing notes | status, lint, Recall, note reads, review inspection |
 | Bounded write | Create work records or proposals in allowlisted Tracekeeper paths | tasks, sessions, context packs, sources, proposals |
-| Review-gated write | Append to a durable target from an approved proposal | approved writeback |
+| Review-gated write | Append to an existing durable target or create one explicitly approved Wiki/MemoryRecord target | approved writeback |
 
 Generated records never overwrite existing notes. Project auto-memory is a
 user-controlled exception to global review and remains project-scoped,
@@ -143,6 +143,10 @@ higher-priority instructions.
 - MCP cannot approve its own proposal or delete rejected history.
 - The plugin must show sufficient source, target, context, and change preview for
   an informed decision.
+- A missing target can authorize creation only when the confirmed effect is a
+  Wiki file under `01_knowledge/wiki/**` or a governed MemoryRecord lifecycle
+  target. Existing targets remain append operations, occupied create targets
+  fail closed, and missing ordinary Memory append targets remain incomplete.
 - Proposal archiving is not implied by a review transition. The archive dialog
   shows the exact source-to-destination moves and managed-reference set, gives
   cancel initial focus, and commits only the confirmation bound to that
@@ -167,9 +171,12 @@ authenticated progress anchor binds the longest durable ordered step prefix and
 terminal status so replacing the JSON record with a shorter valid prefix cannot
 silently replay a completed effect.
 
-Approved writeback records each target append, optional task link, proposal
-transition, and Agent activity append as a separate journaled step. The proposal
-transition stores a bounded committed receipt rather than proposal content.
+Approved writeback records each target append or exact target creation,
+optional task link, proposal transition, and Agent activity append as a
+separate journaled step. The proposal transition stores a bounded committed
+receipt rather than proposal content. A creation effect uses absent-path
+semantics, is bound into the confirmation payload, and can be retried or
+compensated only when the target content proves exact operation ownership.
 When a later proposal transition conflicts, Tracekeeper removes only the exact
 target and task effects owned by that operation; it never rewinds unrelated or
 later user edits. If safe task compensation cannot be proven, target

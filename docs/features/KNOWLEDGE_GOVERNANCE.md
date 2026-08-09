@@ -52,14 +52,21 @@ previewed, explicitly confirmed action.
 
 An incomplete proposal is a remediation item, not a review-ready change. An
 append proposal must resolve an existing Vault-local Memory/Wiki target before
-approval, while a lifecycle proposal with a validated claim may approve a new
-MemoryRecord target that does not exist yet. In both cases the target path must
-remain inside the allowed knowledge boundary and writable content must be
-present. The review detail presents the available task and source evidence,
-current target context, and the expected append or create diff. Approval still
-does not write; apply generates a fresh preview and requires a separate
-confirmation. A lifecycle target is created atomically only during that explicit
-apply step.
+approval. A create-capable Wiki proposal may instead target one absent Markdown
+file under `01_knowledge/wiki/**`, while a lifecycle proposal with a validated
+claim may target a new MemoryRecord. In every case the target path must remain
+inside its exact allowed knowledge boundary and writable content must be
+present. Existing Wiki targets stay append-only; a missing Memory append target
+does not inherit Wiki creation authority.
+
+The review detail presents the available task and source evidence, current or
+absent target state, and a projected append or create diff from the reviewed
+proposal. Approval still does not write. Apply generates the authoritative,
+operation-bound preview and requires a separate confirmation whose binding
+includes the concrete effect and target state. A Wiki or lifecycle target is
+created atomically only during that explicit apply step. Creation never
+overwrites an occupied path, and interruption compensation may remove only the
+exact file owned by the confirmed operation.
 
 Approval commits a receipt that binds the exact proposal revision and content
 hash reviewed by the user. The apply preview produces an opaque, expiring

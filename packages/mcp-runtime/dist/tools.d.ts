@@ -29,6 +29,8 @@ export interface ProposalTransitionPort {
         expectedFileHash?: string;
         now?: string;
         actor?: string;
+        ownedCreateTargetPath?: string | null;
+        ownedCreateTargetContentHash?: string | null;
     }): Promise<ProposalTransitionDecision>;
 }
 export interface ToolInvocationContext extends ToolContext {

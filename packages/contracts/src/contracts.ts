@@ -685,7 +685,7 @@ export const toolContracts = [
 		workflowRole: 'review',
 		useCase: 'apply_approved_writeback',
 		description:
-			'[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content to the local Vault target note.',
+			'[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content to an existing local Vault target or creates the explicitly approved missing Wiki/MemoryRecord target after a fresh confirmation preview.',
 		inputSchema: withToolInput({
 			proposal_id: { type: 'string', description: 'Proposal id to apply.' },
 			proposal_path: { type: 'string', description: 'Vault-relative proposal note path.' },

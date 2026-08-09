@@ -281,8 +281,37 @@ const successFixtures = new Map([
 				proposal_path: 'Tracekeeper/Proposals/proposal-1.md',
 				target_note: 'Memory/project.md',
 				touched_notes: [],
+				writeback_effect: 'append',
 				writeback_preview: 'preview',
 				confirmation_token: 'token',
+				confirmation_expires_at: '2026-08-03T00:01:00.000Z',
+			},
+			{
+				...envelope('tracekeeper.apply_approved_writeback'),
+				read_only: true,
+				dry_run: true,
+				permission_level: 'review-gated apply',
+				proposal_id: 'proposal-wiki-create',
+				proposal_path: 'Tracekeeper/Proposals/proposal-wiki-create.md',
+				target_note: '01_knowledge/wiki/new-topic.md',
+				touched_notes: [],
+				writeback_effect: 'create_wiki_note',
+				writeback_preview: 'wiki create preview',
+				confirmation_token: 'wiki-create-token',
+				confirmation_expires_at: '2026-08-03T00:01:00.000Z',
+			},
+			{
+				...envelope('tracekeeper.apply_approved_writeback'),
+				read_only: true,
+				dry_run: true,
+				permission_level: 'review-gated apply',
+				proposal_id: 'proposal-memory-create',
+				proposal_path: 'Tracekeeper/Proposals/proposal-memory-create.md',
+				target_note: '01_knowledge/memory/global/new-record.md',
+				touched_notes: [],
+				writeback_effect: 'create_memory_record',
+				writeback_preview: 'memory create preview',
+				confirmation_token: 'memory-create-token',
 				confirmation_expires_at: '2026-08-03T00:01:00.000Z',
 			},
 			{
@@ -505,4 +534,17 @@ test('every public success fixture requires the common schema version', () => {
 			assert.equal(result.valid, false, `${tool} accepted a success result without schema_version`);
 		}
 	}
+});
+
+test('approved writeback dry-run requires an explicit writeback effect', () => {
+	const contract = getContractByName('tracekeeper.apply_approved_writeback');
+	assert.ok(contract);
+	const fixture = successFixtures
+		.get('tracekeeper.apply_approved_writeback')
+		.find((candidate) => candidate.dry_run === true);
+	assert.ok(fixture);
+	const invalid = { ...fixture };
+	delete invalid.writeback_effect;
+	const result = validateStructuredContent(invalid, contract.resultSchema);
+	assert.equal(result.valid, false);
 });

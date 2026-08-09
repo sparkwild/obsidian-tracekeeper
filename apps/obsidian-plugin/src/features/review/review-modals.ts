@@ -18,6 +18,55 @@ const configureLiveStatus = (element: HTMLElement): void => {
 	element.setAttr('aria-atomic', 'true');
 };
 
+type ProposalWritebackEffect = 'append' | 'create_memory_record' | 'create_wiki_note';
+
+const normalizeWritebackEffect = (value: unknown): ProposalWritebackEffect | undefined => {
+	if (typeof value !== 'string') {
+		return undefined;
+	}
+	const normalized = value.trim().toLowerCase();
+	if (normalized === 'append') {
+		return 'append';
+	}
+	if (normalized === 'create_memory_record') {
+		return 'create_memory_record';
+	}
+	if (normalized === 'create_wiki_note') {
+		return 'create_wiki_note';
+	}
+	return undefined;
+};
+
+const writebackEffectLabel = (effect: ProposalWritebackEffect): string => ({
+	append: ui('追加写入', 'Append'),
+	create_memory_record: ui('新建 MemoryRecord', 'Create MemoryRecord'),
+	create_wiki_note: ui('新建 Wiki', 'Create Wiki'),
+}[effect]);
+
+const writebackActionLabel = (effect: ProposalWritebackEffect): string => ({
+	append: ui('确认追加写入', 'Confirm append'),
+	create_memory_record: ui('确认创建 MemoryRecord', 'Confirm MemoryRecord create'),
+	create_wiki_note: ui('确认新建 Wiki', 'Confirm Wiki create'),
+}[effect]);
+
+const writebackIntroLabel = (effect: ProposalWritebackEffect): string => ({
+	append: ui('请确认以下内容将写入目标笔记。', 'Confirm the content that will be written to the target note.'),
+	create_memory_record: ui('请确认以下内容将创建新的 MemoryRecord。', 'Confirm the content that will create a new MemoryRecord.'),
+	create_wiki_note: ui('请确认以下内容将新建 Wiki 笔记。', 'Confirm the new Wiki note content to be created.'),
+}[effect]);
+
+const writebackProgressLabel = (effect: ProposalWritebackEffect): string => ({
+	append: ui('正在写入目标笔记。', 'Applying change to the target note.'),
+	create_memory_record: ui('正在创建 MemoryRecord。', 'Creating a MemoryRecord.'),
+	create_wiki_note: ui('正在新建 Wiki 笔记。', 'Creating a new Wiki note.'),
+}[effect]);
+
+const writebackSuccessLabel = (effect: ProposalWritebackEffect): string => ({
+	append: ui('已写入目标笔记。', 'Change applied to the target note.'),
+	create_memory_record: ui('MemoryRecord 已创建。', 'MemoryRecord created.'),
+	create_wiki_note: ui('Wiki 已新建。', 'Wiki note created.'),
+}[effect]);
+
 export class ReviewQueueRequestRevisionModal extends Modal {
 	private comment = '';
 	private readonly editingExistingRevision: boolean;
@@ -631,11 +680,20 @@ export class ApprovedWritebackApplyModal extends Modal {
 
 	private renderReady(preview: ApprovedWritebackPreview): void {
 		const { contentEl } = this;
+		const writebackEffect = normalizeWritebackEffect(preview.writeback_effect);
+		const actionLabel = writebackEffect
+			? writebackActionLabel(writebackEffect)
+			: ui('确认写入', 'Confirm apply');
 		contentEl.empty();
 		contentEl.createEl('p', {
-			text: ui('请确认以下内容将写入目标笔记。', 'Confirm the content that will be written to the target note.'),
+			text: writebackEffect
+				? writebackIntroLabel(writebackEffect)
+				: ui('该写回模式不受支持，无法继续。', 'This writeback mode is not supported and cannot continue.'),
 		});
 		const facts = contentEl.createDiv({ cls: 'tracekeeper-detail-grid' });
+		if (writebackEffect) {
+			this.renderDetail(facts, ui('写回方式', 'Writeback mode'), writebackEffectLabel(writebackEffect));
+		}
 		this.renderDetail(facts, ui('提案', 'Proposal'), preview.proposal_id || this.proposal.proposalId);
 		this.renderDetail(facts, ui('目标笔记', 'Target note'), preview.target_note || this.proposal.targetNote);
 		this.renderDetail(facts, ui('涉及文件', 'Touched notes'), (preview.touched_notes || []).join(', '));
@@ -650,15 +708,23 @@ export class ApprovedWritebackApplyModal extends Modal {
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel'), cls: 'mod-warning' });
 		cancel.addEventListener('click', () => this.close());
-		const confirm = actions.createEl('button', { text: ui('确认写入', 'Confirm apply'), cls: 'mod-cta' });
+		const confirm = actions.createEl('button', { text: actionLabel, cls: 'mod-cta' });
+		if (!writebackEffect) {
+			confirm.disabled = true;
+			status.setText(ui(
+				'写回预览包含不支持的写回模式，不能继续写入。',
+				'The writeback preview has an unsupported writeback mode and cannot be applied.'
+			));
+			return;
+		}
 		confirm.addEventListener('click', () => {
 			void (async () => {
 				confirm.disabled = true;
 				confirm.setText(ui('写回中...', 'Applying...'));
-				status.setText(ui('正在写入目标笔记。', 'Applying change to the target note.'));
+				status.setText(writebackProgressLabel(writebackEffect));
 				try {
 					await this.plugin.applyApprovedWriteback(this.proposal, preview);
-					new Notice(ui('已写入目标笔记。', 'Change applied to the target note.'));
+					new Notice(writebackSuccessLabel(writebackEffect));
 					this.onApplied();
 					this.close();
 				} catch (error) {
@@ -669,7 +735,7 @@ export class ApprovedWritebackApplyModal extends Modal {
 					);
 					new Notice(failureMessage);
 					confirm.disabled = false;
-					confirm.setText(ui('确认写入', 'Confirm apply'));
+					confirm.setText(actionLabel);
 					status.setText(failureMessage);
 					confirm.focus();
 				}

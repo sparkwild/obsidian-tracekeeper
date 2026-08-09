@@ -214,6 +214,7 @@ const makeProposalRecord = (overrides = {}) => {
 		status: record.approvalStatus,
 		targetPath: record.targetNote,
 		writebackContent: record.writebackContent,
+		writebackEffect: overrides.writebackEffect,
 		revisionComment: record.revisionComment,
 		revisionRequestedAt: record.revisionRequestedAt,
 		revisionRequestedBy: record.revisionRequestedBy,
@@ -246,7 +247,7 @@ const currentProposalFromFile = (file) => {
 			? 'legacy_migration_review'
 			: 'other_review_item';
 	return makeProposalRecord({
-	path: file.path,
+		path: file.path,
 	classification,
 	proposalId: file.frontmatter.proposal_id,
 	proposalKind: file.frontmatter.proposal_kind || classification,
@@ -268,12 +269,13 @@ const currentProposalFromFile = (file) => {
 	writebackContent: file.frontmatter.writeback_content
 		|| file.body.match(/## Writeback\s*\n\n([\s\S]*)/i)?.[1]?.trim()
 		|| '',
+		writebackEffect: file.frontmatter.writeback_effect || file.frontmatter.writebackEffect,
 	lastTransition: proposalTransitionReceiptFromFrontmatterForTest?.(file.frontmatter),
 	fileContentHash: hashContent(renderFileContent(file)),
 	});
 };
 
-function makeInitialFile() {
+function makeInitialFile({ targetNotePath = targetPath, proposalFields = {} } = {}) {
 	const file = {
 		__tracekeeper_kind: 'file',
 		path: proposalPath,
@@ -285,9 +287,10 @@ function makeInitialFile() {
 			proposal_id: 'proposal-1',
 			proposal_kind: 'memory',
 			approval_status: 'pending',
-			target_note: targetPath,
+			target_note: targetNotePath,
 			writeback_content: '- original writeback line',
 			task_id: 'task-1',
+			...proposalFields,
 		},
 		body: '# Proposal\n\n## Writeback\n\n- original writeback line\n',
 	};
@@ -296,18 +299,22 @@ function makeInitialFile() {
 }
 
 function createHarness(options = {}) {
+	const proposalTargetPath = options.targetPath || targetPath;
 	const files = new Map();
 	const auditLog = [];
 	let committedWrites = 0;
 	let refreshes = 0;
 	let mutationCount = 0;
-	const initialFile = makeInitialFile();
+	const initialFile = makeInitialFile({
+		targetNotePath: proposalTargetPath,
+		proposalFields: options.proposalFields || {},
+	});
 	files.set(proposalPath, initialFile);
-	files.set(targetPath, {
+	files.set(proposalTargetPath, {
 		__tracekeeper_kind: 'file',
-		path: targetPath,
+		path: proposalTargetPath,
 		extension: 'md',
-		basename: 'stale-target',
+		basename: proposalTargetPath.split('/').pop() || 'stale-target',
 		stat: { mtime: Date.parse('2026-07-30T00:00:00.000Z') },
 		frontmatter: { title: 'Stale target' },
 		body: '# Stale target\n',
@@ -386,6 +393,7 @@ function createHarness(options = {}) {
 				status: current.approvalStatus,
 				targetPath: current.targetNote,
 				writebackContent: current.writebackContent,
+				writebackEffect: current.writebackEffect,
 				revisionComment: current.revisionComment,
 				revisionRequestedAt: current.revisionRequestedAt,
 				revisionRequestedBy: current.revisionRequestedBy,
@@ -451,6 +459,7 @@ function createHarness(options = {}) {
 		initialFile,
 		staleSnapshot: makeProposalRecord({
 			fileContentHash: hashContent(renderFileContent(initialFile)),
+			writebackEffect: initialFile.frontmatter.writeback_effect || initialFile.frontmatter.writebackEffect,
 		}),
 		get committedWrites() {
 			return committedWrites;
@@ -502,6 +511,7 @@ function parseNativeProposal(content) {
 }
 
 function nativeSnapshot(overrides = {}) {
+	const writebackEffect = overrides.writebackEffect || overrides.writeback_effect;
 	return {
 		path: proposalPath,
 		classification: 'memory_proposal',
@@ -511,6 +521,7 @@ function nativeSnapshot(overrides = {}) {
 		status: 'pending',
 		targetPath: targetPath,
 		writebackContent: '- native writeback',
+		writebackEffect: writebackEffect === '' ? undefined : writebackEffect,
 		revisionComment: '',
 		revisionRequestedAt: '',
 		revisionRequestedBy: '',
@@ -519,13 +530,14 @@ function nativeSnapshot(overrides = {}) {
 }
 
 function createNativeTransitionHarness(options = {}) {
+	const harnessTargetPath = options.targetPath || targetPath;
 	const proposalFields = {
 		type: 'memory-proposal',
 		proposal_id: 'proposal-1',
 		proposal_kind: 'memory',
 		approval_status: 'pending',
 		status: 'pending',
-		target_note: targetPath,
+		target_note: harnessTargetPath,
 		task_id: 'task-1',
 		...options.proposalFields,
 	};
@@ -540,7 +552,7 @@ function createNativeTransitionHarness(options = {}) {
 	};
 	const targetFile = {
 		__tracekeeper_kind: 'file',
-		path: targetPath,
+		path: harnessTargetPath,
 		extension: 'md',
 		basename: 'stale-target',
 		stat: { mtime: Date.parse('2026-07-30T00:00:00.000Z') },
@@ -548,7 +560,7 @@ function createNativeTransitionHarness(options = {}) {
 	};
 	const files = new Map([
 		[proposalPath, proposalFile],
-		[targetPath, targetFile],
+		[harnessTargetPath, targetFile],
 	]);
 	let frontmatterWrites = 0;
 	let textWrites = 0;
@@ -558,6 +570,9 @@ function createNativeTransitionHarness(options = {}) {
 		vault: {
 			getAbstractFileByPath(filePath) {
 				return files.get(filePath) || null;
+			},
+			async read(file) {
+				return file.content;
 			},
 			async process(file, updater) {
 				textCalls += 1;
@@ -672,11 +687,11 @@ try {
 		missingTarget.name = 'ProposalTransitionValidationError';
 		assert.equal(
 			reviewStatusFailureReason(missingTarget),
-			'The target note does not exist, and this proposal does not create a new memory record.'
+			'The target note does not exist; confirm whether this proposal can create a new target.'
 		);
 		assert.equal(
 			reviewStatusFailureMessage(missingTarget),
-			'Failed to update review status: The target note does not exist, and this proposal does not create a new memory record.'
+			'Failed to update review status: The target note does not exist; confirm whether this proposal can create a new target.'
 		);
 		const invalidState = new Error('Proposal transition approved -> rejected is not allowed.');
 		invalidState.name = 'ProposalTransitionStateError';
@@ -829,7 +844,7 @@ try {
 			},
 		});
 		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
-		const snapshot = nativeSnapshot();
+		const snapshot = nativeSnapshot({ writebackEffect: 'append' });
 		await assert.rejects(
 			() => adapter.transition({
 				proposalPath,
@@ -847,12 +862,15 @@ try {
 
 	test('native transition adapter rejects target disappearance inside the atomic callback', async () => {
 		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				writeback_effect: 'append',
+			},
 			beforeTextMutation({ files }) {
 				files.delete(targetPath);
 			},
 		});
 		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
-		const snapshot = nativeSnapshot();
+		const snapshot = nativeSnapshot({ writeback_effect: 'append' });
 		await assert.rejects(
 			() => adapter.transition({
 				proposalPath,
@@ -890,6 +908,243 @@ try {
 		assert.equal(decision.state.status, 'approved');
 		assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
 		assert.equal(harness.files.has(targetPath), false);
+	});
+
+	test('native transition adapter applies a create-wiki proposal when target exists but apply-owned path is set', async () => {
+		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_wiki_note',
+			},
+		});
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			writeback_effect: 'create_wiki_note',
+		});
+		await assert.rejects(
+			() => new ObsidianProposalTransitionAdapter(harness.app).transition({
+				proposalPath,
+				expectedRevision: computeProposalRevision(snapshot),
+				expectedContentHash: computeProposalContentHash(snapshot),
+				operationId: 'review-apply-create-path-without-flag',
+				action: { kind: 'apply' },
+				now: '2026-07-30T00:01:00.000Z',
+			}),
+			/Proposal writeback target already exists/i
+		);
+		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
+		const decision = await adapter.transition({
+			proposalPath,
+			expectedRevision: computeProposalRevision(snapshot),
+			expectedContentHash: computeProposalContentHash(snapshot),
+			operationId: 'review-apply-own-target',
+			action: { kind: 'apply' },
+			ownedCreateTargetPath: targetPath,
+			ownedCreateTargetContentHash: hashContent('# Target\n'),
+			now: '2026-07-30T00:01:00.000Z',
+		});
+		assert.equal(decision.state.status, 'applied');
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'applied');
+		assert.equal(harness.proposalFile.frontmatter.status, 'applied');
+		assert.equal(harness.textWrites, 1);
+	});
+
+	test('native transition adapter rejects owned create-memory apply without a claim key', async () => {
+		const memoryTargetPath = '01_knowledge/memory/global/agents/test/memory-no-claim.md';
+		const harness = createNativeTransitionHarness({
+			targetPath: memoryTargetPath,
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_memory_record',
+			},
+		});
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			targetPath: memoryTargetPath,
+			writeback_effect: 'create_memory_record',
+		});
+		await assert.rejects(
+			() => new ObsidianProposalTransitionAdapter(harness.app).transition({
+				proposalPath,
+				expectedRevision: computeProposalRevision(snapshot),
+				expectedContentHash: computeProposalContentHash(snapshot),
+				operationId: 'review-apply-create-memory-without-claim',
+				action: { kind: 'apply' },
+				ownedCreateTargetPath: memoryTargetPath,
+				ownedCreateTargetContentHash: hashContent('# Target\n'),
+				now: '2026-07-30T00:01:10.000Z',
+			}),
+			/target does not exist/i
+		);
+		assert.equal(harness.textWrites, 0);
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
+	});
+
+	test('native transition adapter applies an owned create-memory target with a claim key', async () => {
+		const memoryTargetPath = '01_knowledge/memory/global/agents/test/memory-with-claim.md';
+		const harness = createNativeTransitionHarness({
+			targetPath: memoryTargetPath,
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_memory_record',
+				claim_key: 'review.create-memory-with-claim',
+			},
+		});
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			targetPath: memoryTargetPath,
+			writeback_effect: 'create_memory_record',
+		});
+		const decision = await new ObsidianProposalTransitionAdapter(harness.app).transition({
+			proposalPath,
+			expectedRevision: computeProposalRevision(snapshot),
+			expectedContentHash: computeProposalContentHash(snapshot),
+			operationId: 'review-apply-create-memory-with-claim',
+			action: { kind: 'apply' },
+			ownedCreateTargetPath: memoryTargetPath,
+			ownedCreateTargetContentHash: hashContent('# Target\n'),
+			now: '2026-07-30T00:01:20.000Z',
+		});
+		assert.equal(decision.state.status, 'applied');
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'applied');
+		assert.equal(harness.textWrites, 1);
+	});
+
+	test('native transition adapter rejects an owned create-wiki apply when the target disappears inside callback', async () => {
+		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_wiki_note',
+			},
+			beforeTextMutation({ files }) {
+				files.delete(targetPath);
+			},
+		});
+		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			writeback_effect: 'create_wiki_note',
+		});
+		await assert.rejects(
+			() => adapter.transition({
+				proposalPath,
+				expectedRevision: computeProposalRevision(snapshot),
+				expectedContentHash: computeProposalContentHash(snapshot),
+				operationId: 'review-apply-own-target-disappeared',
+				action: { kind: 'apply' },
+				ownedCreateTargetPath: targetPath,
+				ownedCreateTargetContentHash: hashContent('# Target\n'),
+				now: '2026-07-30T00:01:30.000Z',
+			}),
+			/disappeared before apply|target does not exist/i
+		);
+		assert.equal(harness.textWrites, 0);
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
+		assert.equal(harness.proposalFile.frontmatter.status, 'approved');
+	});
+
+	test('native transition adapter rejects a stale owned create-wiki target hash during apply', async () => {
+		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_wiki_note',
+			},
+		});
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			writeback_effect: 'create_wiki_note',
+		});
+		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
+		const request = {
+			proposalPath,
+			expectedRevision: computeProposalRevision(snapshot),
+			expectedContentHash: computeProposalContentHash(snapshot),
+			operationId: 'review-apply-own-target-hash-mismatch',
+			action: { kind: 'apply' },
+			ownedCreateTargetPath: targetPath,
+			ownedCreateTargetContentHash: '0'.repeat(64),
+			now: '2026-07-30T00:01:45.000Z',
+		};
+		const transitionResult = await adapter.transition(request).then(
+			() => ({ decision: true }),
+			(error) => ({ error })
+		);
+		const error = transitionResult.error;
+		assert.ok(
+			error instanceof Error,
+			'expected transition to reject with hash mismatch'
+		);
+		assert.match(String(error), /changed before apply/i);
+		assert.equal(harness.textWrites, 0);
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
+		assert.equal(harness.proposalFile.frontmatter.status, 'approved');
+	});
+
+	for (const [label, proof] of [
+		['path only', { ownedCreateTargetPath: targetPath }],
+		['hash only', { ownedCreateTargetContentHash: hashContent('# Target\n') }],
+	]) {
+		test(`native transition adapter rejects incomplete owned create proof with ${label}`, async () => {
+			const harness = createNativeTransitionHarness({
+				proposalFields: {
+					approval_status: 'approved',
+					status: 'approved',
+					writeback_effect: 'create_wiki_note',
+				},
+			});
+			const snapshot = nativeSnapshot({
+				status: 'approved',
+				writeback_effect: 'create_wiki_note',
+			});
+			await assert.rejects(
+				() => new ObsidianProposalTransitionAdapter(harness.app).transition({
+					proposalPath,
+					expectedRevision: computeProposalRevision(snapshot),
+					expectedContentHash: computeProposalContentHash(snapshot),
+					operationId: `review-apply-incomplete-owned-proof-${label.replace(/\s+/g, '-')}`,
+					action: { kind: 'apply' },
+					...proof,
+					now: '2026-07-30T00:01:50.000Z',
+				}),
+				/requires both path and content hash/i
+			);
+			assert.equal(harness.textWrites, 0);
+			assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
+		});
+	}
+
+	test('native transition adapter rejects owned create proof outside the knowledge boundary', async () => {
+		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_wiki_note',
+			},
+		});
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			writeback_effect: 'create_wiki_note',
+		});
+		await assert.rejects(
+			() => new ObsidianProposalTransitionAdapter(harness.app).transition({
+				proposalPath,
+				expectedRevision: computeProposalRevision(snapshot),
+				expectedContentHash: computeProposalContentHash(snapshot),
+				operationId: 'review-apply-owned-proof-outside-boundary',
+				action: { kind: 'apply' },
+				ownedCreateTargetPath: '00_tracekeeper/control/forbidden.md',
+				ownedCreateTargetContentHash: hashContent('# Target\n'),
+				now: '2026-07-30T00:01:55.000Z',
+			}),
+			/outside the allowed Memory or Wiki boundary/i
+		);
+		assert.equal(harness.textWrites, 0);
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
 	});
 
 	test('native transition adapter rejects an intervening status before draft mutation', async () => {
@@ -1052,6 +1307,7 @@ try {
 					target_note: targetPath,
 					touched_notes: [targetPath, proposalPath],
 					writeback_preview: 'preview',
+					writeback_effect: 'append',
 				};
 			},
 		});
@@ -1064,6 +1320,56 @@ try {
 		await assert.rejects(
 			() => controller.previewApprovedWriteback(harness.staleSnapshot),
 			/confirmation|invalid preview/i
+		);
+	});
+
+	test('preview rejects missing or unknown writebackEffect', async () => {
+		const missingEffectHarness = createHarness({
+			async executeLocalTool() {
+				return {
+					proposal_id: 'proposal-1',
+					proposal_path: proposalPath,
+					target_note: targetPath,
+					touched_notes: [targetPath, proposalPath],
+					writeback_preview: 'preview',
+					confirmation_token: 'opaque-confirmation-token',
+					confirmation_expires_at: '2026-07-30T00:01:00.000Z',
+				};
+			},
+		});
+		const missingEffectController = new ReviewQueueController(
+			missingEffectHarness.app,
+			missingEffectHarness.records,
+			missingEffectHarness.host,
+			missingEffectHarness.transitionOwner
+		);
+		await assert.rejects(
+			() => missingEffectController.previewApprovedWriteback(missingEffectHarness.staleSnapshot),
+			/confirmation|invalid preview|unsupported|writeback mode/i
+		);
+		const unknownEffectHarness = createHarness({
+			async executeLocalTool() {
+				return {
+					proposal_id: 'proposal-1',
+					proposal_path: proposalPath,
+					target_note: targetPath,
+					touched_notes: [targetPath, proposalPath],
+					writeback_preview: 'preview',
+					writeback_effect: 'create-wiki-note',
+					confirmation_token: 'opaque-confirmation-token',
+					confirmation_expires_at: '2026-07-30T00:01:00.000Z',
+				};
+			},
+		});
+		const unknownEffectController = new ReviewQueueController(
+			unknownEffectHarness.app,
+			unknownEffectHarness.records,
+			unknownEffectHarness.host,
+			unknownEffectHarness.transitionOwner
+		);
+		await assert.rejects(
+			() => unknownEffectController.previewApprovedWriteback(unknownEffectHarness.staleSnapshot),
+			/confirmation|invalid preview|unsupported|writeback mode/i
 		);
 	});
 
@@ -1087,6 +1393,7 @@ try {
 			target_note: targetPath,
 			touched_notes: [targetPath, proposalPath],
 			writeback_preview: 'preview',
+			writeback_effect: 'append',
 			confirmation_token: 'opaque-confirmation-token',
 			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
 		};
@@ -1108,16 +1415,43 @@ try {
 			target_note: targetPath,
 			touched_notes: [targetPath, proposalPath],
 			writeback_preview: 'preview',
+			writeback_effect: 'append',
 			confirmation_token: 'opaque-confirmation-token',
 			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
 		};
 		const modal = new ApprovedWritebackApplyModal({}, plugin, makeProposalRecord(), () => {});
 		modal.renderReady(preview);
 		const cancel = findElement(modal.contentEl, (element) => element.text === 'Cancel');
-		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm apply');
+		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm append');
 		assert.ok(cancel);
 		assert.ok(confirm);
 		assert.equal(cancel.focused, true);
+		confirm.handlers.click();
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(receivedPreview, preview);
+	});
+
+	test('apply modal uses create-Wiki confirmation copy for create_wiki_note', async () => {
+		let receivedPreview;
+		const plugin = {
+			async applyApprovedWriteback(_proposal, preview) {
+				receivedPreview = preview;
+			},
+		};
+		const preview = {
+			proposal_id: 'proposal-1',
+			proposal_path: proposalPath,
+			target_note: targetPath,
+			touched_notes: [targetPath, proposalPath],
+			writeback_preview: 'preview',
+			writeback_effect: 'create_wiki_note',
+			confirmation_token: 'opaque-confirmation-token',
+			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
+		};
+		const modal = new ApprovedWritebackApplyModal({}, plugin, makeProposalRecord(), () => {});
+		modal.renderReady(preview);
+		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm Wiki create');
+		assert.ok(confirm);
 		confirm.handlers.click();
 		await new Promise((resolve) => setImmediate(resolve));
 		assert.equal(receivedPreview, preview);
@@ -1137,12 +1471,13 @@ try {
 			target_note: targetPath,
 			touched_notes: [targetPath, proposalPath],
 			writeback_preview: 'preview',
+			writeback_effect: 'append',
 			confirmation_token: 'opaque-confirmation-token',
 			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
 		};
 		const modal = new ApprovedWritebackApplyModal({}, plugin, makeProposalRecord(), () => {});
 		modal.renderReady(preview);
-		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm apply');
+		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm append');
 		assert.ok(confirm);
 		confirm.handlers.click();
 		await new Promise((resolve) => setImmediate(resolve));
@@ -1157,6 +1492,69 @@ try {
 		assert.equal(confirm.disabled, false);
 		assert.equal(confirm.focused, true);
 		assert.equal(globalThis.__tracekeeperFocusedElement, confirm);
+	});
+
+	test('apply modal preserves create-Wiki confirmation copy after a bounded retry', async () => {
+		globalThis.__tracekeeperReviewNotices = [];
+		const plugin = {
+			async applyApprovedWriteback() {
+				throw new Error('stale preview');
+			},
+		};
+		const preview = {
+			proposal_id: 'proposal-1',
+			proposal_path: proposalPath,
+			target_note: targetPath,
+			touched_notes: [targetPath, proposalPath],
+			writeback_preview: 'preview',
+			writeback_effect: 'create_wiki_note',
+			confirmation_token: 'opaque-confirmation-token',
+			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
+		};
+		const modal = new ApprovedWritebackApplyModal({}, plugin, makeProposalRecord(), () => {});
+		modal.renderReady(preview);
+		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm Wiki create');
+		assert.ok(confirm);
+		confirm.handlers.click();
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(confirm.text, 'Confirm Wiki create');
+	});
+
+	test('apply modal uses Wiki-specific intro, progress, and completion copy', async () => {
+		globalThis.__tracekeeperReviewNotices = [];
+		let onAppliedCalled = false;
+		const plugin = {
+			async applyApprovedWriteback() {},
+		};
+		const preview = {
+			proposal_id: 'proposal-1',
+			proposal_path: proposalPath,
+			target_note: '01_knowledge/wiki/new-note.md',
+			touched_notes: [proposalPath],
+			writeback_preview: 'preview',
+			writeback_effect: 'create_wiki_note',
+			confirmation_token: 'opaque-confirmation-token',
+			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
+		};
+		const modal = new ApprovedWritebackApplyModal({}, plugin, makeProposalRecord(), () => {
+			onAppliedCalled = true;
+		});
+		modal.renderReady(preview);
+		const intro = findElement(
+			modal.contentEl,
+			(element) => typeof element.text === 'string' && (
+				element.text.includes('新建 Wiki')
+				|| element.text.includes('new Wiki note')
+				|| element.text.includes('new Wiki note content')
+			)
+		);
+		assert.ok(intro);
+		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm Wiki create');
+		assert.ok(confirm);
+		confirm.handlers.click();
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(onAppliedCalled, true);
+		assert.match(globalThis.__tracekeeperReviewNotices.join('|'), /Wiki note created/);
 	});
 
 	test('archive modal shows exact paths and commits the displayed preview', async () => {
@@ -1321,6 +1719,9 @@ try {
 
 	test('approval rechecks target existence inside the native mutation callback', async () => {
 		const harness = createHarness({
+			proposalFields: {
+				writeback_effect: 'append',
+			},
 			beforeMutation({ files }) {
 				files.delete(targetPath);
 			},

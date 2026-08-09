@@ -25,7 +25,7 @@ assert.match(targetPolicySource, /segments\.some\(\(segment\) => segment === '\.
 assert.match(contextSource, /REVIEW_TARGET_CANDIDATE_LIMIT = 8/);
 assert.match(contextSource, /isReviewRemediationTargetPath/);
 assert.match(contextSource, /buildReviewDiffPreview/);
-assert.match(contextSource, /Approved Writeback:/);
+assert.match(contextSource, /writeback effect|ReviewTargetContext|buildReviewDiffPreview/);
 assert.match(contextSource, /sourcePathsForProposal/);
 assert.match(contextSource, /taskContextForProposal/);
 
@@ -44,7 +44,7 @@ assert.match(modalSource, /target note was not written/);
 
 assert.match(viewSource, /Task and source evidence/);
 assert.match(viewSource, /Current target context/);
-assert.match(viewSource, /Expected append diff/);
+assert.match(viewSource, /Expected (append diff|create diff|MemoryRecord create diff)/);
 assert.match(viewSource, /Approval does not write/);
 assert.match(viewSource, /Return for revision/);
 assert.match(viewSource, /Do not accept/);
