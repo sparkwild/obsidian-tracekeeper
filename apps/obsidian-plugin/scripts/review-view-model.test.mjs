@@ -335,6 +335,56 @@ try {
 	assert.equal(appliedCreateHistory?.receiptVerified, true);
 	assert.equal(appliedCreateHistory?.writebackEffect, 'create_wiki_note');
 	assert.equal(appliedCreateHistory?.operationId, 'apply-create-wiki');
+	const driftedTargetHistory = reviewModule.getReviewAppliedHistory({
+		...memoryProposal,
+		path: appliedCreateReceipt.proposalPath,
+		proposalId: appliedCreateReceipt.proposalId,
+		taskId: appliedCreateReceipt.taskId,
+		approvalStatus: 'applied',
+		targetNote: '01_knowledge/wiki/drifted-target.md',
+		writebackTarget: '01_knowledge/wiki/applied-create-wiki.md',
+		writebackEffect: 'create_wiki_note',
+		writebackOperationId: appliedCreateReceipt.operationId,
+		writebackAppliedAt: appliedCreateReceipt.committedAt,
+		contentHash: appliedCreateReceipt.committedContentHash,
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: appliedCreateReceipt,
+	});
+	assert.equal(driftedTargetHistory?.receiptVerified, false);
+	assert.equal(driftedTargetHistory?.targetNote, '01_knowledge/wiki/applied-create-wiki.md');
+	const missingWritebackTargetHistory = reviewModule.getReviewAppliedHistory({
+		...memoryProposal,
+		path: 'review_queue/missing-writeback-target.md',
+		proposalId: 'missing-writeback-target',
+		taskId: appliedCreateReceipt.taskId,
+		approvalStatus: 'applied',
+		targetNote: '01_knowledge/wiki/apply-expected-target.md',
+		writebackEffect: 'create_wiki_note',
+		writebackOperationId: appliedCreateReceipt.operationId,
+		writebackAppliedAt: appliedCreateReceipt.committedAt,
+		contentHash: appliedCreateReceipt.committedContentHash,
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: appliedCreateReceipt,
+	});
+	assert.equal(missingWritebackTargetHistory?.targetNote, '');
+	const invalidWritebackTargetHistory = reviewModule.getReviewAppliedHistory({
+		...memoryProposal,
+		path: 'review_queue/invalid-writeback-target.md',
+		proposalId: 'invalid-writeback-target',
+		taskId: appliedCreateReceipt.taskId,
+		approvalStatus: 'applied',
+		targetNote: '01_knowledge/wiki/apply-expected-target.md',
+		writebackTarget: 'unknown',
+		invalidWritebackTarget: true,
+		writebackEffect: 'create_wiki_note',
+		writebackOperationId: appliedCreateReceipt.operationId,
+		writebackAppliedAt: appliedCreateReceipt.committedAt,
+		contentHash: appliedCreateReceipt.committedContentHash,
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: appliedCreateReceipt,
+	});
+	assert.equal(invalidWritebackTargetHistory?.receiptVerified, false);
+	assert.equal(invalidWritebackTargetHistory?.targetNote, '');
 
 	const legacyAppliedHistory = reviewModule.getReviewAppliedHistory({
 		...memoryProposal,
@@ -385,6 +435,24 @@ try {
 		revision: appliedCreateReceipt.committedRevision,
 		lastTransition: appliedCreateReceipt,
 	})?.receiptVerified, false);
+	assert.equal(
+		reviewModule.getReviewAppliedHistory({
+			...memoryProposal,
+			path: appliedCreateReceipt.proposalPath,
+			proposalId: appliedCreateReceipt.proposalId,
+			taskId: appliedCreateReceipt.taskId,
+			approvalStatus: 'applied',
+			targetNote: '01_knowledge/wiki/applied-create-wiki.md',
+			writebackEffect: 'create_wiki_note',
+			writebackOperationId: appliedCreateReceipt.operationId,
+			writebackAppliedAt: appliedCreateReceipt.committedAt,
+			writebackTarget: '01_knowledge/wiki/drifted-target.md',
+			contentHash: appliedCreateReceipt.committedContentHash,
+			revision: appliedCreateReceipt.committedRevision,
+			lastTransition: appliedCreateReceipt,
+		})?.targetNote,
+		'01_knowledge/wiki/drifted-target.md'
+	);
 
 	const driftedAppliedHistory = reviewModule.getReviewAppliedHistory({
 		...memoryProposal,

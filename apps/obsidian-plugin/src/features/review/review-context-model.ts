@@ -331,7 +331,7 @@ export const buildReviewDiffPreview = (
 					: 'Writeback completed';
 		const lines = [
 			`[Applied] ${outcome}`,
-			`Target path: ${appliedHistory.targetNote || target.path || '(not recorded)'}`,
+			`Target path: ${appliedHistory.targetNote || '(not recorded)'}`,
 			`Historical writeback effect: ${appliedHistory.writebackEffect || 'unknown'}`,
 		];
 		if (appliedHistory.receiptVerified) {

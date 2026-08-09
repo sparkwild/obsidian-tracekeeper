@@ -314,6 +314,10 @@ const extractSectionText = (body: string, sectionNames: string[]): string => {
 
 const isMeaningfulProposalValue = (value: string): boolean => Boolean(normalizeProposalText(value));
 
+const hasValidWritebackTarget = (proposal: MemoryProposalRecord): boolean =>
+	!proposal.invalidWritebackTarget
+	&& isMeaningfulProposalValue(proposal.writebackTarget);
+
 const parseProposalWritebackEffect = (
 	fields: ParsedRecord
 ): { effect: ProposalWritebackEffect | undefined; invalid: boolean } => {
@@ -547,6 +551,7 @@ export const getReviewAppliedHistory = (
 		return null;
 	}
 	const receipt = proposal.lastTransition;
+	const validWritebackTarget = hasValidWritebackTarget(proposal);
 	const receiptVerified = Boolean(
 		receipt
 		&& receipt.kind === 'apply'
@@ -569,7 +574,7 @@ export const getReviewAppliedHistory = (
 		writebackEffect: receiptVerified ? proposal.writebackEffect : undefined,
 		operationId: receiptVerified ? receipt?.operationId || '' : '',
 		appliedAt: receiptVerified ? receipt?.committedAt || '' : '',
-		targetNote: proposal.targetNote,
+		targetNote: validWritebackTarget ? proposal.writebackTarget : '',
 	};
 };
 

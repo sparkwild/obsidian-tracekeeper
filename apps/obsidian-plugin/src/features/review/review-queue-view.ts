@@ -567,11 +567,23 @@ export class TracekeeperReviewQueueView extends ItemView {
 		}
 
 		const target = container.createDiv({ cls: 'tracekeeper-review-inbox__target' });
-		target.createEl('span', { text: ui('目标笔记', 'Target note') });
-		target.createEl('code', { text: proposal.targetNote || ui('尚未指定，需要补全。', 'Not specified; needs completion.') });
-		if (context?.target.exists) {
+		const isAppliedHistory = proposal.approvalStatus === 'applied';
+		const displayTarget = this.reviewDisplayTargetPath(proposal);
+		target.createEl('span', {
+			text: isAppliedHistory
+				? ui('已记录的写回目标', 'Recorded writeback target')
+				: ui('目标笔记', 'Target note'),
+		});
+		target.createEl('code', {
+			text: displayTarget || (
+				isAppliedHistory
+					? ui('未记录', 'Not recorded')
+					: ui('尚未指定，需要补全。', 'Not specified; needs completion.')
+			),
+		});
+		if (displayTarget && this.app.vault.getAbstractFileByPath(displayTarget) instanceof TFile) {
 			const openTarget = target.createEl('button', { text: ui('打开目标', 'Open target') });
-			openTarget.addEventListener('click', () => void this.openTargetNote(proposal));
+			openTarget.addEventListener('click', () => void this.openTargetNote(displayTarget));
 		}
 
 		if (context?.target.exists) {
@@ -592,11 +604,16 @@ export class TracekeeperReviewQueueView extends ItemView {
 		const previewTitle = preview.createEl('strong');
 		previewTitle.setText(previewLabel.advanced);
 		preview.createEl('small', {
-			text: appliedHistory
+			text: appliedHistory?.receiptVerified
 				? ui(
 					'这是已完成写回的历史记录；它使用持久化回执，不会根据目标的当前状态重新推断写回方式。',
 					'This is historical applied writeback. It uses the persisted receipt and does not re-infer the effect from the target\'s current state.'
 				)
+				: appliedHistory
+					? ui(
+						'提案记录为已写入，但精确写回回执当前无法验证；仅显示已记录的写回目标，不从当前目标推断历史结果。',
+						'The proposal is recorded as applied, but its exact apply receipt is not currently verified. Only the recorded writeback target is shown; current target state is not used to infer history.'
+					)
 				: ui(
 					'这是审核前的差异视图；通过审核不会写入。最终写入仍会重新生成预览并要求确认。',
 					'This is a pre-approval diff. Approval does not write. Apply will generate a fresh preview and require confirmation.'
@@ -630,6 +647,11 @@ export class TracekeeperReviewQueueView extends ItemView {
 				sourceDetails,
 				ui('历史写回方式', 'Historical writeback effect'),
 				appliedHistory.writebackEffect || ui('未知（历史记录未验证或未保存）', 'Unknown (not verified or not recorded)')
+			);
+			this.renderSourceLine(
+				sourceDetails,
+				ui('已记录的写回目标', 'Recorded writeback target'),
+				appliedHistory.targetNote || ui('未记录', 'Not recorded')
 			);
 			if (appliedHistory.receiptVerified) {
 				this.renderSourceLine(sourceDetails, ui('写回操作', 'Writeback operation'), appliedHistory.operationId);
@@ -1190,8 +1212,9 @@ export class TracekeeperReviewQueueView extends ItemView {
 	}
 
 	private rowMeta(proposal: MemoryProposalRecord): string {
+		const targetPath = this.reviewDisplayTargetPath(proposal);
 		const parts = [
-			proposal.targetNote || ui('未指定目标', 'No target'),
+			targetPath || ui('未指定目标', 'No target'),
 			proposal.relatedProject,
 			this.plugin.formatDisplayTime(proposal.sortTimestamp),
 		].filter(Boolean);
@@ -1211,13 +1234,21 @@ export class TracekeeperReviewQueueView extends ItemView {
 		);
 	}
 
-	private async openTargetNote(proposal: MemoryProposalRecord): Promise<void> {
-		const target = this.app.vault.getAbstractFileByPath(proposal.targetNote);
+	private async openTargetNote(targetPath: string): Promise<void> {
+		const target = this.app.vault.getAbstractFileByPath(targetPath);
 		if (!(target instanceof TFile)) {
 			new Notice(ui('目标笔记尚不存在或不可用。', 'The target note does not exist or is unavailable.'));
 			return;
 		}
 		await this.app.workspace.getLeaf(false).openFile(target);
+	}
+
+	private reviewDisplayTargetPath(proposal: MemoryProposalRecord): string {
+		const appliedHistory = getReviewAppliedHistory(proposal);
+		if (proposal.approvalStatus === 'applied') {
+			return appliedHistory?.targetNote || '';
+		}
+		return appliedHistory?.targetNote || proposal.targetNote;
 	}
 
 	private async openMarkdownPath(path: string, missingMessage: string): Promise<void> {

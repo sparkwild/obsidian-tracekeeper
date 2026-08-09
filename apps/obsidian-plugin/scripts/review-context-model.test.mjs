@@ -289,6 +289,55 @@ try {
 	assert.match(appliedCreateDiff, /Historical writeback effect: create_wiki_note/);
 	assert.match(appliedCreateDiff, /Operation ID: apply-create-wiki/);
 	assert.doesNotMatch(appliedCreateDiff, /\[Blocked\]/);
+	const driftedAppliedTargetProposal = {
+		...appliedCreateProposal,
+		path: 'review_queue/drifted-applied-target.md',
+		proposalId: 'drifted-applied-target',
+		targetNote: '01_knowledge/wiki/target-not-matching-historical-target.md',
+		contentHash: appliedCreateReceipt.committedContentHash,
+	};
+	const driftedAppliedTargetContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [driftedAppliedTargetProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set([existingWikiCreateConflictPath]),
+	});
+	const driftedAppliedTargetDiff = driftedAppliedTargetContexts[driftedAppliedTargetProposal.path].diffPreview;
+	assert.match(driftedAppliedTargetDiff, /Target path: 01_knowledge\/wiki\/guide-for-existing-target\.md/);
+	assert.doesNotMatch(driftedAppliedTargetDiff, /Target path: 01_knowledge\/wiki\/target-not-matching-historical-target\.md/);
+	const missingWritebackTargetProposal = {
+		...appliedCreateProposal,
+		path: 'review_queue/missing-writeback-target.md',
+		proposalId: 'missing-writeback-target',
+		targetNote: '01_knowledge/wiki/missing-writeback-target.md',
+		writebackTarget: '',
+		contentHash: appliedCreateReceipt.committedContentHash,
+	};
+	const missingWritebackTargetContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [missingWritebackTargetProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set([existingWikiCreateConflictPath]),
+	});
+	const missingWritebackTargetDiff = missingWritebackTargetContexts[missingWritebackTargetProposal.path].diffPreview;
+	assert.match(missingWritebackTargetDiff, /Target path: \(not recorded\)/);
+	const invalidWritebackTargetProposal = {
+		...appliedCreateProposal,
+		path: 'review_queue/invalid-writeback-target.md',
+		proposalId: 'invalid-writeback-target',
+		targetNote: '01_knowledge/wiki/invalid-writeback-target.md',
+		writebackTarget: 'unknown',
+		invalidWritebackTarget: true,
+		contentHash: appliedCreateReceipt.committedContentHash,
+	};
+	const invalidWritebackTargetContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [invalidWritebackTargetProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set([existingWikiCreateConflictPath]),
+	});
+	const invalidWritebackTargetDiff = invalidWritebackTargetContexts[invalidWritebackTargetProposal.path].diffPreview;
+	assert.match(invalidWritebackTargetDiff, /Target path: \(not recorded\)/);
 
 	const driftedAppliedProposal = {
 		...appliedCreateProposal,
