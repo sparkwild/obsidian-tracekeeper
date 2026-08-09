@@ -53,8 +53,8 @@ assert.ok(clientRow.includes("ui('管理 Agent', 'Manage Agent')"));
 assert.ok(clientRow.includes("'manage'"));
 assert.ok(clientRow.includes('() => this.renderSettings()'));
 assert.ok(clientRow.includes('renderClientSkillPrompt'));
-assert.ok(source.includes("case 'used': return ui('已连接', 'Connected');"));
-assert.equal(source.includes("case 'used': return ui('已使用', 'Used');"), false);
+assert.ok(source.includes("case 'used': return ui('已使用', 'Used');"));
+assert.equal(source.includes("case 'used': return ui('已连接', 'Connected');"), false);
 
 assert.equal(serviceSection.includes('renderObservedAiToolsSetting'), false);
 assert.equal(serviceSection.includes('renderConnectAiToolSetting'), false);
