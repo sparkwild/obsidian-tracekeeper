@@ -5,6 +5,7 @@ import {
 	startsWithPathPrefix,
 } from '@tracekeeper/core';
 import {
+	getReviewAppliedHistory,
 	getReviewProposalAttentionState,
 	getReviewProposalValidity,
 	type MemoryProposalRecord,
@@ -586,14 +587,20 @@ export class TracekeeperReviewQueueView extends ItemView {
 		}
 
 		const preview = container.createDiv({ cls: 'tracekeeper-review-inbox__writeback' });
+		const appliedHistory = getReviewAppliedHistory(proposal);
 		const previewLabel = this.expectedDiffModeLabel(proposal, context?.target);
 		const previewTitle = preview.createEl('strong');
 		previewTitle.setText(previewLabel.advanced);
 		preview.createEl('small', {
-			text: ui(
-				'这是审核前的差异视图；通过审核不会写入。最终写入仍会重新生成预览并要求确认。',
-				'This is a pre-approval diff. Approval does not write. Apply will generate a fresh preview and require confirmation.'
-			),
+			text: appliedHistory
+				? ui(
+					'这是已完成写回的历史记录；它使用持久化回执，不会根据目标的当前状态重新推断写回方式。',
+					'This is historical applied writeback. It uses the persisted receipt and does not re-infer the effect from the target\'s current state.'
+				)
+				: ui(
+					'这是审核前的差异视图；通过审核不会写入。最终写入仍会重新生成预览并要求确认。',
+					'This is a pre-approval diff. Approval does not write. Apply will generate a fresh preview and require confirmation.'
+				),
 			cls: 'tracekeeper-view__description',
 		});
 		preview.createEl('pre', {
@@ -618,6 +625,17 @@ export class TracekeeperReviewQueueView extends ItemView {
 		this.renderSourceLine(sourceDetails, ui('提案记录', 'Proposal record'), proposal.path);
 		this.renderSourceLine(sourceDetails, ui('提案 ID', 'Proposal ID'), proposal.proposalId || ui('未指定', 'Not specified'));
 		this.renderSourceLine(sourceDetails, ui('审核状态', 'Review status'), memoryProposalStatusLabel(proposal.approvalStatus));
+		if (appliedHistory) {
+			this.renderSourceLine(
+				sourceDetails,
+				ui('历史写回方式', 'Historical writeback effect'),
+				appliedHistory.writebackEffect || ui('未知（历史记录未验证或未保存）', 'Unknown (not verified or not recorded)')
+			);
+			if (appliedHistory.receiptVerified) {
+				this.renderSourceLine(sourceDetails, ui('写回操作', 'Writeback operation'), appliedHistory.operationId);
+				this.renderSourceLine(sourceDetails, ui('写回时间', 'Applied at'), appliedHistory.appliedAt);
+			}
+		}
 		this.renderSourceLine(sourceDetails, ui('创建时间', 'Created'), this.plugin.formatDisplayTime(proposal.sortTimestamp));
 		if (proposal.relatedProject) {
 			this.renderSourceLine(sourceDetails, ui('相关项目', 'Related project'), proposal.relatedProject);
@@ -1054,6 +1072,19 @@ export class TracekeeperReviewQueueView extends ItemView {
 	): {
 		advanced: string;
 	} {
+		const appliedHistory = getReviewAppliedHistory(proposal);
+		if (appliedHistory?.writebackEffect === 'create_memory_record') {
+			return { advanced: ui('已写入：新建 MemoryRecord', 'Applied: Memory record created') };
+		}
+		if (appliedHistory?.writebackEffect === 'create_wiki_note') {
+			return { advanced: ui('已写入：新建 Wiki', 'Applied: Wiki note created') };
+		}
+		if (appliedHistory?.writebackEffect === 'append') {
+			return { advanced: ui('已写入：追加', 'Applied: content appended') };
+		}
+		if (appliedHistory) {
+			return { advanced: ui('已写入：历史方式未知', 'Applied: historical effect unknown') };
+		}
 		const targetIsWiki = Boolean(
 			target?.path
 			&& startsWithPathPrefix(target.path, KNOWLEDGE_WIKI_DIR)

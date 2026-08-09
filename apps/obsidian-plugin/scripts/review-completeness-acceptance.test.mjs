@@ -46,6 +46,11 @@ assert.match(viewSource, /Task and source evidence/);
 assert.match(viewSource, /Current target context/);
 assert.match(viewSource, /Expected (append diff|create diff|MemoryRecord create diff)/);
 assert.match(viewSource, /Approval does not write/);
+assert.match(viewSource, /Applied: Wiki note created/);
+assert.match(viewSource, /Historical writeback effect/);
+assert.match(viewSource, /does not re-infer the effect from the target/);
+assert.match(contextSource, /Historical writeback effect:.*unknown/);
+assert.match(contextSource, /No append or create effect is inferred/);
 assert.match(viewSource, /Return for revision/);
 assert.match(viewSource, /Do not accept/);
 
@@ -63,4 +68,4 @@ assert.match(stylesSource, /button\.tracekeeper-confirm-button\s*\{[\s\S]*--trac
 assert.match(governanceSource, /incomplete proposal/i);
 assert.match(governanceSource, /Memory\/Wiki/i);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 43 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 48 })}\n`);

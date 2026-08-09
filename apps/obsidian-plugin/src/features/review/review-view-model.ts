@@ -15,7 +15,7 @@ type ParsedRecordValue = string | string[];
 
 type ParsedRecord = Record<string, ParsedRecordValue>;
 
-type ProposalWritebackEffect = 'append' | 'create_memory_record' | 'create_wiki_note';
+export type ProposalWritebackEffect = 'append' | 'create_memory_record' | 'create_wiki_note';
 
 export type MemoryProposalStatus =
 	| 'pending'
@@ -76,6 +76,12 @@ export interface MemoryProposalRecord {
 	writebackSource: 'frontmatter' | 'body' | 'none';
 	writebackEffect?: ProposalWritebackEffect;
 	invalidWritebackEffect?: boolean;
+	writebackOperationId: string;
+	invalidWritebackOperationId?: boolean;
+	writebackAppliedAt: string;
+	invalidWritebackAppliedAt?: boolean;
+	writebackTarget: string;
+	invalidWritebackTarget?: boolean;
 	archived: boolean;
 	contentHash: string;
 	fileContentHash: string;
@@ -100,6 +106,14 @@ export interface ReviewProposalValidity {
 
 export interface ReviewProposalTargetResolution {
 	exists?: boolean;
+}
+
+export interface ReviewAppliedHistory {
+	receiptVerified: boolean;
+	writebackEffect?: ProposalWritebackEffect;
+	operationId: string;
+	appliedAt: string;
+	targetNote: string;
 }
 
 interface MemoryProposalParseInput {
@@ -180,6 +194,32 @@ const firstString = (values: ParsedRecord, keys: string[]): string => {
 		}
 	}
 	return '';
+};
+
+const consistentScalarString = (
+	values: ParsedRecord,
+	keys: string[]
+): { value: string; invalid: boolean } => {
+	const found: string[] = [];
+	for (const key of keys) {
+		const raw = values[key];
+		if (raw === undefined) {
+			continue;
+		}
+		if (Array.isArray(raw)) {
+			return { value: '', invalid: true };
+		}
+		const normalized = normalizeProposalText(raw);
+		if (raw.trim() && !normalized) {
+			return { value: '', invalid: true };
+		}
+		if (normalized) {
+			found.push(normalized);
+		}
+	}
+	return new Set(found).size > 1
+		? { value: '', invalid: true }
+		: { value: found[0] || '', invalid: false };
 };
 
 const readStringList = (values: ParsedRecord, keys: string[]): string[] => {
@@ -492,11 +532,46 @@ export const proposalTransitionSnapshotFromRecord = (
 	revisionRequestedAt: proposal.revisionRequestedAt,
 	revisionRequestedBy: proposal.revisionRequestedBy,
 	archived: proposal.archived,
-	appliedOperationId: proposal.lastTransition?.kind === 'apply'
-		? proposal.lastTransition.operationId
-		: undefined,
+	appliedOperationId: proposal.writebackOperationId || (
+		proposal.lastTransition?.kind === 'apply'
+			? proposal.lastTransition.operationId
+			: undefined
+	),
 	lastTransition: proposal.lastTransition,
 });
+
+export const getReviewAppliedHistory = (
+	proposal: MemoryProposalRecord
+): ReviewAppliedHistory | null => {
+	if (proposal.approvalStatus !== 'applied') {
+		return null;
+	}
+	const receipt = proposal.lastTransition;
+	const receiptVerified = Boolean(
+		receipt
+		&& receipt.kind === 'apply'
+		&& receipt.previousStatus === 'approved'
+		&& receipt.nextStatus === 'applied'
+		&& receipt.proposalPath === proposal.path
+		&& receipt.proposalId === proposal.proposalId
+		&& receipt.taskId === proposal.taskId
+		&& receipt.committedContentHash === proposal.contentHash
+		&& receipt.committedRevision === proposal.revision
+		&& !proposal.invalidWritebackOperationId
+		&& !proposal.invalidWritebackAppliedAt
+		&& !proposal.invalidWritebackTarget
+		&& (!proposal.writebackOperationId || proposal.writebackOperationId === receipt.operationId)
+		&& (!proposal.writebackAppliedAt || proposal.writebackAppliedAt === receipt.committedAt)
+		&& (!proposal.writebackTarget || proposal.writebackTarget === proposal.targetNote)
+	);
+	return {
+		receiptVerified,
+		writebackEffect: receiptVerified ? proposal.writebackEffect : undefined,
+		operationId: receiptVerified ? receipt?.operationId || '' : '',
+		appliedAt: receiptVerified ? receipt?.committedAt || '' : '',
+		targetNote: proposal.targetNote,
+	};
+};
 
 export const extractMemoryProposalRationale = (data: ParsedRecord, body: string): string => {
 	const frontmatterRationale = readMultilineString(data, [
@@ -560,6 +635,18 @@ export const parseMemoryProposalRecord = ({
 			? 'body'
 			: 'none';
 	const { effect, invalid } = parseProposalWritebackEffect(fields);
+	const writebackOperation = consistentScalarString(
+		fields,
+		['writeback_operation_id', 'writebackOperationId']
+	);
+	const writebackAppliedAt = consistentScalarString(
+		fields,
+		['writeback_applied_at', 'writebackAppliedAt']
+	);
+	const writebackTarget = consistentScalarString(
+		fields,
+		['writeback_target', 'writebackTarget']
+	);
 	const rationale = extractMemoryProposalRationale(fields, body);
 	const lastTransition = proposalTransitionReceiptFromFrontmatter(
 		fields as Readonly<Record<string, unknown>>
@@ -603,6 +690,12 @@ export const parseMemoryProposalRecord = ({
 		writebackSource,
 		writebackEffect: effect,
 		invalidWritebackEffect: invalid,
+		writebackOperationId: writebackOperation.value,
+		invalidWritebackOperationId: writebackOperation.invalid,
+		writebackAppliedAt: writebackAppliedAt.value,
+		invalidWritebackAppliedAt: writebackAppliedAt.invalid,
+		writebackTarget: writebackTarget.value,
+		invalidWritebackTarget: writebackTarget.invalid,
 		archived: filePath === ARCHIVE_REVIEW_QUEUE_DIR
 			|| filePath.startsWith(`${ARCHIVE_REVIEW_QUEUE_DIR}/`),
 		fileContentHash: fileContentHash || '',

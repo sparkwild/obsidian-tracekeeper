@@ -8,6 +8,7 @@ import {
 } from '@tracekeeper/core';
 import type { AgentTaskRecord } from '../activity/activity-model';
 import {
+	getReviewAppliedHistory,
 	getReviewProposalValidity,
 	type MemoryProposalRecord,
 	type ReviewProposalValidity,
@@ -319,6 +320,33 @@ export const buildReviewDiffPreview = (
 	proposal: MemoryProposalRecord,
 	target: ReviewTargetContext
 ): string => {
+	const appliedHistory = getReviewAppliedHistory(proposal);
+	if (appliedHistory) {
+		const outcome = appliedHistory.writebackEffect === 'create_wiki_note'
+			? 'Wiki note created'
+			: appliedHistory.writebackEffect === 'create_memory_record'
+				? 'Memory record created'
+				: appliedHistory.writebackEffect === 'append'
+					? 'Content appended'
+					: 'Writeback completed';
+		const lines = [
+			`[Applied] ${outcome}`,
+			`Target path: ${appliedHistory.targetNote || target.path || '(not recorded)'}`,
+			`Historical writeback effect: ${appliedHistory.writebackEffect || 'unknown'}`,
+		];
+		if (appliedHistory.receiptVerified) {
+			lines.push(`Operation ID: ${appliedHistory.operationId}`);
+			lines.push(`Applied at: ${appliedHistory.appliedAt}`);
+		} else {
+			lines.push('Historical apply receipt: unavailable or no longer matches this proposal');
+		}
+		if (!appliedHistory.writebackEffect) {
+			lines.push('No append or create effect is inferred from the target\'s current state.');
+		} else {
+			lines.push('This historical outcome comes from the committed apply receipt and persisted effect.');
+		}
+		return lines.join('\n');
+	}
 	const current = target.exists
 		? trimContext(target.excerpt || '(current note has no indexed excerpt)')
 		: '(target is not resolved yet)';
