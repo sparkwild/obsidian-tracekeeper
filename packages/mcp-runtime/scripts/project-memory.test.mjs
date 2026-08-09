@@ -8,6 +8,7 @@ import test from 'node:test';
 import {
 	NodeFsVaultRepository,
 	NodeFileOperationJournal,
+	buildMemoryRecord,
 	computePayloadHash,
 	parseMarkdown,
 	scanVault,
@@ -863,6 +864,127 @@ test('start_task respects the task tracking setting', async (t) => {
 	assert.equal(disabled.isError, true);
 	assert.match(String(disabled.structuredContent?.error), /task_tracking_disabled/);
 });
+
+test('start_task context_pack_summary excludes control/inbox paths but keeps wiki/source/current memory discoverability', async (t) => {
+	const fixture = createFixture(t);
+	const context = fixture.context();
+	const token = 'start-context-filter-regression-token';
+
+	const sourcePath = '01_knowledge/sources/web/start-context-filter-source.md';
+	const wikiPath = '01_knowledge/wiki/concepts/start-context-filter-wiki.md';
+	const taskHint = {
+		project_hint: 'atlas',
+		project_id: 'atlas-id',
+		repo_path: '/work/atlas',
+	};
+	const memoryRecord = buildMemoryRecord({
+		path: '01_knowledge/memory/projects/atlas/start-context-filter-memory.md',
+		memory_id: 'start-context-filter-memory-id',
+		scope: 'project',
+		project_id: taskHint.project_id,
+		agent_type: 'codex',
+		operation_id: 'start-context-filter-memory-operation',
+		memory_kind: 'task_decision',
+		claim_key: 'start context filter current memory',
+		authority: 'agent',
+		confidence_level: 'supported',
+		declared_state: 'active',
+		observed_at: '2026-08-10T00:00:00Z',
+		valid_from: null,
+		valid_to: null,
+		last_verified_at: null,
+		evidence: [sourcePath],
+		supersedes: [],
+		contradicts: [],
+		project_hub: '01_knowledge/memory/projects/atlas/index.md',
+		global_hub: null,
+		related_wiki: [wikiPath],
+		related_sources: [sourcePath],
+		body: '# Start context filter memory\nstart-context-filter-regression-token\n',
+	});
+	const memoryPath = memoryRecord.record.path;
+
+	fixture.write(sourcePath, [
+		'---',
+		`project_hint: ${taskHint.project_hint}`,
+		`project_id: ${taskHint.project_id}`,
+		'type: captured_source',
+		'---',
+		'',
+		`# Start context filter source`,
+		`start-context-filter-regression-token`,
+		'',
+		'shared evidence for context retrieval.',
+		'',
+	].join('\n'));
+	fixture.write(wikiPath, [
+		'---',
+		`project_hint: ${taskHint.project_hint}`,
+		`project_id: ${taskHint.project_id}`,
+		'type: wiki_concept',
+		'---',
+		'',
+		'# Start context filter wiki',
+		'start-context-filter-regression-token',
+		'',
+	].join('\n'));
+	fixture.write(memoryPath, memoryRecord.markdown);
+
+	const proposal = expectSuccess(
+		await callTool(
+			'tracekeeper.propose_memory',
+			{
+				proposal_kind: 'task_decision',
+				content: `proposal containing ${token}`,
+				memory_scope: 'global',
+				...taskHint,
+				related_wiki: [wikiPath.replace(/\.md$/, '')],
+				idempotency_key: 'start-context-filter-proposal',
+			},
+			context
+		),
+		'create proposal candidate for context filter regression'
+	);
+
+	const started = expectSuccess(
+		await callTool(
+			'tracekeeper.start_task',
+			{
+				goal: `${token} review context with mixed candidates`,
+				idempotency_key: 'start-context-filter-start',
+				...taskHint,
+			},
+			context
+		),
+		'start_task for context filter regression'
+	);
+
+	const relevantNotes = started.context_pack_summary?.relevant_notes ?? [];
+	assert.ok(relevantNotes.length > 0);
+	const queue = expectSuccess(
+		await callTool(
+			'tracekeeper.review_queue',
+			{ action: 'list_pending' },
+			{
+				...context,
+				credentialCapabilities: [...LOCAL_TRUST_CAPABILITIES, 'memory.review'],
+			}
+		),
+		'list pending review queue'
+	);
+	assert.ok(queue.entries.some((entry) => entry.path === proposal.proposal_path));
+	assertNoTracekeeperPaths(relevantNotes.map((note) => note.relativePath || note.path || ''));
+	assert.ok(relevantNotes.some((note) => note.relativePath === sourcePath));
+	assert.ok(relevantNotes.some((note) => note.relativePath === wikiPath));
+	assert.ok(relevantNotes.some((note) => note.relativePath === memoryPath));
+});
+
+function assertNoTracekeeperPaths(paths) {
+	for (const notePath of paths) {
+		assert.equal(String(notePath).startsWith('00_tracekeeper/control/'), false);
+		assert.equal(String(notePath).startsWith('00_tracekeeper/inbox/'), false);
+	}
+}
 
 test('finish_task keeps ordinary task fields out of durable Memory', async (t) => {
 	const fixture = createFixture(t);

@@ -577,6 +577,8 @@ function catalogMetadataProjection(entry) {
 }
 function isCurrentReadViewEntry(entry, view) {
     const normalizedPath = entry.path.replace(/\\/g, '/');
+    if (!(0, core_1.isOrdinaryRecallPathEligible)(normalizedPath))
+        return false;
     if (normalizedPath === core_1.ARCHIVE_ROOT || normalizedPath.startsWith(`${core_1.ARCHIVE_ROOT}/`))
         return false;
     if (entry.type !== 'memory_record')

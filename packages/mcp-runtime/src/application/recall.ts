@@ -6,6 +6,7 @@ import {
 	TRACEKEEPER_SESSIONS_DIR,
 	TRACEKEEPER_TASKS_DIR,
 	isKnowledgeWikiPath,
+	isOrdinaryRecallPathEligible,
 	recallNotes,
 	type KnowledgeCatalogEntry,
 	type KnowledgeReadView,
@@ -904,6 +905,7 @@ function catalogMetadataProjection(entry: KnowledgeCatalogEntry): ScannedNote {
 
 function isCurrentReadViewEntry(entry: KnowledgeCatalogEntry, view: KnowledgeReadView): boolean {
 	const normalizedPath = entry.path.replace(/\\/g, '/');
+	if (!isOrdinaryRecallPathEligible(normalizedPath)) return false;
 	if (normalizedPath === ARCHIVE_ROOT || normalizedPath.startsWith(`${ARCHIVE_ROOT}/`)) return false;
 	if (entry.type !== 'memory_record') return true;
 	return view.memory.lifecycle.current.some((row) => row.record.path === entry.path);

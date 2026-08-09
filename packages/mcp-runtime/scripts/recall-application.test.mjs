@@ -333,6 +333,11 @@ test('application owner: injected dependencies execute global, project, and hist
 test('read view owner: bounded catalog recall never reads bodies and excludes archive and superseded memory by default', async (t) => {
 	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-recall-read-view-'));
 	t.after(() => fs.rmSync(vaultRoot, { recursive: true, force: true }));
+	const regressionToken = 'review-filter-regression-token';
+	const reviewQueueProposalPath = '00_tracekeeper/inbox/review_queue/proposal-propose-memory-ad497db02a981e82727485ea.md';
+	const controlActivityPath = '00_tracekeeper/control/agent_activity/review-filter-control.md';
+	const reviewFilterWikiPath = '01_knowledge/wiki/concepts/review-filter-wiki.md';
+	const reviewFilterSourcePath = '01_knowledge/sources/web/review-filter-source.md';
 	const memory = (memoryId, overrides = {}) => buildMemoryRecord({
 		path: `01_knowledge/memory/global/${memoryId}.md`,
 		memory_id: memoryId,
@@ -363,10 +368,43 @@ test('read view owner: bounded catalog recall never reads bodies and excludes ar
 	const currentMemory = memory('memory-current', {
 		observed_at: '2026-08-02T00:00:00Z',
 		supersedes: ['memory-old'],
+		body: `# memory-current\nlifecyclefixture memory-current\n${regressionToken}`,
 	});
 	const notes = [
 		note(vaultRoot, oldMemory.record.path, { content: oldMemory.markdown }),
 		note(vaultRoot, currentMemory.record.path, { content: currentMemory.markdown }),
+		note(vaultRoot, controlActivityPath, {
+			content: `# review filter control\n${regressionToken}`,
+			frontmatter: {
+				type: 'agent_activity',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+			},
+		}),
+		note(vaultRoot, reviewQueueProposalPath, {
+			content: `# review queue proposal\n${regressionToken}`,
+			frontmatter: {
+				type: 'memory_proposal',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+			},
+		}),
+		note(vaultRoot, reviewFilterSourcePath, {
+			content: `# review filter source\n${regressionToken}`,
+			frontmatter: {
+				type: 'captured_source',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+			},
+		}),
+		note(vaultRoot, reviewFilterWikiPath, {
+			content: `# review filter wiki\n${regressionToken}`,
+			frontmatter: {
+				type: 'wiki-concept',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+			},
+		}),
 		note(vaultRoot, '02_archive/atlas-history.md', {
 			frontmatter: { project_hint: 'atlas', project_id: 'atlas-id', type: 'agent-task', task_id: 'archived-task' },
 			content: '# Archived\narchivefixture historyfixture',
@@ -376,7 +414,7 @@ test('read view owner: bounded catalog recall never reads bodies and excludes ar
 		}),
 		note(vaultRoot, '01_knowledge/memory/projects/atlas/durable.md', {
 			frontmatter: { project_hint: 'atlas', project_id: 'atlas-id', type: 'memory' },
-			content: '# Atlas durable memory\n订单投影的既有架构决定。',
+			content: `# Atlas durable memory\n订单投影的既有架构决定。\n${regressionToken}`,
 		}),
 		note(vaultRoot, '00_tracekeeper/work/tasks/atlas-query-echo.md', {
 			frontmatter: { project_hint: 'atlas', project_id: 'atlas-id', type: 'agent_task' },
@@ -430,6 +468,31 @@ test('read view owner: bounded catalog recall never reads bodies and excludes ar
 	}, view);
 	assert.equal(queryEcho.entries[0].path, '01_knowledge/memory/projects/atlas/durable.md');
 	assert.match(queryEcho.entries.find((entry) => entry.path.endsWith('atlas-query-echo.md')).score_reason.join(' '), /query-echo penalty/);
+	const globalLeak = service.executeReadView({
+		scope: 'global',
+		query: regressionToken,
+		maxItems: 10,
+		vaultRoot,
+		projectIdentityInput: {},
+	}, view);
+	assert.equal(globalLeak.matches.some((entry) => entry.path.startsWith('00_tracekeeper/control/')), false);
+	assert.equal(globalLeak.matches.some((entry) => entry.path.startsWith('00_tracekeeper/inbox/')), false);
+	assert.equal(globalLeak.matches.some((entry) => entry.path === currentMemory.record.path), true);
+	assert.equal(globalLeak.matches.some((entry) => entry.path === reviewFilterSourcePath), true);
+	assert.equal(globalLeak.matches.some((entry) => entry.path === reviewFilterWikiPath), true);
+	assert.equal(globalLeak.matches.some((entry) => entry.path === '01_knowledge/memory/projects/atlas/durable.md'), true);
+	const project = service.executeReadView({
+		scope: 'project',
+		query: regressionToken,
+		maxItems: 10,
+		vaultRoot,
+		projectIdentityInput: { project_id: 'atlas-id', project_hint: 'atlas' },
+	}, view);
+	assert.equal(project.entries.some((entry) => entry.path.startsWith('00_tracekeeper/control/')), false);
+	assert.equal(project.entries.some((entry) => entry.path.startsWith('00_tracekeeper/inbox/')), false);
+	assert.equal(project.entries.some((entry) => entry.path === reviewFilterSourcePath), true);
+	assert.equal(project.entries.some((entry) => entry.path === reviewFilterWikiPath), true);
+	assert.equal(project.entries.some((entry) => entry.path === '01_knowledge/memory/projects/atlas/durable.md'), true);
 	assert.equal(contentReads, 0);
 });
 

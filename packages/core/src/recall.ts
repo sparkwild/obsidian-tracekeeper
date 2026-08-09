@@ -27,9 +27,9 @@ const MAX_QUERY_TOKENS = 64;
 const MAX_NOTE_TOKENS = 4096;
 const EXCLUDED_RECALL_PREFIXES = [TRACEKEEPER_CONTROL_DIR, TRACEKEEPER_INBOX_DIR];
 
-function isExcludedFromRecall(note: ScannedNote): boolean {
-	const normalizedPath = note.relativePath.replace(/\\/g, '/').toLowerCase();
-	return EXCLUDED_RECALL_PREFIXES.some((prefix) => {
+export function isOrdinaryRecallPathEligible(relativePath: string): boolean {
+	const normalizedPath = relativePath.replace(/\\/g, '/').toLowerCase();
+	return !EXCLUDED_RECALL_PREFIXES.some((prefix) => {
 		const normalizedPrefix = prefix.toLowerCase();
 		return normalizedPath === normalizedPrefix || normalizedPath.startsWith(`${normalizedPrefix}/`);
 	});
@@ -200,7 +200,7 @@ export function recallNotes(notes: ScannedNote[], query: string, options: Recall
 	const matches: RecallMatch[] = [];
 
 	for (const note of notes) {
-		if (isExcludedFromRecall(note)) {
+		if (!isOrdinaryRecallPathEligible(note.relativePath)) {
 			continue;
 		}
 		const score = scoreNote(note, tokens);
