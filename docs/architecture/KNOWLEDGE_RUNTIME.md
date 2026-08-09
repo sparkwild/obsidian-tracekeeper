@@ -44,6 +44,11 @@ truth. A stale replacement fails instead of silently overwriting newer content.
 5. The Agent consumes excerpts, match reasons, and verified relations first,
    then reads a complete note only when necessary.
 
+Source candidates are durable provenance, not approved synthesis. Their
+presence in Recall or `read_note` does not imply that any linked Wiki/Memory
+proposal has been approved or applied; the finish-task durable-output summary
+owns that closeout distinction.
+
 The index is disposable. Status exposes readiness and generation, and a rebuild
 can reproduce it from Markdown.
 
@@ -141,6 +146,13 @@ payload nor a plaintext completed result; callers recover those values only
 through the journal API. Legacy plaintext records are rewritten in sealed form
 on a subsequent safe save, while incompatible body-bearing writeback records
 are quarantined instead of replayed.
+
+A finish operation snapshots exact proposal ids and review-owner paths already
+managed by its task before journaling. That snapshot, plus any finish-generated
+or auto-applied output, produces the separate durable-output result. Missing,
+mismatched, or out-of-owner references remain unresolved evidence. Exact finish
+retries return the original snapshot instead of reinterpreting a proposal after
+later human review.
 
 Proposal identity is independent of its current path. Active review enumerates
 only the review queue, while history lookup resolves the same explicit

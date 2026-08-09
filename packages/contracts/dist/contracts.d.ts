@@ -335,7 +335,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.finish_task";
-    readonly version: 3;
+    readonly version: 4;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -344,7 +344,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "task-finish";
     readonly useCase: "finish_task";
-    readonly description: "[low-risk write] Record the task execution summary and explicitly submitted durable memory candidates at task closeout.";
+    readonly description: "[low-risk write] Record task execution closeout and report durable Wiki/Memory output separately. The result includes direct proposals already linked to the task; a captured Source or Recall match does not prove that proposed knowledge was applied.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly deprecated: {
@@ -413,7 +413,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "source";
     readonly useCase: "capture_source";
-    readonly description: "[low-risk write] Save user-provided source metadata or content under sources. Does not fetch external content.";
+    readonly description: "[low-risk write] Save user-provided source evidence under Sources. Does not fetch external content and does not apply a Wiki or Memory proposal; a captured Source remains readable provenance, not proof that synthesized knowledge was persisted.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly outputSchema: ToolOutputSchema;
@@ -428,7 +428,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "memory";
     readonly useCase: "propose_memory";
-    readonly description: "[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. Global memory stays review-gated by default.";
+    readonly description: "[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. When auto_applied is false, the proposal is not persisted knowledge until governed apply completes.";
     readonly inputSchema: ToolInputSchema;
 }];
 type ContractByName = {

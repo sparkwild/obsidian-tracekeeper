@@ -40,6 +40,9 @@ Rules:
 - Use different stable, operation-specific idempotency keys for start and finish. One key may replay only the same logical operation.
 - A successful finish is terminal. Do not retry with a different payload or idempotency key.
 - If the finish outcome is unknown, use the server's structured recovery action rather than blindly calling finish again.
+- Finished task execution and durable-output persistence are orthogonal. Report
+  the finish result's `durable_output.status`; never upgrade it because Source
+  evidence is Recallable or the task execution status is `completed`.
 
 ## Structured action order
 

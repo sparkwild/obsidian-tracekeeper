@@ -5,27 +5,27 @@
   "workflow_contract_version": 3,
   "minimum_tracekeeper_version": "0.3.0",
   "hash_algorithm": "sha256",
-  "bundle_hash": "sha256:34f7e58042b484ed96ce097b2539294f406efcdfdb7fb79b7910f20918d9b7f1",
+  "bundle_hash": "sha256:8a706c1ccd84e3e0613fb045725d878760fb1e68258314c8a24333b9272cb37b",
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "sha256:1afda3a1949abb3afbe6a4746379bf4e165c91d425e45605fbed3ebb2df3ebb5"
+      "sha256": "sha256:bd6a63c63d50c70178a89588eb7230230404f408060a2089fe081056ef032b47"
     },
     {
       "path": "references/workflow-state-machine.md",
-      "sha256": "sha256:dafc75955510f73f460b22b8cfcd729c09ad6f0aab104bf8b64b3c09d6cfb20e"
+      "sha256": "sha256:b18b97e80bf3f6dd9e4ff1bf1c19f0f98ffb0a1d4c25cc4cb33d663f7ad1a8d6"
     },
     {
       "path": "references/ingestion-workflow.md",
-      "sha256": "sha256:9c484ba3fbe830d61c150e0dcc6ae246c3ee3561f092bb03a57ab6ffaad08f36"
+      "sha256": "sha256:65517aceea2aaff762d2c721859674d47b4e0fdebc061bca0a37e19970db8771"
     },
     {
       "path": "references/failure-recovery.md",
-      "sha256": "sha256:8e3eb0168764b8892a3270334f71da1fcd96a0be2390929607e37e670aa866ef"
+      "sha256": "sha256:e428e26c5c4080a79f7f1173dac1ea6347ba3f268577cfc3bf1b176c537d4cf9"
     },
     {
       "path": "references/closeout-fields.md",
-      "sha256": "sha256:3664195d07789500e5f1259636c48d3942dd4806a145b5edc11d777ce7e1c45b"
+      "sha256": "sha256:ceebe92245fd05aa3062391bcc16d62b559b9e12b048dcbbd32118fc4ee52354"
     },
     {
       "path": "references/instruction-isolation.md",
@@ -35,7 +35,7 @@
   "artifacts": {
     "flattened": {
       "path": "dist/tracekeeper.flattened.md",
-      "sha256": "sha256:13a6f55b95d7d9392dbeb33f992fdda52ee40fad305c16317e41190dc4f3d2fd"
+      "sha256": "sha256:fe90535a3ce55b0ced19ce45d92e0f0a3eae2aa4332f460e8c2511efdbd064a6"
     }
   }
 }

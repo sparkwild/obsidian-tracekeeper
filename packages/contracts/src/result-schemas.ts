@@ -440,6 +440,51 @@ export const RECALL_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 	additionalProperties: false,
 };
 
+const DURABLE_OUTPUT_STATUS_SCHEMA = {
+	type: 'string',
+	enum: [
+		'none',
+		'pending_review',
+		'ready_to_apply',
+		'revision_requested',
+		'applied',
+		'rejected',
+		'unresolved',
+		'mixed',
+	],
+};
+
+const DURABLE_OUTPUT_SUMMARY_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	required: [
+		'status',
+		'source_capture_count',
+		'proposal_count',
+		'pending_review_count',
+		'ready_to_apply_count',
+		'revision_requested_count',
+		'applied_count',
+		'rejected_count',
+		'unresolved_count',
+		'proposal_paths',
+		'target_paths',
+	],
+	properties: {
+		status: DURABLE_OUTPUT_STATUS_SCHEMA,
+		source_capture_count: { type: 'integer', minimum: 0 },
+		proposal_count: { type: 'integer', minimum: 0 },
+		pending_review_count: { type: 'integer', minimum: 0 },
+		ready_to_apply_count: { type: 'integer', minimum: 0 },
+		revision_requested_count: { type: 'integer', minimum: 0 },
+		applied_count: { type: 'integer', minimum: 0 },
+		rejected_count: { type: 'integer', minimum: 0 },
+		unresolved_count: { type: 'integer', minimum: 0 },
+		proposal_paths: { type: 'array', items: { type: 'string' } },
+		target_paths: { type: 'array', items: { type: 'string' } },
+	},
+	additionalProperties: false,
+};
+
 export const FINISH_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 	type: 'object',
 	required: [
@@ -455,6 +500,7 @@ export const FINISH_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 		'activity_path',
 		'workflow',
 		'memory',
+		'durable_output',
 		'status',
 		'next_actions',
 	],
@@ -491,6 +537,7 @@ export const FINISH_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 		missing_related_sources: { type: 'array', items: { type: 'string' } },
 		workflow: { type: 'object', additionalProperties: true },
 		memory: { type: 'object', additionalProperties: true },
+		durable_output: DURABLE_OUTPUT_SUMMARY_SCHEMA,
 		closeout_contract: { type: 'object', additionalProperties: true },
 		memory_candidate_records: { type: 'array', items: FINISH_TASK_CLAIM_RECORD_SCHEMA },
 		memory_changes: { type: 'array', items: FINISH_TASK_MEMORY_CHANGE_SCHEMA },
@@ -505,7 +552,7 @@ export const FINISH_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 	allOf: [
 		COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA,
 		{
-			required: ['workflow', 'memory', 'status', 'next_actions'],
+			required: ['workflow', 'memory', 'durable_output', 'status', 'next_actions'],
 			properties: {
 				tool: { const: 'tracekeeper.finish_task' },
 				task_id: { type: 'string', minLength: 1 },

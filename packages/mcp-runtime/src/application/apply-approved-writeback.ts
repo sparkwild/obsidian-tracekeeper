@@ -28,6 +28,7 @@ export interface ApplyApprovedWritebackPayload {
 	taskHadProposalReference: boolean;
 	taskHadProposalIdReference?: boolean;
 	taskHadProposalPathEvidence?: boolean;
+	taskHadAppliedProposalReference?: boolean;
 	writebackContentHash: string;
 	writebackBlockHash: string;
 	writebackMarker: string;
@@ -112,6 +113,8 @@ function boundedWritebackPayload(
 	const hasPartialStableProposalReferenceFlags =
 		payload.taskHadProposalIdReference !== undefined
 		|| payload.taskHadProposalPathEvidence !== undefined;
+	const hasAppliedProposalReferenceFlag =
+		typeof payload.taskHadAppliedProposalReference === 'boolean';
 	const requiredStrings: Array<keyof ApplyApprovedWritebackPayload> = [
 		'proposalId',
 		'proposalPath',
@@ -149,6 +152,9 @@ function boundedWritebackPayload(
 			&& payload.effectKind !== 'create_memory_record'
 			&& payload.effectKind !== 'create_wiki_note')
 		|| (hasPartialStableProposalReferenceFlags && !hasStableProposalReferenceFlags)
+		|| (payload.taskHadAppliedProposalReference !== undefined
+			&& !hasAppliedProposalReferenceFlag)
+		|| (hasAppliedProposalReferenceFlag && !hasStableProposalReferenceFlags)
 		|| (
 			payload.taskId === null
 			&& (
@@ -159,6 +165,7 @@ function boundedWritebackPayload(
 				|| payload.taskHadProposalReference
 				|| payload.taskHadProposalIdReference === true
 				|| payload.taskHadProposalPathEvidence === true
+				|| payload.taskHadAppliedProposalReference === true
 			)
 		)
 		|| (
@@ -215,6 +222,12 @@ function boundedWritebackPayload(
 			? {
 				taskHadProposalIdReference: payload.taskHadProposalIdReference,
 				taskHadProposalPathEvidence: payload.taskHadProposalPathEvidence,
+				...(hasAppliedProposalReferenceFlag
+					? {
+						taskHadAppliedProposalReference:
+							payload.taskHadAppliedProposalReference,
+					}
+					: {}),
 			}
 			: {}),
 		writebackContentHash: payload.writebackContentHash,

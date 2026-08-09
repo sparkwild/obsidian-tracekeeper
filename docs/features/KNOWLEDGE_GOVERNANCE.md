@@ -18,6 +18,16 @@ reusable subjects such as hubs, concepts, claims, guides, and references.
 Durable Memory should link to relevant Wiki or Source notes so Recall and the
 Obsidian graph use the same relationships.
 
+A finished task therefore has two independent outcome dimensions. Task status
+describes whether the Agent finished its execution; the finish result's
+durable-output status freezes the state at closeout of every exact Wiki/Memory
+proposal linked to that task. Human and Agent closeout surfaces show both, and
+the human surface may additionally reflect later exact applied-proposal
+evidence without rewriting the closeout snapshot. Source capture is durable
+provenance and remains readable even when a linked proposal is pending,
+rejected, or abandoned, but it is never presented as proof that the proposed
+Wiki/Memory target was applied.
+
 ## Agent Work
 
 Agents may:
@@ -105,6 +115,12 @@ Project memory uses a lighter default rule:
 
 A pending proposal is not durable memory. Only an eligible project auto-save or
 a completed approved writeback may be described as persisted.
+
+At `finish_task`, direct proposals already linked to the task are included in
+the durable-output summary even when the Agent correctly omits duplicate
+`memory_candidate_records`. Exact finish retries retain the original closeout
+snapshot; proposal correlation requires the managed id and review-owner path,
+and missing or mismatched evidence is reported as unresolved.
 
 Recall selects relevant evidence and is not exhaustive. The only public memory
 catalog is read-only `tracekeeper.memory`; there is no public project-specific

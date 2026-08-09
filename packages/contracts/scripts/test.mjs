@@ -217,7 +217,7 @@ assert.match(memoryContract.description, /metadata only/i);
 assert.match(memoryContract.description, /read_note/i);
 
 const finishContract = getContractByName('tracekeeper.finish_task');
-assert.equal(finishContract.version, 3);
+assert.equal(finishContract.version, 4);
 assert.equal(finishContract.inputSchema.properties.memory_candidates, undefined);
 assert.equal(finishContract.inputSchema.properties.review_proposal_mode, undefined);
 assert.equal(finishContract.inputSchema.properties.memory_scope, undefined);
@@ -408,6 +408,7 @@ for (const reasonCode of ['TASK_CONTEXT_REQUIRED', 'TASK_CLOSEOUT_REQUIRED', 'RE
 	assert(AGENT_ACTION_REASON_CODES.includes(reasonCode), `agent action reason codes should include ${reasonCode}`);
 }
 assert(AGENT_ACTION_REASON_CODES.includes('MEMORY_REVIEW_REQUIRED'), 'agent action reason codes should include MEMORY_REVIEW_REQUIRED');
+assert(AGENT_ACTION_REASON_CODES.includes('MEMORY_NOT_PERSISTED'), 'agent action reason codes should include MEMORY_NOT_PERSISTED');
 
 assert(Array.isArray(AGENT_ACTION_SCHEMA.required), 'AGENT_ACTION_SCHEMA should have required list');
 for (const requiredField of ['action_id', 'kind', 'priority', 'required', 'timing', 'reason_code', 'reason']) {

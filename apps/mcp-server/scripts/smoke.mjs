@@ -1737,11 +1737,25 @@ async function main() {
 		assert.equal(finishTask.suggestion_count, undefined);
 		assert.equal(finishTask.suggested_memory_updates, undefined);
 		assert.equal(finishTask.memory?.status, 'no_candidates');
+		assert.deepEqual(finishTask.durable_output, {
+			status: 'none',
+			source_capture_count: 0,
+			proposal_count: 0,
+			pending_review_count: 0,
+			ready_to_apply_count: 0,
+			revision_requested_count: 0,
+			applied_count: 0,
+			rejected_count: 0,
+			unresolved_count: 0,
+			proposal_paths: [],
+			target_paths: [],
+		});
 		assert.ok(Array.isArray(finishTask.next_actions));
 		assert.equal(finishTask.next_actions.some((action) => action.tool === 'tracekeeper.finish_task'), false);
+		assert.equal(finishTask.next_actions[0]?.reason_code, 'MEMORY_NOT_PERSISTED');
 		assert.ok(Array.isArray(finishTask.next_actions_for_agent));
-		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('no durable memory candidates')));
-		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('tracekeeper.propose_memory')));
+		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('no Wiki/Memory durable output was linked at finish')));
+		assert.equal(finishTask.next_actions_for_agent.some((entry) => entry.includes('tracekeeper.propose_memory')), false);
 		assert.equal(finishTask.next_actions_for_agent.some((entry) => entry.includes('call tracekeeper.finish_task again with')), false);
 		assert.deepEqual(JSON.parse(finishTaskCall.content[0]?.text), finishTask, 'finish text fallback should match structuredContent');
 		assert.ok(

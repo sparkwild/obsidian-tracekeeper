@@ -18,6 +18,7 @@ export interface ApplyApprovedWritebackPayload {
     taskHadProposalReference: boolean;
     taskHadProposalIdReference?: boolean;
     taskHadProposalPathEvidence?: boolean;
+    taskHadAppliedProposalReference?: boolean;
     writebackContentHash: string;
     writebackBlockHash: string;
     writebackMarker: string;

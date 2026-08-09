@@ -15,6 +15,8 @@
 | Missing Wiki bridge | Accept review-queue routing | Bypass review with an automatic write |
 | Proposal pending | Report that human review is pending | Describe it as approved or durable memory |
 | Proposal approved | Apply only when the user explicitly requests it | Auto-approve or auto-apply |
+| Source captured or recalled | Describe it as readable provenance and inspect `durable_output` for persistence | Claim that a Wiki/Memory target was applied |
+| Finish reports pending, rejected, or unresolved durable output | Report task execution and persistence state separately | Collapse both into a successful save |
 | Finish completed | Treat the task as terminal | Call finish again with a different payload |
 | Finish outcome unknown | Follow the server's structured recovery action | Blindly retry finish |
 

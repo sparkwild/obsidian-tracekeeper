@@ -16,6 +16,11 @@ Use this route only inside `tracked_task` when the active user explicitly asks t
 6. Synthesize only from successfully captured source paths and verified Recall evidence. Call `tracekeeper.propose_memory` once for the intended candidate and include only valid `related_sources` and `related_wiki` paths.
 7. Call `tracekeeper.finish_task` once with the same real task id and the actual task status. Omit duplicate `memory_candidate_records` when the candidate was already submitted through `propose_memory`; task tracking is still recorded.
 
+At closeout, report task execution and `durable_output.status` separately. A
+captured Source remains Recallable/readable provenance while its synthesized
+proposal is pending or rejected. That read success must not be described as an
+applied Wiki/Memory result.
+
 ## Policy and authority
 
 An explicit request to research and save is a workflow trigger, not a permission grant. `capture_source` still requires `vault.write`; `propose_memory` still requires `memory.propose`; MCP policy still controls the target, review queue, and optional project auto-write. If a capability is missing, report which capability was unavailable and leave that step undone.

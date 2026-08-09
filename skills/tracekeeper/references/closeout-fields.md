@@ -6,6 +6,9 @@ Provide accurate values for the fields exposed by the current `tracekeeper.finis
 
 - `task_id`: the exact identifier returned by `tracekeeper.start_task`.
 - status: completed, partial, or blocked according to actual outcome.
+- Returned `durable_output.status`: the Runtime's separate snapshot of exact
+  Wiki/Memory proposals linked to the task. Always report it when persistence
+  was requested; never infer it from task status.
 - summary: concise work performed and user-visible result.
 - decisions: decisions made during the task; these remain task facts unless copied into an explicit memory candidate.
 - unresolved items: risks, blockers, or intentionally deferred work.
@@ -21,6 +24,12 @@ Review semantics:
 
 - A proposal is pending until human review approves it.
 - Pending content is not durable memory or an applied Wiki update.
+- A captured Source, Source Recall match, or Source `read_note` result is
+  provenance evidence, not proof that a linked Wiki/Memory target was applied.
+- A direct `propose_memory` call is already linked to the task. Omit its
+  duplicate finish candidate as instructed, then use the returned
+  `durable_output` summary instead of accepting `no_candidates` as persistence
+  success.
 - Apply an approved proposal only when the user explicitly requests the apply action.
 - Missing Wiki context routes the proposal to review rather than weakening the boundary.
 - Project auto-save caps an Agent `verified` request to `supported`; user authority, lifecycle transitions, unresolved claim conflicts, and uncertain project identity still require review.

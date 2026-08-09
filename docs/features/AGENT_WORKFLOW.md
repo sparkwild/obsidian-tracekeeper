@@ -115,6 +115,13 @@ The user's explicit request authorizes this workflow intent. It does not grant M
 5. Synthesize only from captured source paths and verified Recall evidence. Call `tracekeeper.propose_memory` for a candidate memory or Wiki change, supplying only Runtime-validated relation paths. The Memory policy, target allowlist, Wiki bridge, and Runtime's fixed capabilities decide whether that result is queued, auto-applied for an eligible project, or denied.
 6. Finish the task once. When a source-ingestion route already submitted the durable candidate, omit duplicate `memory_candidate_records`; task tracking and durable-memory processing are independent.
 
+`finish_task.status` describes task execution only. Its `durable_output` result
+describes whether task-linked Wiki/Memory output is still pending review, ready
+to apply, returned for revision, applied, rejected, unresolved, or mixed. The
+Agent must report both when the user requested persistence. A captured Source,
+Source `read_note`, or Source Recall match proves only that provenance is
+available; it never proves that the proposed Wiki/Memory target was applied.
+
 Use stable tool-specific idempotency keys, for example `capture-source:<task-id>:<ordinal>` and `propose-memory:<task-id>:<target>`. A retry repeats the same tool payload with its same key. Never reuse a start, finish, capture, or proposal key for a different tool or a changed payload.
 
 If a source cannot be acquired, do not invent a summary, claim, citation, or captured path. Continue with captured evidence only and state the partial source coverage explicitly in the final `finish_task` summary. If `vault.write` or `memory.propose` is unavailable, report which capability was unavailable and leave the denied action undone; do not request a bypass or silently write outside Tracekeeper.
@@ -135,6 +142,8 @@ Only `tracked_task` has a closeout lifecycle.
 - Never invent, guess, or rewrite a Wiki or source path. When no verified relationship is available, omit the field and allow MCP review policy to report the missing bridge.
 - Submit durable-memory or Wiki changes only through `tracekeeper.propose_memory`; the Runtime's policy decides whether the outcome is review-gated or an eligible project auto-write.
 - A pending proposal is not durable memory.
+- Copy the returned `durable_output` state into the user-facing closeout. Do not
+  replace it with an inference from task `status`, a Source path, or Recall.
 - Apply an approved proposal only when the user explicitly requests the apply action.
 - After a successful finish, treat the task as terminal and do not finish again.
 

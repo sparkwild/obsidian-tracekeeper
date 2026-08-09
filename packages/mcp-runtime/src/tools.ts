@@ -503,6 +503,51 @@ interface FinishTaskProposalResult {
 	memoryChanges: FinishTaskMemoryChange[];
 }
 
+type DurableOutputStatus =
+	| 'none'
+	| 'pending_review'
+	| 'ready_to_apply'
+	| 'revision_requested'
+	| 'applied'
+	| 'rejected'
+	| 'unresolved'
+	| 'mixed';
+
+type DurableProposalStatus = Exclude<DurableOutputStatus, 'none' | 'mixed'>;
+
+interface FinishTaskDurableProposalSnapshot {
+	proposalId: string;
+	path: string;
+	proposalKind: string;
+	targetPath: string;
+	status: DurableProposalStatus;
+	exact: boolean;
+}
+
+interface FinishTaskDurableOutputSnapshot {
+	sourceCapturePaths: string[];
+	proposals: FinishTaskDurableProposalSnapshot[];
+}
+
+interface FinishTaskDurableOutputSummary {
+	status: DurableOutputStatus;
+	source_capture_count: number;
+	proposal_count: number;
+	pending_review_count: number;
+	ready_to_apply_count: number;
+	revision_requested_count: number;
+	applied_count: number;
+	rejected_count: number;
+	unresolved_count: number;
+	proposal_paths: string[];
+	target_paths: string[];
+}
+
+interface FinishTaskDurableOutputEvidence {
+	summary: FinishTaskDurableOutputSummary;
+	proposalIdsAtFinish: string[];
+}
+
 interface FinishTaskMemoryCandidateRecord {
 	proposal_kind: string;
 	content: string;
@@ -1166,32 +1211,192 @@ function canonicalMemoryCloseoutStatus(payload: Record<string, unknown>): Memory
 	}
 }
 
+function nonNegativeInteger(value: unknown): number {
+	return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+		? value
+		: 0;
+}
+
+function normalizedStringList(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	return [...new Set(
+		value
+			.filter((entry): entry is string => typeof entry === 'string')
+			.map((entry) => entry.trim())
+			.filter(Boolean)
+	)];
+}
+
+function isDurableOutputStatus(value: unknown): value is DurableOutputStatus {
+	return value === 'none'
+		|| value === 'pending_review'
+		|| value === 'ready_to_apply'
+		|| value === 'revision_requested'
+		|| value === 'applied'
+		|| value === 'rejected'
+		|| value === 'unresolved'
+		|| value === 'mixed';
+}
+
+function legacyDurableOutputSummary(payload: Record<string, unknown>): FinishTaskDurableOutputSummary {
+	const memoryStatus = canonicalMemoryCloseoutStatus(payload);
+	const proposals = Array.isArray(payload.proposals)
+		? payload.proposals.filter(isRecord)
+		: [];
+	const autoApplied = Array.isArray(payload.auto_applied_memory_updates)
+		? payload.auto_applied_memory_updates.filter(isRecord)
+		: [];
+	const proposalPaths = normalizedStringList(
+		proposals.map((proposal) => proposal.path ?? proposal.proposal_path)
+	);
+	const targetPaths = normalizedStringList([
+		...proposals.map((proposal) => proposal.target_note),
+		...autoApplied.map((update) => update.path),
+	]);
+	let proposalCount = nonNegativeInteger(payload.proposal_count);
+	let pendingReviewCount = 0;
+	let appliedCount = nonNegativeInteger(payload.auto_applied_count);
+	let unresolvedCount = 0;
+
+	if (memoryStatus === 'queued_for_review' || memoryStatus === 'requires_wiki_bridge') {
+		pendingReviewCount = Math.max(proposalCount, proposalPaths.length, 1);
+		proposalCount = Math.max(proposalCount, pendingReviewCount);
+	} else if (memoryStatus === 'partially_auto_saved') {
+		pendingReviewCount = Math.max(proposalCount, proposalPaths.length, 1);
+		proposalCount = Math.max(proposalCount, pendingReviewCount);
+		appliedCount = Math.max(appliedCount, targetPaths.length > 0 ? 1 : 0, 1);
+	} else if (memoryStatus === 'auto_saved') {
+		appliedCount = Math.max(appliedCount, targetPaths.length > 0 ? 1 : 0, 1);
+	} else if (memoryStatus === 'conflict') {
+		unresolvedCount = Math.max(proposalCount, proposalPaths.length, 1);
+		proposalCount = Math.max(proposalCount, unresolvedCount);
+	}
+
+	const activeStates = [pendingReviewCount, appliedCount, unresolvedCount]
+		.filter((count) => count > 0)
+		.length;
+	const status: DurableOutputStatus = activeStates > 1
+		? 'mixed'
+		: pendingReviewCount > 0
+			? 'pending_review'
+			: appliedCount > 0
+				? 'applied'
+				: unresolvedCount > 0
+					? 'unresolved'
+					: 'none';
+	return {
+		status,
+		source_capture_count: 0,
+		proposal_count: proposalCount,
+		pending_review_count: pendingReviewCount,
+		ready_to_apply_count: 0,
+		revision_requested_count: 0,
+		applied_count: appliedCount,
+		rejected_count: 0,
+		unresolved_count: unresolvedCount,
+		proposal_paths: proposalPaths,
+		target_paths: targetPaths,
+	};
+}
+
+function durableOutputSummaryFromPayload(payload: Record<string, unknown>): FinishTaskDurableOutputSummary {
+	if (!isRecord(payload.durable_output)) {
+		return legacyDurableOutputSummary(payload);
+	}
+	const raw = payload.durable_output;
+	const fallback = legacyDurableOutputSummary(payload);
+	return {
+		status: isDurableOutputStatus(raw.status) ? raw.status : fallback.status,
+		source_capture_count: nonNegativeInteger(raw.source_capture_count),
+		proposal_count: nonNegativeInteger(raw.proposal_count),
+		pending_review_count: nonNegativeInteger(raw.pending_review_count),
+		ready_to_apply_count: nonNegativeInteger(raw.ready_to_apply_count),
+		revision_requested_count: nonNegativeInteger(raw.revision_requested_count),
+		applied_count: nonNegativeInteger(raw.applied_count),
+		rejected_count: nonNegativeInteger(raw.rejected_count),
+		unresolved_count: nonNegativeInteger(raw.unresolved_count),
+		proposal_paths: normalizedStringList(raw.proposal_paths),
+		target_paths: normalizedStringList(raw.target_paths),
+	};
+}
+
+function compatibleMemoryCloseoutStatus(
+	durableOutput: FinishTaskDurableOutputSummary,
+	fallback: MemoryCloseoutStatus
+): MemoryCloseoutStatus {
+	if (durableOutput.rejected_count > 0 || durableOutput.unresolved_count > 0) {
+		return 'conflict';
+	}
+	if (fallback === 'requires_wiki_bridge' && durableOutputNeedsReview(durableOutput)) {
+		return 'requires_wiki_bridge';
+	}
+	if (
+		durableOutput.pending_review_count > 0
+		|| durableOutput.ready_to_apply_count > 0
+		|| durableOutput.revision_requested_count > 0
+	) {
+		return durableOutput.applied_count > 0
+			? 'partially_auto_saved'
+			: 'queued_for_review';
+	}
+	if (durableOutput.applied_count > 0) {
+		return 'auto_saved';
+	}
+	return fallback;
+}
+
+function durableOutputNeedsReview(durableOutput: FinishTaskDurableOutputSummary): boolean {
+	return durableOutput.pending_review_count > 0
+		|| durableOutput.ready_to_apply_count > 0
+		|| durableOutput.revision_requested_count > 0;
+}
+
 function buildFinishTaskActions(payload: Record<string, unknown>): AgentAction[] {
 	const baseId = actionBaseId(payload, 'finish-task');
-	const memoryStatus = canonicalMemoryCloseoutStatus(payload);
-	if (
-		memoryStatus === 'queued_for_review' ||
-		memoryStatus === 'partially_auto_saved' ||
-		memoryStatus === 'requires_wiki_bridge'
-	) {
-		return [{
+	const durableOutput = durableOutputSummaryFromPayload(payload);
+	const actions: AgentAction[] = [];
+	if (durableOutputNeedsReview(durableOutput)) {
+		actions.push({
 			action_id: `${baseId}:report-review`,
 			kind: 'user_review',
 			priority: 100,
 			required: true,
 			timing: 'immediate',
 			reason_code: 'MEMORY_REVIEW_REQUIRED',
-			reason: 'Report that durable memory candidates await review in Obsidian; do not call finish_task again.',
-		}];
+			reason: `Report that durable Wiki/Memory output is ${durableOutput.status} and requires human review in Obsidian. Captured Source or Recall evidence does not prove that a Wiki/Memory target was applied; do not call finish_task again.`,
+		});
 	}
+	if (durableOutput.rejected_count > 0 || durableOutput.unresolved_count > 0) {
+		actions.push({
+			action_id: `${baseId}:report-not-persisted`,
+			kind: 'report_status',
+			priority: 100,
+			required: true,
+			timing: 'immediate',
+			reason_code: 'MEMORY_NOT_PERSISTED',
+			reason: `Report that durable Wiki/Memory output is ${durableOutput.status} and was not persisted. Captured Source or Recall evidence remains provenance only; do not call finish_task again.`,
+		});
+	}
+	if (actions.length > 0) {
+		return actions;
+	}
+	const reason = durableOutput.status === 'applied'
+		? 'Report that the durable Wiki/Memory output was applied and do not call finish_task again.'
+		: durableOutput.source_capture_count > 0
+			? 'Report that captured Source is readable provenance only and that no Wiki/Memory output was applied; do not call finish_task again.'
+			: 'Report that no durable Wiki/Memory output was linked at finish and do not call finish_task again.';
 	return [{
 		action_id: `${baseId}:report`,
 		kind: 'report_status',
 		priority: 100,
 		required: true,
 		timing: 'immediate',
-		reason_code: 'MEMORY_RECORDED',
-		reason: 'Report the returned memory closeout status and do not call finish_task again.',
+		reason_code: durableOutput.status === 'applied'
+			? 'MEMORY_RECORDED'
+			: 'MEMORY_NOT_PERSISTED',
+		reason,
 	}];
 }
 
@@ -1322,8 +1527,13 @@ function decorateToolResult(
 		decorated.next_actions = buildRecallActions(decorated, context, recallId, scope, matches);
 	}
 	if (toolName === 'tracekeeper.finish_task') {
-		const memoryStatus = canonicalMemoryCloseoutStatus(payload);
+		const durableOutput = durableOutputSummaryFromPayload(payload);
+		const memoryStatus = compatibleMemoryCloseoutStatus(
+			durableOutput,
+			canonicalMemoryCloseoutStatus(payload)
+		);
 		decorated.memory_status = memoryStatus;
+		decorated.durable_output = durableOutput;
 		decorated.workflow = {
 			mode: 'tracked_task',
 			state: 'finished',
@@ -1335,12 +1545,9 @@ function decorateToolResult(
 		};
 		decorated.memory = {
 			status: memoryStatus,
-			proposal_count: typeof payload.proposal_count === 'number' ? payload.proposal_count : 0,
+			proposal_count: durableOutput.proposal_count,
 			auto_applied_count: typeof payload.auto_applied_count === 'number' ? payload.auto_applied_count : 0,
-			action_required:
-				memoryStatus === 'queued_for_review' ||
-				memoryStatus === 'partially_auto_saved' ||
-				memoryStatus === 'requires_wiki_bridge',
+			action_required: durableOutputNeedsReview(durableOutput),
 		};
 		decorated.next_actions = buildFinishTaskActions(decorated);
 	}
@@ -3882,6 +4089,7 @@ interface WritebackConfirmationBinding {
 	taskHadProposalReference: boolean;
 	taskHadProposalIdReference?: boolean;
 	taskHadProposalPathEvidence?: boolean;
+	taskHadAppliedProposalReference?: boolean;
 	writebackContentHash: string;
 	writebackBlockHash: string;
 	writebackMarker: string;
@@ -4211,6 +4419,8 @@ function isWritebackConfirmationBinding(value: unknown): value is WritebackConfi
 	const hasPartialStableProposalReferenceFlags =
 		value.taskHadProposalIdReference !== undefined
 		|| value.taskHadProposalPathEvidence !== undefined;
+	const hasAppliedProposalReferenceFlag =
+		typeof value.taskHadAppliedProposalReference === 'boolean';
 	return value.schemaVersion === WRITEBACK_CONFIRMATION_SCHEMA_VERSION
 		&& stringKeys.every((key) => typeof value[key] === 'string')
 		&& typeof value.previewNonce === 'string'
@@ -4235,6 +4445,9 @@ function isWritebackConfirmationBinding(value: unknown): value is WritebackConfi
 		&& typeof value.taskHadTargetReference === 'boolean'
 		&& typeof value.taskHadProposalReference === 'boolean'
 		&& (!hasPartialStableProposalReferenceFlags || hasStableProposalReferenceFlags)
+		&& (value.taskHadAppliedProposalReference === undefined
+			|| hasAppliedProposalReferenceFlag)
+		&& (!hasAppliedProposalReferenceFlag || hasStableProposalReferenceFlags)
 		&& (
 			(
 				value.taskId === null
@@ -4245,6 +4458,7 @@ function isWritebackConfirmationBinding(value: unknown): value is WritebackConfi
 				&& value.taskHadProposalReference === false
 				&& value.taskHadProposalIdReference !== true
 				&& value.taskHadProposalPathEvidence !== true
+				&& value.taskHadAppliedProposalReference !== true
 			)
 			|| (
 				typeof value.taskId === 'string'
@@ -4661,11 +4875,18 @@ async function prepareWritebackConfirmation(
 	const taskHadProposalPathEvidence = task
 		? readFrontmatterStringList(taskFrontmatter, 'proposal_paths').includes(proposal.path)
 		: false;
+	const taskHadAppliedProposalReference = task
+		? readFrontmatterStringList(
+			taskFrontmatter,
+			'durable_output_applied_proposal_ids'
+		).includes(proposal.proposalId)
+		: false;
 	const taskHadProposalReference = taskHadProposalIdReference;
 	const taskLinkedContent = task && (
 		!taskHadTargetReference
 		|| !taskHadProposalIdReference
 		|| !taskHadProposalPathEvidence
+		|| !taskHadAppliedProposalReference
 	)
 		? updateFrontmatterFields(task.content, {
 			memory_writes: mergeFrontmatterList(taskFrontmatter, 'memory_writes', [targetPath]),
@@ -4678,6 +4899,11 @@ async function prepareWritebackConfirmation(
 				taskFrontmatter,
 				'proposal_paths',
 				[proposal.path]
+			),
+			durable_output_applied_proposal_ids: mergeFrontmatterList(
+				taskFrontmatter,
+				'durable_output_applied_proposal_ids',
+				[proposal.proposalId]
 			),
 		})
 		: task?.content || '';
@@ -4754,6 +4980,7 @@ async function prepareWritebackConfirmation(
 			taskHadProposalReference,
 			taskHadProposalIdReference,
 			taskHadProposalPathEvidence,
+			taskHadAppliedProposalReference,
 			writebackContentHash: hashText(snapshot.writebackContent),
 			writebackBlockHash: hashText(writeback.block),
 			writebackMarker: writeback.marker,
@@ -4795,6 +5022,12 @@ function writebackBindingPayload(
 			? {
 				taskHadProposalIdReference: binding.taskHadProposalIdReference,
 				taskHadProposalPathEvidence: binding.taskHadProposalPathEvidence,
+				...(typeof binding.taskHadAppliedProposalReference === 'boolean'
+					? {
+						taskHadAppliedProposalReference:
+							binding.taskHadAppliedProposalReference,
+					}
+					: {}),
 			}
 			: {}),
 		writebackContentHash: binding.writebackContentHash,
@@ -4845,6 +5078,8 @@ function isApplyApprovedWritebackPayload(
 	const hasPartialStableProposalReferenceFlags =
 		value.taskHadProposalIdReference !== undefined
 		|| value.taskHadProposalPathEvidence !== undefined;
+	const hasAppliedProposalReferenceFlag =
+		typeof value.taskHadAppliedProposalReference === 'boolean';
 	return value.schemaVersion === WRITEBACK_CONFIRMATION_SCHEMA_VERSION
 		&& requiredStrings.every((key) => typeof value[key] === 'string')
 		&& requiredStrings.every((key) => (value[key] as string).length <= 2048)
@@ -4869,6 +5104,9 @@ function isApplyApprovedWritebackPayload(
 		&& typeof value.taskHadTargetReference === 'boolean'
 		&& typeof value.taskHadProposalReference === 'boolean'
 		&& (!hasPartialStableProposalReferenceFlags || hasStableProposalReferenceFlags)
+		&& (value.taskHadAppliedProposalReference === undefined
+			|| hasAppliedProposalReferenceFlag)
+		&& (!hasAppliedProposalReferenceFlag || hasStableProposalReferenceFlags)
 		&& (
 			(
 				value.taskId === null
@@ -4879,6 +5117,7 @@ function isApplyApprovedWritebackPayload(
 				&& value.taskHadProposalReference === false
 				&& value.taskHadProposalIdReference !== true
 				&& value.taskHadProposalPathEvidence !== true
+				&& value.taskHadAppliedProposalReference !== true
 			)
 			|| (
 				typeof value.taskId === 'string'
@@ -6050,6 +6289,9 @@ function buildTaskNotePath(taskId: string): string {
 
 interface AgentTaskMetadata extends ResolvedProjectIdentity {
 	client: string;
+	proposalIds: string[];
+	proposalPaths: string[];
+	sourceCaptures: string[];
 }
 
 function emptyAgentTaskMetadata(): AgentTaskMetadata {
@@ -6061,6 +6303,9 @@ function emptyAgentTaskMetadata(): AgentTaskMetadata {
 		confidence: 'uncertain',
 		warnings: [],
 		client: '',
+		proposalIds: [],
+		proposalPaths: [],
+		sourceCaptures: [],
 	};
 }
 
@@ -6086,6 +6331,9 @@ function agentTaskMetadataFromFrontmatter(frontmatter: Record<string, unknown>):
 			: 'derived',
 		warnings: readFrontmatterStringList(frontmatter, 'project_identity_warnings'),
 		client: readFrontmatterString(frontmatter, ['client']),
+		proposalIds: readFrontmatterStringList(frontmatter, 'proposal_ids'),
+		proposalPaths: readFrontmatterStringList(frontmatter, 'proposal_paths'),
+		sourceCaptures: readFrontmatterStringList(frontmatter, 'source_captures'),
 	};
 }
 
@@ -6206,6 +6454,157 @@ function mergeFrontmatterList(frontmatter: Record<string, unknown>, key: string,
 		}
 	}
 	return Array.from(merged).join(', ');
+}
+
+function durableProposalStatusFromApproval(status: string): DurableProposalStatus {
+	switch (status.trim().toLowerCase().replace(/[\s-]+/g, '_')) {
+		case 'pending':
+		case 'pending_review':
+			return 'pending_review';
+		case 'approved':
+		case 'ready_to_apply':
+			return 'ready_to_apply';
+		case 'revision_requested':
+			return 'revision_requested';
+		case 'applied':
+			return 'applied';
+		case 'rejected':
+			return 'rejected';
+		default:
+			return 'unresolved';
+	}
+}
+
+function normalizedTaskSourceCaptures(values: readonly string[], context: ToolContext): string[] {
+	const captures = new Set<string>();
+	for (const value of values) {
+		try {
+			const normalized = normalizeNotePath(value, pathSafetyOptions(context));
+			if (isKnowledgeSourcePath(normalized)) {
+				captures.add(normalized);
+			}
+		} catch {
+		}
+	}
+	return [...captures];
+}
+
+function unresolvedDurableProposalSnapshot(
+	proposalId: string,
+	proposalPath: string
+): FinishTaskDurableProposalSnapshot {
+	return {
+		proposalId,
+		path: proposalPath,
+		proposalKind: '',
+		targetPath: '',
+		status: 'unresolved',
+		exact: false,
+	};
+}
+
+async function snapshotExactTaskProposal(
+	vaultRoot: string,
+	taskId: string,
+	proposalId: string,
+	rawPath: string,
+	context: ToolContext
+): Promise<FinishTaskDurableProposalSnapshot> {
+	let proposalPath = '';
+	try {
+		const normalized = normalizeNotePath(rawPath, pathSafetyOptions(context));
+		if (normalized.startsWith(`${REVIEW_QUEUE_PREFIX}/`)) {
+			proposalPath = normalized;
+		}
+	} catch {
+	}
+	if (!proposalId || !proposalPath) {
+		return unresolvedDurableProposalSnapshot(proposalId, proposalPath);
+	}
+
+	try {
+		const text = await readVaultNoteContent(vaultRoot, proposalPath, context);
+		if (text === null) {
+			return unresolvedDurableProposalSnapshot(proposalId, proposalPath);
+		}
+		const document = memoryProposalDocumentFromText(
+			vaultRoot,
+			proposalPath,
+			text,
+			context
+		);
+		const explicitProposalId = stripYamlQuotes(
+			readFrontmatterString(document.frontmatter, ['proposal_id', 'proposalId'])
+		);
+		if (
+			!explicitProposalId
+			|| explicitProposalId !== proposalId
+			|| document.taskId !== taskId
+		) {
+			return unresolvedDurableProposalSnapshot(proposalId, proposalPath);
+		}
+		const rawTargetPath = document.targetNote.trim();
+		let targetPath = '';
+		if (rawTargetPath && isAllowedProposalTargetPath(rawTargetPath)) {
+			try {
+				targetPath = normalizeNotePath(rawTargetPath, pathSafetyOptions(context));
+			} catch {
+				targetPath = '';
+			}
+		}
+		const approvalStatus = stripYamlQuotes(
+			readFrontmatterString(document.frontmatter, ['approval_status', 'approvalStatus', 'status'])
+		);
+		const durableStatus = approvalStatus
+			? durableProposalStatusFromApproval(approvalStatus)
+			: 'unresolved';
+		return {
+			proposalId,
+			path: proposalPath,
+			proposalKind: document.proposalKind,
+			targetPath,
+			status: targetPath
+				? durableStatus
+				: !rawTargetPath && durableStatus === 'pending_review'
+					? 'pending_review'
+					: 'unresolved',
+			exact: true,
+		};
+	} catch {
+		return unresolvedDurableProposalSnapshot(proposalId, proposalPath);
+	}
+}
+
+async function snapshotTaskDurableOutput(
+	vaultRoot: string,
+	taskId: string,
+	metadata: AgentTaskMetadata,
+	context: ToolContext
+): Promise<FinishTaskDurableOutputSnapshot> {
+	const proposals: FinishTaskDurableProposalSnapshot[] = [];
+	const seenPairs = new Set<string>();
+	const pairCount = Math.max(metadata.proposalIds.length, metadata.proposalPaths.length);
+	for (let index = 0; index < pairCount; index += 1) {
+		const proposalId = metadata.proposalIds[index]?.trim() || '';
+		const rawPath = metadata.proposalPaths[index]?.trim() || '';
+		const pairKey = `${proposalId}\0${rawPath}`;
+		if (seenPairs.has(pairKey)) {
+			continue;
+		}
+		seenPairs.add(pairKey);
+		proposals.push(await snapshotExactTaskProposal(
+			vaultRoot,
+			taskId,
+			proposalId,
+			rawPath,
+			context
+		));
+	}
+
+	return {
+		sourceCapturePaths: normalizedTaskSourceCaptures(metadata.sourceCaptures, context),
+		proposals,
+	};
 }
 
 function proposalReferenceMarker(proposalId: string): string {
@@ -6417,6 +6816,7 @@ async function linkApprovedWritebackTask(
 			|| payload.taskHadProposalReference
 			|| payload.taskHadProposalIdReference === true
 			|| payload.taskHadProposalPathEvidence === true
+			|| payload.taskHadAppliedProposalReference === true
 		) {
 			throw new OperationConflictError('Writeback task binding is invalid.');
 		}
@@ -6438,9 +6838,14 @@ async function linkApprovedWritebackTask(
 	const usesStableProposalReferences =
 		typeof payload.taskHadProposalIdReference === 'boolean'
 		&& typeof payload.taskHadProposalPathEvidence === 'boolean';
+	const usesAppliedProposalEvidence =
+		typeof payload.taskHadAppliedProposalReference === 'boolean';
 	const memoryWrites = new Set(readFrontmatterStringList(frontmatter, 'memory_writes'));
 	const proposalIds = new Set(readFrontmatterStringList(frontmatter, 'proposal_ids'));
 	const proposalPaths = new Set(readFrontmatterStringList(frontmatter, 'proposal_paths'));
+	const appliedProposalIds = new Set(
+		readFrontmatterStringList(frontmatter, 'durable_output_applied_proposal_ids')
+	);
 	const legacyProposals = new Set(readFrontmatterStringList(frontmatter, 'proposals'));
 	const hasProposalReference = usesStableProposalReferences
 		? proposalIds.has(payload.proposalId)
@@ -6448,12 +6853,16 @@ async function linkApprovedWritebackTask(
 	const hasProposalPathEvidence = usesStableProposalReferences
 		? proposalPaths.has(payload.proposalPath)
 		: true;
+	const hasAppliedProposalReference = usesAppliedProposalEvidence
+		? appliedProposalIds.has(payload.proposalId)
+		: true;
 	const targetReferenceAdded = !payload.taskHadTargetReference;
 	const proposalReferenceAdded = !payload.taskHadProposalReference;
 	if (
 		memoryWrites.has(payload.targetPath)
 		&& hasProposalReference
 		&& hasProposalPathEvidence
+		&& hasAppliedProposalReference
 	) {
 		if (current.contentHash !== payload.taskLinkedContentHash) {
 			throw new OperationConflictError(
@@ -6478,6 +6887,10 @@ async function linkApprovedWritebackTask(
 			usesStableProposalReferences
 			&& hasProposalPathEvidence !== payload.taskHadProposalPathEvidence
 		)
+		|| (
+			usesAppliedProposalEvidence
+			&& hasAppliedProposalReference !== payload.taskHadAppliedProposalReference
+		)
 	) {
 		throw new OperationConflictError('Writeback task references changed after preview.');
 	}
@@ -6500,6 +6913,15 @@ async function linkApprovedWritebackTask(
 					'proposal_paths',
 					[payload.proposalPath]
 				),
+				...(usesAppliedProposalEvidence
+					? {
+						durable_output_applied_proposal_ids: mergeFrontmatterList(
+							frontmatter,
+							'durable_output_applied_proposal_ids',
+							[payload.proposalId]
+						),
+					}
+					: {}),
 			}
 			: {
 				memory_writes: mergeFrontmatterList(
@@ -6555,10 +6977,14 @@ async function rollbackApprovedWritebackTask(
 	const proposalPathEvidenceAdded =
 		usesStableProposalReferences
 		&& payload.taskHadProposalPathEvidence === false;
+	const appliedProposalEvidenceAdded =
+		typeof payload.taskHadAppliedProposalReference === 'boolean'
+		&& payload.taskHadAppliedProposalReference === false;
 	if (
 		!receipt.targetReferenceAdded
 		&& !receipt.proposalReferenceAdded
 		&& !proposalPathEvidenceAdded
+		&& !appliedProposalEvidenceAdded
 	) {
 		return;
 	}
@@ -6580,6 +7006,10 @@ async function rollbackApprovedWritebackTask(
 	const memoryWrites = readFrontmatterStringList(frontmatter, 'memory_writes');
 	const proposalIds = readFrontmatterStringList(frontmatter, 'proposal_ids');
 	const proposalPaths = readFrontmatterStringList(frontmatter, 'proposal_paths');
+	const appliedProposalIds = readFrontmatterStringList(
+		frontmatter,
+		'durable_output_applied_proposal_ids'
+	);
 	const legacyProposals = readFrontmatterStringList(frontmatter, 'proposals');
 	const nextMemoryWrites = receipt.targetReferenceAdded
 		? memoryWrites.filter((value) => value !== payload.targetPath)
@@ -6590,6 +7020,9 @@ async function rollbackApprovedWritebackTask(
 	const nextProposalPaths = proposalPathEvidenceAdded
 		? proposalPaths.filter((value) => value !== payload.proposalPath)
 		: proposalPaths;
+	const nextAppliedProposalIds = appliedProposalEvidenceAdded
+		? appliedProposalIds.filter((value) => value !== payload.proposalId)
+		: appliedProposalIds;
 	const nextLegacyProposals = !usesStableProposalReferences && receipt.proposalReferenceAdded
 		? legacyProposals.filter((value) => value !== payload.proposalPath)
 		: legacyProposals;
@@ -6597,6 +7030,7 @@ async function rollbackApprovedWritebackTask(
 		nextMemoryWrites.length === memoryWrites.length
 		&& nextProposalIds.length === proposalIds.length
 		&& nextProposalPaths.length === proposalPaths.length
+		&& nextAppliedProposalIds.length === appliedProposalIds.length
 		&& nextLegacyProposals.length === legacyProposals.length
 	) {
 		return;
@@ -6611,6 +7045,14 @@ async function rollbackApprovedWritebackTask(
 					nextProposalIds.length > 0 ? nextProposalIds.join(', ') : null,
 				proposal_paths:
 					nextProposalPaths.length > 0 ? nextProposalPaths.join(', ') : null,
+				...(typeof payload.taskHadAppliedProposalReference === 'boolean'
+					? {
+						durable_output_applied_proposal_ids:
+							nextAppliedProposalIds.length > 0
+								? nextAppliedProposalIds.join(', ')
+								: null,
+					}
+					: {}),
 			}
 			: {
 				memory_writes:
@@ -9539,38 +9981,42 @@ function buildSessionNoteBodyWithCloseout(
 
 function buildFinishTaskNextActions(
 	context: ToolContext,
-	reviewProposalMode: ReviewProposalMode,
-	proposalResult: FinishTaskProposalResult,
-	projectHint: string,
-	hasCloseoutCandidates: boolean
+	durableOutput: FinishTaskDurableOutputSummary,
+	projectHint: string
 ): string[] {
 	const actions: string[] = [];
-	if (!hasCloseoutCandidates) {
-		actions.push(contentText(context, '任务追踪已记录；没有提交长期记忆候选。如果之后发现遗漏的长期信息，请将其作为新的 tracekeeper.propose_memory 候选提交，不要再次调用 tracekeeper.finish_task。', 'Task tracking was recorded with no durable memory candidates. If omitted durable information is discovered later, submit it as a new tracekeeper.propose_memory candidate; do not call tracekeeper.finish_task again.'));
+	if (durableOutputNeedsReview(durableOutput)) {
+		actions.push(contentText(
+			context,
+			`知识持久化状态为 ${durableOutput.status}；请在 Obsidian 的知识变更审核中处理。已捕获的 Source 或 Recall 结果不证明 Wiki/Memory 目标已写入。`,
+			`Durable output is ${durableOutput.status}; handle it in Obsidian Knowledge Change Review. Captured Source or Recall results do not prove that the Wiki/Memory target was applied.`
+		));
 	}
-	if (reviewProposalMode === 'off') {
-		actions.push(contentText(context, '任务会话已记录；当前模式不会创建记忆建议或知识变更审核提案。', 'Task session was recorded; no memory suggestions or Knowledge Change Review proposals were created.'));
+	if (durableOutput.rejected_count > 0 || durableOutput.unresolved_count > 0) {
+		actions.push(contentText(
+			context,
+			`知识持久化状态为 ${durableOutput.status}，请求的 Wiki/Memory 输出未持久化；Source 仍只作为来源证据。`,
+			`Durable output is ${durableOutput.status}; the requested Wiki/Memory output was not persisted, while Source remains provenance evidence only.`
+		));
 	}
-	if (reviewProposalMode === 'suggest') {
-		actions.push(contentText(context, '请查看本次响应中的 suggested_memory_updates；没有写入知识变更审核。', 'Review suggested_memory_updates in this response; nothing was written to Knowledge Change Review.'));
-	}
-	if (reviewProposalMode === 'review_queue' || reviewProposalMode === 'auto_propose') {
-		if (proposalResult.proposals.length > 0) {
-			actions.push(contentText(context, '请在 Obsidian 的知识变更审核中确认提案后再写入长期记忆。', 'Review proposed changes in Obsidian Knowledge Change Review before durable memory writeback.'));
-		}
-		if (proposalResult.autoAppliedMemoryUpdates.length > 0) {
-			actions.push(contentText(
-				context,
-				'项目记忆已按用户规则保存为独立的不可变操作条目。',
-				'Project memory was saved as a separate immutable operation entry according to the user rule.'
-			));
-		}
-		if (proposalResult.hasMissingWikiBridge) {
-			actions.push(contentText(context, '部分项目记忆候选缺少 related_wiki 桥接关系，因此需要先审核。', 'Some project memory candidates need a related_wiki bridge before automatic project memory save.'));
-		}
-		if (actions.length === 0) {
-			actions.push(contentText(context, '任务追踪已记录；没有产生长期记忆候选。', 'Task tracking was recorded; no durable memory candidates were produced.'));
-		}
+	if (actions.length === 0 && durableOutput.status === 'applied') {
+		actions.push(contentText(
+			context,
+			'知识持久化状态为 applied；已应用的目标路径列在 durable_output.target_paths。',
+			'Durable output is applied; the applied target paths are listed in durable_output.target_paths.'
+		));
+	} else if (actions.length === 0 && durableOutput.source_capture_count > 0) {
+		actions.push(contentText(
+			context,
+			'已捕获的 Source 可作为来源证据读取，但没有 Wiki/Memory 输出被应用。不要将 Source 或 Recall 可读性描述为知识写入成功。',
+			'Captured Source is readable provenance, but no Wiki/Memory output was applied. Do not describe Source or Recall readability as successful knowledge writeback.'
+		));
+	} else if (actions.length === 0) {
+		actions.push(contentText(
+			context,
+			'任务追踪已记录；结束时没有关联 Wiki/Memory 持久化输出。',
+			'Task tracking was recorded; no Wiki/Memory durable output was linked at finish.'
+		));
 	}
 	if (projectHint) {
 		actions.push(contentText(context, '下一次相关任务开始时，请用相同 project_hint 调用 tracekeeper.recall，并设置 scope="project_history"。', 'For the next related session, call tracekeeper.recall with scope="project_history" and the same project_hint.'));
@@ -9795,6 +10241,25 @@ interface FinishTaskOperationPayload {
 	closeoutGroups: FinishTaskCloseoutGroup[];
 	hasCloseoutCandidates: boolean;
 	contentLanguage: ContentLanguage;
+	durableOutputSnapshot?: FinishTaskDurableOutputSnapshot;
+}
+
+function isFinishTaskDurableOutputSnapshot(value: unknown): value is FinishTaskDurableOutputSnapshot {
+	if (!isRecord(value)) {
+		return false;
+	}
+	return Array.isArray(value.sourceCapturePaths)
+		&& value.sourceCapturePaths.every((entry) => typeof entry === 'string')
+		&& Array.isArray(value.proposals)
+		&& value.proposals.every((proposal) => {
+			return isRecord(proposal)
+				&& typeof proposal.proposalId === 'string'
+				&& typeof proposal.path === 'string'
+				&& typeof proposal.proposalKind === 'string'
+				&& typeof proposal.targetPath === 'string'
+				&& durableProposalStatusFromApproval(String(proposal.status)) === proposal.status
+				&& typeof proposal.exact === 'boolean';
+		});
 }
 
 function isFinishTaskOperationPayload(payload: unknown): payload is FinishTaskOperationPayload {
@@ -9865,6 +10330,12 @@ function isFinishTaskOperationPayload(payload: unknown): payload is FinishTaskOp
 	) {
 		return false;
 	}
+	if (
+		payload.durableOutputSnapshot !== undefined
+		&& !isFinishTaskDurableOutputSnapshot(payload.durableOutputSnapshot)
+	) {
+		return false;
+	}
 	return true;
 }
 
@@ -9877,6 +10348,412 @@ function projectIdentityFromFinishPayload(input: FinishTaskOperationPayload): Re
 		confidence: input.projectHint || input.projectId || input.repoPath ? 'derived' : 'uncertain',
 		warnings: ['legacy_finish_payload_without_project_identity'],
 	};
+}
+
+function durableOutputSnapshotFromFinishPayload(
+	input: FinishTaskOperationPayload
+): FinishTaskDurableOutputSnapshot {
+	return input.durableOutputSnapshot ?? {
+		sourceCapturePaths: [],
+		proposals: [],
+	};
+}
+
+async function buildFinishTaskDurableOutput(
+	input: FinishTaskOperationPayload,
+	proposalResult: FinishTaskProposalResult,
+	context: ToolContext
+): Promise<FinishTaskDurableOutputEvidence> {
+	const snapshot = durableOutputSnapshotFromFinishPayload(input);
+	const proposals = [...snapshot.proposals];
+	const seenIds = new Set(proposals.map((proposal) => proposal.proposalId).filter(Boolean));
+	const seenPaths = new Set(proposals.map((proposal) => proposal.path).filter(Boolean));
+	for (const proposal of proposalResult.proposals) {
+		if (seenIds.has(proposal.proposalId) || seenPaths.has(proposal.path)) {
+			continue;
+		}
+		const generated = await snapshotExactTaskProposal(
+			input.vaultRoot,
+			input.taskId,
+			proposal.proposalId,
+			proposal.path,
+			context
+		);
+		proposals.push(generated);
+		if (generated.proposalId) {
+			seenIds.add(generated.proposalId);
+		}
+		if (generated.path) {
+			seenPaths.add(generated.path);
+		}
+	}
+
+	const counts: Record<DurableProposalStatus, number> = {
+		pending_review: 0,
+		ready_to_apply: 0,
+		revision_requested: 0,
+		applied: 0,
+		rejected: 0,
+		unresolved: 0,
+	};
+	for (const proposal of proposals) {
+		counts[proposal.status] += 1;
+	}
+	const targetPaths = new Set(
+		proposals
+			.map((proposal) => proposal.targetPath)
+			.filter(Boolean)
+	);
+	const autoAppliedKeys = new Set<string>();
+	for (const update of proposalResult.autoAppliedMemoryUpdates) {
+		const key = update.operation_id || `${update.kind}\0${update.path}`;
+		if (autoAppliedKeys.has(key)) {
+			continue;
+		}
+		autoAppliedKeys.add(key);
+		counts.applied += 1;
+		try {
+			const normalized = normalizeNotePath(update.path, pathSafetyOptions(context));
+			if (isAllowedProposalTargetPath(normalized)) {
+				targetPaths.add(normalized);
+			}
+		} catch {
+		}
+	}
+	const activeStatuses = Object.entries(counts)
+		.filter(([, count]) => count > 0)
+		.map(([status]) => status as DurableProposalStatus);
+	const status: DurableOutputStatus = activeStatuses.length === 0
+		? 'none'
+		: activeStatuses.length === 1
+			? activeStatuses[0]
+			: 'mixed';
+	return {
+		summary: {
+			status,
+			source_capture_count: snapshot.sourceCapturePaths.length,
+			proposal_count: proposals.length,
+			pending_review_count: counts.pending_review,
+			ready_to_apply_count: counts.ready_to_apply,
+			revision_requested_count: counts.revision_requested,
+			applied_count: counts.applied,
+			rejected_count: counts.rejected,
+			unresolved_count: counts.unresolved,
+			proposal_paths: [...new Set(proposals.map((proposal) => proposal.path).filter(Boolean))],
+			target_paths: [...targetPaths],
+		},
+		proposalIdsAtFinish: [
+			...new Set(
+				proposals
+					.filter((proposal) => proposal.exact)
+					.map((proposal) => proposal.proposalId)
+					.filter(Boolean)
+			),
+		],
+	};
+}
+
+function aggregateFinishTaskProposalReferences(
+	input: FinishTaskOperationPayload,
+	proposalResult: FinishTaskProposalResult,
+	sessionNotePath: string,
+	context: ToolContext
+): Array<ManagedProposalReference & { kind: string }> {
+	const aggregated: Array<ManagedProposalReference & { kind: string }> = [];
+	const seenIds = new Set<string>();
+	const seenPaths = new Set<string>();
+	const add = (proposal: ManagedProposalReference & { kind: string }) => {
+		if (
+			seenIds.has(proposal.proposalId)
+			|| seenPaths.has(proposal.path)
+		) {
+			return;
+		}
+		seenIds.add(proposal.proposalId);
+		seenPaths.add(proposal.path);
+		aggregated.push(proposal);
+	};
+	for (const proposal of durableOutputSnapshotFromFinishPayload(input).proposals) {
+		if (!proposal.exact || !proposal.proposalId || !proposal.path) {
+			continue;
+		}
+		const link = generateProposalMarkdownLink(context, proposal.path, sessionNotePath);
+		add({
+			kind: proposal.proposalKind || 'unknown',
+			proposalId: proposal.proposalId,
+			path: proposal.path,
+			linkTarget: proposal.path,
+			...(link ? { link } : {}),
+		});
+	}
+	for (const proposal of proposalResult.proposals) {
+		add(proposal);
+	}
+	return aggregated;
+}
+
+function durableOutputFrontmatterFields(
+	evidence: FinishTaskDurableOutputEvidence
+): Record<string, string | null> {
+	const durableOutput = evidence.summary;
+	return {
+		durable_output_status_at_finish: durableOutput.status,
+		durable_output_source_capture_count: String(durableOutput.source_capture_count),
+		durable_output_proposal_count: String(durableOutput.proposal_count),
+		durable_output_pending_review_count: String(durableOutput.pending_review_count),
+		durable_output_ready_to_apply_count: String(durableOutput.ready_to_apply_count),
+		durable_output_revision_requested_count: String(durableOutput.revision_requested_count),
+		durable_output_applied_count: String(durableOutput.applied_count),
+		durable_output_rejected_count: String(durableOutput.rejected_count),
+		durable_output_unresolved_count: String(durableOutput.unresolved_count),
+		durable_output_proposal_ids_at_finish: evidence.proposalIdsAtFinish.join(', '),
+		durable_output_proposal_paths: durableOutput.proposal_paths.join(', '),
+		durable_output_target_paths: durableOutput.target_paths.join(', '),
+	};
+}
+
+function isFinishTaskDurableOutputEvidenceConsistent(
+	evidence: FinishTaskDurableOutputEvidence,
+	context: ToolContext
+): boolean {
+	const summary = evidence.summary;
+	const stateCounts: Array<[DurableProposalStatus, number]> = [
+		['pending_review', summary.pending_review_count],
+		['ready_to_apply', summary.ready_to_apply_count],
+		['revision_requested', summary.revision_requested_count],
+		['applied', summary.applied_count],
+		['rejected', summary.rejected_count],
+		['unresolved', summary.unresolved_count],
+	];
+	const activeStates = stateCounts.filter(([, count]) => count > 0);
+	const expectedStatus: DurableOutputStatus = activeStates.length === 0
+		? 'none'
+		: activeStates.length === 1
+			? activeStates[0][0]
+			: 'mixed';
+	if (summary.status !== expectedStatus) {
+		return false;
+	}
+	const nonAppliedProposalCount = summary.pending_review_count
+		+ summary.ready_to_apply_count
+		+ summary.revision_requested_count
+		+ summary.rejected_count
+		+ summary.unresolved_count;
+	const maximumProposalCount = nonAppliedProposalCount + summary.applied_count;
+	if (
+		!Number.isSafeInteger(nonAppliedProposalCount)
+		|| !Number.isSafeInteger(maximumProposalCount)
+		|| summary.proposal_count < nonAppliedProposalCount
+		|| summary.proposal_count > maximumProposalCount
+	) {
+		return false;
+	}
+	const uniqueList = (values: readonly string[]): boolean =>
+		new Set(values).size === values.length;
+	if (
+		!uniqueList(evidence.proposalIdsAtFinish)
+		|| !uniqueList(summary.proposal_paths)
+		|| !uniqueList(summary.target_paths)
+		|| evidence.proposalIdsAtFinish.length > summary.proposal_count
+		|| summary.proposal_paths.length > summary.proposal_count
+		|| summary.target_paths.length > summary.proposal_count + summary.applied_count
+	) {
+		return false;
+	}
+	const exactNonAppliedCount = summary.pending_review_count
+		+ summary.ready_to_apply_count
+		+ summary.revision_requested_count
+		+ summary.rejected_count;
+	if (
+		evidence.proposalIdsAtFinish.length < exactNonAppliedCount
+		|| summary.proposal_paths.length < exactNonAppliedCount
+		|| (
+			summary.ready_to_apply_count
+			+ summary.revision_requested_count
+			+ summary.applied_count
+			+ summary.rejected_count > 0
+			&& summary.target_paths.length === 0
+		)
+	) {
+		return false;
+	}
+	if (evidence.proposalIdsAtFinish.some(
+		(proposalId) => proposalId.length === 0 || proposalId.length > 512
+	)) {
+		return false;
+	}
+	const exactNormalizedPath = (value: string): string | null => {
+		try {
+			const normalized = normalizeNotePath(value, pathSafetyOptions(context));
+			return normalized === value ? normalized : null;
+		} catch {
+			return null;
+		}
+	};
+	if (summary.proposal_paths.some((proposalPath) => {
+		const normalized = exactNormalizedPath(proposalPath);
+		return !normalized || !normalized.startsWith(`${REVIEW_QUEUE_PREFIX}/`);
+	})) {
+		return false;
+	}
+	return summary.target_paths.every((targetPath) => {
+		const normalized = exactNormalizedPath(targetPath);
+		return Boolean(normalized && isAllowedProposalTargetPath(normalized));
+	});
+}
+
+function durableOutputFromFrontmatter(
+	frontmatter: Record<string, unknown>,
+	context: ToolContext
+): FinishTaskDurableOutputEvidence | null {
+	const requiredKeys = [
+		'durable_output_status_at_finish',
+		'durable_output_source_capture_count',
+		'durable_output_proposal_count',
+		'durable_output_pending_review_count',
+		'durable_output_ready_to_apply_count',
+		'durable_output_revision_requested_count',
+		'durable_output_applied_count',
+		'durable_output_rejected_count',
+		'durable_output_unresolved_count',
+		'durable_output_proposal_ids_at_finish',
+		'durable_output_proposal_paths',
+		'durable_output_target_paths',
+	];
+	if (!requiredKeys.every((key) => Object.prototype.hasOwnProperty.call(frontmatter, key))) {
+		return null;
+	}
+	const status = readFrontmatterString(frontmatter, ['durable_output_status_at_finish']);
+	if (!isDurableOutputStatus(status)) {
+		return null;
+	}
+	const count = (key: string): number | null => {
+		const value = readFrontmatterString(frontmatter, [key]);
+		if (!/^\d+$/.test(value)) {
+			return null;
+		}
+		const parsed = Number(value);
+		return Number.isSafeInteger(parsed) ? parsed : null;
+	};
+	const counts = {
+		source_capture_count: count('durable_output_source_capture_count'),
+		proposal_count: count('durable_output_proposal_count'),
+		pending_review_count: count('durable_output_pending_review_count'),
+		ready_to_apply_count: count('durable_output_ready_to_apply_count'),
+		revision_requested_count: count('durable_output_revision_requested_count'),
+		applied_count: count('durable_output_applied_count'),
+		rejected_count: count('durable_output_rejected_count'),
+		unresolved_count: count('durable_output_unresolved_count'),
+	};
+	if (Object.values(counts).some((value) => value === null)) {
+		return null;
+	}
+	const evidence: FinishTaskDurableOutputEvidence = {
+		summary: {
+			status,
+			source_capture_count: counts.source_capture_count as number,
+			proposal_count: counts.proposal_count as number,
+			pending_review_count: counts.pending_review_count as number,
+			ready_to_apply_count: counts.ready_to_apply_count as number,
+			revision_requested_count: counts.revision_requested_count as number,
+			applied_count: counts.applied_count as number,
+			rejected_count: counts.rejected_count as number,
+			unresolved_count: counts.unresolved_count as number,
+			proposal_paths: readFrontmatterStringList(frontmatter, 'durable_output_proposal_paths'),
+			target_paths: readFrontmatterStringList(frontmatter, 'durable_output_target_paths'),
+		},
+		proposalIdsAtFinish: readFrontmatterStringList(
+			frontmatter,
+			'durable_output_proposal_ids_at_finish'
+		),
+	};
+	return isFinishTaskDurableOutputEvidenceConsistent(evidence, context)
+		? evidence
+		: null;
+}
+
+type FinishTaskDurableOutputEvidenceReadMode = 'repair' | 'finalize';
+
+async function readFinishTaskDurableOutputEvidence(
+	input: FinishTaskOperationPayload,
+	sessionNotePath: string,
+	context: ToolContext,
+	mode: FinishTaskDurableOutputEvidenceReadMode
+): Promise<FinishTaskDurableOutputEvidence | null> {
+	const session = await readCurrentVaultTextState(input.vaultRoot, sessionNotePath, context);
+	const task = await readCurrentVaultTextState(
+		input.vaultRoot,
+		buildTaskNotePath(input.taskId),
+		context
+	);
+	const sessionFrontmatter = session
+		? parseMarkdown(session.content).frontmatter.fields
+		: {};
+	const taskFrontmatter = task
+		? parseMarkdown(task.content).frontmatter.fields
+		: {};
+	const sessionEvidence = session
+		? durableOutputFromFrontmatter(sessionFrontmatter, context)
+		: null;
+	const taskEvidence = task
+		? durableOutputFromFrontmatter(taskFrontmatter, context)
+		: null;
+	const sessionHasEvidenceFields = Object.keys(sessionFrontmatter)
+		.some((key) => key.startsWith('durable_output_'));
+	const taskHasEvidenceFields = Object.keys(taskFrontmatter)
+		.some((key) => key.startsWith('durable_output_'));
+	if (
+		sessionEvidence
+		&& taskEvidence
+		&& JSON.stringify(sessionEvidence) !== JSON.stringify(taskEvidence)
+	) {
+		throw new OperationConflictError(
+			'Finish-task durable-output evidence differs between the task and session records.'
+		);
+	}
+	if (mode === 'finalize') {
+		if (!sessionEvidence || !taskEvidence) {
+			throw new OperationConflictError(
+				'Finish-task durable-output evidence is not complete in both the task and session records.'
+			);
+		}
+		return sessionEvidence;
+	}
+	const trustedEvidence = sessionEvidence ?? taskEvidence;
+	if (trustedEvidence) {
+		return trustedEvidence;
+	}
+	if (sessionHasEvidenceFields || taskHasEvidenceFields) {
+		throw new OperationConflictError(
+			'Finish-task durable-output evidence is incomplete, invalid, or internally inconsistent.'
+		);
+	}
+	return null;
+}
+
+async function updateManagedRecordFields(
+	vaultRoot: string,
+	recordPath: string,
+	fields: Record<string, string | null>,
+	context: ToolContext
+): Promise<void> {
+	const current = await readCurrentVaultTextState(vaultRoot, recordPath, context);
+	if (!current) {
+		throw new OperationConflictError(`Tracekeeper-managed record is unavailable: ${recordPath}`);
+	}
+	const next = updateFrontmatterFields(current.content, fields);
+	if (next === current.content) {
+		return;
+	}
+	if (context.vaultRepository) {
+		if (!current.version) {
+			throw new OperationConflictError(`Tracekeeper-managed record version is unavailable: ${recordPath}`);
+		}
+		await context.vaultRepository.replaceText(current.path, current.version, next);
+		return;
+	}
+	const absolute = resolveSafeNotePath(vaultRoot, current.path, pathSafetyOptions(context));
+	replaceTextFileAtomically(absolute, next, current.content);
 }
 
 function buildFinishTaskRequestSnapshot(rawArgs: FinishTaskArgs) {
@@ -9923,6 +10800,12 @@ async function buildFinishTaskOperationPayload(
 	const memoryCandidateRecords = normalizeFinishTaskMemoryCandidateRecords(rawArgs.memory_candidate_records);
 	const reviewProposalMode: ReviewProposalMode = DEFAULT_FINISH_TASK_REVIEW_MODE;
 	const taskMetadata = await readAgentTaskMetadataAsync(vaultRoot, taskId, context);
+	const durableOutputSnapshot = await snapshotTaskDurableOutput(
+		vaultRoot,
+		taskId,
+		taskMetadata,
+		context
+	);
 	const identityScan = scanVaultForContext(vaultRoot, context);
 	const explicitIdentity = resolveProjectIdentity(rawArgs, identityScan.notes);
 	const projectIdentity = mergeTaskProjectIdentity(taskId, taskMetadata, explicitIdentity);
@@ -9987,6 +10870,7 @@ async function buildFinishTaskOperationPayload(
 		closeoutGroups,
 		hasCloseoutCandidates: memoryCandidateRecords.length > 0,
 		contentLanguage: contentLanguageFromContext(context),
+		durableOutputSnapshot,
 	};
 }
 
@@ -10385,9 +11269,28 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 		input.projectMemoryEntryVersion === 1
 			&& buildFinishTaskProjectMemoryPlan(input, context) !== null
 	);
-	const proposalPaths = proposalResult.proposals.map((proposal) => proposal.path);
-	const proposalIds = proposalResult.proposals.map((proposal) => proposal.proposalId);
+	const durableOutputEvidence = await readFinishTaskDurableOutputEvidence(
+		input,
+		sessionNote.path,
+		context,
+		'repair'
+	) ?? await buildFinishTaskDurableOutput(input, proposalResult, context);
+	const durableOutput = durableOutputEvidence.summary;
+	const aggregatedProposals = aggregateFinishTaskProposalReferences(
+		input,
+		proposalResult,
+		sessionNote.path,
+		context
+	);
+	const proposalPaths = aggregatedProposals.map((proposal) => proposal.path);
+	const proposalIds = aggregatedProposals.map((proposal) => proposal.proposalId);
 	const autoWritePaths = proposalResult.autoAppliedMemoryUpdates.map((update) => update.path);
+	await updateManagedRecordFields(
+		input.vaultRoot,
+		sessionNote.path,
+		durableOutputFrontmatterFields(durableOutputEvidence),
+		context
+	);
 
 	const taskPath = await updateAgentTaskRecordAsync(
 		input.vaultRoot,
@@ -10412,6 +11315,7 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 			project_identity_confidence: projectIdentity.confidence,
 			project_identity_warnings: projectIdentity.warnings.join(', '),
 			finish_operation_id: operationId,
+			...durableOutputFrontmatterFields(durableOutputEvidence),
 		},
 		context,
 		{
@@ -10453,14 +11357,14 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 	await updateManagedProposalReferences(
 		input.vaultRoot,
 		sessionNote.path,
-		proposalResult.proposals,
+		aggregatedProposals,
 		context
 	);
 	if (taskPath) {
 		await updateManagedProposalReferences(
 			input.vaultRoot,
 			taskPath,
-			proposalResult.proposals,
+			aggregatedProposals,
 			context
 		);
 	}
@@ -10513,16 +11417,36 @@ async function executeFinishTaskOperation(
 		input.projectMemoryEntryVersion === 1
 			&& buildFinishTaskProjectMemoryPlan(input, context) !== null
 	);
-	const memoryCloseoutStatus = resolveMemoryCloseoutStatus(
-		input.reviewProposalMode,
-		proposalResult,
-		input.hasCloseoutCandidates
+	const durableOutputEvidence = await readFinishTaskDurableOutputEvidence(
+		input,
+		sessionNote.path,
+		context,
+		'finalize'
 	);
-	const memoryCloseoutState = resolveCanonicalMemoryCloseoutStatus(
-		input.reviewProposalMode,
+	if (!durableOutputEvidence) {
+		throw new OperationConflictError(
+			'Finish-task durable-output evidence is unavailable at finalization.'
+		);
+	}
+	const durableOutput = durableOutputEvidence.summary;
+	const aggregatedProposals = aggregateFinishTaskProposalReferences(
+		input,
 		proposalResult,
-		input.hasCloseoutCandidates,
-		memoryCloseoutStatus
+		sessionNote.path,
+		context
+	);
+	const memoryCloseoutState = compatibleMemoryCloseoutStatus(
+		durableOutput,
+		resolveCanonicalMemoryCloseoutStatus(
+			input.reviewProposalMode,
+			proposalResult,
+			input.hasCloseoutCandidates,
+			resolveMemoryCloseoutStatus(
+				input.reviewProposalMode,
+				proposalResult,
+				input.hasCloseoutCandidates
+			)
+		)
 	);
 
 	const response: {
@@ -10555,6 +11479,7 @@ async function executeFinishTaskOperation(
 		memory_candidate_records: FinishTaskMemoryCandidateRecordResult[];
 		memory_changes: FinishTaskMemoryChange[];
 		memory_status: MemoryCloseoutStatus;
+		durable_output: FinishTaskDurableOutputSummary;
 		project_id?: string | null;
 		repo_path?: string | null;
 		project_hint?: string | null;
@@ -10593,15 +11518,16 @@ async function executeFinishTaskOperation(
 			missing_graph_bridges: input.architectureStatus.missing_graph_bridges,
 			missing_wiki_bridge: proposalResult.hasMissingWikiBridge,
 		memory_status: memoryCloseoutState,
-		next_actions_for_agent: buildFinishTaskNextActions(context, input.reviewProposalMode, proposalResult, input.projectHint, input.hasCloseoutCandidates),
+		durable_output: durableOutput,
+		next_actions_for_agent: buildFinishTaskNextActions(context, durableOutput, input.projectHint),
 		};
 	if (proposalResult.hasMissingRelatedSources) {
 		response.missing_related_sources = input.missingRelatedSources ?? [];
 	}
 
 	if (input.reviewProposalMode === 'auto_propose' || input.reviewProposalMode === 'review_queue') {
-		response.proposal_count = proposalResult.proposals.length;
-		response.proposals = proposalResult.proposals.map((proposal) => ({
+		response.proposal_count = durableOutput.proposal_count;
+		response.proposals = aggregatedProposals.map((proposal) => ({
 			kind: proposal.kind,
 			proposal_id: proposal.proposalId,
 			path: proposal.path,

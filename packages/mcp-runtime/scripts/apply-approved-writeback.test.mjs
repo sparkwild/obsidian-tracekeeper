@@ -14,6 +14,7 @@ const {
 	computeProposalRevision,
 	NodeFileOperationJournal,
 	OperationConflictError,
+	parseMarkdown,
 	transitionProposal,
 } = require('@tracekeeper/core');
 
@@ -425,6 +426,14 @@ function countOccurrences(content, needle) {
 	return content.split(needle).length - 1;
 }
 
+function taskAppliedProposalIds(fixture) {
+	const value = parseMarkdown(fixture.read(TASK_PATH)).frontmatter.fields
+		.durable_output_applied_proposal_ids;
+	return (Array.isArray(value) ? value : String(value || '').split(','))
+		.map((entry) => String(entry).trim())
+		.filter(Boolean);
+}
+
 async function operationRecords(fixture) {
 	const directory = fixture.absolute('00_tracekeeper/control/operations');
 	if (!fs.existsSync(directory)) {
@@ -646,12 +655,56 @@ function createDirectServiceFixture(t, overrides = {}) {
 
 test('dry-run returns a bounded opaque confirmation token', async (t) => {
 	const fixture = createFixture(t);
+	const taskBeforePreview = fixture.read(TASK_PATH);
 	const result = await preview(fixture);
 	assert.equal(result.isError, false);
 	assert.equal(typeof result.structuredContent?.confirmation_token, 'string');
 	assert.ok(result.structuredContent.confirmation_token.length >= 32);
 	assert.equal(typeof result.structuredContent?.confirmation_expires_at, 'string');
 	assert.equal(result.structuredContent.confirmation_token.includes('Atomic writeback content'), false);
+	assert.equal(fixture.read(TASK_PATH), taskBeforePreview);
+	assert.deepEqual(taskAppliedProposalIds(fixture), []);
+});
+
+test('actual apply records exact proposal-id evidence in the linked task', async (t) => {
+	const fixture = createFixture(t);
+	const previewResult = await preview(fixture);
+	assert.deepEqual(taskAppliedProposalIds(fixture), []);
+
+	const applied = await apply(fixture, tokenFrom(previewResult));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.deepEqual(taskAppliedProposalIds(fixture), ['atomic-proposal']);
+	const operation = await operationRecord(fixture);
+	assert.equal(operation.payload.taskHadAppliedProposalReference, false);
+});
+
+test('applied proposal-id evidence is confirmation-bound before the target write', async (t) => {
+	const fixture = createFixture(t);
+	const previewResult = await preview(fixture);
+	fixture.write(TASK_PATH, fixture.read(TASK_PATH).replace(
+		'status: active',
+		'status: active\ndurable_output_applied_proposal_ids: atomic-proposal'
+	));
+
+	const result = await apply(fixture, tokenFrom(previewResult));
+	assertRejectedWithoutWrite(fixture, result);
+	assert.deepEqual(taskAppliedProposalIds(fixture), ['atomic-proposal']);
+});
+
+test('approved writeback without a task never writes task apply evidence', async (t) => {
+	const fixture = createFixture(t, {
+		proposalFields: { task_id: '' },
+	});
+	const taskBefore = fixture.read(TASK_PATH);
+	const previewResult = await preview(fixture, { task_id: null });
+	assert.equal(previewResult.isError, false, JSON.stringify(previewResult.structuredContent));
+	const result = await apply(fixture, tokenFrom(previewResult), { task_id: null });
+	assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+	assert.equal(fixture.read(TASK_PATH), taskBefore);
+	assert.deepEqual(taskAppliedProposalIds(fixture), []);
+	const operation = await operationRecord(fixture);
+	assert.equal(operation.payload.taskId, null);
+	assert.equal(operation.payload.taskHadAppliedProposalReference, false);
 });
 
 test('dry-run rejects an approved proposal without a committed approval receipt', async (t) => {
@@ -833,6 +886,7 @@ test('proposal drift after the target effect is compensated and becomes a termin
 	assert.match(String(result.structuredContent?.error || ''), /conflict|changed/i);
 	assert.equal(fixture.read(TARGET_PATH), originalTarget);
 	assert.equal(fixture.read(TASK_PATH), originalTask);
+	assert.deepEqual(taskAppliedProposalIds(fixture), []);
 	assert.match(fixture.read(PROPOSAL_PATH), /Proposal drift after the target effect/);
 	assert.match(fixture.read(PROPOSAL_PATH), /approval_status: approved/);
 	const conflicted = await operationRecord(fixture);
@@ -1620,6 +1674,14 @@ test('exact apply retry returns one receipt and one durable effect', async (t) =
 	assert.equal(first.isError, false);
 	assert.deepEqual(second.structuredContent, first.structuredContent);
 	assert.equal(fixture.read(TARGET_PATH).split(MARKER).length - 1, 1);
+	assert.deepEqual(taskAppliedProposalIds(fixture), ['atomic-proposal']);
+	assert.equal(
+		countOccurrences(
+			fixture.read(TASK_PATH),
+			'durable_output_applied_proposal_ids:'
+		),
+		1
+	);
 	const operation = await operationRecord(fixture);
 	const taskReceipt = assertBoundedTaskLinkStep(
 		operation,

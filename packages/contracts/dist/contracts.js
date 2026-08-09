@@ -637,7 +637,7 @@ exports.toolContracts = [
     },
     {
         name: 'tracekeeper.finish_task',
-        version: 3,
+        version: 4,
         visibility: 'public',
         capability: 'workflow.manage',
         risk: 'low-risk-write',
@@ -646,11 +646,11 @@ exports.toolContracts = [
         world: 'closed',
         workflowRole: 'task-finish',
         useCase: 'finish_task',
-        description: '[low-risk write] Record the task execution summary and explicitly submitted durable memory candidates at task closeout.',
+        description: '[low-risk write] Record task execution closeout and report durable Wiki/Memory output separately. The result includes direct proposals already linked to the task; a captured Source or Recall match does not prove that proposed knowledge was applied.',
         inputSchema: withToolInput({
             task_id: { type: 'string', description: 'Task id.' },
             summary: { type: 'string', description: 'Task summary.' },
-            status: { type: 'string', enum: ['completed', 'partial', 'blocked'], description: 'Final task status.' },
+            status: { type: 'string', enum: ['completed', 'partial', 'blocked'], description: 'Final task execution status only; inspect durable_output in the result for Wiki/Memory persistence state.' },
             outcomes: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Optional outcomes.' },
             decisions: {
                 oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
@@ -801,7 +801,7 @@ exports.toolContracts = [
         world: 'closed',
         workflowRole: 'source',
         useCase: 'capture_source',
-        description: '[low-risk write] Save user-provided source metadata or content under sources. Does not fetch external content.',
+        description: '[low-risk write] Save user-provided source evidence under Sources. Does not fetch external content and does not apply a Wiki or Memory proposal; a captured Source remains readable provenance, not proof that synthesized knowledge was persisted.',
         inputSchema: withToolInput({
             source: { type: 'string', description: 'Source identifier (usually URL or local path).' },
             source_kind: {
@@ -839,7 +839,7 @@ exports.toolContracts = [
         world: 'closed',
         workflowRole: 'memory',
         useCase: 'propose_memory',
-        description: '[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. Global memory stays review-gated by default.',
+        description: '[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. When auto_applied is false, the proposal is not persisted knowledge until governed apply completes.',
         inputSchema: withToolInput({
             proposal_kind: { type: 'string', description: 'Proposal kind.' },
             content: { type: 'string', description: 'Proposal markdown/text content.' },

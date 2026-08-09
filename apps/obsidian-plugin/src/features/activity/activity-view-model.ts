@@ -1,7 +1,12 @@
+import { ARCHIVE_REVIEW_QUEUE_DIR, TRACEKEEPER_REVIEW_QUEUE_DIR } from '@tracekeeper/core';
 import type { RuntimeViewModelInput } from '../runtime/runtime-view-model';
 import { runtimeViewModel } from '../runtime/runtime-view-model';
 import type { StructureState } from '../structure/legacy-migration-controller';
-import type { AgentConnectionRecord, AgentTaskRecord } from './activity-model';
+import type {
+	AgentConnectionRecord,
+	AgentTaskRecord,
+	DurableOutputStatusAtFinish,
+} from './activity-model';
 
 export type ActivityPrimaryAction =
 	| 'repair_structure'
@@ -35,6 +40,40 @@ export interface ActivityAgentSummary {
 
 export type LatestTaskPlacement = 'hidden' | 'memory_loop' | 'standalone';
 
+export type TaskExecutionPresentationStatus =
+	| 'completed'
+	| 'partially_complete'
+	| 'blocked'
+	| 'running'
+	| 'in_progress';
+
+export type TaskDurableOutputPresentationStatus =
+	| Exclude<DurableOutputStatusAtFinish, ''>
+	| 'legacy_proposals';
+
+const MANAGED_PROPOSAL_PATH_PREFIXES = [
+	TRACEKEEPER_REVIEW_QUEUE_DIR,
+	ARCHIVE_REVIEW_QUEUE_DIR,
+];
+
+type TaskDurableOutputInput = Pick<
+	AgentTaskRecord,
+	| 'sessionNote'
+	| 'memoryWrites'
+	| 'sourceCaptures'
+	| 'proposalIds'
+	| 'proposalPaths'
+	| 'proposals'
+	| 'durableOutputStatusAtFinish'
+	| 'durableOutputProposalCount'
+	| 'durableOutputSourceCaptureCount'
+	| 'durableOutputProposalIdsAtFinish'
+	| 'durableOutputAppliedProposalIds'
+	| 'durableOutputProposalPaths'
+	| 'durableOutputRejectedCount'
+	| 'durableOutputUnresolvedCount'
+>;
+
 export function selectLatestTaskPlacement(latestTask: AgentTaskRecord | null): LatestTaskPlacement {
 	if (!latestTask) {
 		return 'hidden';
@@ -43,6 +82,128 @@ export function selectLatestTaskPlacement(latestTask: AgentTaskRecord | null): L
 	return status === 'completed' || status === 'done' || status === 'success'
 		? 'memory_loop'
 		: 'standalone';
+}
+
+export function selectTaskExecutionPresentationStatus(
+	task: Pick<AgentTaskRecord, 'status'>
+): TaskExecutionPresentationStatus {
+	const normalized = task.status.toLowerCase().trim();
+	if (['completed', 'done', 'success'].includes(normalized)) {
+		return 'completed';
+	}
+	if (['partial', 'partial_complete', 'partially_complete', 'partly_complete'].includes(normalized)) {
+		return 'partially_complete';
+	}
+	if (['interrupted', 'blocked', 'failed', 'error', 'cancelled', 'canceled', 'timed_out'].includes(normalized)) {
+		return 'blocked';
+	}
+	if (['active', 'running', 'in_progress'].includes(normalized)) {
+		return 'running';
+	}
+	return 'in_progress';
+}
+
+export function countTaskDurableMemoryWrites(
+	task: Pick<AgentTaskRecord, 'memoryWrites' | 'sessionNote'>
+): number {
+	return task.memoryWrites.filter((path) => path && path !== task.sessionNote).length;
+}
+
+export function countTaskProposalReferences(
+	task: Pick<
+		AgentTaskRecord,
+		| 'proposalIds'
+		| 'proposalPaths'
+		| 'proposals'
+		| 'durableOutputProposalCount'
+		| 'durableOutputProposalIdsAtFinish'
+		| 'durableOutputProposalPaths'
+	>
+): number {
+	return Math.max(
+		task.durableOutputProposalCount,
+		task.proposalIds.length,
+		task.proposalPaths.length,
+		task.proposals.length,
+		task.durableOutputProposalIdsAtFinish.length,
+		task.durableOutputProposalPaths.length
+	);
+}
+
+export function countTaskSourceCaptureEvidence(
+	task: Pick<AgentTaskRecord, 'sourceCaptures' | 'durableOutputSourceCaptureCount'>
+): number {
+	return Math.max(task.durableOutputSourceCaptureCount, task.sourceCaptures.length);
+}
+
+export function taskSnapshotProposalIdsAreFullyApplied(
+	task: Pick<
+		AgentTaskRecord,
+		'durableOutputProposalIdsAtFinish' | 'durableOutputAppliedProposalIds'
+	>
+): boolean {
+	const proposalIdsAtFinish = [...new Set(
+		task.durableOutputProposalIdsAtFinish.map((proposalId) => proposalId.trim()).filter(Boolean)
+	)];
+	if (proposalIdsAtFinish.length === 0) {
+		return false;
+	}
+	const appliedProposalIds = new Set(
+		task.durableOutputAppliedProposalIds.map((proposalId) => proposalId.trim()).filter(Boolean)
+	);
+	return proposalIdsAtFinish.every((proposalId) => appliedProposalIds.has(proposalId));
+}
+
+export function taskProposalNavigationPaths(
+	task: Pick<AgentTaskRecord, 'proposalPaths' | 'proposals' | 'durableOutputProposalPaths'>
+): string[] {
+	const paths = [
+		...task.proposalPaths,
+		...task.durableOutputProposalPaths,
+		...task.proposals,
+	];
+	return [...new Set(paths.map((path) => path.replace(/\\/g, '/').trim().replace(/^\.\//, ''))
+		.filter((path) =>
+			Boolean(path)
+			&& !path.startsWith('/')
+			&& path.toLowerCase().endsWith('.md')
+			&& !path.split('/').some((segment) => segment === '.' || segment === '..')
+			&& MANAGED_PROPOSAL_PATH_PREFIXES.some((prefix) =>
+				path === prefix || path.startsWith(`${prefix}/`)
+			)
+		))];
+}
+
+export function selectTaskDurableOutputPresentationStatus(
+	task: TaskDurableOutputInput
+): TaskDurableOutputPresentationStatus {
+	if (task.durableOutputStatusAtFinish) {
+		const allSnapshotProposalsApplied = taskSnapshotProposalIdsAreFullyApplied(task);
+		if (
+			['pending_review', 'ready_to_apply', 'revision_requested'].includes(
+				task.durableOutputStatusAtFinish
+			)
+			&& allSnapshotProposalsApplied
+		) {
+			return 'applied';
+		}
+		if (
+			task.durableOutputStatusAtFinish === 'mixed'
+			&& allSnapshotProposalsApplied
+			&& task.durableOutputRejectedCount === 0
+			&& task.durableOutputUnresolvedCount === 0
+		) {
+			return 'applied';
+		}
+		return task.durableOutputStatusAtFinish;
+	}
+	if (countTaskDurableMemoryWrites(task) > 0) {
+		return 'applied';
+	}
+	if (countTaskProposalReferences(task) > 0) {
+		return 'legacy_proposals';
+	}
+	return 'none';
 }
 
 export function selectActivityPrimaryAction(input: ActivityPrimaryActionInput): ActivityPrimaryAction {
