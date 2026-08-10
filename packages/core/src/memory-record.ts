@@ -332,11 +332,25 @@ function normalizeClaimKey(value: unknown): string {
 	if (typeof value !== 'string') {
 		throw new MemoryRecordValidationError('claim_key must be a string.');
 	}
-	const normalized = value.normalize('NFC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US');
-	if (!normalized || normalized.length > 240 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+	const canonical = value.normalize('NFC');
+	if (hasControlCharacter(canonical)) {
+		throw new MemoryRecordValidationError('claim_key is empty, too long, or contains control characters.');
+	}
+	const normalized = canonical.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US');
+	if (!normalized || normalized.length > 240) {
 		throw new MemoryRecordValidationError('claim_key is empty, too long, or contains control characters.');
 	}
 	return normalized;
+}
+
+function hasControlCharacter(value: string): boolean {
+	for (let index = 0; index < value.length; index += 1) {
+		const code = value.charCodeAt(index);
+		if (code <= 0x1f || code === 0x7f) {
+			return true;
+		}
+	}
+	return false;
 }
 
 function requireObject(value: unknown, field: string): Record<string, unknown> {

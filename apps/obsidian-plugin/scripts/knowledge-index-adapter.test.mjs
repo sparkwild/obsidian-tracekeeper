@@ -128,6 +128,7 @@ try {
 	};
 	const app = {
 		vault: {
+			getAbstractFileByPath: (filePath) => files.find((file) => file.path === filePath) ?? null,
 			getMarkdownFiles: () => files,
 			cachedRead: readFile,
 			read: readFile,
@@ -495,6 +496,22 @@ try {
 			await rowAdapter.applyDelete(file);
 			assert.equal((await rowAdapter.knowledgeSnapshot()).notes.has(filePath), false);
 		}],
+		['direct-path-miss-does-not-enumerate-the-vault', async () => {
+			let listingCount = 0;
+			const rowApp = {
+				vault: {
+					getAbstractFileByPath: () => null,
+					getMarkdownFiles: () => {
+						listingCount += 1;
+						return [createFile('outside.md', '# Outside', 1000)];
+					},
+				},
+				metadataCache: createMetadataCache(),
+			};
+			const rowAdapter = ObsidianKnowledgeIndexAdapter.create(rowApp, vaultRoot);
+			assert.equal(rowAdapter.findMarkdownFile('missing.md'), null);
+			assert.equal(listingCount, 0);
+		}],
 		['rename-markdown-removes-old-identity', async () => {
 			const oldPath = '01_knowledge/wiki/before-rename.md';
 			const newPath = '01_knowledge/wiki/after-rename.md';
@@ -694,6 +711,8 @@ try {
 			};
 			const rowApp = {
 				vault: {
+					getAbstractFileByPath: (filePath) =>
+						[eventFile, blockerFile].find((file) => file.path === filePath) ?? null,
 					getMarkdownFiles: () => [eventFile, blockerFile],
 					cachedRead: readFile,
 					read: readFile,
@@ -763,6 +782,8 @@ try {
 			};
 			const rowApp = {
 				vault: {
+					getAbstractFileByPath: (filePath) =>
+						files.find((file) => file.path === filePath) ?? null,
 					getMarkdownFiles: () => [...files],
 					cachedRead: readFile,
 					read: readFile,
@@ -973,6 +994,8 @@ try {
 			};
 			const rowApp = {
 				vault: {
+					getAbstractFileByPath: (filePath) =>
+						[eventFile, blockerFile].find((file) => file.path === filePath) ?? null,
 					getMarkdownFiles: () => [eventFile, blockerFile],
 					cachedRead: readFile,
 					read: readFile,
@@ -1013,6 +1036,7 @@ try {
 			};
 			const rowApp = {
 				vault: {
+					getAbstractFileByPath: (candidatePath) => candidatePath === filePath ? file : null,
 					getMarkdownFiles: () => [file],
 					cachedRead: readFile,
 					read: readFile,

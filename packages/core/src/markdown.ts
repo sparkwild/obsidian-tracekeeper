@@ -18,9 +18,9 @@ export interface ParsedFrontmatter {
 	bodyStartLine: number;
 }
 
-export interface Wikilink extends NormalizedVaultEdge {}
+export type Wikilink = NormalizedVaultEdge;
 
-export interface CalloutBlock extends NormalizedVaultCallout {}
+export type CalloutBlock = NormalizedVaultCallout;
 
 export interface ParsedMarkdown {
 	frontmatter: ParsedFrontmatter;
@@ -220,7 +220,7 @@ function parseFrontmatterBody(frontmatterRaw: string): { fields: Record<string, 
 	}
 
 	try {
-		const value = document.toJS({ mapAsMap: false, maxAliasCount: 100 });
+		const value: unknown = document.toJS({ mapAsMap: false, maxAliasCount: 100 });
 		if (value === null || value === undefined) {
 			return { fields: {}, errors };
 		}
@@ -278,14 +278,14 @@ function sanitizeYamlValue(value: unknown, depth: number): unknown {
 	) {
 		return value;
 	}
-	return String(value);
+	throw new TypeError('Frontmatter contains an unsupported value.');
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		return false;
 	}
-	const prototype = Object.getPrototypeOf(value);
+	const prototype = Reflect.getPrototypeOf(value);
 	return prototype === Object.prototype || prototype === null;
 }
 

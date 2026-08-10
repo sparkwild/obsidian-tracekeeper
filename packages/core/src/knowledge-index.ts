@@ -77,7 +77,7 @@ export interface RenameVaultIndexEvent {
 
 export type VaultIndexEvent = CreateVaultIndexEvent | ModifyVaultIndexEvent | DeleteVaultIndexEvent | RenameVaultIndexEvent;
 
-export interface IndexedWikilink extends NormalizedVaultEdge {}
+export type IndexedWikilink = NormalizedVaultEdge;
 
 export interface IndexedKnowledgeNote extends NormalizedVaultNote {
 	path: VaultPath;
@@ -226,31 +226,6 @@ const NOTES_EXTENSIONS = new Set(['.md', '.markdown']);
 const SNIPPET_MAX_LENGTH = 160;
 const MAX_LEXICAL_TERMS_PER_NOTE = 512;
 const DEFAULT_MAX_INCREMENTAL_RENAME_IMPACT = 256;
-
-const DEFAULT_INITIAL_STATE: InternalKnowledgeState = {
-	notes: new Map(),
-	graph: {
-		outgoing: new Map(),
-		incoming: new Map(),
-		edges: [],
-		unresolvedEdges: [],
-	},
-	scopes: {
-		byType: new Map(),
-		byTag: new Map(),
-	},
-	generation: 0,
-	eventSequence: 0,
-	indexState: 'initializing',
-	lastEvent: null,
-	lastRebuild: null,
-	createdAt: new Date().toISOString(),
-	catalog: new Map(),
-	lexicalPostings: new Map(),
-	memory: emptyMemoryIndex(0, new Date(0).toISOString()),
-	lastUpdate: { mode: 'rebuild', affectedPaths: [], reason: null },
-	warnings: [],
-};
 
 export function computeFileVersion(size: number, modifiedAt: string): FileVersion {
 	return `${modifiedAt}|${size}`;

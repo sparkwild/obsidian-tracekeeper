@@ -7,10 +7,8 @@ export interface ParsedFrontmatter {
     bodyOffset: number;
     bodyStartLine: number;
 }
-export interface Wikilink extends NormalizedVaultEdge {
-}
-export interface CalloutBlock extends NormalizedVaultCallout {
-}
+export type Wikilink = NormalizedVaultEdge;
+export type CalloutBlock = NormalizedVaultCallout;
 export interface ParsedMarkdown {
     frontmatter: ParsedFrontmatter;
     title: string;

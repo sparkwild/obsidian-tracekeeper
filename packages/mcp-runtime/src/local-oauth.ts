@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from 'node:timers';
 import { URL } from 'node:url';
 import type {
 	ApprovedOAuthExchange,
@@ -228,7 +229,7 @@ export class LocalOAuthAuthorizationServer {
 			this.writeOAuthJson(response, 400, { error: 'invalid_client_metadata', error_description: 'Registration body must be an object.' });
 			return;
 		}
-		const parsed = this.validateRegistration(payload as ClientRegistrationRequest);
+		const parsed = this.validateRegistration(payload);
 		if (parsed instanceof Error) {
 			this.writeOAuthJson(response, 400, { error: 'invalid_client_metadata', error_description: parsed.message });
 			return;
@@ -480,7 +481,7 @@ export class LocalOAuthAuthorizationServer {
 		}
 		const rawName = typeof request.client_name === 'string' ? request.client_name.trim() : 'Local MCP client';
 		const clientName = rawName.slice(0, 128) || 'Local MCP client';
-		if (/[\u0000-\u001f\u007f]/u.test(clientName)) return new Error('client_name contains control characters.');
+		if (containsAsciiControlCharacter(clientName)) return new Error('client_name contains control characters.');
 		return { clientName, redirectUris };
 	}
 
@@ -671,11 +672,21 @@ function timingSafeTextEqual(left: string, right: string): boolean {
 	return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+function containsAsciiControlCharacter(value: string): boolean {
+	for (let index = 0; index < value.length; index += 1) {
+		const code = value.charCodeAt(index);
+		if (code <= 0x1f || code === 0x7f) {
+			return true;
+		}
+	}
+	return false;
+}
+
 async function readRequestBody(request: IncomingMessage, maxBytes: number, timeoutMs: number): Promise<string> {
 	const declaredLength = Number.parseInt(firstHeaderValue(request.headers['content-length']), 10);
 	if (Number.isFinite(declaredLength) && declaredLength > maxBytes) throw new OAuthBodyTooLargeError(maxBytes);
-	let timeout: ReturnType<typeof setTimeout> | undefined;
-	const timeoutPromise = new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new OAuthBodyTimeoutError(timeoutMs)), timeoutMs); });
+	let timeout: ReturnType<typeof setNodeTimeout> | undefined;
+	const timeoutPromise = new Promise<never>((_resolve, reject) => { timeout = setNodeTimeout(() => reject(new OAuthBodyTimeoutError(timeoutMs)), timeoutMs); });
 	try {
 		const bodyPromise = (async () => {
 			const chunks: Buffer[] = [];
@@ -690,7 +701,7 @@ async function readRequestBody(request: IncomingMessage, maxBytes: number, timeo
 		})();
 		return await Promise.race([bodyPromise, timeoutPromise]);
 	} finally {
-		if (timeout) clearTimeout(timeout);
+		if (timeout) clearNodeTimeout(timeout);
 	}
 }
 

@@ -7,6 +7,7 @@ plugin/
 apps/obsidian-plugin/plugin/
 apps/obsidian-plugin/main.js
 apps/obsidian-plugin/main.js.map
+/main.js
 /.idea/
 apps/**/node_modules/
 apps/obsidian-plugin/node_modules/

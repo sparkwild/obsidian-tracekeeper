@@ -41,7 +41,7 @@ export interface RecoverableOperationStepContext {
 }
 export interface RecoverableOperationStep<TPayload> {
     name: string;
-    execute: (payload: TPayload, context: RecoverableOperationStepContext) => Promise<unknown> | unknown;
+    execute: (payload: TPayload, context: RecoverableOperationStepContext) => unknown;
     persistResult?: boolean;
     failureStatus?: OperationFailureStatus | ((error: unknown) => OperationFailureStatus);
 }

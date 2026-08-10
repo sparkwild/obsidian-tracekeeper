@@ -130,6 +130,12 @@ MCP writes are intentionally narrow:
 - every Session has a random identifier, every Session request revalidates its integration-bound credential, and request-size, session-count, stream, and idle-time limits remain enforced
 - delete, rename, bulk rewrite, and system command execution are not available MCP actions
 
+The desktop plugin uses three local capabilities whose scope is visible and bounded:
+
+- It enumerates Markdown files in the active vault when building or explicitly rebuilding the local knowledge index. Scoped review and activity reads traverse only their Tracekeeper-controlled folders, and no index data is uploaded.
+- It uses direct filesystem primitives for crash-safe operation journals and symlink containment inside the active vault, for the plugin-managed local Skill source, and for a user-selected Skills directory outside the vault. External Skill changes are previewed, confirmed, verified, backed up, and recoverable.
+- It writes to the system clipboard only after an explicit copy-button action and never reads or monitors clipboard contents. Copying a manual Bearer JSON configuration places that secret in the operating-system clipboard, so paste it only into the intended client and replace the credential if the clipboard may have been exposed.
+
 Normal Agent configuration is owned by each client's official OAuth/MCP entry; Tracekeeper does not read or write cross-platform client configuration paths. Skill installation is a user-selected, previewed, and recoverable Vault-outside write; AI-assisted installation only supplies a local source and instructions until the destination is externally verified. Tokens, digests, authorization codes, PKCE verifiers, pending handles, token responses, and Authorization Headers never enter connection URLs, copied commands, AI instructions, Runtime logs, or Vault audit records.
 
 ## Documentation

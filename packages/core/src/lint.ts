@@ -18,7 +18,6 @@ import {
 	KNW_RELATED_MEMORY_KEYS,
 	KNW_RELATED_WIKI_KEYS,
 	GRAPH_RECOMMENDED_ENTRY,
-	KNOWLEDGE_ROOT as KNOWLEDGE_ARCHITECTURE_DIR,
 	resolvePreferredKnowledgePath,
 	normalizeKnowledgePath as normalizeVaultPath,
 } from './knowledge-architecture';
