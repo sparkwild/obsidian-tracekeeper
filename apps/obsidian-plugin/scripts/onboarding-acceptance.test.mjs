@@ -139,13 +139,18 @@ try {
 	assert.ok(settingsSource.includes('renderClientSkillPrompt'));
 	assert.ok(clientSkillPromptSource.includes('SkillInstallPreviewModal'));
 	assert.ok(clientSkillPromptSource.includes('buildSkillInstallPrompt'));
-	const directoryActionStart = clientSkillPromptSource.indexOf("const choose = actions.createEl('button'");
+	const directoryActionStart = clientSkillPromptSource.indexOf("const actionButton = actions.createEl('button'");
 	const directoryActionEnd = clientSkillPromptSource.indexOf('if (prompt.assistantLabel)', directoryActionStart);
 	assert.ok(directoryActionStart >= 0 && directoryActionEnd > directoryActionStart);
+	const directoryActionSource = clientSkillPromptSource.slice(directoryActionStart, directoryActionEnd);
+	assert.match(directoryActionSource, /prompt\.action === 'update'/);
+	assert.match(directoryActionSource, /plugin\.updateSkillAtInstalledDirectory\(config\.clientId\)/);
+	assert.match(directoryActionSource, /await onChanged\?\.\(\)/);
+	assert.match(directoryActionSource, /new SkillInstallPreviewModal\(app, plugin, config\.clientId, onChanged\)\.open\(\)/);
 	assert.match(
-		clientSkillPromptSource.slice(directoryActionStart, directoryActionEnd),
-		/\.finally\(\(\) => \{ choose\.disabled = false; \}\);/,
-		'the directory action must be re-enabled after the modal opens or opening fails'
+		directoryActionSource,
+		/\.finally\(\(\) => \{ actionButton\.disabled = false; \}\);/,
+		'the Skill action must be re-enabled after direct update, modal opening, or failure'
 	);
 	assert.ok(settingsSource.includes('renderClientSkillPrompt'));
 	assert.ok(clientSkillPromptSource.includes('tracekeeper-settings-client-skill'));
@@ -230,7 +235,7 @@ assert.ok(skillPromptSource.includes("case 'location_required'"));
 		assert.equal(/(?:sk-[A-Za-z0-9_-]{12,}|api_key\s*[:=]\s*[A-Za-z0-9._-]{12,})/i.test(content), false);
 	}
 
-		process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 61 })}\n`);
+		process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 65 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

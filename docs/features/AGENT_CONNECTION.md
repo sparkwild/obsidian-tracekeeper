@@ -100,14 +100,20 @@ approval button, or opaque handle beyond the waiting URL required for polling.
 
 The companion Skill teaches `no_track`, `recall_only`, and `tracked_task` habits;
 it never grants Runtime permissions or proves MCP use. Skill installation keeps
-the existing preview, confirm, backup, rollback, symlink, and receipt controls.
-The user explicitly chooses a Skills root through the desktop directory picker;
-Tracekeeper appends one `tracekeeper` directory unless that directory was chosen
-directly. Officially documented locations are shown only as suggestions. An
-AI-assisted panel can export the complete local bundle to a versioned plugin
-source directory and provide a selectable prompt; copying that prompt is not
-installation. A direct install or an external directory verification must pass
-the bundle and manifest hash checks before the card shows **installed**.
+the existing write-plan, recheck, backup, rollback, symlink, and receipt
+controls. Initial installation and location changes explicitly choose a Skills
+root through the desktop directory picker and confirm the preview; Tracekeeper
+appends one `tracekeeper` directory unless that directory was chosen directly.
+When a receipt-backed installation has a verified older bundle, Settings offers
+an in-place **Update** action. It uses the recorded target directory without
+asking for the directory or a second confirmation, while still creating a
+short-lived plan, rechecking the files immediately before writing, retaining a
+backup, and refusing modified or newer content. Officially documented locations
+are shown only as suggestions. An AI-assisted panel can export the complete
+local bundle to a versioned plugin source directory and provide a selectable
+prompt; copying that prompt is not installation. A direct install, in-place
+update, or external directory verification must pass the bundle and manifest
+hash checks before the card shows **installed**.
 
 Settings owns connection, authorization, revocation, replacement, card removal,
 and Skill actions. Activity may show recent non-secret integration and

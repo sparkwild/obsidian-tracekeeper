@@ -144,8 +144,12 @@ export class SkillInstallPreviewModal extends Modal {
 			confirm.disabled = true;
 			back.disabled = true;
 			void this.plugin.confirmSkillWrite(plan.planId, this.clientId).then(async () => {
-				await this.onChanged?.();
 				this.close();
+				try {
+					await this.onChanged?.();
+				} catch (error) {
+					console.error('tracekeeper failed to refresh Skill state after confirmed write', error);
+				}
 			}).catch(() => {
 				confirm.disabled = false;
 				back.disabled = false;

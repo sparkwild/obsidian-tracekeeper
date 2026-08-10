@@ -2906,6 +2906,24 @@ export default class TracekeeperPlugin extends Plugin {
 		return plan;
 	}
 
+	async updateSkillAtInstalledDirectory(clientId: string): Promise<SkillInstallResult> {
+		const state = this.getSkillInstallState(clientId);
+		if (state.state !== 'update_available' || !state.targetDirectory) {
+			throw new ClientSkillPlanConflictError(ui(
+				'当前 Skill 已不再满足原路径更新条件，请重新检测状态。',
+				'The Skill is no longer eligible for an in-place update. Detect its current state again.'
+			));
+		}
+		const plan = this.prepareSkillWrite(clientId, state.targetDirectory);
+		if (plan.action !== 'update' || !plan.canConfirm) {
+			throw new ClientSkillPlanConflictError(ui(
+				'当前安装目录无法安全更新，请重新检测 Skill 状态。',
+				'The current installation directory cannot be updated safely. Detect the Skill state again.'
+			));
+		}
+		return this.confirmSkillWrite(plan.planId, clientId);
+	}
+
 	async confirmSkillWrite(planId: string, clientId: string): Promise<SkillInstallResult> {
 		const pendingPlan = this.skillPlanActions.get(planId);
 		if (!pendingPlan || pendingPlan.clientId !== clientId) {
@@ -2987,6 +3005,7 @@ export default class TracekeeperPlugin extends Plugin {
 				? `${actionLabel} ${ui('请重启客户端。', 'Restart the client.')}`
 				: `${actionLabel} ${ui('客户端通常会自动识别；若未出现再重启。', 'The client normally detects it automatically; restart only if it does not appear.')}`);
 		}
+		this.scheduleAgentStateViewRefresh();
 		return result;
 	}
 

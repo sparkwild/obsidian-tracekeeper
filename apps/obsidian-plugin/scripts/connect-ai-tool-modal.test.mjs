@@ -112,7 +112,8 @@ assert.equal(revokeFlowSource.includes('forgetAgentIntegration'), false);
 assert.match(modalSource, /structure: this\.onStructureChanged/);
 assert.match(modalSource, /content: this\.onChanged/);
 assert.match(modalSource, /createAgentIntegration[\s\S]*await this\.refreshSettings\('structure'\)/);
-assert.match(skillModalSource, /confirmSkillWrite[\s\S]*await this\.onChanged\?\.\(\)[\s\S]*this\.close\(\)/);
+assert.match(skillModalSource, /confirmSkillWrite[\s\S]*this\.close\(\)[\s\S]*await this\.onChanged\?\.\(\)/);
+assert.match(skillModalSource, /failed to refresh Skill state after confirmed write/);
 assert.match(skillModalSource, /verifyExternalSkill[\s\S]*await this\.onChanged\?\.\(\)[\s\S]*this\.close\(\)/);
 assert.match(settingsSource, /'add',\s*\(\) => this\.refreshAgentList\(true\),/);
 assert.match(settingsSource, /'manage',\s*\(\) => this\.refreshAgentList\(true\),/);
@@ -171,4 +172,4 @@ assert.doesNotMatch(stylesSource, /\.tracekeeper-connect-ai-tool-modal__selector
 assert.match(stylesSource, /max-width:\s*min\(720px,\s*calc\(100vw - 32px\)\)/);
 assert.match(stylesSource, /@media \(max-width: 520px\)/);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 75 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 76 })}\n`);

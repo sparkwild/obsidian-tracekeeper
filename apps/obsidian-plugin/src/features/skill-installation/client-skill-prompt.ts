@@ -56,16 +56,29 @@ export function renderClientSkillPrompt({
 	body.createEl('div', { text: prompt.detail, cls: 'tracekeeper-settings-client-skill__detail' });
 	const actions = skill.createDiv({ cls: 'tracekeeper-settings-client-skill__actions' });
 	if (prompt.action) {
-		const choose = actions.createEl('button', { text: prompt.actionLabel, cls: 'mod-cta' });
-		choose.addEventListener('click', () => {
-			choose.disabled = true;
+		const actionButton = actions.createEl('button', { text: prompt.actionLabel, cls: 'mod-cta' });
+		actionButton.addEventListener('click', () => {
+			actionButton.disabled = true;
 			void plugin.setOnboardingClientId(config.clientId)
-				.then(() => new SkillInstallPreviewModal(app, plugin, config.clientId, onChanged).open())
-				.catch((error) => {
-					console.error('tracekeeper failed to open Skill directory selection', error);
-					new Notice(ui('无法打开目录选择。', 'Unable to open directory selection.'));
+				.then(async () => {
+					if (prompt.action === 'update') {
+						await plugin.updateSkillAtInstalledDirectory(config.clientId);
+						await onChanged?.();
+						return;
+					}
+					new SkillInstallPreviewModal(app, plugin, config.clientId, onChanged).open();
 				})
-				.finally(() => { choose.disabled = false; });
+				.catch((error) => {
+					console.error(prompt.action === 'update'
+						? 'tracekeeper failed to update Skill in its installed directory'
+						: 'tracekeeper failed to open Skill directory selection', error);
+					new Notice(error instanceof Error
+						? error.message
+						: prompt.action === 'update'
+							? ui('无法更新 Skill。', 'Unable to update the Skill.')
+							: ui('无法打开目录选择。', 'Unable to open directory selection.'));
+				})
+				.finally(() => { actionButton.disabled = false; });
 		});
 	}
 	if (prompt.assistantLabel) {
