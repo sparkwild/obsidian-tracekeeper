@@ -201,18 +201,18 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 				`${snapshot.totalItems} records`
 			),
 		});
-		summary.createEl('div', {
+		summary.createDiv({
 			text: `${ui('索引代次', 'Index generation')} ${snapshot.indexGeneration} · ${ui('最后刷新', 'Last refreshed')} ${this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt))}`,
 			cls: 'tracekeeper-view__description',
 		});
-		summary.createEl('div', {
+		summary.createDiv({
 			text: ui(
 				`生命周期：当前 ${snapshot.lifecycleCounts.current} · 历史 ${snapshot.lifecycleCounts.history} · 冲突 ${snapshot.lifecycleCounts.conflict} · 待审核 ${snapshot.lifecycleCounts.review} · 旧版未标识 ${snapshot.lifecycleCounts.legacy_unkeyed}`,
 				`Lifecycle: current ${snapshot.lifecycleCounts.current} · history ${snapshot.lifecycleCounts.history} · conflict ${snapshot.lifecycleCounts.conflict} · review ${snapshot.lifecycleCounts.review} · legacy unkeyed ${snapshot.lifecycleCounts.legacy_unkeyed}`
 			),
 			cls: 'tracekeeper-view__description',
 		});
-		summary.createEl('div', {
+		summary.createDiv({
 			text: ui(
 				`项目记忆：不可变条目 ${snapshot.projectMemoryCounts.immutableEntries} · 旧版笔记 ${snapshot.projectMemoryCounts.legacyNotes}。此计数来自当前索引；Recall 只按相关性选择，不能替代完整目录。`,
 				`Project memory: ${snapshot.projectMemoryCounts.immutableEntries} immutable entries · ${snapshot.projectMemoryCounts.legacyNotes} legacy notes. These counts come from the current index; Recall selects by relevance and is not a complete catalog.`
@@ -220,34 +220,34 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 			cls: 'tracekeeper-view__description',
 		});
 		const controls = filters.createDiv({ cls: 'tracekeeper-action-row' });
-		const scopeSelect = controls.createEl('select') as HTMLSelectElement;
-		this.addOption(scopeSelect, 'all', ui('全部范围', 'All scopes'), snapshot.scope);
-		this.addOption(scopeSelect, 'global', ui('全局记忆', 'Global memory'), snapshot.scope);
-		this.addOption(scopeSelect, 'project', ui('项目记忆', 'Project memory'), snapshot.scope);
+		const scopeSelect = controls.createEl('select');
+		this.addOption(scopeSelect, ui('全部范围', 'All scopes'), 'all', snapshot.scope);
+		this.addOption(scopeSelect, ui('全局记忆', 'Global memory'), 'global', snapshot.scope);
+		this.addOption(scopeSelect, ui('项目记忆', 'Project memory'), 'project', snapshot.scope);
 		scopeSelect.setAttr('aria-label', ui('按记忆范围筛选', 'Filter by memory scope'));
 		scopeSelect.addEventListener('change', () => {
 			this.query = { ...this.query, page: 1, scope: scopeSelect.value as MemoryScopeFilter };
 			void this.refresh();
 		});
 
-		const stateSelect = controls.createEl('select') as HTMLSelectElement;
-		this.addOption(stateSelect, 'all', ui('全部状态', 'All states'), snapshot.state);
-		this.addOption(stateSelect, 'persisted', ui('已保存', 'Persisted'), snapshot.state);
-		this.addOption(stateSelect, 'queued', ui('待确认', 'Queued'), snapshot.state);
-		this.addOption(stateSelect, 'missing', ui('证据缺失', 'Missing evidence'), snapshot.state);
+		const stateSelect = controls.createEl('select');
+		this.addOption(stateSelect, ui('全部状态', 'All states'), 'all', snapshot.state);
+		this.addOption(stateSelect, ui('已保存', 'Persisted'), 'persisted', snapshot.state);
+		this.addOption(stateSelect, ui('待确认', 'Queued'), 'queued', snapshot.state);
+		this.addOption(stateSelect, ui('证据缺失', 'Missing evidence'), 'missing', snapshot.state);
 		stateSelect.setAttr('aria-label', ui('按持久化状态筛选', 'Filter by persistence state'));
 		stateSelect.addEventListener('change', () => {
 			this.query = { ...this.query, page: 1, state: stateSelect.value as MemoryStateFilter };
 			void this.refresh();
 		});
 
-		const lifecycleSelect = controls.createEl('select') as HTMLSelectElement;
-		this.addOption(lifecycleSelect, 'all', ui('全部生命周期', 'All lifecycle states'), snapshot.lifecycle);
-		this.addOption(lifecycleSelect, 'current', ui('当前', 'Current'), snapshot.lifecycle);
-		this.addOption(lifecycleSelect, 'history', ui('历史', 'History'), snapshot.lifecycle);
-		this.addOption(lifecycleSelect, 'conflict', ui('冲突', 'Conflict'), snapshot.lifecycle);
-		this.addOption(lifecycleSelect, 'review', ui('待审核', 'Review'), snapshot.lifecycle);
-		this.addOption(lifecycleSelect, 'legacy_unkeyed', ui('旧版未标识', 'Legacy unkeyed'), snapshot.lifecycle);
+		const lifecycleSelect = controls.createEl('select');
+		this.addOption(lifecycleSelect, ui('全部生命周期', 'All lifecycle states'), 'all', snapshot.lifecycle);
+		this.addOption(lifecycleSelect, ui('当前', 'Current'), 'current', snapshot.lifecycle);
+		this.addOption(lifecycleSelect, ui('历史', 'History'), 'history', snapshot.lifecycle);
+		this.addOption(lifecycleSelect, ui('冲突', 'Conflict'), 'conflict', snapshot.lifecycle);
+		this.addOption(lifecycleSelect, ui('待审核', 'Review'), 'review', snapshot.lifecycle);
+		this.addOption(lifecycleSelect, ui('旧版未标识', 'Legacy unkeyed'), 'legacy_unkeyed', snapshot.lifecycle);
 		lifecycleSelect.setAttr('aria-label', ui('按记忆生命周期筛选', 'Filter by memory lifecycle'));
 		lifecycleSelect.addEventListener('change', () => {
 			this.query = {
@@ -261,8 +261,8 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 
 	private addOption(
 		select: HTMLSelectElement,
-		value: string,
 		label: string,
+		value: string,
 		selected: string
 	): void {
 		const option = select.createEl('option', { text: label, value });
@@ -274,11 +274,11 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		const header = item.createDiv({ cls: 'tracekeeper-card__header' });
 		const title = header.createDiv();
 		title.createEl('strong', { text: record.title || record.path || ui('未命名记忆', 'Untitled memory') });
-		title.createEl('div', {
+		title.createDiv({
 			text: record.path || ui('目标路径尚未确定', 'Target path is not resolved'),
 			cls: 'tracekeeper-observability-record__path',
 		});
-		header.createEl('span', {
+		header.createSpan({
 			text: this.lifecycleStateLabel(record.lifecycleState),
 			cls: `tracekeeper-badge ${this.lifecycleStateClass(record.lifecycleState)}`,
 		});
@@ -365,7 +365,7 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value || ui('暂无', 'None') });
 	}
 
@@ -465,7 +465,7 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 			this.query = { ...this.query, page: snapshot.page - 1 };
 			void this.refresh();
 		});
-		pagination.createEl('span', {
+		pagination.createSpan({
 			text: ui(
 				`第 ${snapshot.page} / ${snapshot.totalPages} 页`,
 				`Page ${snapshot.page} of ${snapshot.totalPages}`

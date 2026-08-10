@@ -124,7 +124,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 		status.createEl('strong', {
 			text: ui(`${snapshot.totalItems} 条资料记录`, `${snapshot.totalItems} source records`),
 		});
-		status.createEl('div', {
+		status.createDiv({
 			text: `${ui('索引代次', 'Index generation')} ${snapshot.indexGeneration} · ${ui('最后刷新', 'Last refreshed')} ${this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt))}`,
 			cls: 'tracekeeper-view__description',
 		});
@@ -216,8 +216,8 @@ export class TracekeeperSourceStatusView extends ItemView {
 		const header = item.createDiv({ cls: 'tracekeeper-card__header' });
 		const title = header.createDiv();
 		title.createEl('strong', { text: record.title || ui('未命名资料', 'Untitled source') });
-		title.createEl('div', { text: record.path, cls: 'tracekeeper-observability-record__path' });
-		header.createEl('span', {
+		title.createDiv({ text: record.path, cls: 'tracekeeper-observability-record__path' });
+		header.createSpan({
 			text: record.state === 'captured'
 				? ui('已捕获', 'Captured')
 				: record.state === 'incomplete'
@@ -309,7 +309,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 			);
 		});
 		if (paths.length > 3) {
-			container.createEl('span', {
+			container.createSpan({
 				text: ui(`另有 ${paths.length - 3} 条`, `${paths.length - 3} more`),
 				cls: 'tracekeeper-view__description',
 			});
@@ -360,17 +360,17 @@ export class TracekeeperSourceStatusView extends ItemView {
 
 	private renderRequest(container: HTMLElement, request: SourceRequestRecord): void {
 		const item = container.createEl('li', { cls: 'tracekeeper-view__item' });
-		item.createEl('div', {
+		item.createDiv({
 			text: `${this.plugin.formatDisplayTime(request.sortTimestamp)} • ${request.sourceKind} • ${request.status}`,
 		});
 		if (request.source) {
-			item.createEl('div', { text: `${ui('来源', 'Source')}: ${trimText(request.source, 120)}` });
+			item.createDiv({ text: `${ui('来源', 'Source')}: ${trimText(request.source, 120)}` });
 		}
 		if (request.purpose) {
-			item.createEl('div', { text: `${ui('用途', 'Purpose')}: ${request.purpose}` });
+			item.createDiv({ text: `${ui('用途', 'Purpose')}: ${request.purpose}` });
 		}
 		if (request.relatedProject) {
-			item.createEl('div', { text: `${ui('关联项目', 'Related project')}: ${request.relatedProject}` });
+			item.createDiv({ text: `${ui('关联项目', 'Related project')}: ${request.relatedProject}` });
 		}
 		item.createEl('small', { text: `${ui('文件', 'File')}: ${request.path}` });
 		const actionRow = item.createDiv({ cls: 'tracekeeper-action-row' });
@@ -406,7 +406,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value || ui('暂无', 'None') });
 	}
 
@@ -421,7 +421,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 			this.query = { ...this.query, page: snapshot.page - 1 };
 			void this.refresh();
 		});
-		pagination.createEl('span', {
+		pagination.createSpan({
 			text: ui(
 				`第 ${snapshot.page} / ${snapshot.totalPages} 页`,
 				`Page ${snapshot.page} of ${snapshot.totalPages}`

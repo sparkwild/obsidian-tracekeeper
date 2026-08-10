@@ -160,7 +160,7 @@ export class SkillInstallPreviewModal extends Modal {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value });
 	}
 }
@@ -265,7 +265,7 @@ export class SkillAiAssistantModal extends Modal {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value });
 	}
 }

@@ -26,6 +26,9 @@ import {
 import type { ArchiveProposalInspection } from './review-queue-controller';
 import { withObsidianVaultPathLocks } from '../../adapters/obsidian-vault-path-lock';
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === 'object' && value !== null && !Array.isArray(value);
+
 export interface ObsidianProposalTransitionRequest extends ProposalTransitionCommand {
 	proposalPath: string;
 	expectedFileHash?: string;
@@ -411,13 +414,13 @@ export class ObsidianProposalTransitionAdapter {
 		if (!info.exists) {
 			throw new ProposalTransitionValidationError('Proposal frontmatter is required.');
 		}
-		const parsed = parseYaml(info.frontmatter);
-		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		const parsed: unknown = parseYaml(info.frontmatter);
+		if (!isRecord(parsed)) {
 			throw new ProposalTransitionValidationError('Proposal frontmatter is invalid.');
 		}
 		const snapshot = this.currentSnapshot(
 			file,
-			parsed as Record<string, unknown>,
+			parsed,
 			content.slice(info.contentStart)
 		);
 		return {
@@ -524,13 +527,17 @@ export class ObsidianProposalTransitionAdapter {
 	): Promise<ProposalTransitionDecision> {
 		let committed: ProposalTransitionDecision | null = null;
 		await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-			const current = this.currentSnapshot(file, frontmatter, '');
+			const frontmatterValue: unknown = frontmatter;
+			if (!isRecord(frontmatterValue)) {
+				throw new ProposalTransitionValidationError('Proposal frontmatter is invalid.');
+			}
+			const current = this.currentSnapshot(file, frontmatterValue, '');
 			committed = transitionProposal(
 				current,
 				request,
-				this.environment(request, frontmatter)
+				this.environment(request, frontmatterValue)
 			);
-			applyFrontmatterMutation(frontmatter, committed.frontmatter);
+			applyFrontmatterMutation(frontmatterValue, committed.frontmatter);
 		});
 		if (!committed) {
 			throw new ProposalTransitionConflictError('Proposal transition did not commit.');
@@ -548,11 +555,11 @@ export class ObsidianProposalTransitionAdapter {
 			if (!info.exists) {
 				throw new ProposalTransitionValidationError('Proposal frontmatter is required.');
 			}
-			const parsed = parseYaml(info.frontmatter);
-			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+			const parsed: unknown = parseYaml(info.frontmatter);
+			if (!isRecord(parsed)) {
 				throw new ProposalTransitionValidationError('Proposal frontmatter is invalid.');
 			}
-			const frontmatter = { ...(parsed as Record<string, unknown>) };
+			const frontmatter = { ...parsed };
 			const current = this.currentSnapshot(
 				file,
 				frontmatter,

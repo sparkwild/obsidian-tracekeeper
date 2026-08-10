@@ -1,7 +1,7 @@
 {
 	"name": "obsidian-tracekeeper",
 	"version": "0.3.0",
-	"description": "Connect AI agents to your vault through a local MCP runtime, with scoped recall and review-gated knowledge updates.",
+	"description": "Connect AI agents to your vault through a local MCP runtime, with scoped recall and governed memory updates.",
 	"private": true,
 	"workspaces": [
 		"packages/core",

@@ -70,7 +70,7 @@ export class RuntimeLogCleanupModal extends Modal {
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
 		cancel.addEventListener('click', () => this.close());
-		const status = actions.createEl('span', {
+		const status = actions.createSpan({
 			cls: 'tracekeeper-view__description',
 			attr: {
 				role: 'status',
@@ -137,7 +137,7 @@ export class RuntimeLogCleanupModal extends Modal {
 		});
 		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel') });
 		cancel.addEventListener('click', () => this.close());
-		const status = actions.createEl('span', {
+		const status = actions.createSpan({
 			cls: 'tracekeeper-view__description',
 			attr: {
 				role: 'status',
@@ -374,7 +374,7 @@ export class TracekeeperRuntimeLogView extends ItemView {
 
 	private renderLogItem(container: HTMLElement, item: RuntimeLogItem): void {
 		const row = container.createDiv({ cls: 'tracekeeper-runtime-log-row' });
-		row.createEl('div', {
+		row.createDiv({
 			text: this.categoryLabel(item.category),
 			cls: 'tracekeeper-runtime-log-row__badge tracekeeper-badge',
 		});
@@ -383,10 +383,10 @@ export class TracekeeperRuntimeLogView extends ItemView {
 				text: `${item.title || ui('Agent 活动', 'Agent activity')} • ${this.plugin.formatDisplayTime(item.time)}`,
 		});
 		if (item.meta) {
-			body.createEl('div', { text: item.meta, cls: 'tracekeeper-view__description' });
+			body.createDiv({ text: item.meta, cls: 'tracekeeper-view__description' });
 		}
 		if (item.body) {
-			body.createEl('div', { text: trimText(item.body, 180) });
+			body.createDiv({ text: trimText(item.body, 180) });
 		}
 		if (item.path) {
 			body.createEl('small', { text: item.path });
@@ -401,7 +401,7 @@ export class TracekeeperRuntimeLogView extends ItemView {
 			this.page = Math.max(1, snapshot.page - 1);
 			void this.refresh();
 		});
-		pager.createEl('span', {
+		pager.createSpan({
 			text: ui(
 				`第 ${snapshot.page} / ${snapshot.totalPages} 页`,
 				`Page ${snapshot.page} of ${snapshot.totalPages}`
@@ -489,11 +489,11 @@ export class AgentActivityDetailsModal extends Modal {
 			}
 			for (const item of snapshot.items) {
 				const row = list.createDiv({ cls: 'tracekeeper-runtime-log-row' });
-				row.createEl('div', { text: this.categoryLabel(item.category), cls: 'tracekeeper-runtime-log-row__badge tracekeeper-badge' });
+				row.createDiv({ text: this.categoryLabel(item.category), cls: 'tracekeeper-runtime-log-row__badge tracekeeper-badge' });
 				const body = row.createDiv({ cls: 'tracekeeper-runtime-log-row__body' });
 				body.createEl('strong', { text: `${item.title || ui('Agent 活动', 'Agent activity')} • ${this.plugin.formatDisplayTime(item.time)}` });
-				if (item.meta) body.createEl('div', { text: item.meta, cls: 'tracekeeper-view__description' });
-				if (item.body) body.createEl('div', { text: trimText(item.body, 240) });
+				if (item.meta) body.createDiv({ text: item.meta, cls: 'tracekeeper-view__description' });
+				if (item.body) body.createDiv({ text: trimText(item.body, 240) });
 				if (item.path) body.createEl('small', { text: item.path });
 			}
 		} catch (error) {

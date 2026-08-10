@@ -123,7 +123,7 @@ export function bindLegacyMigrationJournal(
 
 export function parseLegacyMigrationJournal(value: unknown): LegacyMigrationJournal {
 	assertPlainObject(value, 'Migration journal must be an object.');
-	const record = value as Record<string, unknown>;
+	const record = value;
 	if (record.version !== LEGACY_MIGRATION_JOURNAL_VERSION) {
 		throw new Error('Migration journal version is unsupported.');
 	}
@@ -160,21 +160,21 @@ export function parseLegacyMigrationJournal(value: unknown): LegacyMigrationJour
 
 	const parsed: LegacyMigrationJournal = {
 		version: LEGACY_MIGRATION_JOURNAL_VERSION,
-		migrationId: record.migrationId as string,
-		planHash: record.planHash as string,
-		revision: record.revision as number,
-		status: record.status as LegacyMigrationJournalStatus,
-		createdAt: record.createdAt as string,
-		updatedAt: record.updatedAt as string,
-		completedAt: record.completedAt as string,
-		metadataGeneration: record.metadataGeneration as number,
-		linkCapabilityStatus: record.linkCapabilityStatus as 'not_required' | 'passed',
+		migrationId: record.migrationId,
+		planHash: record.planHash,
+		revision: record.revision,
+		status: record.status,
+		createdAt: record.createdAt,
+		updatedAt: record.updatedAt,
+		completedAt: record.completedAt,
+		metadataGeneration: record.metadataGeneration,
+		linkCapabilityStatus: record.linkCapabilityStatus,
 		items,
 		cleanup,
-		reportMdPath: record.reportMdPath as string,
-		reportJsonPath: record.reportJsonPath as string,
+		reportMdPath: record.reportMdPath,
+		reportJsonPath: record.reportJsonPath,
 		auditWritten: record.auditWritten,
-		bindingHash: record.bindingHash as string,
+		bindingHash: record.bindingHash,
 	};
 	if (bindLegacyMigrationJournal(parsed).bindingHash !== parsed.bindingHash) {
 		throw new Error('Migration journal integrity is invalid.');
@@ -308,7 +308,7 @@ export class LegacyMigrationJournalRepository {
 
 function parseJournalItem(value: unknown): LegacyMigrationJournalItem {
 	assertPlainObject(value, 'Migration journal item must be an object.');
-	const item = value as Record<string, unknown>;
+	const item = value;
 	assertVaultPath(item.oldPath, 'Migration journal source path is invalid.');
 	if (item.action === 'unmapped') {
 		if (item.newPath !== '') {
@@ -371,32 +371,32 @@ function parseJournalItem(value: unknown): LegacyMigrationJournalItem {
 		throw new Error('Migration unresolved-edge evidence is invalid.');
 	}
 	return {
-		oldPath: item.oldPath as string,
-		newPath: item.newPath as string,
+		oldPath: item.oldPath,
+		newPath: item.newPath,
 		kind: item.kind,
 		action: item.action,
 		isMarkdown: item.isMarkdown,
-		sourceSize: item.sourceSize as number,
-		sourceHash: item.sourceHash as string,
-		semanticContentHash: item.semanticContentHash as string,
-		expectedEnrichedHash: item.expectedEnrichedHash as string,
-		initialTargetHash: item.initialTargetHash as string | null,
+		sourceSize: item.sourceSize,
+		sourceHash: item.sourceHash,
+		semanticContentHash: item.semanticContentHash,
+		expectedEnrichedHash: item.expectedEnrichedHash,
+		initialTargetHash: item.initialTargetHash,
 		inboundEdges: item.inboundEdges.map(parseJournalEdge),
 		outgoingEdges: item.outgoingEdges.map(parseJournalEdge),
 		unresolvedBaseline: item.unresolvedBaseline.map(parseJournalEdge),
 		state: item.state,
 		lastCompletedState: item.lastCompletedState,
-		preMoveHash: item.preMoveHash as string | null,
-		postMoveHash: item.postMoveHash as string | null,
-		postEnrichmentHash: item.postEnrichmentHash as string | null,
-		verifiedGeneration: item.verifiedGeneration as number | null,
+		preMoveHash: item.preMoveHash,
+		postMoveHash: item.postMoveHash,
+		postEnrichmentHash: item.postEnrichmentHash,
+		verifiedGeneration: item.verifiedGeneration,
 		error: item.error,
 	};
 }
 
 function parseJournalEdge(value: unknown): LegacyMigrationJournalEdge {
 	assertPlainObject(value, 'Migration journal edge must be an object.');
-	const edge = value as Record<string, unknown>;
+	const edge = value;
 	assertVaultPath(edge.sourcePath, 'Migration edge source path is invalid.');
 	assertVaultPathOrEmpty(edge.targetPath, 'Migration edge target path is invalid.');
 	assertHash(edge.shapeHash, 'Migration edge shape hash is invalid.');
@@ -412,10 +412,10 @@ function parseJournalEdge(value: unknown): LegacyMigrationJournalEdge {
 		throw new Error('Migration edge subpath kind is invalid.');
 	}
 	return {
-		sourcePath: edge.sourcePath as string,
-		targetPath: edge.targetPath as string,
-		shapeHash: edge.shapeHash as string,
-		count: edge.count as number,
+		sourcePath: edge.sourcePath,
+		targetPath: edge.targetPath,
+		shapeHash: edge.shapeHash,
+		count: edge.count,
 		subpath: edge.subpath,
 		subpathKind: edge.subpathKind,
 	};
@@ -423,7 +423,7 @@ function parseJournalEdge(value: unknown): LegacyMigrationJournalEdge {
 
 function parseCleanupJournal(value: unknown): LegacyMigrationCleanupJournal {
 	assertPlainObject(value, 'Migration cleanup journal must be an object.');
-	const cleanup = value as Record<string, unknown>;
+	const cleanup = value;
 	assertHash(cleanup.previewHash, 'Migration cleanup preview hash is invalid.');
 	assertVaultPathOrEmpty(cleanup.attemptingRoot, 'Cleanup attempting root is invalid.');
 	assertOptionalTimestamp(cleanup.completedAt, 'Cleanup completion time is invalid.');
@@ -434,20 +434,20 @@ function parseCleanupJournal(value: unknown): LegacyMigrationCleanupJournal {
 	}
 	const failedRoots = cleanup.failedRoots.map((failure) => {
 		assertPlainObject(failure, 'Cleanup failure must be an object.');
-		const entry = failure as Record<string, unknown>;
+		const entry = failure;
 		assertVaultPath(entry.path, 'Cleanup failure path is invalid.');
 		if (typeof entry.error !== 'string' || entry.error.length > MAX_ERROR_LENGTH) {
 			throw new Error('Cleanup failure error is invalid.');
 		}
-		return { path: entry.path as string, error: entry.error };
+		return { path: entry.path, error: entry.error };
 	});
 	return {
-		previewHash: cleanup.previewHash as string,
-		attemptingRoot: cleanup.attemptingRoot as string,
+		previewHash: cleanup.previewHash,
+		attemptingRoot: cleanup.attemptingRoot,
 		trashedRoots,
 		missingRoots,
 		failedRoots,
-		completedAt: cleanup.completedAt as string,
+		completedAt: cleanup.completedAt,
 	};
 }
 
@@ -581,7 +581,7 @@ function parsePathArray(value: unknown, message: string): string[] {
 	}
 	return value.map((path) => {
 		assertVaultPath(path, message);
-		return path as string;
+		return path;
 	});
 }
 
@@ -604,10 +604,20 @@ function assertVaultPath(value: unknown, message: string): asserts value is stri
 		|| value.startsWith('/')
 		|| value.includes('\\')
 		|| value.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')
-		|| /[\u0000-\u001f\u007f]/u.test(value)
+		|| containsControlCharacter(value)
 	) {
 		throw new Error(message);
 	}
+}
+
+function containsControlCharacter(value: string): boolean {
+	for (const character of value) {
+		const code = character.charCodeAt(0);
+		if (code <= 0x1f || code === 0x7f) {
+			return true;
+		}
+	}
+	return false;
 }
 
 function assertVaultPathOrEmpty(

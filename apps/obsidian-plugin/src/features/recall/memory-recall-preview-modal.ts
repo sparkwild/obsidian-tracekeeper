@@ -2,7 +2,6 @@ import { App, Modal, Setting } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import {
 	MEMORY_RECALL_SCOPES,
-	normalizeMemoryRecallScope,
 	type MemoryRecallResult,
 	type TracekeeperRecallScope,
 } from './recall-view-model';
@@ -137,8 +136,8 @@ export class MemoryRecallPreviewModal extends Modal {
 			const header = card.createDiv({ cls: 'tracekeeper-card__header' });
 			header.createEl('strong', { text: item.title || item.path });
 			const badges = header.createDiv({ cls: 'tracekeeper-badge-row' });
-			badges.createEl('span', { text: item.scope, cls: 'tracekeeper-badge' });
-			badges.createEl('span', { text: `${ui('分数', 'Score')} ${item.score}`, cls: 'tracekeeper-badge tracekeeper-badge--muted' });
+			badges.createSpan({ text: item.scope, cls: 'tracekeeper-badge' });
+			badges.createSpan({ text: `${ui('分数', 'Score')} ${item.score}`, cls: 'tracekeeper-badge tracekeeper-badge--muted' });
 			const details = card.createDiv({ cls: 'tracekeeper-detail-grid' });
 			this.renderDetail(details, ui('路径', 'Path'), item.path || ui('未知', 'Unknown'));
 			this.renderDetail(details, ui('类型', 'Type'), item.type || ui('笔记', 'Note'));
@@ -149,7 +148,7 @@ export class MemoryRecallPreviewModal extends Modal {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail tracekeeper-detail--description' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value || ui('未知', 'Unknown') });
 	}
 }

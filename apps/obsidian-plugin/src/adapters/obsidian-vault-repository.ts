@@ -115,7 +115,7 @@ export class ObsidianVaultRepository implements VaultRepository {
 			if (this.fileVersion(file, content) !== expectedVersion) {
 				throw new OperationConflictError(`CAS check failed for ${safePath}`);
 			}
-			await this.vault.delete(file);
+			await this.fileManager.trashFile(file);
 		});
 	}
 

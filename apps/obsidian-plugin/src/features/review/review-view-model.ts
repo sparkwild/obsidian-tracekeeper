@@ -654,7 +654,7 @@ export const parseMemoryProposalRecord = ({
 	);
 	const rationale = extractMemoryProposalRationale(fields, body);
 	const lastTransition = proposalTransitionReceiptFromFrontmatter(
-		fields as Readonly<Record<string, unknown>>
+		fields
 	);
 
 	const recordBase = {

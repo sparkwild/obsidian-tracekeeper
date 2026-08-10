@@ -2,7 +2,6 @@ import { App, Menu, Notice, PluginSettingTab, Setting, SettingGroup } from 'obsi
 import type TracekeeperPlugin from '../../main';
 import type { AgentConnectionsSnapshot } from '../activity/activity-model';
 import type { GeneratedClientConfig } from '../client-config/client-config';
-import type { AgentIntegrationSnapshot } from './agent-integrations';
 import { ConnectAiToolModal } from '../client-config/client-config-modals';
 import {
 	canBindPendingOAuthRequest,
@@ -10,7 +9,7 @@ import {
 } from '../client-config/oauth-pending';
 import { McpCapabilitiesModal } from '../runtime/mcp-capabilities-modal';
 import { RuntimeAccessResetModal } from '../runtime/runtime-access-reset-modal';
-import { DEFAULT_MCP_HOST, DEFAULT_MCP_PORT } from '../runtime/runtime-defaults';
+import { DEFAULT_MCP_PORT } from '../runtime/runtime-defaults';
 import { runtimeToneBadgeClass, runtimeViewModel } from '../runtime/runtime-view-model';
 import {
 	AUTO_REFRESH_INTERVAL_OPTIONS,
@@ -120,7 +119,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			if (!this.visible || host !== this.agentListHostEl || !host.isConnected) continue;
 			const fingerprint = this.buildAgentListFingerprint(snapshot);
 			if (!shouldReplaceAgentConfiguration(this.agentListFingerprint, fingerprint, force)) continue;
-			const stagingEl = host.ownerDocument.createElement('div');
+			const stagingEl = host.createDiv();
+			stagingEl.remove();
 			const replacement = this.renderAgentClientConfigSection(stagingEl, snapshot);
 			host.replaceWith(replacement);
 			this.agentListHostEl = replacement;
@@ -248,26 +248,30 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				visibleAgents.find(({ integration }) => integration.integrationId === integrationId)?.config.displayName
 					?? integrationId
 			);
-			group.addSetting((setting) => setting
-				.setName(ui('OAuth 客户端归属冲突', 'OAuth client ownership conflict'))
-				.setDesc(ui(
-					`客户端 ID “${conflict.clientId}” 同时保存在多个 OAuth Agent（${ownerNames.join('、')}）。Tracekeeper 未改写这些记录；在撤销重复归属、只保留一个 Agent 前，该客户端不会作为已绑定客户端导出，其请求也不能授权。`,
-					`Client ID “${conflict.clientId}” is stored on multiple OAuth Agents (${ownerNames.join(', ')}). Tracekeeper has not rewritten these records. Until you revoke duplicate ownership and leave exactly one Agent, the client is not exported as bound and its requests cannot be allowed.`
-				)));
+			group.addSetting((setting) => {
+				setting.setName(ui('OAuth 客户端归属冲突', 'OAuth client ownership conflict'))
+					.setDesc(ui(
+						`客户端 ID “${conflict.clientId}” 同时保存在多个 OAuth Agent（${ownerNames.join('、')}）。Tracekeeper 未改写这些记录；在撤销重复归属、只保留一个 Agent 前，该客户端不会作为已绑定客户端导出，其请求也不能授权。`,
+						`Client ID “${conflict.clientId}” is stored on multiple OAuth Agents (${ownerNames.join(', ')}). Tracekeeper has not rewritten these records. Until you revoke duplicate ownership and leave exactly one Agent, the client is not exported as bound and its requests cannot be allowed.`
+					));
+			});
 		}
 		for (const request of conflictingOAuthRequests) {
-			group.addSetting((setting) => setting
-				.setName(ui('已阻止的 OAuth 请求', 'Blocked OAuth request'))
-				.setDesc(ui(
-					`客户端 ID “${request.clientId}” 存在重复 Agent 归属，因此此请求不会显示在任何 Agent 卡片上，也不能授权。请先撤销重复归属。请求有效至 ${new Date(request.expiresAt).toLocaleString()}。`,
-					`Client ID “${request.clientId}” has duplicate Agent owners, so this request is not shown on any Agent card and cannot be allowed. Revoke the duplicate ownership first. Expires ${new Date(request.expiresAt).toLocaleString()}.`
-				))
-				.addButton((button) => button
-					.setButtonText(ui('拒绝', 'Deny'))
-					.onClick(() => {
-						button.setDisabled(true);
-						void this.denyPendingOAuthRequest(request.requestId, () => button.setDisabled(false));
-					})));
+			group.addSetting((setting) => {
+				setting.setName(ui('已阻止的 OAuth 请求', 'Blocked OAuth request'))
+					.setDesc(ui(
+						`客户端 ID “${request.clientId}” 存在重复 Agent 归属，因此此请求不会显示在任何 Agent 卡片上，也不能授权。请先撤销重复归属。请求有效至 ${new Date(request.expiresAt).toLocaleString()}。`,
+						`Client ID “${request.clientId}” has duplicate Agent owners, so this request is not shown on any Agent card and cannot be allowed. Revoke the duplicate ownership first. Expires ${new Date(request.expiresAt).toLocaleString()}.`
+					))
+					.addButton((button) => button
+						.setButtonText(ui('拒绝', 'Deny'))
+						.onClick(() => {
+							button.setDisabled(true);
+							void this.denyPendingOAuthRequest(request.requestId, () => {
+								button.setDisabled(false);
+							});
+						}));
+			});
 		}
 		for (const request of unboundOAuthRequests) {
 			const bindingCandidates = visibleAgents.filter(({ integration }) =>
@@ -320,7 +324,9 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.setButtonText(ui('拒绝', 'Deny'))
 						.onClick(() => {
 							button.setDisabled(true);
-							void this.denyPendingOAuthRequest(request.requestId, () => button.setDisabled(false));
+							void this.denyPendingOAuthRequest(request.requestId, () => {
+								button.setDisabled(false);
+							});
 						}));
 				if (bindingCandidates.length === 0) {
 					setting.descEl.createEl('small', {
@@ -351,7 +357,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	}
 
 	private async denyPendingOAuthRequest(requestId: string, onCommitFailure: () => void): Promise<void> {
-		let refreshError: unknown | null;
+		let refreshError: unknown;
 		try {
 			({ refreshError } = await commitOAuthDecisionWithBestEffortRefresh(
 				() => this.plugin.decideOAuthRequest(requestId, { decision: 'deny' }),
@@ -402,7 +408,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						})
 				);
 			setting.nameEl.addClass('tracekeeper-settings-runtime-name');
-			setting.nameEl.createEl('span', {
+			setting.nameEl.createSpan({
 				text: runtime.label,
 				cls: `tracekeeper-badge ${runtimeToneBadgeClass(runtime.tone)}`,
 			});
@@ -878,13 +884,13 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		const info = row.createDiv({ cls: 'tracekeeper-settings-client-row__info' });
 		const title = info.createDiv({ cls: 'tracekeeper-config-row__title' });
 		title.createEl('strong', { text: config.displayName });
-		title.createEl('span', {
+		title.createSpan({
 			text: this.connectionStateLabel(presentation.state),
 			cls: `tracekeeper-badge ${presentation.state === 'connected' || presentation.state === 'used' || presentation.state === 'authorized' ? 'tracekeeper-badge--success' : presentation.state === 'revoked' || presentation.state === 'needs_update' ? 'tracekeeper-badge--warning' : 'tracekeeper-badge--muted'}`,
 		});
 		const meta = info.createDiv({ cls: 'tracekeeper-settings-client-row__meta' });
 		const latestActivityAt = agent?.sortTimestamp ?? 0;
-		meta.createEl('span', {
+		meta.createSpan({
 			text: ui(
 				`最近活动时间：${latestActivityAt > 0 ? this.plugin.formatDisplayTime(latestActivityAt) : '暂无活动'}`,
 				`Latest activity: ${latestActivityAt > 0 ? this.plugin.formatDisplayTime(latestActivityAt) : 'No activity'}`
@@ -937,7 +943,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value || ui('未知', 'Unknown') });
 	}
 

@@ -8,13 +8,13 @@ Tracekeeper is an Obsidian-native, local-first knowledge and AI-memory system. I
 
 - Connects AI tools to the active vault through a local MCP Runtime while desktop Obsidian is open.
 - Recalls selected vault context and builds bounded context packs without exposing unrestricted filesystem access.
-- Sends global memory and knowledge updates through human review, preview, and explicit writeback confirmation.
-- Optionally saves project memory as immutable, linked Markdown entries with retry-safe operation identity.
+- Routes Wiki changes through human review and applies approved writebacks only after preview and explicit confirmation.
+- Saves Global or Project memory according to user-selected policy as governed, immutable Markdown records with retry-safe operation identity.
 - Keeps durable knowledge in ordinary vault files with no hosted Tracekeeper backend or external database.
 
 ## Installation
 
-Install Tracekeeper from the Obsidian Community Plugins directory:
+After Tracekeeper is approved for the Obsidian Community Plugins directory, install it there:
 
 1. Open **Settings** in Obsidian.
 2. Go to **Community plugins**.
@@ -22,7 +22,7 @@ Install Tracekeeper from the Obsidian Community Plugins directory:
 4. Select **Browse**, search for **Tracekeeper**, then install it.
 5. Enable **Tracekeeper** from the installed plugins list.
 
-For manual installation or release-candidate testing, install from the matching GitHub release:
+Before directory approval, or for manual installation and release-candidate testing, install from the matching GitHub release:
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the release whose tag matches the version in `manifest.json`.
 2. Create `plugins/tracekeeper/` inside the vault's Obsidian configuration folder.
@@ -37,16 +37,16 @@ Tracekeeper keeps that boundary clear:
 
 - Memory captures tasks, sessions, decisions, preferences, and project continuity.
 - Wiki organizes reusable topics, hubs, sources, and graph entry points.
-- Memory and Wiki stay connected through explicit wikilinks so Obsidian graph and agent recall use the same structure.
+- Memory can link to verified Wiki or Source notes when those relations exist, so Obsidian graph and Agent Recall can use the same structure without requiring a Wiki for every record.
 - No external database is required, and no app auto-sync platform is required.
 
-AI can help recall context, draft proposals, and prepare updates, while you keep the final decision before anything becomes durable knowledge.
+AI can help recall context, draft proposals, and prepare updates. You choose the persistence policy: Review keeps the final write decision with you, while Auto is limited to governed immutable MemoryRecord v2 writes.
 
 ## Why It Exists
 
 Personal knowledge bases often fail in two opposite ways: conversations stay trapped in chat history, or automation writes too eagerly and pollutes the vault. Tracekeeper sits between those extremes.
 
-Tracekeeper treats every AI suggestion as a candidate memory proposal. You can inspect it, adjust it, approve it, or reject it from the same place where your notes already live.
+Tracekeeper routes durable AI output according to explicit policy. Wiki changes and review-routed memory stay inspectable and require human approval; eligible Auto memory uses the same validation, identity, lifecycle, and conflict controls before creating an immutable record.
 
 ## First Use
 
@@ -65,7 +65,7 @@ Tracekeeper exposes a local Streamable HTTP MCP Runtime while desktop Obsidian i
 
 Each Agent credential is an access gate bound to its integration and Session, not to untrusted `clientInfo`. OAuth and manual Bearer credentials are independently replaceable and revocable; replacing or revoking one closes its Sessions without changing other cards or Skill files. Successful requests still use the Runtime's fixed `local-user` capability set.
 
-AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and submit memory updates according to your memory rules. Global memory goes to review by default; when you enable project auto-save, each eligible operation creates its own immutable Markdown entry under a stable project hub.
+AI tools connect through `tracekeeper.*` MCP tools. The connection lets an assistant read selected vault context, build context packs, record bounded working notes, and submit memory updates according to your memory rules. Fresh installations use Global Review and Project Auto; you can select Review or Auto per scope. Eligible Auto operations create their own immutable MemoryRecord v2 entry under the canonical Global or Project Hub.
 
 For shared use across Codex, Claude, OpenClaw, and other MCP clients, the companion Skill selects `no_track`, `recall_only`, or `tracked_task`. Tracked work starts once, recalls the narrowest useful context, finishes once with the returned task id, and reports whether closeout memory was saved, queued, suggested, or blocked. Recall results label Vault content as knowledge data rather than instructions, and structured MCP actions reduce client-side guesswork. See the [Agent Workflow](./docs/features/AGENT_WORKFLOW.md).
 
@@ -81,11 +81,11 @@ The connection is local-first:
 
 ## Knowledge Change Review
 
-Global long-term memory changes are review-gated by default. When an assistant proposes a durable global update, Tracekeeper stores it first as a change proposal in Knowledge Change Review. The same surface also presents graph-health suggestions and structure-migration conflicts that need human confirmation. You decide whether to approve, return for revision, or not accept a proposal.
+Global long-term memory changes are review-gated by default. When Global Review is selected, Tracekeeper stores a durable global update first as a change proposal in Knowledge Change Review. The same surface presents Wiki changes, graph-health suggestions, and structure-migration conflicts that need human confirmation. You decide whether to approve, return for revision, or not accept a proposal. Global Auto remains an explicit user-selected policy and writes only governed MemoryRecord v2 entries.
 
 Approval and writeback are separate actions. Tracekeeper only applies an approved proposal to its target note after you preview and explicitly confirm the writeback.
 
-Project memory auto-saves by default as create-only entries under `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/`. Stable operation identity makes an exact retry reuse the same entry and rejects a changed payload instead of overwriting another operation. Every new entry links to the stable project hub and verified Wiki or Source notes through Obsidian-native links. Existing project `memory.md` files remain readable and catalogued but are not rewritten, split, or migrated automatically.
+Project memory auto-saves by default as create-only entries under `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/`. Stable operation identity makes an exact retry reuse the same entry and rejects a changed payload instead of overwriting another operation. Every new entry links to the stable project Hub and, when present, verified Wiki or Source notes through Obsidian-native links. Wiki and Source relations are optional. Existing project `memory.md` files remain readable and catalogued but are not rewritten, split, or migrated automatically.
 
 `tracekeeper.recall` remains a relevance-ranked selection. When an Agent needs complete global or project-memory enumeration, the canonical read-only `tracekeeper.memory` catalog lists current, history, conflict, review, and legacy metadata over one index generation without returning note bodies.
 
@@ -113,9 +113,9 @@ Graph health never creates notes or rewrites links by itself. Use the report, or
 ## Design Principles
 
 - Vault first: Obsidian remains the durable knowledge home.
-- Human review first: lasting memory changes should be approved.
+- Policy-controlled persistence: Global Review is the default, and user-selected Auto is constrained to governed immutable memory records.
 - Traceability first: knowledge should keep enough context to be trusted later.
-- AI as collaborator: the assistant helps organize and propose, but does not own the vault.
+- AI as collaborator: the assistant helps organize and propose, but the user owns the Vault, policy, and review decisions.
 
 ## Safety Model
 

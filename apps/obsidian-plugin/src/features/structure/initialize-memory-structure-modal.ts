@@ -396,7 +396,7 @@ export class InitializeMemoryStructureModal extends Modal {
 
 	private renderFact(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value || ui('无', 'None') });
 	}
 

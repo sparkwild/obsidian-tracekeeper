@@ -826,7 +826,8 @@ private cachedFirstString(
 				return String(value);
 			}
 			if (Array.isArray(value)) {
-				const first = value.find((entry) =>
+				const entries: readonly unknown[] = value;
+				const first = entries.find((entry) =>
 					typeof entry === 'string' && entry.trim()
 				);
 				if (typeof first === 'string') {

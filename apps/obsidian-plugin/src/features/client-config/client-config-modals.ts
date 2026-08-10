@@ -151,9 +151,9 @@ export class ConnectAiToolModal extends Modal {
 		const section = container.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__section tracekeeper-connect-ai-tool-modal__auth-section' });
 		const row = section.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__auth-row', attr: { 'aria-live': 'polite', 'aria-atomic': 'true' } });
 		row.createEl('strong', { text: ui('配置方式', 'Setup') });
-		row.createEl('span', { text: this.statusLabel(), cls: `tracekeeper-badge ${this.statusTone()}` });
+		row.createSpan({ text: this.statusLabel(), cls: `tracekeeper-badge ${this.statusTone()}` });
 		if (this.config.supportedAuthModes.length === 1) {
-			row.createEl('span', { text: ui('手动配置', 'Manual setup'), cls: 'tracekeeper-connect-ai-tool-modal__auth-static' });
+			row.createSpan({ text: ui('手动配置', 'Manual setup'), cls: 'tracekeeper-connect-ai-tool-modal__auth-static' });
 			return;
 		}
 		const group = section.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__auth-modes', attr: { role: 'group', 'aria-label': ui('配置方式', 'Setup mode') } });
@@ -373,8 +373,8 @@ export class ConnectAiToolModal extends Modal {
 	}
 
 	private renderApprovalDetail(container: HTMLElement, label: string, value: string): void {
-		container.createEl('span', { text: label, cls: 'tracekeeper-connect-ai-tool-modal__pending-label' });
-		container.createEl('span', { text: value });
+		container.createSpan({ text: label, cls: 'tracekeeper-connect-ai-tool-modal__pending-label' });
+		container.createSpan({ text: value });
 	}
 
 	private pendingOAuthRequests() {
@@ -403,7 +403,7 @@ export class ConnectAiToolModal extends Modal {
 	}
 
 	private async decide(requestId: string, decision: NonNullable<OAuthDecision>): Promise<void> {
-		let refreshError: unknown | null;
+		let refreshError: unknown;
 		try {
 			({ refreshError } = await commitOAuthDecisionWithBestEffortRefresh(
 				() => this.plugin.decideOAuthRequest(requestId, decision),

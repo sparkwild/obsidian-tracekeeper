@@ -39,25 +39,25 @@ export function renderClientSkillPrompt({
 	const title = skill.createEl(collapsible ? 'summary' : 'div', { cls: 'tracekeeper-settings-client-skill__title' });
 	title.createEl('strong', { text: ui(`增强 ${config.displayName} 的记忆协作`, `Enhance ${config.displayName} with memory collaboration`) });
 	if (presentation === 'optional') {
-		title.createEl('span', { text: ui('推荐，可稍后', 'Recommended, optional for now'), cls: 'tracekeeper-badge tracekeeper-badge--muted' });
+		title.createSpan({ text: ui('推荐，可稍后', 'Recommended, optional for now'), cls: 'tracekeeper-badge tracekeeper-badge--muted' });
 	}
 	if (collapsible) {
-		title.createEl('span', { text: prompt.label, cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}` });
+		title.createSpan({ text: prompt.label, cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}` });
 	} else {
-		skill.createEl('span', { text: prompt.label, cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}` });
+		skill.createSpan({ text: prompt.label, cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}` });
 	}
 	const body = skill.createDiv({ cls: 'tracekeeper-settings-client-skill__body' });
 	if (presentation === 'optional') {
-		body.createEl('div', {
+		body.createDiv({
 			text: ui('强化技能帮助 Agent 在合适任务中查找相关记忆并正确收尾，不会增加访问权限。', 'The Skill helps the Agent find relevant memories and close tasks correctly without adding access permissions.'),
 			cls: 'tracekeeper-settings-client-skill__benefit',
 		});
 	}
-	body.createEl('div', { text: prompt.detail, cls: 'tracekeeper-settings-client-skill__detail' });
+	body.createDiv({ text: prompt.detail, cls: 'tracekeeper-settings-client-skill__detail' });
 	const actions = skill.createDiv({ cls: 'tracekeeper-settings-client-skill__actions' });
 	if (prompt.action) {
 		const operationStatus = prompt.action === 'update'
-			? body.createEl('div', {
+			? body.createDiv({
 				cls: 'tracekeeper-settings-client-skill__operation-status',
 				attr: {
 					role: 'status',

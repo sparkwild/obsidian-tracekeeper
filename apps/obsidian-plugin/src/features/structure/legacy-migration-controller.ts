@@ -2277,7 +2277,10 @@ export class LegacyMigrationController {
 
 	private boundError(error: unknown): string {
 		const text = error instanceof Error ? error.message : String(error);
-		return text.replace(/[\u0000-\u001f\u007f]+/gu, ' ').slice(0, MAX_ERROR_LENGTH);
+		return Array.from(text, (character) => {
+			const code = character.charCodeAt(0);
+			return code <= 0x1f || code === 0x7f ? ' ' : character;
+		}).join('').slice(0, MAX_ERROR_LENGTH);
 	}
 }
 
@@ -2341,6 +2344,6 @@ function canonicalize(value: unknown): unknown {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => {
-		globalThis.setTimeout(resolve, ms);
+		window.setTimeout(resolve, ms);
 	});
 }

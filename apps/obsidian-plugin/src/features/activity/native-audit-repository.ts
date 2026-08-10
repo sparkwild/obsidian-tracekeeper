@@ -148,8 +148,8 @@ export class ObsidianAuditShardRepository {
 		if (this.host.createOperationId) {
 			return this.host.createOperationId();
 		}
-		if (typeof globalThis.crypto?.randomUUID === 'function') {
-			return `native-${globalThis.crypto.randomUUID()}`;
+		if (typeof window.crypto?.randomUUID === 'function') {
+			return `native-${window.crypto.randomUUID()}`;
 		}
 		return `native-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
 	}

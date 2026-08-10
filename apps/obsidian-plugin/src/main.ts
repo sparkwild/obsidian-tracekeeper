@@ -24,12 +24,10 @@ import { LocalToolExecutor } from './composition/local-tool-executor';
 import {
 	ARCHIVE_ROOT,
 	KNOWLEDGE_ROOT,
-	KNOWLEDGE_GLOBAL_MEMORY_DIR,
 	KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
 	KNOWLEDGE_INDEX_PATH,
 	KNOWLEDGE_MEMORY_DIR,
 	KNOWLEDGE_MEMORY_INDEX_PATH,
-	KNOWLEDGE_PROJECTS_MEMORY_DIR,
 	KNOWLEDGE_PROJECTS_INDEX_PATH,
 	KNOWLEDGE_SOURCES_DIR,
 	KNOWLEDGE_SOURCES_INDEX_PATH,
@@ -38,16 +36,13 @@ import {
 	TRACEKEEPER_AGENT_REQUESTS_DIR,
 	TRACEKEEPER_AGENT_ACTIVITY_DIR,
 	TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
-	TRACEKEEPER_CONTEXT_PACKS_DIR,
 	TRACEKEEPER_CONTROL_DIR,
 	TRACEKEEPER_MEMORY_POLICY_PATH,
 	TRACEKEEPER_OPERATIONS_DIR,
 	TRACEKEEPER_PERMISSIONS_PATH,
 	TRACEKEEPER_REVIEW_QUEUE_DIR,
 	TRACEKEEPER_ROOT,
-	TRACEKEEPER_SESSIONS_DIR,
 	TRACEKEEPER_SYSTEM_PATH,
-	TRACEKEEPER_TASKS_DIR,
 	TRACEKEEPER_WORK_DIR,
 	REQUIRED_KNOWLEDGE_FILES,
 } from '@tracekeeper/core';
@@ -689,7 +684,7 @@ export default class TracekeeperPlugin extends Plugin {
 			this.app.vault,
 			this.app.fileManager
 		);
-		this.knowledgeIndex = await ObsidianKnowledgeIndexAdapter.create(this.app, this.getVaultRoot());
+		this.knowledgeIndex = ObsidianKnowledgeIndexAdapter.create(this.app, this.getVaultRoot());
 		await this.startMcpRuntime();
 		this.localToolExecutor = new LocalToolExecutor({
 			getContext: () => this.buildLocalToolExecutionContext(),
@@ -1525,7 +1520,7 @@ export default class TracekeeperPlugin extends Plugin {
 		);
 	}
 
-	private async readArchiveReceipt(operationId: string): Promise<unknown | null> {
+	private async readArchiveReceipt(operationId: string): Promise<unknown> {
 		const path = this.archiveReceiptPath(operationId);
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!file) {
@@ -1618,7 +1613,7 @@ export default class TracekeeperPlugin extends Plugin {
 		);
 	}
 
-	private async readArchiveTargetClaim(targetHash: string): Promise<unknown | null> {
+	private async readArchiveTargetClaim(targetHash: string): Promise<unknown> {
 		const path = this.archiveTargetClaimPath(targetHash);
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!file) {
@@ -3401,16 +3396,16 @@ export default class TracekeeperPlugin extends Plugin {
 
 	renderTimelineItem(container: HTMLElement, item: ActivityTimelineItem): void {
 		const row = container.createDiv({ cls: 'tracekeeper-timeline__item' });
-		row.createEl('div', { text: item.type, cls: 'tracekeeper-badge' });
+		row.createDiv({ text: item.type, cls: 'tracekeeper-badge' });
 		const body = row.createDiv({ cls: 'tracekeeper-timeline__body' });
 		body.createEl('strong', {
 			text: `${item.title || ui('未命名', 'Untitled')} • ${this.formatDisplayTime(item.time)}`,
 		});
 		if (item.meta) {
-			body.createEl('div', { text: item.meta, cls: 'tracekeeper-view__description' });
+			body.createDiv({ text: item.meta, cls: 'tracekeeper-view__description' });
 		}
 		if (item.body) {
-			body.createEl('div', { text: trimText(item.body, 160) });
+			body.createDiv({ text: trimText(item.body, 160) });
 		}
 		if (item.path) {
 			body.createEl('small', { text: item.path });

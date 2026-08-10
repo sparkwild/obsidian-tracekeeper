@@ -15,6 +15,8 @@ const modalsOutput = path.join(tempRoot, 'review-modals.cjs');
 const transitionAdapterOutput = path.join(tempRoot, 'proposal-transition-adapter.cjs');
 const require = createRequire(import.meta.url);
 
+globalThis.window = globalThis;
+
 const hashContent = (value) => createHash('sha256').update(value, 'utf8').digest('hex');
 const proposalPath = '00_tracekeeper/inbox/review_queue/proposal.md';
 const targetPath = '01_knowledge/wiki/stale-target.md';
@@ -58,6 +60,9 @@ const obsidianStub = {
 					}
 					createDiv(options = {}) {
 						return this.createEl('div', options);
+					}
+					createSpan(options = {}) {
+						return this.createEl('span', options);
 					}
 					addEventListener(name, handler) {
 						this.handlers[name] = handler;

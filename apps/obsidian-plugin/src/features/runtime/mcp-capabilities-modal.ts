@@ -247,7 +247,7 @@ export class McpCapabilitiesModal extends Modal {
 			row.setAttr('aria-label', accessibleLabel);
 			row.setAttr('data-tooltip-position', 'top');
 			row.setAttr('title', tooltip);
-			row.createEl('span', {
+			row.createSpan({
 				text: category,
 				cls: 'tracekeeper-badge tracekeeper-capability-row__badge',
 			});

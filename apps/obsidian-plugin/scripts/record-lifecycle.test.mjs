@@ -35,6 +35,7 @@ class StubTFolder {
 
 globalThis.__tracekeeperRecordLifecycleTFile = StubTFile;
 globalThis.__tracekeeperRecordLifecycleTFolder = StubTFolder;
+globalThis.window = globalThis;
 
 const obsidianStub = {
 	name: 'obsidian-stub',

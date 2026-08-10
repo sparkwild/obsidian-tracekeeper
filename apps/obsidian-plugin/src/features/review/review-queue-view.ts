@@ -393,7 +393,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 		const pending = selected.filter((proposal) => getReviewProposalAttentionState(proposal) === 'pending_review' || getReviewProposalAttentionState(proposal) === 'incomplete');
 		const archiveCandidates = selected.filter((proposal) => isReviewQueueArchiveCandidate(proposal));
 		const toolbar = container.createDiv({ cls: 'tracekeeper-batch-toolbar' });
-		toolbar.createEl('span', {
+		toolbar.createSpan({
 			text: ui(`已选择 ${selected.length} 项`, `${selected.length} items selected`),
 			cls: 'tracekeeper-badge tracekeeper-badge--muted',
 		});
@@ -437,7 +437,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 		const listHeader = container.createDiv({ cls: 'tracekeeper-review-inbox__list-header' });
 		const listHeading = listHeader.createDiv({ cls: 'tracekeeper-review-inbox__list-heading' });
 		listHeading.createEl('strong', { text: ui('审核列表', 'Review list') });
-		listHeading.createEl('span', {
+		listHeading.createSpan({
 			text: ui(`共 ${totalItems} 条`, `${totalItems} items`),
 			cls: 'tracekeeper-badge tracekeeper-badge--muted',
 		});
@@ -502,7 +502,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 			const titleText = title.createDiv({ cls: 'tracekeeper-review-inbox__row-title-text' });
 			titleText.createEl('strong', { text: this.proposalTitle(proposal) });
 			if (isBatchSelected || isLastViewed) {
-				titleText.createEl('span', {
+				titleText.createSpan({
 					text: isBatchSelected
 						? ui('已选择', 'Selected')
 						: ui('刚刚查看', 'Last viewed'),
@@ -536,7 +536,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 		});
 		const rangeStart = page.pageIndex * REVIEW_PAGE_SIZE + 1;
 		const rangeEnd = Math.min(rangeStart + REVIEW_PAGE_SIZE - 1, page.totalItems);
-		pagination.createEl('span', {
+		pagination.createSpan({
 			text: ui(
 				`第 ${page.pageIndex + 1} / ${page.totalPages} 页 · ${rangeStart}–${rangeEnd} / ${page.totalItems}`,
 				`Page ${page.pageIndex + 1} of ${page.totalPages} · ${rangeStart}–${rangeEnd} of ${page.totalItems}`
@@ -569,7 +569,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 			void this.render(snapshot);
 		});
 
-		navigation.createEl('span', {
+		navigation.createSpan({
 			text: position.index >= 0
 				? ui(`正在处理 · 第 ${position.index + 1} / ${position.total} 条`, `Reviewing ${position.index + 1} of ${position.total}`)
 				: ui('正在查看当前变更', 'Viewing current change'),
@@ -603,14 +603,14 @@ export class TracekeeperReviewQueueView extends ItemView {
 		container.addClass('tracekeeper-review-inbox__detail-panel');
 		const header = container.createDiv({ cls: 'tracekeeper-review-inbox__detail-header' });
 		const title = header.createDiv();
-		title.createEl('span', { text: ui('变更详情', 'Change details'), cls: 'tracekeeper-review-inbox__eyebrow' });
+		title.createSpan({ text: ui('变更详情', 'Change details'), cls: 'tracekeeper-review-inbox__eyebrow' });
 		const detailHeading = title.createEl('h3', { text: this.proposalTitle(proposal) });
 		detailHeading.tabIndex = -1;
 		detailHeading.focus({ preventScroll: true });
 		const badges = header.createDiv({ cls: 'tracekeeper-badge-row' });
 		this.renderAttentionBadge(badges, proposal, context);
 		if (proposal.riskLevel && proposal.riskLevel !== 'unknown') {
-			badges.createEl('span', {
+			badges.createSpan({
 				text: this.plugin.formatRiskLabel(proposal.riskLevel),
 				cls: `tracekeeper-badge tracekeeper-badge--risk-${proposal.riskLevel.toLowerCase()}`,
 			});
@@ -673,7 +673,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 		const target = container.createDiv({ cls: 'tracekeeper-review-inbox__target' });
 		const isAppliedHistory = proposal.approvalStatus === 'applied';
 		const displayTarget = this.reviewDisplayTargetPath(proposal);
-		target.createEl('span', {
+		target.createSpan({
 			text: isAppliedHistory
 				? ui('已记录的写回目标', 'Recorded writeback target')
 				: ui('目标笔记', 'Target note'),
@@ -821,7 +821,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 		evidence.createEl('strong', { text: ui('任务与资料依据', 'Task and source evidence') });
 		if (context?.task) {
 			const task = evidence.createDiv({ cls: 'tracekeeper-review-context-card' });
-			task.createEl('span', { text: ui('任务', 'Task'), cls: 'tracekeeper-review-inbox__eyebrow' });
+			task.createSpan({ text: ui('任务', 'Task'), cls: 'tracekeeper-review-inbox__eyebrow' });
 			task.createEl('strong', {
 				text: context.task.objective || ui('已关联任务', 'Linked task'),
 			});
@@ -876,7 +876,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 	private renderSourceContext(container: HTMLElement, source: ReviewSourceContext): void {
 		const card = container.createDiv({ cls: 'tracekeeper-review-context-card' });
-		card.createEl('span', { text: ui('资料', 'Source'), cls: 'tracekeeper-review-inbox__eyebrow' });
+		card.createSpan({ text: ui('资料', 'Source'), cls: 'tracekeeper-review-inbox__eyebrow' });
 		card.createEl('strong', { text: source.title || ui('资料记录', 'Source record') });
 		if (source.sourceKind) {
 			card.createEl('small', {
@@ -1180,7 +1180,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 				: state === 'awaiting_revision'
 					? 'tracekeeper-badge tracekeeper-badge--warning'
 					: 'tracekeeper-badge tracekeeper-badge--muted';
-		container.createEl('span', { text: this.attentionStateLabel(state), cls: className });
+		container.createSpan({ text: this.attentionStateLabel(state), cls: className });
 	}
 
 	private attentionFilter(state: ReviewProposalAttentionState): ReviewInboxFilter {
@@ -1468,7 +1468,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 	private renderSourceLine(container: HTMLElement, label: string, value: string): void {
 		const line = container.createDiv();
-		line.createEl('span', { text: label });
+		line.createSpan({ text: label });
 		line.createEl('code', { text: value });
 	}
 

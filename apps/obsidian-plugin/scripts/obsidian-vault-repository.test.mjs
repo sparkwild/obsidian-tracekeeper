@@ -110,6 +110,9 @@ try {
 		},
 	};
 	const fileManager = {
+		trashFile: async (file) => {
+			records.delete(file.path);
+		},
 		generateMarkdownLink: (file, sourcePath, subpath, alias) => {
 			generatedLinks.push({
 				targetPath: file.path,

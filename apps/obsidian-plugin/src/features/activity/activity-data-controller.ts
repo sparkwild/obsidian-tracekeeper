@@ -1115,8 +1115,8 @@ private createRuntimeLogCleanupOperationId(): string {
 	}
 
 private createRuntimeLogCleanupNonce(): string {
-		if (typeof globalThis.crypto?.randomUUID === 'function') {
-			return globalThis.crypto.randomUUID();
+		if (typeof window.crypto?.randomUUID === 'function') {
+			return window.crypto.randomUUID();
 		}
 		return `${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
 	}

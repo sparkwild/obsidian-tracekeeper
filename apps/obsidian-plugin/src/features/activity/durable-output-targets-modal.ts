@@ -40,7 +40,7 @@ export class DurableOutputTargetsModal extends Modal {
 		for (const path of this.targetPaths) {
 			const file = this.app.vault.getAbstractFileByPath(path);
 			const row = list.createEl('li', { cls: 'tracekeeper-task-card__info' });
-			row.createEl('span', {
+			row.createSpan({
 				text: path,
 				attr: { title: path },
 			});
@@ -51,7 +51,7 @@ export class DurableOutputTargetsModal extends Modal {
 				});
 				openButton.addEventListener('click', () => {
 					this.close();
-					this.app.workspace.getLeaf(false).openFile(file);
+					void this.app.workspace.getLeaf(false).openFile(file);
 				});
 			} else {
 				row.createEl('small', {

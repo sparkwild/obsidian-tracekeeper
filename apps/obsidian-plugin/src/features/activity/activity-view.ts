@@ -180,7 +180,7 @@ export class TracekeeperActivityView extends ItemView {
 		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
 		header.createEl('h3', { text: ui('最近 Agent 使用', 'Recent Agent usage') });
 		const headerActions = header.createDiv({ cls: 'tracekeeper-action-row' });
-		headerActions.createEl('span', {
+		headerActions.createSpan({
 			text: summary.observedAgentCount > 0
 				? ui(`最近使用 ${summary.observedAgentCount} 个 Agent`, `${summary.observedAgentCount} recently used Agent${summary.observedAgentCount === 1 ? '' : 's'}`)
 				: ui('暂无使用记录', 'No usage observed'),
@@ -213,13 +213,13 @@ export class TracekeeperActivityView extends ItemView {
 			const row = list.createDiv({ cls: 'tracekeeper-agent-activity-row' });
 			const identity = row.createDiv({ cls: 'tracekeeper-agent-activity-row__identity' });
 			identity.createEl('strong', { text: agent.displayName });
-			identity.createEl('span', {
+			identity.createSpan({
 				text: ui(
 					`最近活动时间：${this.plugin.formatDisplayTime(agent.sortTimestamp)}`,
 					`Latest activity: ${this.plugin.formatDisplayTime(agent.sortTimestamp)}`
 				),
 			});
-			identity.createEl('span', {
+			identity.createSpan({
 				text: ui(
 					`记录到 ${agent.sessionCount} 个会话`,
 					`${agent.sessionCount} recorded session${agent.sessionCount === 1 ? '' : 's'}`
@@ -238,7 +238,7 @@ export class TracekeeperActivityView extends ItemView {
 		}
 
 		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-primary-action-card' });
-		card.createEl('span', { text: ui('下一步', 'Next action'), cls: 'tracekeeper-primary-action-card__eyebrow' });
+		card.createSpan({ text: ui('下一步', 'Next action'), cls: 'tracekeeper-primary-action-card__eyebrow' });
 		const title = this.primaryActionTitle(action, snapshot);
 		card.createEl('h3', { text: title });
 		card.createEl('p', {
@@ -259,7 +259,7 @@ export class TracekeeperActivityView extends ItemView {
 				return snapshot.runtimeStatus.state === 'port_conflict'
 					? ui('解决端口冲突', 'Resolve port conflict')
 					: ui('恢复 MCP 服务', 'Recover MCP service');
-			case 'review_changes':
+			case 'review_changes': {
 				const actionableCount = this.reviewQueueCountLabel(
 					snapshot.actionableReviewQueueItemCount,
 					snapshot.reviewQueueCountsTruncated
@@ -268,6 +268,7 @@ export class TracekeeperActivityView extends ItemView {
 					`处理知识变更 (${actionableCount})`,
 					`Review knowledge changes (${actionableCount})`
 				);
+			}
 			case 'inspect_diagnostics':
 				return ui('检查工作流异常', 'Inspect workflow issues');
 			case 'none':
@@ -305,7 +306,7 @@ export class TracekeeperActivityView extends ItemView {
 	): Promise<void> {
 		switch (action) {
 			case 'repair_structure':
-				this.plugin.openInitializeMemoryStructureModal();
+				await this.plugin.openInitializeMemoryStructureModal();
 				return;
 			case 'recover_runtime':
 				if (snapshot.runtimeStatus.state === 'port_conflict') {
@@ -415,7 +416,7 @@ export class TracekeeperActivityView extends ItemView {
 
 		const latestProposal = snapshot.recentProposals[0] ?? null;
 		const summary = card.createDiv({ cls: 'tracekeeper-memory-loop-summary' });
-		summary.createEl('span', { text: ui('待处理的知识变更', 'Knowledge changes requiring action') });
+		summary.createSpan({ text: ui('待处理的知识变更', 'Knowledge changes requiring action') });
 		summary.createEl('strong', { text: actionableCount });
 		summary.createEl('p', {
 			text: snapshot.actionableReviewQueueItemCount > 0
@@ -545,7 +546,7 @@ export class TracekeeperActivityView extends ItemView {
 		const evalRow = body.createDiv({ cls: 'tracekeeper-action-row' });
 		const evalDescription = evalRow.createDiv();
 		evalDescription.createEl('strong', { text: ui('本地主动性 Eval', 'Local initiative Eval') });
-		evalDescription.createEl('div', {
+		evalDescription.createDiv({
 			text: ui(
 				'仓库检出环境可运行 npm run eval:agent-initiative:test；评测不会读取真实 Vault。',
 				'In a repository checkout, run npm run eval:agent-initiative:test; it does not read the real Vault.'
@@ -584,7 +585,7 @@ export class TracekeeperActivityView extends ItemView {
 			.sort(([left], [right]) => left.localeCompare(right));
 		if (entries.length > 0) {
 			const detail = container.createDiv({ cls: 'tracekeeper-memory-loop-summary' });
-			detail.createEl('span', { text: ui('Finish 关闭状态', 'Finish closeout status') });
+			detail.createSpan({ text: ui('Finish 关闭状态', 'Finish closeout status') });
 			if (entries.length > 0) {
 				detail.createEl('p', {
 					text: entries.map(([status, count]) => `${status}: ${count}`).join(' · '),
@@ -605,7 +606,7 @@ export class TracekeeperActivityView extends ItemView {
 
 	private renderMemoryLoopDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value || ui('暂无', 'None') });
 	}
 
@@ -624,9 +625,9 @@ export class TracekeeperActivityView extends ItemView {
 
 	private renderMetricCard(container: HTMLElement, label: string, value: string, detail: string): void {
 		const card = container.createDiv({ cls: 'tracekeeper-metric-card' });
-		card.createEl('div', { text: label, cls: 'tracekeeper-metric-card__label' });
+		card.createDiv({ text: label, cls: 'tracekeeper-metric-card__label' });
 		card.createEl('strong', { text: value, cls: 'tracekeeper-metric-card__value' });
-		card.createEl('div', { text: detail, cls: 'tracekeeper-view__description' });
+		card.createDiv({ text: detail, cls: 'tracekeeper-view__description' });
 	}
 
 	private renderEmptyState(container: HTMLElement, title: string, detail: string): void {
@@ -642,18 +643,18 @@ export class TracekeeperActivityView extends ItemView {
 		title.createEl('h4', { text: task.objective || task.taskId || ui('未命名任务', 'Untitled task') });
 		const badges = header.createDiv({ cls: 'tracekeeper-badge-row tracekeeper-task-card__badges' });
 		const executionStatus = this.taskExecutionStatusLabel(task);
-		badges.createEl('span', {
+		badges.createSpan({
 			text: ui(`任务执行：${executionStatus}`, `Task execution: ${executionStatus}`),
 			cls: 'tracekeeper-badge tracekeeper-badge--muted',
 		});
 		const persistenceStatus = this.taskPersistenceStatusLabel(task);
-		badges.createEl('span', {
+		badges.createSpan({
 			text: ui(`知识持久化：${persistenceStatus}`, `Knowledge durable output: ${persistenceStatus}`),
 			cls: 'tracekeeper-badge tracekeeper-badge--muted',
 		});
 		const agentLabel = this.readableAgentLabel(task.agent);
 		if (agentLabel) {
-			badges.createEl('span', { text: agentLabel, cls: 'tracekeeper-badge tracekeeper-badge--muted' });
+			badges.createSpan({ text: agentLabel, cls: 'tracekeeper-badge tracekeeper-badge--muted' });
 		}
 
 		const focus = item.createDiv({ cls: 'tracekeeper-task-card__focus' });
@@ -681,11 +682,11 @@ export class TracekeeperActivityView extends ItemView {
 		}
 		if (expanded) {
 			const changes = item.createDiv({ cls: 'tracekeeper-task-card__changes' });
-			changes.createEl('span', { text: ui('本次变化', 'Changes') });
+			changes.createSpan({ text: ui('本次变化', 'Changes') });
 			const chips = changes.createDiv({ cls: 'tracekeeper-task-card__chips' });
 			const changeItems = this.taskChangeItems(task);
 			if (changeItems.length === 0) {
-				chips.createEl('span', {
+				chips.createSpan({
 					text: ui('没有产生记忆或资料变化', 'No memory or source changes'),
 					cls: 'tracekeeper-task-card__change-note',
 				});
@@ -693,7 +694,7 @@ export class TracekeeperActivityView extends ItemView {
 				for (const change of changeItems) {
 					const chip = chips.createEl('button', { cls: 'tracekeeper-task-card__change-chip' });
 					chip.createEl('strong', { text: String(change.value) });
-					chip.createEl('span', { text: change.label });
+					chip.createSpan({ text: change.label });
 					chip.addEventListener('click', () => {
 						void this.openTaskChange(task, change.kind);
 					});
@@ -703,7 +704,7 @@ export class TracekeeperActivityView extends ItemView {
 
 		const footer = item.createDiv({ cls: 'tracekeeper-task-card__footer' });
 		const path = footer.createDiv({ cls: 'tracekeeper-task-card__path' });
-		path.createEl('span', { text: ui('保存位置', 'Saved in') });
+		path.createSpan({ text: ui('保存位置', 'Saved in') });
 		path.createEl('code', { text: task.path || ui('未知', 'Unknown') });
 		if (task.path) {
 			const openButton = footer.createEl('button', { text: ui('打开记录', 'Open record') });
@@ -735,14 +736,14 @@ export class TracekeeperActivityView extends ItemView {
 		const normalizedSnippet = task.snippet.trim();
 		if (normalizedSnippet && normalizedSnippet !== task.objective.trim()) {
 			const summary = item.createDiv({ cls: 'tracekeeper-task-card__summary' });
-			summary.createEl('span', { text: ui('摘要', 'Summary') });
+			summary.createSpan({ text: ui('摘要', 'Summary') });
 			summary.createEl('p', { text: trimText(normalizedSnippet, 180) });
 		}
 	}
 
 	private renderTaskInfoItem(container: HTMLElement, label: string, value: string): void {
 		const field = container.createDiv({ cls: 'tracekeeper-task-card__info' });
-		field.createEl('span', { text: label });
+		field.createSpan({ text: label });
 		field.createEl('strong', { text: value || ui('未知', 'Unknown') });
 	}
 
@@ -834,7 +835,7 @@ export class TracekeeperActivityView extends ItemView {
 					taskId: task.taskId,
 				});
 				return;
-			case 'memory_proposals':
+			case 'memory_proposals': {
 				const exactProposalFiles = this.taskProposalFiles(task);
 				if (exactProposalFiles.length === 1) {
 					await this.app.workspace.getLeaf(false).openFile(exactProposalFiles[0]);
@@ -842,7 +843,8 @@ export class TracekeeperActivityView extends ItemView {
 				}
 				await this.plugin.openPluginView(TRACEKEEPER_REVIEW_QUEUE_VIEW);
 				return;
-			case 'durable_targets':
+			}
+			case 'durable_targets': {
 				const durableOutputTargetPaths = this.taskDurableOutputTargetPaths(task);
 				if (durableOutputTargetPaths.length === 1) {
 					const exactFile = this.app.vault.getAbstractFileByPath(durableOutputTargetPaths[0]);
@@ -857,6 +859,7 @@ export class TracekeeperActivityView extends ItemView {
 					task.taskId
 				).open();
 				return;
+			}
 		}
 	}
 
@@ -936,12 +939,12 @@ export class TracekeeperActivityView extends ItemView {
 	}
 
 	private renderTaskSummary(container: HTMLElement, task: AgentTaskRecord): void {
-		const compact = container.createEl('div', {
+		const compact = container.createDiv({
 			text: `${task.taskId} • ${this.plugin.formatDisplayTime(task.sortTimestamp)} • ${task.status}`,
 			cls: 'tracekeeper-view__item',
 		});
 		if (task.objective) {
-			compact.createEl('div', { text: task.objective });
+			compact.createDiv({ text: task.objective });
 		}
 	}
 

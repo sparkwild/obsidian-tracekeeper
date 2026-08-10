@@ -363,7 +363,7 @@ export class ReviewQueueEditProposalModal extends Modal {
 
 		const select = section.createEl('select', {
 			cls: 'tracekeeper-review-edit-modal__target',
-		}) as HTMLSelectElement;
+		});
 		select.setAttr('aria-label', ui('选择受限目标笔记', 'Select constrained target note'));
 		const empty = select.createEl('option', {
 			text: ui('请选择记忆或知识笔记', 'Select a memory or knowledge note'),
@@ -852,7 +852,7 @@ export class ApprovedWritebackApplyModal extends Modal {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value || ui('未指定', 'Not specified') });
 	}
 }

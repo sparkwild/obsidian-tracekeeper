@@ -139,7 +139,7 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-agent-connection-card' });
 		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
 		header.createEl('h3', { text: ui('Agent 认证', 'Agent authentication') });
-		header.createEl('span', {
+		header.createSpan({
 			text: latestAgent
 				? ui('已观察到认证活动', 'Authenticated activity observed')
 				: ui('未观察到认证活动', 'No authenticated activity observed'),
@@ -185,7 +185,7 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value });
 	}
 }

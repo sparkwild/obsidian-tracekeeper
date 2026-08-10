@@ -376,12 +376,12 @@ export interface ReviewQueueControllerHost {
 	normalizeVaultPath(path: string): string;
 	loadReviewKnowledgeSnapshot(): Promise<ReviewKnowledgeSnapshot>;
 	waitForNativePath(sourcePath: string, targetPath: string): Promise<void>;
-	readArchiveReceipt(operationId: string): Promise<unknown | null>;
+	readArchiveReceipt(operationId: string): Promise<unknown>;
 	writeArchiveReceipt(
 		receipt: ArchiveMemoryProposalReceipt,
 		expectedBindingHash: string | null
 	): Promise<void>;
-	readArchiveTargetClaim(targetHash: string): Promise<unknown | null>;
+	readArchiveTargetClaim(targetHash: string): Promise<unknown>;
 	writeArchiveTargetClaim(
 		claim: ArchiveMemoryProposalTargetClaim,
 		expectedBindingHash: string | null
@@ -395,7 +395,7 @@ export interface ReviewProposalTransitionOwner {
 }
 
 const createReviewOperationId = (): string => {
-	const operationId = globalThis.crypto?.randomUUID?.();
+	const operationId = window.crypto?.randomUUID?.();
 	if (!operationId) {
 		throw new Error('Secure review operation identifiers are unavailable.');
 	}
@@ -800,7 +800,12 @@ async applyApprovedWriteback(
 					`Archive destination is owned by another or unknown operation: ${item.destinationPath}.`
 				);
 			}
-			const file = source instanceof TFile ? source : destination as TFile;
+			const file = source ?? destination;
+			if (!(file instanceof TFile)) {
+				throw new Error(
+					`Archive source/destination file is unavailable for ${item.proposalId}.`
+				);
+			}
 			const current = await this.inspectArchiveProposal(file.path);
 			if (
 				current.proposalId !== item.proposalId
@@ -1701,7 +1706,7 @@ async applyApprovedWriteback(
 				value.status === 'completed'
 				&& (
 					value.completedAt === null
-					|| Date.parse(value.completedAt as string)
+					|| Date.parse(value.completedAt)
 						< Date.parse(value.startedAt)
 				)
 			)

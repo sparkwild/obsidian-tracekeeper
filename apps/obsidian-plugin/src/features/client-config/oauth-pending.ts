@@ -74,7 +74,7 @@ export class PendingOAuthClientReservations {
 }
 
 export interface OAuthDecisionRefreshOutcome {
-	refreshError: unknown | null;
+	refreshError: unknown;
 }
 
 export interface OAuthClientOwnershipConflict {
