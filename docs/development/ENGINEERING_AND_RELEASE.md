@@ -48,6 +48,14 @@ Agent ecosystem consistency, and diff hygiene. The release workflow additionally
 rebuilds tracked package artifacts and requires generated output to match source
 on a clean checkout.
 
+The plugin build writes its canonical workspace bundle to
+`apps/obsidian-plugin/main.js` and an ignored, byte-identical compatibility
+mirror to repository-root `main.js` for community build scanners that inspect
+only conventional root output locations. Verification compares those files.
+Packaging and release qualification continue to use only
+`apps/obsidian-plugin/plugin/main.js`, `manifest.json`, and `styles.css`; the
+root mirror is never a release asset.
+
 Use narrower checks while iterating:
 
 ```bash

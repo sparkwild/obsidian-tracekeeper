@@ -16,6 +16,12 @@ run_workspace_script() {
   (cd "$REPO_ROOT" && npm run "$script" --workspace "$workspace")
 }
 
+verify_plugin_build_mirror() {
+  printf '\n>>> root: verify plugin build mirror\n'
+  test -f "$REPO_ROOT/main.js"
+  cmp -s "$REPO_ROOT/main.js" "$REPO_ROOT/apps/obsidian-plugin/main.js"
+}
+
 run_root_script community:check
 run_root_script agent:ecosystem
 run_root_script agent:ecosystem:test
@@ -26,6 +32,7 @@ run_root_script architecture:check
 run_root_script release:upgrade-fixture:test
 run_root_script typecheck
 run_root_script build
+verify_plugin_build_mirror
 run_workspace_script test packages/core
 run_workspace_script test packages/contracts
 run_workspace_script test apps/obsidian-plugin

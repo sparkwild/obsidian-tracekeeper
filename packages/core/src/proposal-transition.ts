@@ -204,7 +204,7 @@ const INVALID_PROPOSAL_TEXT = new Set([
 ]);
 
 const normalizeWritebackEffect = (
-	effect: ProposalTransitionSnapshot['writebackEffect'] | string | undefined,
+	effect: unknown,
 ): ProposalTransitionSnapshot['writebackEffect'] | undefined => {
 	if (effect === '' || effect === undefined) {
 		return undefined;

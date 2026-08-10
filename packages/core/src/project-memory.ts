@@ -858,7 +858,7 @@ function normalizeCatalogEntries(
 	projectId: string,
 	projectKey: string
 ): ProjectMemoryCatalogEntry[] {
-	if (!Array.isArray(input)) {
+	if (!Array.isArray(input as unknown)) {
 		throw new ProjectMemoryValidationError(
 			'Project-memory catalog entries must be an array.'
 		);
@@ -1359,7 +1359,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		return false;
 	}
-	const prototype = Object.getPrototypeOf(value);
+	const prototype = Reflect.getPrototypeOf(value);
 	return prototype === Object.prototype || prototype === null;
 }
 

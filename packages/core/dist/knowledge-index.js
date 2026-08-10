@@ -23,30 +23,6 @@ const NOTES_EXTENSIONS = new Set(['.md', '.markdown']);
 const SNIPPET_MAX_LENGTH = 160;
 const MAX_LEXICAL_TERMS_PER_NOTE = 512;
 const DEFAULT_MAX_INCREMENTAL_RENAME_IMPACT = 256;
-const DEFAULT_INITIAL_STATE = {
-    notes: new Map(),
-    graph: {
-        outgoing: new Map(),
-        incoming: new Map(),
-        edges: [],
-        unresolvedEdges: [],
-    },
-    scopes: {
-        byType: new Map(),
-        byTag: new Map(),
-    },
-    generation: 0,
-    eventSequence: 0,
-    indexState: 'initializing',
-    lastEvent: null,
-    lastRebuild: null,
-    createdAt: new Date().toISOString(),
-    catalog: new Map(),
-    lexicalPostings: new Map(),
-    memory: emptyMemoryIndex(0, new Date(0).toISOString()),
-    lastUpdate: { mode: 'rebuild', affectedPaths: [], reason: null },
-    warnings: [],
-};
 function computeFileVersion(size, modifiedAt) {
     return `${modifiedAt}|${size}`;
 }

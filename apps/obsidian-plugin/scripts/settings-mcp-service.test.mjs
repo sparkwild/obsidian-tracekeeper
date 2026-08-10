@@ -20,6 +20,10 @@ function methodBody(name, nextName) {
 const serviceSection = methodBody('renderConnectionInfoSection', 'renderRuntimeEnabledSetting');
 const endpointSetting = methodBody('renderEndpointSetting', 'renderViewRefreshSection');
 const advancedSection = methodBody('renderAdvancedMaintenanceSection', 'renderPortSetting');
+const definitionsStart = source.indexOf('getSettingDefinitions(): SettingRenderDefinitionCompat[]');
+const definitionsEnd = source.indexOf('private mountSettings', definitionsStart);
+assert.ok(definitionsStart >= 0 && definitionsEnd > definitionsStart);
+const definitions = source.slice(definitionsStart, definitionsEnd);
 
 assert.ok(serviceSection.includes('renderRuntimeEnabledSetting'));
 assert.ok(serviceSection.includes('renderEndpointSetting'));
@@ -69,6 +73,17 @@ assert.ok(stylesSource.includes('.tracekeeper-capability-row__subtitle'));
 assert.equal(stylesSource.includes('.tracekeeper-capability-row__heading'), false);
 
 assert.ok(source.includes("import { App, Menu, Notice, PluginSettingTab, Setting, SettingGroup } from 'obsidian';"));
+assert.ok(source.includes('display(): void {\n\t\tthis.mountSettings(this.containerEl);'));
+assert.ok(definitions.includes("name: ui('Tracekeeper 设置', 'Tracekeeper settings')"));
+assert.ok(definitions.includes('aliases: [...SETTING_SEARCH_ALIASES]'));
+assert.equal((definitions.match(/\brender:/g) ?? []).length, 1);
+assert.ok(definitions.includes('this.mountSettings(setting.settingEl)'));
+assert.ok(definitions.includes('this.unmountSettings(setting.settingEl)'));
+assert.equal(definitions.includes('loadAgentConnectionsSnapshot'), false);
+assert.equal(definitions.includes('await '), false);
+assert.ok(source.includes('const declarativeTab = this as DeclarativeSettingTabCompat'));
+assert.ok(source.includes('declarativeTab.update();'));
+assert.ok(source.includes('void this.renderSettings();'));
 assert.ok(advancedSection.includes("this.createGroup(container, ui('高级维护', 'Advanced maintenance'))"));
 assert.ok(advancedSection.includes('group.addSetting'));
 assert.equal(advancedSection.includes("createEl('details'"), false);
@@ -85,4 +100,4 @@ assert.equal(pluginManifest.minAppVersion, '1.11.0');
 assert.equal(rootManifest.minAppVersion, '1.11.0');
 assert.equal(versions[pluginManifest.version], '1.11.0');
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 60 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 72 })}\n`);

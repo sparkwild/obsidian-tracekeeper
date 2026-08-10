@@ -37,6 +37,7 @@ exports.StreamableHttpMcpRuntime = exports.DEFAULT_MCP_PORT = void 0;
 const node_buffer_1 = require("node:buffer");
 const node_http_1 = require("node:http");
 const crypto = __importStar(require("node:crypto"));
+const node_timers_1 = require("node:timers");
 const node_url_1 = require("node:url");
 const tools_1 = require("./tools");
 const handler_1 = require("./handler");
@@ -497,7 +498,7 @@ class StreamableHttpMcpRuntime {
         }
         let timeout;
         const timeoutPromise = new Promise((_resolve, reject) => {
-            timeout = setTimeout(() => reject(new RequestBodyTimeoutError(this.requestTimeoutMs)), this.requestTimeoutMs);
+            timeout = (0, node_timers_1.setTimeout)(() => reject(new RequestBodyTimeoutError(this.requestTimeoutMs)), this.requestTimeoutMs);
         });
         try {
             return await Promise.race([this.consumeRequestBody(request), timeoutPromise]);
@@ -510,7 +511,7 @@ class StreamableHttpMcpRuntime {
         }
         finally {
             if (timeout) {
-                clearTimeout(timeout);
+                (0, node_timers_1.clearTimeout)(timeout);
             }
         }
     }

@@ -3,7 +3,6 @@ import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import {
 	VaultPathError,
-	analyzeSourceText,
 	type ContextPack,
 	type ParsedMarkdown,
 	analyzeGraphHealth,
@@ -11,7 +10,6 @@ import {
 	type GraphHealthReport,
 	type GraphProfile,
 	normalizeGraphProfile,
-	type SourceAnalysisResult,
 	TRACEKEEPER_ROOT,
 	TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
 	TRACEKEEPER_AGENT_REQUESTS_DIR,
@@ -127,8 +125,6 @@ import {
 } from './application/recall';
 import {
 	CaptureSourceApplicationService,
-	type CaptureSourceNote,
-	type CaptureSourceRawRequest,
 	type CaptureSourceWriteInput,
 } from './application/capture-source';
 import {
@@ -139,14 +135,11 @@ import {
 import {
 	ProposeMemoryApplicationService,
 	type ProposeMemoryImmutableWriteInput,
-	type ProposeMemoryProjectIdentity,
-	type ProposeMemoryRawRequest,
 	type ProposeMemoryWriteInput,
 } from './application/propose-memory';
 import {
 	DistillSessionApplicationService,
 	FinishTaskApplicationService,
-	type DistillSessionRawRequest,
 	type FinishTaskRunnerStep,
 } from './application/finish-task';
 import {
@@ -159,7 +152,6 @@ import {
 	projectArgumentsForAudit,
 	readMergedAuditSections,
 	summarizeForAudit,
-	type AuditEventInput,
 } from './infrastructure/audit-persistence';
 import { VaultRecordAdapter } from './infrastructure/vault-record-adapter';
 import {
@@ -198,11 +190,9 @@ const SOURCE_REQUESTS_DIR = TRACEKEEPER_AGENT_REQUESTS_DIR;
 const SOURCES_DIR = KNOWLEDGE_SOURCES_DIR;
 const SOURCE_ANALYSIS_REPORT_DIR = TRACEKEEPER_SOURCE_ANALYSIS_DIR;
 const MEMORY_PROPOSAL_DIR = TRACEKEEPER_REVIEW_QUEUE_DIR;
-const MAX_SOURCE_EXCERPT_LENGTH = 1000;
 const MAX_RECALL_RELATIONS = 8;
 const DEFAULT_FINISH_TASK_REVIEW_MODE = 'auto_propose';
 
-type CaptureSourceMode = 'external_reference' | 'extracted_snapshot' | 'local_copy';
 type ReviewProposalMode = 'off' | 'suggest' | 'review_queue' | 'auto_propose';
 type MemoryProposalRule = 'review_queue' | 'auto_write' | 'disabled';
 type MemoryScope = 'global' | 'project';
@@ -460,17 +450,6 @@ interface MemoryBridgeReport {
 	missing_related_sources: string[];
 }
 
-interface MemoryRoutingContext {
-	memoryScope: MemoryScope;
-	projectHint: string;
-	relatedWiki: string[];
-	relatedSources: string[];
-	architecture: ArchitectureStatusReport;
-	missingWikiBridge: boolean;
-	missingRelatedWiki: string[];
-	missingRelatedSources: string[];
-}
-
 interface FinishTaskSuggestion {
 	kind: string;
 	label: string;
@@ -595,51 +574,6 @@ interface FinishTaskMemoryChange {
 	proposal_transition?: Record<string, unknown>;
 }
 
-function buildFinishTaskCloseoutGroups(
-	closeout: {
-		decisions: string[];
-		solution_changes: string[];
-		lessons: string[];
-		preferences: string[];
-		next_actions: string[];
-		memory_candidates: string[];
-	},
-	context: ToolContext
-): FinishTaskCloseoutGroup[] {
-	return [
-		{
-			kind: 'task_decision',
-			label: contentText(context, '任务决策', 'Task Decisions'),
-			values: normalizeFinishTaskProposalValues(closeout.decisions),
-		},
-		{
-			kind: 'solution_change',
-			label: contentText(context, '方案调整', 'Solution Changes'),
-			values: normalizeFinishTaskProposalValues(closeout.solution_changes),
-		},
-		{
-			kind: 'lesson_learned',
-			label: contentText(context, '经验教训', 'Lessons'),
-			values: normalizeFinishTaskProposalValues(closeout.lessons),
-		},
-		{
-			kind: 'user_preference',
-			label: contentText(context, '用户偏好', 'User Preferences'),
-			values: normalizeFinishTaskProposalValues(closeout.preferences),
-		},
-		{
-			kind: 'project_next_action',
-			label: contentText(context, '项目下一步', 'Project Next Actions'),
-			values: normalizeFinishTaskProposalValues(closeout.next_actions),
-		},
-		{
-			kind: 'memory_candidate',
-			label: contentText(context, '记忆候选', 'Memory Candidates'),
-			values: normalizeFinishTaskProposalValues(closeout.memory_candidates),
-		},
-	];
-}
-
 type LegacyMemoryCloseoutStatus = 'auto_saved' | 'queued' | 'mixed' | 'empty' | 'ignored';
 type MemoryCloseoutStatus =
 	| 'no_candidates'
@@ -728,57 +662,9 @@ interface ProposeMemoryArgs extends ProjectScopeArgs {
 	idempotency_key?: unknown;
 }
 
-function buildProposeMemoryRequestSnapshot(rawArgs: ProposeMemoryArgs) {
-	return {
-		proposal_kind: coerceNonEmptyString(
-			rawArgs.proposal_kind,
-			true,
-			'proposal_kind'
-		),
-		content: coerceNonEmptyString(rawArgs.content, true, 'content'),
-		evidence: coerceOptionalString(rawArgs.evidence) || null,
-		target_note: coerceOptionalString(rawArgs.target_note) || null,
-		risk_level: coerceOptionalString(rawArgs.risk_level) || null,
-		task_id: coerceOptionalString(rawArgs.task_id) || null,
-		filename: coerceOptionalString(rawArgs.filename) || null,
-		title: coerceOptionalString(rawArgs.title) || null,
-		project_hint: coerceOptionalString(rawArgs.project_hint) || null,
-		project_id: coerceOptionalString(rawArgs.project_id) || null,
-		repo_path: coerceOptionalString(rawArgs.repo_path) || null,
-		repo: coerceOptionalString(rawArgs.repo) || null,
-		project_path: coerceOptionalString(rawArgs.project_path) || null,
-		memory_scope: coerceOptionalString(rawArgs.memory_scope) || null,
-		related_wiki: normalizeMultiValueList(
-			rawArgs.related_wiki,
-			'related_wiki'
-		),
-		related_sources: normalizeMultiValueList(
-			rawArgs.related_sources,
-			'related_sources'
-		),
-		claim_key: coerceOptionalString(rawArgs.claim_key) || null,
-		proposed_authority: coerceOptionalString(rawArgs.proposed_authority) || null,
-		proposed_confidence: coerceOptionalString(rawArgs.proposed_confidence) || null,
-		declared_state: coerceOptionalString(rawArgs.declared_state) || null,
-		observed_at: coerceOptionalString(rawArgs.observed_at) || null,
-		valid_from: coerceOptionalString(rawArgs.valid_from) || null,
-		valid_to: coerceOptionalString(rawArgs.valid_to) || null,
-		last_verified_at: coerceOptionalString(rawArgs.last_verified_at) || null,
-		supersedes: normalizeMultiValueList(rawArgs.supersedes, 'supersedes'),
-		contradicts: normalizeMultiValueList(rawArgs.contradicts, 'contradicts'),
-	};
-}
-
-interface ProposeMemoryOperationPayload {
-	requestHash: string;
-	requestSnapshot: ReturnType<typeof buildProposeMemoryRequestSnapshot>;
-	projectMemoryCreatedAt: string;
-	projectMemoryAgentType: ObservedClientType | 'custom';
-}
-
 function isProposeMemoryOperationPayload(
 	payload: unknown
-): payload is ProposeMemoryOperationPayload {
+): boolean {
 	if (!isRecord(payload) || !isRecord(payload.requestSnapshot)) {
 		return false;
 	}
@@ -912,10 +798,14 @@ function summarizeToolPayload(payload: unknown, isError: boolean): string {
 	];
 	for (const key of keys) {
 		const value = payload[key];
-		if (value === undefined || value === null || Array.isArray(value) || isRecord(value)) {
+		if (
+			typeof value !== 'string'
+			&& typeof value !== 'number'
+			&& typeof value !== 'boolean'
+		) {
 			continue;
 		}
-		summaryParts.push(`${key}=${String(value)}`);
+		summaryParts.push(`${key}=${value}`);
 	}
 	if (
 		payload.tool === 'tracekeeper.memory'
@@ -1784,7 +1674,7 @@ function projectMemoryRepository(
 	context: ToolContext
 ): ProjectMemoryVaultRepository {
 	if (context.vaultRepository) {
-		return context.vaultRepository as ProjectMemoryVaultRepository;
+		return context.vaultRepository;
 	}
 	return new NodeFsVaultRepository({
 		vaultRoot,
@@ -1968,8 +1858,8 @@ function normalizeWikilinkOrSourceValue(value: string): string {
 		candidate = markdownLink[1].trim();
 	}
 	candidate = candidate
-		.replace(/^\s*!\[\[(.*?)\]\]\s*$/, (_, body) => body)
-		.replace(/^\s*\[\[(.*?)\]\]\s*$/, (_, body) => body);
+		.replace(/^\s*!\[\[(.*?)\]\]\s*$/, (_match: string, body: string) => body)
+		.replace(/^\s*\[\[(.*?)\]\]\s*$/, (_match: string, body: string) => body);
 	const aliasSplit = candidate.indexOf('|');
 	if (aliasSplit >= 0) {
 		candidate = candidate.slice(0, aliasSplit).trim();
@@ -2140,17 +2030,6 @@ function coerceStringOrStringArray(value: unknown, field: string, required = fal
 	throw new ToolInputError(`${field} must be a string or string array.`);
 }
 
-function coerceReviewProposalMode(value: unknown, fallback: ReviewProposalMode = DEFAULT_FINISH_TASK_REVIEW_MODE): ReviewProposalMode {
-	const normalized = coerceOptionalString(value).toLowerCase();
-	if (!normalized) {
-		return fallback;
-	}
-	if (normalized === 'off' || normalized === 'suggest' || normalized === 'review_queue' || normalized === 'auto_propose') {
-		return normalized;
-	}
-	throw new ToolInputError('review_proposal_mode must be one of: off, suggest, review_queue, auto_propose.');
-}
-
 const FINISH_TASK_PROPOSAL_SIGNATURE_KEY = 'content_signature';
 
 function normalizeFinishTaskProposalValues(values: string[]): string[] {
@@ -2254,17 +2133,6 @@ function findExistingFinishTaskProposal(
 	return null;
 }
 
-function normalizeReviewProposalMode(value: unknown, fallback: ReviewProposalMode = DEFAULT_FINISH_TASK_REVIEW_MODE): ReviewProposalMode {
-	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-	return normalized === 'off' || normalized === 'suggest' || normalized === 'review_queue' || normalized === 'auto_propose'
-		? normalized
-		: fallback;
-}
-
-function defaultReviewProposalMode(context: ToolContext): ReviewProposalMode {
-	return DEFAULT_FINISH_TASK_REVIEW_MODE;
-}
-
 function normalizeMemoryProposalRule(value: unknown, fallback: MemoryProposalRule = 'review_queue'): MemoryProposalRule {
 	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
 	if (normalized === 'disabled') {
@@ -2342,17 +2210,6 @@ function assertMemoryProposalAllowed(
 	}
 	const scope = isProjectMemoryProposalForScope(proposalKind, targetNote, projectHint, memoryScope) ? 'project' : 'global';
 	throw new ToolInputError(`${scope} memory proposals are disabled by Tracekeeper memory rules.`);
-}
-
-function buildSafePathSegment(raw: string, fallback: string): string {
-	const segment = raw
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9._-]+/g, '-')
-		.replace(/-+/g, '-')
-		.replace(/^-+|-+$/g, '')
-		.slice(0, 80);
-	return segment || fallback;
 }
 
 function buildDefaultProjectMemoryTarget(vaultRoot: string, projectHint: string): string {
@@ -3650,33 +3507,9 @@ function readFrontmatterString(frontmatter: Readonly<Record<string, unknown>>, k
 	return '';
 }
 
-function isLikelyVaultPath(value: string, sourceKind: string): boolean {
-	const trimmed = value.trim();
-	if (!trimmed) {
-		return false;
-	}
-	if (trimmed.includes('\n') || trimmed.includes('\r')) {
-		return false;
-	}
-	if (/^https?:\/\//i.test(trimmed) || /^(mailto:|file:|ftp:)/i.test(trimmed)) {
-		return false;
-	}
-	if (['url', 'selection', 'http', 'external'].includes(sourceKind.toLowerCase())) {
-		return false;
-	}
-	if (trimmed.startsWith('.') && !trimmed.includes('/')) {
-		return false;
-	}
-	return /\.(md|markdown|txt)$/i.test(trimmed) || trimmed.includes('/') || sourceKind === 'current_note' || sourceKind === 'local_file';
-}
-
 function isSourceRequestPending(status: string): boolean {
 	const normalized = status.toLowerCase();
 	return ['pending', 'todo', 'open', 'queued', 'new'].includes(normalized);
-}
-
-function isUrlSource(source: string): boolean {
-	return /^https?:\/\//i.test(source.trim());
 }
 
 function safeReadNote(vaultRoot: string, notePath: string, context: ToolContext): { path: string; text: string } {
@@ -4830,7 +4663,7 @@ function buildApprovedMemoryRecordMarkdown(
 	if (scopeValue !== 'global' && scopeValue !== 'project') {
 		throw new ToolInputError('Approved memory proposal scope is invalid.');
 	}
-	const scope = scopeValue as 'global' | 'project';
+	const scope = scopeValue;
 	const projectId = scope === 'project'
 		? stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['project_id']))
 		: '';
@@ -5312,6 +5145,7 @@ function replaceTextFileAtomically(absolutePath: string, content: string, expect
 		try {
 			fs.unlinkSync(tempPath);
 		} catch {
+			// Best-effort cleanup must preserve the original write failure.
 		}
 		throw error;
 	}
@@ -5401,34 +5235,6 @@ async function updateRequestStatusAsync(
 	const updated = buildRequestStatusUpdate(repositoryFile.content, repositoryFile.path, nextStatus);
 	await context.vaultRepository.replaceText(repositoryFile.path, repositoryFile.version, updated);
 	return { path: repositoryFile.path };
-}
-
-function parseOptionalIntendedSourcePath(rawSource: string, sourceKind: string): { requestedPath?: string; inferredText?: string } {
-	const source = rawSource.trim();
-	if (!source) {
-		return {};
-	}
-
-	if (isUrlSource(source)) {
-		return {};
-	}
-
-	if (!isLikelyVaultPath(source, sourceKind)) {
-		return {};
-	}
-
-	return { requestedPath: source };
-}
-
-function buildProjectCounts(scan: ScannedNote[]) {
-	const typeCount: Record<string, number> = {};
-	for (const note of scan) {
-		const type = note.type ?? 'note';
-		typeCount[type] = (typeCount[type] ?? 0) + 1;
-	}
-	return Object.entries(typeCount)
-		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([type, count]) => ({ type, count }));
 }
 
 function buildCatalogCounts(entries: Iterable<KnowledgeCatalogEntry>) {
@@ -5609,18 +5415,6 @@ function isPendingProposal(note: { frontmatter: Readonly<Record<string, unknown>
 	return true;
 }
 
-function coerceCaptureMode(value: unknown): CaptureSourceMode {
-	const mode = coerceNonEmptyString(value, true, 'mode').toLowerCase();
-	switch (mode) {
-		case 'external_reference':
-		case 'extracted_snapshot':
-		case 'local_copy':
-			return mode;
-		default:
-			throw new ToolInputError('capture_source mode must be one of: external_reference | extracted_snapshot | local_copy');
-	}
-}
-
 function buildSafeFilename(rawFilename: unknown, fallbackPrefix: string, context: ToolContext): string {
 	const candidate = coerceOptionalString(rawFilename);
 	if (candidate) {
@@ -5687,32 +5481,6 @@ function boundedWritebackErrorMessage(
 	return truncateSummaryText(message || 'Approved writeback failed.', 512);
 }
 
-function buildAndWriteNote(
-	vaultRoot: string,
-	toolName: string,
-	allowedDir: string,
-	filename: string,
-	frontmatter: Record<string, unknown>,
-	body: string,
-	taskId: string | null,
-	context: ToolContext,
-	metadata: Record<string, unknown> = {},
-	operationId = ''
-): ReturnType<VaultRecordAdapter['buildAndWriteNote']> {
-	return vaultRecordAdapter.buildAndWriteNote(
-		vaultRoot,
-		toolName,
-		allowedDir,
-		filename,
-		frontmatter,
-		body,
-		taskId,
-		context,
-		metadata,
-		operationId
-	);
-}
-
 async function buildAndWriteNoteAsync(
 	vaultRoot: string,
 	toolName: string,
@@ -5736,24 +5504,6 @@ async function buildAndWriteNoteAsync(
 		context,
 		metadata,
 		operationId
-	);
-}
-
-function findOperationOwnedNote(
-	vaultRoot: string,
-	allowedDir: string,
-	filename: string,
-	operationField: string,
-	operationId: string,
-	context: ToolContext
-): ReturnType<VaultRecordAdapter['findOperationOwnedNote']> {
-	return vaultRecordAdapter.findOperationOwnedNote(
-		vaultRoot,
-		allowedDir,
-		filename,
-		operationField,
-		operationId,
-		context
 	);
 }
 
@@ -6627,23 +6377,6 @@ function mergeTaskProjectIdentity(
 	};
 }
 
-function readAgentTaskMetadata(
-	vaultRoot: string,
-	taskId: string,
-	context: ToolContext
-): AgentTaskMetadata {
-	try {
-		const absolute = resolveSafeNotePath(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
-		const parsed = parseMarkdown(fs.readFileSync(absolute, 'utf8'));
-		return agentTaskMetadataFromFrontmatter(parsed.frontmatter.fields);
-	} catch (error) {
-		if (error instanceof ToolInputError || error instanceof VaultPathError || error instanceof Error) {
-			return emptyAgentTaskMetadata();
-		}
-		return emptyAgentTaskMetadata();
-	}
-}
-
 async function readAgentTaskMetadataAsync(
 	vaultRoot: string,
 	taskId: string,
@@ -6727,6 +6460,7 @@ function normalizedTaskSourceCaptures(values: readonly string[], context: ToolCo
 				captures.add(normalized);
 			}
 		} catch {
+			// Invalid source metadata is omitted from the normalized capture list.
 		}
 	}
 	return [...captures];
@@ -6760,6 +6494,7 @@ async function snapshotExactTaskProposal(
 			proposalPath = normalized;
 		}
 	} catch {
+		// Invalid proposal paths remain unresolved for safe degradation.
 	}
 	if (!proposalId || !proposalPath) {
 		return unresolvedDurableProposalSnapshot(proposalId, proposalPath);
@@ -6936,49 +6671,6 @@ async function updateManagedProposalReferences(
 	}
 	const absolute = resolveSafeNotePath(vaultRoot, current.path, pathSafetyOptions(context));
 	replaceTextFileAtomically(absolute, next, current.content);
-}
-
-function updateAgentTaskRecord(
-	vaultRoot: string,
-	taskId: string | null,
-	fields: Record<string, string | null>,
-	context: ToolContext,
-	references: Record<string, string[]> = {},
-	appendBody = '',
-	appendBodyMarker = ''
-): string | null {
-	if (!taskId) {
-		return null;
-	}
-
-	let absolute = '';
-	try {
-		absolute = resolveSafeNotePath(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
-	} catch (error) {
-		if (error instanceof ToolInputError || error instanceof VaultPathError) {
-			return null;
-		}
-		throw error;
-	}
-
-	const current = fs.readFileSync(absolute, 'utf8');
-	const frontmatter = parseMarkdown(current).frontmatter.fields;
-	const nextFields: Record<string, string> = Object.fromEntries(
-		Object.entries(fields).map(([key, value]) => [key, value ?? ''])
-	);
-	for (const [key, values] of Object.entries(references)) {
-		const merged = mergeFrontmatterList(frontmatter, key, values);
-		if (merged) {
-			nextFields[key] = merged;
-		}
-	}
-
-	let next = updateFrontmatterFields(current, nextFields);
-	if (appendBody.trim() && (!appendBodyMarker || !current.includes(appendBodyMarker))) {
-		next = `${next.replace(/\s*$/, '')}\n\n${appendBody.trim()}\n`;
-	}
-	replaceTextFileAtomically(absolute, next, current);
-	return relativeFromAbsolute(vaultRoot, absolute);
 }
 
 async function updateAgentTaskRecordAsync(
@@ -7444,41 +7136,41 @@ function toSourceRequestRow(note: { frontmatter: Readonly<Record<string, unknown
 }
 
 type ToolInvocationHandler = (
-	(rawArgs: Record<string, unknown>, context: ToolInvocationContext) => unknown | Promise<unknown>
+	(rawArgs: Record<string, unknown>, context: ToolInvocationContext) => unknown
 );
 
 const TOOL_HANDLERS: Record<ToolName, ToolInvocationHandler> = {
-	'tracekeeper.status': (rawArgs, context) => handleStatus(rawArgs as StatusArgs, context),
-	'tracekeeper.graph_health': (rawArgs, context) => handleGraphHealth(rawArgs as GraphHealthArgs, context),
-	'tracekeeper.start_task': (rawArgs, context) => handleStartTask(rawArgs as StartTaskArgs, context),
-	'tracekeeper.recall': (rawArgs, context) => handleRecall(rawArgs as RecallArgs, context),
+	'tracekeeper.status': (rawArgs, context) => handleStatus(rawArgs, context),
+	'tracekeeper.graph_health': (rawArgs, context) => handleGraphHealth(rawArgs, context),
+	'tracekeeper.start_task': (rawArgs, context) => handleStartTask(rawArgs, context),
+	'tracekeeper.recall': (rawArgs, context) => handleRecall(rawArgs, context),
 	'tracekeeper.memory': (rawArgs, context) =>
-		handleMemory(rawArgs as MemoryArgs, context),
-	'tracekeeper.read_note': (rawArgs, context) => handleReadNote(rawArgs as ReadNoteArgs, context),
-	'tracekeeper.review_queue': (rawArgs, context) => handleReviewQueueUnified(rawArgs as ReviewQueueArgs, context),
-	'tracekeeper.project_context': (rawArgs, context) => handleProjectContext(rawArgs as ProjectContextArgs, context),
-	'tracekeeper.project_history': (rawArgs, context) => handleProjectHistory(rawArgs as ProjectHistoryArgs, context),
-	'tracekeeper.list_review_queue': (rawArgs, context) => handleReviewQueue(rawArgs as ListReviewQueueArgs, context),
-	'tracekeeper.list_source_requests': (rawArgs, context) => handleListSourceRequests(rawArgs as ListSourceRequestsArgs, context),
+		handleMemory(rawArgs, context),
+	'tracekeeper.read_note': (rawArgs, context) => handleReadNote(rawArgs, context),
+	'tracekeeper.review_queue': (rawArgs, context) => handleReviewQueueUnified(rawArgs, context),
+	'tracekeeper.project_context': (rawArgs, context) => handleProjectContext(rawArgs, context),
+	'tracekeeper.project_history': (rawArgs, context) => handleProjectHistory(rawArgs, context),
+	'tracekeeper.list_review_queue': (rawArgs, context) => handleReviewQueue(rawArgs, context),
+	'tracekeeper.list_source_requests': (rawArgs, context) => handleListSourceRequests(rawArgs, context),
 	'tracekeeper.list_approved_writebacks': (rawArgs, context) =>
-		handleListApprovedWritebacks(rawArgs as ListApprovedWritebacksArgs, context),
-	'tracekeeper.agent_activity_recent': (rawArgs, context) => handleAgentActivityRecent(rawArgs as AgentActivityRecentArgs, context),
-	'tracekeeper.source_request': (rawArgs, context) => handleSourceRequest(rawArgs as SourceRequestArgs, context),
+		handleListApprovedWritebacks(rawArgs, context),
+	'tracekeeper.agent_activity_recent': (rawArgs, context) => handleAgentActivityRecent(rawArgs, context),
+	'tracekeeper.source_request': (rawArgs, context) => handleSourceRequest(rawArgs, context),
 	'tracekeeper.analyze_source_request': (rawArgs, context) =>
-		handleAnalyzeSourceRequest(rawArgs as AnalyzeSourceRequestArgs, context),
+		handleAnalyzeSourceRequest(rawArgs, context),
 	'tracekeeper.apply_approved_writeback': (rawArgs, context) =>
-		handleApplyApprovedWriteback(rawArgs as ApplyApprovedWritebackArgs, context),
+		handleApplyApprovedWriteback(rawArgs, context),
 	'tracekeeper.build_context_pack': (rawArgs, context) =>
-		handleBuildContextPack(rawArgs as BuildContextPackArgs, context),
-	'tracekeeper.lint': (rawArgs, context) => handleLint(rawArgs as LintArgs, context),
-	'tracekeeper.finish_task': (rawArgs, context) => handleFinishTask(rawArgs as FinishTaskArgs, context),
-	'tracekeeper.distill_session': (rawArgs, context) => handleDistillSession(rawArgs as DistillSessionArgs, context),
+		handleBuildContextPack(rawArgs, context),
+	'tracekeeper.lint': (rawArgs, context) => handleLint(rawArgs, context),
+	'tracekeeper.finish_task': (rawArgs, context) => handleFinishTask(rawArgs, context),
+	'tracekeeper.distill_session': (rawArgs, context) => handleDistillSession(rawArgs, context),
 	'tracekeeper.write_context_pack': (rawArgs, context) =>
-		handleWriteContextPack(rawArgs as WriteContextPackArgs, context),
+		handleWriteContextPack(rawArgs, context),
 	'tracekeeper.write_session_note': (rawArgs, context) =>
-		handleWriteSessionNote(rawArgs as WriteSessionNoteArgs, context),
-	'tracekeeper.capture_source': (rawArgs, context) => handleCaptureSource(rawArgs as CaptureSourceArgs, context),
-	'tracekeeper.propose_memory': (rawArgs, context) => handleProposeMemory(rawArgs as ProposeMemoryArgs, context),
+		handleWriteSessionNote(rawArgs, context),
+	'tracekeeper.capture_source': (rawArgs, context) => handleCaptureSource(rawArgs, context),
+	'tracekeeper.propose_memory': (rawArgs, context) => handleProposeMemory(rawArgs, context),
 } satisfies Record<ToolName, ToolInvocationHandler>;
 
 function getToolRiskLevel(toolName: string): string {
@@ -7692,7 +7384,7 @@ export async function recordRejectedToolCallAuditEvent(
 	}
 }
 
-function makeToolResultForWrite(tool: string, payload: ReturnType<typeof buildAndWriteNote>) {
+function makeToolResultForWrite(tool: string, payload: ReturnType<VaultRecordAdapter['buildAndWriteNote']>) {
 	return {
 		ok: true,
 		tool,
@@ -7973,7 +7665,7 @@ export async function recoverPendingOperations(
 		releaseIncompatibleFinishTaskBinding: (record) =>
 			releaseIncompatibleFinishTaskBinding(vaultRoot, record, context),
 		invoke: async (request, record, requestedVaultRoot) => {
-			const result = await callTool(request.tool as TracekeeperToolName, request.args, {
+			const result = await callTool(request.tool, request.args, {
 				...context,
 				defaultVaultRoot: requestedVaultRoot,
 				principalId: context.principalId || LOCAL_TRUST_PRINCIPAL_ID,
@@ -10013,7 +9705,7 @@ async function handleCaptureSource(rawArgs: CaptureSourceArgs, context: ToolInvo
 	});
 
 	return application.execute({
-		rawArgs: rawArgs as CaptureSourceRawRequest,
+		rawArgs,
 		requestHash,
 		idempotencyKey: normalizedIdempotencyKey,
 	});
@@ -10065,7 +9757,7 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolInvo
 				repo: snapshot.repo,
 				project_path: snapshot.project_path,
 			}, scanVaultForContext(vaultRoot, context).notes);
-			return resolved as ProposeMemoryProjectIdentity;
+			return resolved;
 		},
 		assertAllowed: (proposalKind, targetNote, projectHint, memoryScope) =>
 			assertMemoryProposalAllowed(proposalKind, targetNote, projectHint, context, memoryScope),
@@ -10149,7 +9841,7 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolInvo
 		assertSafeText: assertNoSensitiveText,
 		renderText: (zh, en) => contentText(context, zh, en),
 	});
-	return application.execute({ rawArgs: rawArgs as ProposeMemoryRawRequest });
+	return application.execute({ rawArgs });
 }
 
 async function handleBuildContextPack(rawArgs: BuildContextPackArgs, context: ToolInvocationContext) {
@@ -10377,23 +10069,6 @@ function buildGraphSummary(graphHealth: GraphHealthReport): Record<string, unkno
 	};
 }
 
-function buildSessionNoteBody(context: ToolContext, summary: string, outcomes: string[], nextActions: string[]): string {
-	const lines = [
-		contentText(context, '# 任务会话记录', '# Task Session Note'),
-		`- created_at: ${new Date().toISOString()}`,
-		'',
-		contentText(context, '## 摘要', '## Summary'),
-		summary,
-		'',
-		contentText(context, '## 结果', '## Outcomes'),
-		...formatListMarkdown(outcomes).split('\n'),
-		'',
-		contentText(context, '## 下一步', '## Next Actions'),
-		...formatListMarkdown(nextActions).split('\n'),
-	].join('\n');
-	return lines.trim();
-}
-
 function buildSessionNoteBodyWithCloseout(
 	context: ToolContext,
 	summary: string,
@@ -10483,24 +10158,6 @@ function buildFinishTaskNextActions(
 	return actions;
 }
 
-function hasFinishTaskCloseoutCandidates(input: {
-	decisions: string[];
-	solutionChanges: string[];
-	lessons: string[];
-	preferences: string[];
-	nextActions: string[];
-	memoryCandidates: string[];
-}): boolean {
-	return [
-		input.decisions,
-		input.solutionChanges,
-		input.lessons,
-		input.preferences,
-		input.nextActions,
-		input.memoryCandidates,
-	].some((values) => values.length > 0);
-}
-
 function resolveMemoryCloseoutStatus(
 	reviewProposalMode: ReviewProposalMode,
 	proposalResult: FinishTaskProposalResult,
@@ -10524,28 +10181,6 @@ function resolveMemoryCloseoutStatus(
 		return 'queued';
 	}
 	return 'empty';
-}
-
-function buildMemoryCloseoutSummary(
-	context: ToolContext,
-	status: LegacyMemoryCloseoutStatus,
-	proposalResult: FinishTaskProposalResult
-): string {
-	const queued = proposalResult.proposals.length;
-	const autoSaved = proposalResult.autoAppliedMemoryUpdates.length;
-	switch (status) {
-		case 'auto_saved':
-			return contentText(context, `已自动保存 ${autoSaved} 条项目记忆更新。`, `${autoSaved} project memory update(s) were auto-saved.`);
-		case 'queued':
-			return contentText(context, `${queued} 条记忆候选已进入知识变更审核。`, `${queued} memory candidate(s) were sent to Knowledge Change Review.`);
-		case 'mixed':
-			return contentText(context, `已自动保存 ${autoSaved} 条项目记忆更新，另有 ${queued} 条候选进入知识变更审核。`, `${autoSaved} project memory update(s) were auto-saved and ${queued} candidate(s) were sent to Knowledge Change Review.`);
-		case 'ignored':
-			return contentText(context, '收尾记忆候选已记录在会话中，但当前模式没有入队或写入。', 'Closeout memory candidates were recorded in the session but not queued or written by the selected mode.');
-		case 'empty':
-		default:
-			return contentText(context, '没有提交可长期沉淀的收尾记忆候选。', 'No durable closeout memory candidates were submitted.');
-	}
 }
 
 function resolveCanonicalMemoryCloseoutStatus(
@@ -10893,6 +10528,7 @@ async function buildFinishTaskDurableOutput(
 				targetPaths.add(normalized);
 			}
 		} catch {
+			// Invalid auto-write targets are omitted from the target summary.
 		}
 	}
 	const activeStatuses = Object.entries(counts)
@@ -11738,7 +11374,6 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 		context,
 		'repair'
 	) ?? await buildFinishTaskDurableOutput(input, proposalResult, context);
-	const durableOutput = durableOutputEvidence.summary;
 	const aggregatedProposals = aggregateFinishTaskProposalReferences(
 		input,
 		proposalResult,
@@ -12021,28 +11656,6 @@ async function executeFinishTaskOperation(
 	return response;
 }
 
-function readTaskLifecycleState(
-	vaultRoot: string,
-	taskId: string,
-	context: ToolContext
-): { status: string; finishOperationId: string } | null {
-	try {
-		const absolutePath = resolveSafeNotePath(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
-		const parsed = parseMarkdown(fs.readFileSync(absolutePath, 'utf8'));
-		return {
-			status: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['status'])).toLowerCase(),
-			finishOperationId: stripYamlQuotes(
-				readFrontmatterString(parsed.frontmatter.fields, ['finish_operation_id'])
-			),
-		};
-	} catch (error: unknown) {
-		if (error instanceof ToolInputError || error instanceof VaultPathError) {
-			return null;
-		}
-		throw error;
-	}
-}
-
 async function readTaskLifecycleStateAsync(
 	vaultRoot: string,
 	taskId: string,
@@ -12301,5 +11914,5 @@ async function handleDistillSession(rawArgs: DistillSessionArgs, context: ToolCo
 		updateManagedProposalReferences: (recordPath, proposals) =>
 			updateManagedProposalReferences(vaultRoot, recordPath, proposals, context),
 	});
-	return application.execute(rawArgs as DistillSessionRawRequest);
+	return application.execute(rawArgs);
 }

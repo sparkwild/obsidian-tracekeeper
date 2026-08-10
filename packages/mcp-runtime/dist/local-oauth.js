@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.LocalOAuthAuthorizationServer = void 0;
 const node_buffer_1 = require("node:buffer");
 const crypto = __importStar(require("node:crypto"));
+const node_timers_1 = require("node:timers");
 const node_url_1 = require("node:url");
 const oauth_page_1 = require("./oauth-page");
 const PROTECTED_RESOURCE_METADATA_ROOT_PATH = '/.well-known/oauth-protected-resource';
@@ -431,7 +432,7 @@ class LocalOAuthAuthorizationServer {
         }
         const rawName = typeof request.client_name === 'string' ? request.client_name.trim() : 'Local MCP client';
         const clientName = rawName.slice(0, 128) || 'Local MCP client';
-        if (/[\u0000-\u001f\u007f]/u.test(clientName))
+        if (containsAsciiControlCharacter(clientName))
             return new Error('client_name contains control characters.');
         return { clientName, redirectUris };
     }
@@ -629,12 +630,21 @@ function timingSafeTextEqual(left, right) {
     const rightBuffer = node_buffer_1.Buffer.from(right, 'utf8');
     return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
+function containsAsciiControlCharacter(value) {
+    for (let index = 0; index < value.length; index += 1) {
+        const code = value.charCodeAt(index);
+        if (code <= 0x1f || code === 0x7f) {
+            return true;
+        }
+    }
+    return false;
+}
 async function readRequestBody(request, maxBytes, timeoutMs) {
     const declaredLength = Number.parseInt(firstHeaderValue(request.headers['content-length']), 10);
     if (Number.isFinite(declaredLength) && declaredLength > maxBytes)
         throw new OAuthBodyTooLargeError(maxBytes);
     let timeout;
-    const timeoutPromise = new Promise((_resolve, reject) => { timeout = setTimeout(() => reject(new OAuthBodyTimeoutError(timeoutMs)), timeoutMs); });
+    const timeoutPromise = new Promise((_resolve, reject) => { timeout = (0, node_timers_1.setTimeout)(() => reject(new OAuthBodyTimeoutError(timeoutMs)), timeoutMs); });
     try {
         const bodyPromise = (async () => {
             const chunks = [];
@@ -652,7 +662,7 @@ async function readRequestBody(request, maxBytes, timeoutMs) {
     }
     finally {
         if (timeout)
-            clearTimeout(timeout);
+            (0, node_timers_1.clearTimeout)(timeout);
     }
 }
 class OAuthBodyTooLargeError extends Error {

@@ -23,7 +23,6 @@ import {
 	type ScanResult,
 	type ScannedNote,
 	type VaultRepository,
-	type VaultWriteReceipt,
 } from '@tracekeeper/core';
 
 export interface ProjectMemoryHubProjection extends ProjectMemoryHubBinding {
@@ -444,12 +443,10 @@ export function buildProjectMemoryCatalog(
 export class ProjectMemoryApplicationService {
 	private readonly repository: ProjectMemoryVaultRepository;
 	private readonly loadScan: () => ScanResult | Promise<ScanResult>;
-	private readonly now: () => string;
 
 	constructor(dependencies: ProjectMemoryApplicationDependencies) {
 		this.repository = dependencies.repository;
-		this.loadScan = dependencies.loadScan;
-		this.now = dependencies.now ?? (() => new Date().toISOString());
+		this.loadScan = () => dependencies.loadScan();
 	}
 
 	async snapshot(): Promise<ProjectMemorySnapshotProjection> {

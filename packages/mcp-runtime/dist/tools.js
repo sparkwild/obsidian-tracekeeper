@@ -88,7 +88,6 @@ const SOURCE_REQUESTS_DIR = core_1.TRACEKEEPER_AGENT_REQUESTS_DIR;
 const SOURCES_DIR = core_1.KNOWLEDGE_SOURCES_DIR;
 const SOURCE_ANALYSIS_REPORT_DIR = core_1.TRACEKEEPER_SOURCE_ANALYSIS_DIR;
 const MEMORY_PROPOSAL_DIR = core_1.TRACEKEEPER_REVIEW_QUEUE_DIR;
-const MAX_SOURCE_EXCERPT_LENGTH = 1000;
 const MAX_RECALL_RELATIONS = 8;
 const DEFAULT_FINISH_TASK_REVIEW_MODE = 'auto_propose';
 function normalizeContentLanguage(value) {
@@ -126,70 +125,6 @@ const DEPRECATED_TOOL_REPLACEMENTS = Object.fromEntries(TRACEKEEPER_TOOL_CONTRAC
 const TOOL_CONTRACT_BY_NAME = new Map(TRACEKEEPER_TOOL_CONTRACTS.map((contract) => [contract.name, contract]));
 function isToolName(value) {
     return TOOL_NAME_SET.has(value);
-}
-function buildFinishTaskCloseoutGroups(closeout, context) {
-    return [
-        {
-            kind: 'task_decision',
-            label: contentText(context, '任务决策', 'Task Decisions'),
-            values: normalizeFinishTaskProposalValues(closeout.decisions),
-        },
-        {
-            kind: 'solution_change',
-            label: contentText(context, '方案调整', 'Solution Changes'),
-            values: normalizeFinishTaskProposalValues(closeout.solution_changes),
-        },
-        {
-            kind: 'lesson_learned',
-            label: contentText(context, '经验教训', 'Lessons'),
-            values: normalizeFinishTaskProposalValues(closeout.lessons),
-        },
-        {
-            kind: 'user_preference',
-            label: contentText(context, '用户偏好', 'User Preferences'),
-            values: normalizeFinishTaskProposalValues(closeout.preferences),
-        },
-        {
-            kind: 'project_next_action',
-            label: contentText(context, '项目下一步', 'Project Next Actions'),
-            values: normalizeFinishTaskProposalValues(closeout.next_actions),
-        },
-        {
-            kind: 'memory_candidate',
-            label: contentText(context, '记忆候选', 'Memory Candidates'),
-            values: normalizeFinishTaskProposalValues(closeout.memory_candidates),
-        },
-    ];
-}
-function buildProposeMemoryRequestSnapshot(rawArgs) {
-    return {
-        proposal_kind: coerceNonEmptyString(rawArgs.proposal_kind, true, 'proposal_kind'),
-        content: coerceNonEmptyString(rawArgs.content, true, 'content'),
-        evidence: coerceOptionalString(rawArgs.evidence) || null,
-        target_note: coerceOptionalString(rawArgs.target_note) || null,
-        risk_level: coerceOptionalString(rawArgs.risk_level) || null,
-        task_id: coerceOptionalString(rawArgs.task_id) || null,
-        filename: coerceOptionalString(rawArgs.filename) || null,
-        title: coerceOptionalString(rawArgs.title) || null,
-        project_hint: coerceOptionalString(rawArgs.project_hint) || null,
-        project_id: coerceOptionalString(rawArgs.project_id) || null,
-        repo_path: coerceOptionalString(rawArgs.repo_path) || null,
-        repo: coerceOptionalString(rawArgs.repo) || null,
-        project_path: coerceOptionalString(rawArgs.project_path) || null,
-        memory_scope: coerceOptionalString(rawArgs.memory_scope) || null,
-        related_wiki: normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki'),
-        related_sources: normalizeMultiValueList(rawArgs.related_sources, 'related_sources'),
-        claim_key: coerceOptionalString(rawArgs.claim_key) || null,
-        proposed_authority: coerceOptionalString(rawArgs.proposed_authority) || null,
-        proposed_confidence: coerceOptionalString(rawArgs.proposed_confidence) || null,
-        declared_state: coerceOptionalString(rawArgs.declared_state) || null,
-        observed_at: coerceOptionalString(rawArgs.observed_at) || null,
-        valid_from: coerceOptionalString(rawArgs.valid_from) || null,
-        valid_to: coerceOptionalString(rawArgs.valid_to) || null,
-        last_verified_at: coerceOptionalString(rawArgs.last_verified_at) || null,
-        supersedes: normalizeMultiValueList(rawArgs.supersedes, 'supersedes'),
-        contradicts: normalizeMultiValueList(rawArgs.contradicts, 'contradicts'),
-    };
 }
 function isProposeMemoryOperationPayload(payload) {
     if (!(0, protocol_1.isRecord)(payload) || !(0, protocol_1.isRecord)(payload.requestSnapshot)) {
@@ -250,10 +185,12 @@ function summarizeToolPayload(payload, isError) {
     ];
     for (const key of keys) {
         const value = payload[key];
-        if (value === undefined || value === null || Array.isArray(value) || (0, protocol_1.isRecord)(value)) {
+        if (typeof value !== 'string'
+            && typeof value !== 'number'
+            && typeof value !== 'boolean') {
             continue;
         }
-        summaryParts.push(`${key}=${String(value)}`);
+        summaryParts.push(`${key}=${value}`);
     }
     if (payload.tool === 'tracekeeper.memory'
         && (0, protocol_1.isRecord)(payload.page)) {
@@ -1184,8 +1121,8 @@ function normalizeWikilinkOrSourceValue(value) {
         candidate = markdownLink[1].trim();
     }
     candidate = candidate
-        .replace(/^\s*!\[\[(.*?)\]\]\s*$/, (_, body) => body)
-        .replace(/^\s*\[\[(.*?)\]\]\s*$/, (_, body) => body);
+        .replace(/^\s*!\[\[(.*?)\]\]\s*$/, (_match, body) => body)
+        .replace(/^\s*\[\[(.*?)\]\]\s*$/, (_match, body) => body);
     const aliasSplit = candidate.indexOf('|');
     if (aliasSplit >= 0) {
         candidate = candidate.slice(0, aliasSplit).trim();
@@ -1326,16 +1263,6 @@ function coerceStringOrStringArray(value, field, required = false) {
     }
     throw new safety_1.ToolInputError(`${field} must be a string or string array.`);
 }
-function coerceReviewProposalMode(value, fallback = DEFAULT_FINISH_TASK_REVIEW_MODE) {
-    const normalized = coerceOptionalString(value).toLowerCase();
-    if (!normalized) {
-        return fallback;
-    }
-    if (normalized === 'off' || normalized === 'suggest' || normalized === 'review_queue' || normalized === 'auto_propose') {
-        return normalized;
-    }
-    throw new safety_1.ToolInputError('review_proposal_mode must be one of: off, suggest, review_queue, auto_propose.');
-}
 const FINISH_TASK_PROPOSAL_SIGNATURE_KEY = 'content_signature';
 function normalizeFinishTaskProposalValues(values) {
     return [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))].sort((a, b) => a.localeCompare(b));
@@ -1415,15 +1342,6 @@ function findExistingFinishTaskProposal(vaultRoot, taskId, proposalKind, proposa
     }
     return null;
 }
-function normalizeReviewProposalMode(value, fallback = DEFAULT_FINISH_TASK_REVIEW_MODE) {
-    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-    return normalized === 'off' || normalized === 'suggest' || normalized === 'review_queue' || normalized === 'auto_propose'
-        ? normalized
-        : fallback;
-}
-function defaultReviewProposalMode(context) {
-    return DEFAULT_FINISH_TASK_REVIEW_MODE;
-}
 function normalizeMemoryProposalRule(value, fallback = 'review_queue') {
     const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (normalized === 'disabled') {
@@ -1468,16 +1386,6 @@ function assertMemoryProposalAllowed(proposalKind, targetNote, projectHint, cont
     }
     const scope = isProjectMemoryProposalForScope(proposalKind, targetNote, projectHint, memoryScope) ? 'project' : 'global';
     throw new safety_1.ToolInputError(`${scope} memory proposals are disabled by Tracekeeper memory rules.`);
-}
-function buildSafePathSegment(raw, fallback) {
-    const segment = raw
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9._-]+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 80);
-    return segment || fallback;
 }
 function buildDefaultProjectMemoryTarget(vaultRoot, projectHint) {
     void vaultRoot;
@@ -2469,31 +2377,9 @@ function readFrontmatterString(frontmatter, keys) {
     }
     return '';
 }
-function isLikelyVaultPath(value, sourceKind) {
-    const trimmed = value.trim();
-    if (!trimmed) {
-        return false;
-    }
-    if (trimmed.includes('\n') || trimmed.includes('\r')) {
-        return false;
-    }
-    if (/^https?:\/\//i.test(trimmed) || /^(mailto:|file:|ftp:)/i.test(trimmed)) {
-        return false;
-    }
-    if (['url', 'selection', 'http', 'external'].includes(sourceKind.toLowerCase())) {
-        return false;
-    }
-    if (trimmed.startsWith('.') && !trimmed.includes('/')) {
-        return false;
-    }
-    return /\.(md|markdown|txt)$/i.test(trimmed) || trimmed.includes('/') || sourceKind === 'current_note' || sourceKind === 'local_file';
-}
 function isSourceRequestPending(status) {
     const normalized = status.toLowerCase();
     return ['pending', 'todo', 'open', 'queued', 'new'].includes(normalized);
-}
-function isUrlSource(source) {
-    return /^https?:\/\//i.test(source.trim());
 }
 function safeReadNote(vaultRoot, notePath, context) {
     const options = pathSafetyOptions(context);
@@ -3747,6 +3633,7 @@ function replaceTextFileAtomically(absolutePath, content, expectedContent) {
             fs.unlinkSync(tempPath);
         }
         catch {
+            // Best-effort cleanup must preserve the original write failure.
         }
         throw error;
     }
@@ -3820,29 +3707,6 @@ async function updateRequestStatusAsync(vaultRoot, requestPath, nextStatus, cont
     const updated = buildRequestStatusUpdate(repositoryFile.content, repositoryFile.path, nextStatus);
     await context.vaultRepository.replaceText(repositoryFile.path, repositoryFile.version, updated);
     return { path: repositoryFile.path };
-}
-function parseOptionalIntendedSourcePath(rawSource, sourceKind) {
-    const source = rawSource.trim();
-    if (!source) {
-        return {};
-    }
-    if (isUrlSource(source)) {
-        return {};
-    }
-    if (!isLikelyVaultPath(source, sourceKind)) {
-        return {};
-    }
-    return { requestedPath: source };
-}
-function buildProjectCounts(scan) {
-    const typeCount = {};
-    for (const note of scan) {
-        const type = note.type ?? 'note';
-        typeCount[type] = (typeCount[type] ?? 0) + 1;
-    }
-    return Object.entries(typeCount)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([type, count]) => ({ type, count }));
 }
 function buildCatalogCounts(entries) {
     const typeCount = {};
@@ -3998,17 +3862,6 @@ function isPendingProposal(note) {
     }
     return true;
 }
-function coerceCaptureMode(value) {
-    const mode = coerceNonEmptyString(value, true, 'mode').toLowerCase();
-    switch (mode) {
-        case 'external_reference':
-        case 'extracted_snapshot':
-        case 'local_copy':
-            return mode;
-        default:
-            throw new safety_1.ToolInputError('capture_source mode must be one of: external_reference | extracted_snapshot | local_copy');
-    }
-}
 function buildSafeFilename(rawFilename, fallbackPrefix, context) {
     const candidate = coerceOptionalString(rawFilename);
     if (candidate) {
@@ -4064,14 +3917,8 @@ function boundedWritebackErrorMessage(error, vaultRoot) {
         .replace(/(^|[\s("'`])[A-Za-z]:\\(?:[^\s"'`<>|]+\\?)+/g, (_match, prefix) => `${prefix}<absolute-path>`);
     return truncateSummaryText(message || 'Approved writeback failed.', 512);
 }
-function buildAndWriteNote(vaultRoot, toolName, allowedDir, filename, frontmatter, body, taskId, context, metadata = {}, operationId = '') {
-    return vaultRecordAdapter.buildAndWriteNote(vaultRoot, toolName, allowedDir, filename, frontmatter, body, taskId, context, metadata, operationId);
-}
 async function buildAndWriteNoteAsync(vaultRoot, toolName, allowedDir, filename, frontmatter, body, taskId, context, metadata = {}, operationId = '') {
     return vaultRecordAdapter.buildAndWriteNoteAsync(vaultRoot, toolName, allowedDir, filename, frontmatter, body, taskId, context, metadata, operationId);
-}
-function findOperationOwnedNote(vaultRoot, allowedDir, filename, operationField, operationId, context) {
-    return vaultRecordAdapter.findOperationOwnedNote(vaultRoot, allowedDir, filename, operationField, operationId, context);
 }
 function resolveExistingOrNewAutoMemoryTarget(vaultRoot, targetNote, allowedDir, context) {
     const options = pathSafetyOptions(context);
@@ -4757,19 +4604,6 @@ function mergeTaskProjectIdentity(taskId, task, explicit) {
         warnings: [...new Set([...task.warnings, ...explicit.warnings])],
     };
 }
-function readAgentTaskMetadata(vaultRoot, taskId, context) {
-    try {
-        const absolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
-        const parsed = (0, core_1.parseMarkdown)(fs.readFileSync(absolute, 'utf8'));
-        return agentTaskMetadataFromFrontmatter(parsed.frontmatter.fields);
-    }
-    catch (error) {
-        if (error instanceof safety_1.ToolInputError || error instanceof core_1.VaultPathError || error instanceof Error) {
-            return emptyAgentTaskMetadata();
-        }
-        return emptyAgentTaskMetadata();
-    }
-}
 async function readAgentTaskMetadataAsync(vaultRoot, taskId, context) {
     try {
         const safePath = buildTaskNotePath(taskId);
@@ -4848,6 +4682,7 @@ function normalizedTaskSourceCaptures(values, context) {
             }
         }
         catch {
+            // Invalid source metadata is omitted from the normalized capture list.
         }
     }
     return [...captures];
@@ -4871,6 +4706,7 @@ async function snapshotExactTaskProposal(vaultRoot, taskId, proposalId, rawPath,
         }
     }
     catch {
+        // Invalid proposal paths remain unresolved for safe degradation.
     }
     if (!proposalId || !proposalPath) {
         return unresolvedDurableProposalSnapshot(proposalId, proposalPath);
@@ -4990,36 +4826,6 @@ async function updateManagedProposalReferences(vaultRoot, recordPath, proposals,
     }
     const absolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, current.path, pathSafetyOptions(context));
     replaceTextFileAtomically(absolute, next, current.content);
-}
-function updateAgentTaskRecord(vaultRoot, taskId, fields, context, references = {}, appendBody = '', appendBodyMarker = '') {
-    if (!taskId) {
-        return null;
-    }
-    let absolute = '';
-    try {
-        absolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
-    }
-    catch (error) {
-        if (error instanceof safety_1.ToolInputError || error instanceof core_1.VaultPathError) {
-            return null;
-        }
-        throw error;
-    }
-    const current = fs.readFileSync(absolute, 'utf8');
-    const frontmatter = (0, core_1.parseMarkdown)(current).frontmatter.fields;
-    const nextFields = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value ?? '']));
-    for (const [key, values] of Object.entries(references)) {
-        const merged = mergeFrontmatterList(frontmatter, key, values);
-        if (merged) {
-            nextFields[key] = merged;
-        }
-    }
-    let next = updateFrontmatterFields(current, nextFields);
-    if (appendBody.trim() && (!appendBodyMarker || !current.includes(appendBodyMarker))) {
-        next = `${next.replace(/\s*$/, '')}\n\n${appendBody.trim()}\n`;
-    }
-    replaceTextFileAtomically(absolute, next, current);
-    return (0, safety_1.relativeFromAbsolute)(vaultRoot, absolute);
 }
 async function updateAgentTaskRecordAsync(vaultRoot, taskId, fields, context, references = {}, appendBody = '', appendBodyMarker = '') {
     if (!taskId) {
@@ -7314,7 +7120,7 @@ async function handleCaptureSource(rawArgs, context) {
         },
     });
     return application.execute({
-        rawArgs: rawArgs,
+        rawArgs,
         requestHash,
         idempotencyKey: normalizedIdempotencyKey,
     });
@@ -7402,7 +7208,7 @@ async function handleProposeMemory(rawArgs, context) {
         assertSafeText: assertNoSensitiveText,
         renderText: (zh, en) => contentText(context, zh, en),
     });
-    return application.execute({ rawArgs: rawArgs });
+    return application.execute({ rawArgs });
 }
 async function handleBuildContextPack(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
@@ -7604,22 +7410,6 @@ function buildGraphSummary(graphHealth) {
         recommendations: graphHealth.recommendations,
     };
 }
-function buildSessionNoteBody(context, summary, outcomes, nextActions) {
-    const lines = [
-        contentText(context, '# 任务会话记录', '# Task Session Note'),
-        `- created_at: ${new Date().toISOString()}`,
-        '',
-        contentText(context, '## 摘要', '## Summary'),
-        summary,
-        '',
-        contentText(context, '## 结果', '## Outcomes'),
-        ...formatListMarkdown(outcomes).split('\n'),
-        '',
-        contentText(context, '## 下一步', '## Next Actions'),
-        ...formatListMarkdown(nextActions).split('\n'),
-    ].join('\n');
-    return lines.trim();
-}
 function buildSessionNoteBodyWithCloseout(context, summary, outcomes, nextActions, decisions, solutionChanges, lessons, preferences, memoryCandidateRecords) {
     const lines = [
         contentText(context, '# 任务会话记录', '# Task Session Note'),
@@ -7675,16 +7465,6 @@ function buildFinishTaskNextActions(context, durableOutput, projectHint) {
     }
     return actions;
 }
-function hasFinishTaskCloseoutCandidates(input) {
-    return [
-        input.decisions,
-        input.solutionChanges,
-        input.lessons,
-        input.preferences,
-        input.nextActions,
-        input.memoryCandidates,
-    ].some((values) => values.length > 0);
-}
 function resolveMemoryCloseoutStatus(reviewProposalMode, proposalResult, hasCloseoutCandidates) {
     if (!hasCloseoutCandidates) {
         return 'empty';
@@ -7704,23 +7484,6 @@ function resolveMemoryCloseoutStatus(reviewProposalMode, proposalResult, hasClos
         return 'queued';
     }
     return 'empty';
-}
-function buildMemoryCloseoutSummary(context, status, proposalResult) {
-    const queued = proposalResult.proposals.length;
-    const autoSaved = proposalResult.autoAppliedMemoryUpdates.length;
-    switch (status) {
-        case 'auto_saved':
-            return contentText(context, `已自动保存 ${autoSaved} 条项目记忆更新。`, `${autoSaved} project memory update(s) were auto-saved.`);
-        case 'queued':
-            return contentText(context, `${queued} 条记忆候选已进入知识变更审核。`, `${queued} memory candidate(s) were sent to Knowledge Change Review.`);
-        case 'mixed':
-            return contentText(context, `已自动保存 ${autoSaved} 条项目记忆更新，另有 ${queued} 条候选进入知识变更审核。`, `${autoSaved} project memory update(s) were auto-saved and ${queued} candidate(s) were sent to Knowledge Change Review.`);
-        case 'ignored':
-            return contentText(context, '收尾记忆候选已记录在会话中，但当前模式没有入队或写入。', 'Closeout memory candidates were recorded in the session but not queued or written by the selected mode.');
-        case 'empty':
-        default:
-            return contentText(context, '没有提交可长期沉淀的收尾记忆候选。', 'No durable closeout memory candidates were submitted.');
-    }
 }
 function resolveCanonicalMemoryCloseoutStatus(reviewProposalMode, proposalResult, hasCloseoutCandidates, legacyStatus) {
     if (!hasCloseoutCandidates) {
@@ -7962,6 +7725,7 @@ async function buildFinishTaskDurableOutput(input, proposalResult, context) {
             }
         }
         catch {
+            // Invalid auto-write targets are omitted from the target summary.
         }
     }
     const activeStatuses = Object.entries(counts)
@@ -8539,7 +8303,6 @@ async function updateFinishTaskRecord(input, context, operationId) {
     }, input.memoryCandidateRecords ?? [], context, operationId, input.projectMemoryEntryVersion === 1
         && buildFinishTaskProjectMemoryPlan(input, context) !== null);
     const durableOutputEvidence = await readFinishTaskDurableOutputEvidence(input, sessionNote.path, context, 'repair') ?? await buildFinishTaskDurableOutput(input, proposalResult, context);
-    const durableOutput = durableOutputEvidence.summary;
     const aggregatedProposals = aggregateFinishTaskProposalReferences(input, proposalResult, sessionNote.path, context);
     const proposalPaths = aggregatedProposals.map((proposal) => proposal.path);
     const proposalIds = aggregatedProposals.map((proposal) => proposal.proposalId);
@@ -8689,22 +8452,6 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         }));
     }
     return response;
-}
-function readTaskLifecycleState(vaultRoot, taskId, context) {
-    try {
-        const absolutePath = (0, safety_1.resolveSafeNotePath)(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
-        const parsed = (0, core_1.parseMarkdown)(fs.readFileSync(absolutePath, 'utf8'));
-        return {
-            status: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['status'])).toLowerCase(),
-            finishOperationId: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['finish_operation_id'])),
-        };
-    }
-    catch (error) {
-        if (error instanceof safety_1.ToolInputError || error instanceof core_1.VaultPathError) {
-            return null;
-        }
-        throw error;
-    }
 }
 async function readTaskLifecycleStateAsync(vaultRoot, taskId, context) {
     try {

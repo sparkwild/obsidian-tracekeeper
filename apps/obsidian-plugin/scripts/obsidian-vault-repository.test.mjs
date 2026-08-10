@@ -35,7 +35,14 @@ try {
 					contents: [
 						'export class TFile {}',
 						'export class TFolder {}',
-						'export class Vault {}',
+						'export class Vault {',
+						'  static recurseChildren(root, callback) {',
+						'    for (const child of root.children) {',
+						'      callback(child);',
+						'      if (child instanceof TFolder) Vault.recurseChildren(child, callback);',
+						'    }',
+						'  }',
+						'}',
 						'export const normalizePath = (value) => value.replace(/\\\\/g, "/").replace(/\\/{2,}/g, "/");',
 					].join('\n'),
 					loader: 'js',
@@ -52,6 +59,8 @@ try {
 
 	const records = new Map();
 	let readCalls = 0;
+	const readPaths = [];
+	let getFilesCalls = 0;
 	let processCalls = 0;
 	const generatedLinks = [];
 	let beforeProcess;
@@ -71,17 +80,19 @@ try {
 	const vault = {
 		configDir: '.obsidian',
 		getAbstractFileByPath: (filePath) => records.get(filePath)?.file ?? null,
+		getFolderByPath: (folderPath) => {
+			const entry = records.get(folderPath)?.file;
+			return entry instanceof TFolder ? entry : null;
+		},
 		read: async (file) => {
 			readCalls += 1;
+			readPaths.push(file.path);
 			return records.get(file.path).content;
 		},
 		cachedRead: async () => {
 			throw new Error('cachedRead must not be used for repository CAS content');
 		},
 		create: async (filePath, content) => makeFile(filePath, content, 2000),
-		delete: async (file) => {
-			records.delete(file.path);
-		},
 		modify: async () => {
 			throw new Error('modify must not be used for repository CAS writes');
 		},
@@ -97,7 +108,10 @@ try {
 			};
 			return nextContent;
 		},
-		getFiles: () => Array.from(records.values(), (record) => record.file).filter((file) => file instanceof TFile),
+		getFiles: () => {
+			getFilesCalls += 1;
+			return Array.from(records.values(), (record) => record.file).filter((file) => file instanceof TFile);
+		},
 		createFolder: async (folderPath) => {
 			createFolderCalls.push(folderPath);
 			await beforeCreateFolder?.(folderPath);
@@ -110,6 +124,9 @@ try {
 		},
 	};
 	const fileManager = {
+		trashFile: async (file) => {
+			records.delete(file.path);
+		},
 		generateMarkdownLink: (file, sourcePath, subpath, alias) => {
 			generatedLinks.push({
 				targetPath: file.path,
@@ -190,6 +207,36 @@ try {
 		listed.find((entry) => entry.path === created.path).version,
 		createdRead.version
 	);
+	const scopedFolder = new TFolder();
+	const nestedFolder = new TFolder();
+	Object.assign(scopedFolder, {
+		path: '04_scoped',
+		children: [],
+	});
+	Object.assign(nestedFolder, {
+		path: '04_scoped/nested',
+		children: [],
+	});
+	records.set(scopedFolder.path, { file: scopedFolder, content: '' });
+	records.set(nestedFolder.path, { file: nestedFolder, content: '' });
+	const scopedFile = makeFile('04_scoped/in-scope.md', '# In scope');
+	const nestedFile = makeFile('04_scoped/nested/deep.markdown', '# Deep');
+	const nonMarkdownFile = makeFile('04_scoped/ignored.txt', 'ignored');
+	const outsideFile = makeFile('05_outside/outside.md', '# Outside');
+	scopedFolder.children.push(scopedFile, nestedFolder, nonMarkdownFile);
+	nestedFolder.children.push(nestedFile);
+	const getFilesCallsBeforeScope = getFilesCalls;
+	const readCountBeforeScope = readPaths.length;
+	const scoped = await repository.listMarkdown(scopedFolder.path);
+	assert.deepEqual(scoped.map((entry) => entry.path), [scopedFile.path, nestedFile.path]);
+	assert.equal(getFilesCalls, getFilesCallsBeforeScope);
+	assert.deepEqual(
+		readPaths.slice(readCountBeforeScope).sort(),
+		[scopedFile.path, nestedFile.path].sort()
+	);
+	assert.equal(readPaths.includes(outsideFile.path), false);
+	assert.deepEqual(await repository.listMarkdown('missing-folder'), []);
+	assert.equal(getFilesCalls, getFilesCallsBeforeScope);
 	assert.equal(
 		repository.generateMarkdownLink(
 			existing.path,
@@ -298,7 +345,7 @@ try {
 	assert.equal(records.get('03_external/recovered.md').content, '# Recovered');
 	await assert.rejects(() => repository.readText('../outside.md'), /Unsafe vault path/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 38 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 44 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

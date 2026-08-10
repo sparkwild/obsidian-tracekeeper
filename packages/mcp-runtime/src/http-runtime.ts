@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import * as crypto from 'node:crypto';
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from 'node:timers';
 import { URL } from 'node:url';
 import type { VaultRepository } from '@tracekeeper/core';
 import type { JsonRpcResponse } from './protocol';
@@ -738,9 +739,9 @@ export class StreamableHttpMcpRuntime {
 		if (Number.isFinite(declaredLength) && declaredLength > this.maxRequestBytes) {
 			throw new RequestBodyTooLargeError(this.maxRequestBytes);
 		}
-		let timeout: ReturnType<typeof setTimeout> | undefined;
+		let timeout: ReturnType<typeof setNodeTimeout> | undefined;
 		const timeoutPromise = new Promise<never>((_resolve, reject) => {
-			timeout = setTimeout(
+			timeout = setNodeTimeout(
 				() => reject(new RequestBodyTimeoutError(this.requestTimeoutMs)),
 				this.requestTimeoutMs
 			);
@@ -754,7 +755,7 @@ export class StreamableHttpMcpRuntime {
 			throw error;
 		} finally {
 			if (timeout) {
-				clearTimeout(timeout);
+				clearNodeTimeout(timeout);
 			}
 		}
 	}

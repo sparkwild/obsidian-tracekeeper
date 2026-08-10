@@ -130,6 +130,12 @@ MCP 写入范围被刻意限制：
 - 每个 Session 使用随机标识，每次 Session 请求都会重新校验其 integration/credential 绑定，并继续执行请求体大小、会话数量、流数量和空闲时间上限
 - MCP 不提供删除、重命名、批量重写和系统命令执行能力
 
+桌面插件会使用三类范围明确的本地能力：
+
+- 构建本地知识索引或由用户明确重建索引时，插件会枚举当前 vault 中的 Markdown 文件；审核与活动记录的限定范围读取只遍历 Tracekeeper 控制的目标目录，索引数据不会上传。
+- 插件会使用直接文件系统操作，以便在当前 vault 内实现可恢复的操作日志和符号链接边界检查、维护插件管理的本地 Skill 源，并写入用户选择的 vault 外 Skills 目录。外部 Skill 变更必须经过预览、确认、校验和备份，并支持恢复。
+- 插件只会在用户明确点击复制按钮后写入系统剪贴板，不会读取或监听剪贴板。复制手工 Bearer JSON 配置会把该凭据放入操作系统剪贴板；请只粘贴到目标客户端，如果剪贴板可能暴露，应替换该凭据。
+
 正常 Agent 配置由客户端官方 OAuth/MCP 入口拥有；Tracekeeper 不读取或写入跨平台客户端配置路径。Skill 安装必须由用户选择目录并确认预览；AI 辅助流程只提供本地源目录和提示词，外部目录验证通过后才算完成。Token、digest、授权码、PKCE verifier、pending handle、token response 和 Authorization Header 都不会进入连接 URL、复制命令、AI 指令、Runtime 日志或 Vault 审计记录。
 
 ## 项目文档

@@ -229,8 +229,7 @@ function buildProjectMemoryCatalog(snapshot, input) {
 class ProjectMemoryApplicationService {
     constructor(dependencies) {
         this.repository = dependencies.repository;
-        this.loadScan = dependencies.loadScan;
-        this.now = dependencies.now ?? (() => new Date().toISOString());
+        this.loadScan = () => dependencies.loadScan();
     }
     async snapshot() {
         return projectProjectMemorySnapshot(await this.loadScan());
