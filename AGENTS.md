@@ -57,7 +57,7 @@ Module READMEs explain local usage only. Cross-module policy belongs in `docs/`.
 - Keep the production MCP runtime loopback-only and token-protected by default.
 - Treat client configuration as an exceptional vault-outside write: preview it, require confirmation, preserve unrelated entries, and create a backup.
 - Keep generated records inside Tracekeeper-controlled folders and avoid overwriting existing notes.
-- Keep global durable memory review-gated by default. Project auto-save remains user-controlled, append-only, and linked to Wiki context.
+- Keep global durable memory review-gated by default. Global and Project Auto remain user-controlled, append-only MemoryRecord v2 writes; Wiki and Source relations are optional, while explicitly unresolved relation evidence remains review-gated.
 - MCP migration and lint operations remain non-destructive. Destructive cleanup requires an explicit human action in Obsidian.
 - Prefer Obsidian APIs and existing local UI primitives for plugin surfaces. Any UI dependency must justify bundle size, theme compatibility, accessibility, and maintenance cost.
 - Never hardcode a developer home, repository, vault, configuration path, token, or local port.

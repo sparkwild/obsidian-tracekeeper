@@ -45,6 +45,11 @@ export interface BuiltMemoryRecord {
     body: string;
     markdown: string;
 }
+export interface GlobalMemoryEntryPathInput {
+    agentType: string;
+    operationKind: string;
+    operationId: string;
+}
 export type MemoryRecordReadProjection = {
     kind: 'v2';
     record: MemoryRecord;
@@ -71,6 +76,7 @@ export declare class MemoryRecordValidationError extends Error {
     readonly code = "invalid_memory_record";
     constructor(message: string);
 }
+export declare function buildGlobalMemoryEntryPath(input: GlobalMemoryEntryPathInput): string;
 export declare function parseMemoryRecord(source: MemoryRecordSource): MemoryRecord;
 export declare function buildMemoryRecord(input: BuildMemoryRecordInput): BuiltMemoryRecord;
 export declare function renderMemoryRecordMarkdown(record: MemoryRecord, body: string): string;

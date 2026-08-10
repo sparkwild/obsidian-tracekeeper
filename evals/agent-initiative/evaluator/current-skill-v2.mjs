@@ -34,6 +34,11 @@ export function buildSkillV2Profile(sourceDocuments) {
 		recallOnlyRouteGuard: requires(text, /recall_only[\s\S]*never start[\s\S]*scope:\s*"global"[\s\S]*scope:\s*"project_history"/iu, 'recall_only route guard'),
 		trackedRecallRouting: requires(text, /tracked_task[\s\S]*start first[\s\S]*(?:next_actions|recommended_recall)/iu, 'tracked-task Recall routing'),
 		operationSpecificKeys: requires(text, /One idempotency key replays only the same logical operation/iu, 'operation-specific idempotency keys'),
+		explicitMemoryScope: requires(text, /MemoryRecord candidate declares\s*`memory_scope/iu, 'explicit MemoryRecord scope'),
+		wikiReviewOnly: requires(text, /Wiki changes always enter review/iu, 'review-only Wiki routing'),
+		scopeAuto: requires(text, /Global and Project Auto are fully supported/iu, 'Global and Project Auto support'),
+		optionalRelations: requires(text, /Wiki and Source relations are optional/iu, 'optional Wiki and Source relations'),
+		hubRepair: requires(text, /missing or invalid canonical Memory Hub[\s\S]*structure-repair/iu, 'Memory Hub repair recovery'),
 	};
 }
 
@@ -139,7 +144,7 @@ function trackedTrace(scenario, signals) {
 	}
 	const closeoutStatus = signals.permissionDenied || signals.idempotencyConflict
 		? 'requires_user_action'
-		: signals.proposalPending || signals.missingWikiBridge
+		: signals.proposalPending || signals.missingMemoryHub
 			? 'queued'
 			: 'recorded';
 	const codes = signals.permissionDenied
@@ -148,8 +153,8 @@ function trackedTrace(scenario, signals) {
 			? ['idempotency_conflict']
 			: signals.proposalPending
 				? ['proposal_not_applied']
-				: signals.missingWikiBridge
-					? ['missing_wiki_bridge']
+				: signals.missingMemoryHub
+					? ['missing_memory_hub', 'structure_repair_required']
 					: [];
 	const finishResult = closeoutStatus === 'requires_user_action'
 		? { status: closeoutStatus, error: signals.permissionDenied ? 'permission denied' : 'idempotency conflict' }

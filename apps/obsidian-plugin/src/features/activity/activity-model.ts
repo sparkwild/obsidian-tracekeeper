@@ -6,7 +6,7 @@ import type { TracekeeperStructureStatus } from '../structure/legacy-migration-c
 import type { AgentAuthMode, AgentIntegrationSnapshot } from '../settings/agent-integrations';
 import type { PendingOAuthRequest } from '@tracekeeper/mcp-runtime';
 
-export type PendingOAuthApproval = Pick<PendingOAuthRequest, 'requestId' | 'clientNameClaim' | 'redirectUri' | 'resource' | 'scope' | 'issuedAt' | 'expiresAt'>;
+export type PendingOAuthApproval = Pick<PendingOAuthRequest, 'requestId' | 'clientId' | 'clientNameClaim' | 'redirectUri' | 'resource' | 'scope' | 'issuedAt' | 'expiresAt'>;
 
 export const AGENT_TASKS_PATH = TRACEKEEPER_TASKS_DIR;
 
@@ -32,6 +32,17 @@ export const MAX_AGENT_CONNECTION_ROWS = 8;
 
 export const MAX_AGENT_TOOL_CALL_ROWS = 12;
 
+export type DurableOutputStatusAtFinish =
+	| ''
+	| 'none'
+	| 'pending_review'
+	| 'ready_to_apply'
+	| 'revision_requested'
+	| 'applied'
+	| 'rejected'
+	| 'unresolved'
+	| 'mixed';
+
 export interface AgentTaskRecord {
 	path: string;
 	type: string;
@@ -50,6 +61,19 @@ export interface AgentTaskRecord {
 	proposalIds: string[];
 	proposalPaths: string[];
 	proposals: string[];
+	durableOutputStatusAtFinish: DurableOutputStatusAtFinish;
+	durableOutputProposalCount: number;
+	durableOutputSourceCaptureCount: number;
+	durableOutputPendingReviewCount: number;
+	durableOutputReadyToApplyCount: number;
+	durableOutputRevisionRequestedCount: number;
+	durableOutputAppliedCount: number;
+	durableOutputRejectedCount: number;
+	durableOutputUnresolvedCount: number;
+	durableOutputProposalIdsAtFinish: string[];
+	durableOutputAppliedProposalIds: string[];
+	durableOutputProposalPaths: string[];
+	durableOutputTargetPaths: string[];
 	memoryCandidates: string[];
 	snippet: string;
 	sortTimestamp: number;

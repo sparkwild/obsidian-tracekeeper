@@ -210,6 +210,7 @@ function isProposeMemoryOperationPayload(payload) {
         && typeof payload.projectMemoryAgentType === 'string'
         && payload.projectMemoryAgentType.length > 0;
 }
+const CREATE_WIKI_NOTE_EFFECT = 'create_wiki_note';
 function truncateSummaryText(value, maxLength = 900) {
     const normalized = value.replace(/\s+/g, ' ').trim();
     if (normalized.length <= maxLength) {
@@ -517,30 +518,235 @@ function canonicalMemoryCloseoutStatus(payload) {
             return 'disabled';
     }
 }
+function nonNegativeInteger(value) {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+        ? value
+        : 0;
+}
+function normalizedStringList(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return [...new Set(value
+            .filter((entry) => typeof entry === 'string')
+            .map((entry) => entry.trim())
+            .filter(Boolean))];
+}
+function isDurableOutputStatus(value) {
+    return value === 'none'
+        || value === 'pending_review'
+        || value === 'ready_to_apply'
+        || value === 'revision_requested'
+        || value === 'applied'
+        || value === 'rejected'
+        || value === 'unresolved'
+        || value === 'mixed';
+}
+function legacyDurableOutputSummary(payload) {
+    const memoryStatus = canonicalMemoryCloseoutStatus(payload);
+    const proposals = Array.isArray(payload.proposals)
+        ? payload.proposals.filter(protocol_1.isRecord)
+        : [];
+    const autoApplied = Array.isArray(payload.auto_applied_memory_updates)
+        ? payload.auto_applied_memory_updates.filter(protocol_1.isRecord)
+        : [];
+    const proposalPaths = normalizedStringList(proposals.map((proposal) => proposal.path ?? proposal.proposal_path));
+    const targetPaths = normalizedStringList([
+        ...proposals.map((proposal) => proposal.target_note),
+        ...autoApplied.map((update) => update.path),
+    ]);
+    let proposalCount = nonNegativeInteger(payload.proposal_count);
+    let pendingReviewCount = 0;
+    let appliedCount = nonNegativeInteger(payload.auto_applied_count);
+    let unresolvedCount = 0;
+    if (memoryStatus === 'queued_for_review' || memoryStatus === 'requires_wiki_bridge') {
+        pendingReviewCount = Math.max(proposalCount, proposalPaths.length, 1);
+        proposalCount = Math.max(proposalCount, pendingReviewCount);
+    }
+    else if (memoryStatus === 'partially_auto_saved') {
+        pendingReviewCount = Math.max(proposalCount, proposalPaths.length, 1);
+        proposalCount = Math.max(proposalCount, pendingReviewCount);
+        appliedCount = Math.max(appliedCount, targetPaths.length > 0 ? 1 : 0, 1);
+    }
+    else if (memoryStatus === 'auto_saved') {
+        appliedCount = Math.max(appliedCount, targetPaths.length > 0 ? 1 : 0, 1);
+    }
+    else if (memoryStatus === 'conflict') {
+        unresolvedCount = Math.max(proposalCount, proposalPaths.length, 1);
+        proposalCount = Math.max(proposalCount, unresolvedCount);
+    }
+    const activeStates = [pendingReviewCount, appliedCount, unresolvedCount]
+        .filter((count) => count > 0)
+        .length;
+    const status = activeStates > 1
+        ? 'mixed'
+        : pendingReviewCount > 0
+            ? 'pending_review'
+            : appliedCount > 0
+                ? 'applied'
+                : unresolvedCount > 0
+                    ? 'unresolved'
+                    : 'none';
+    return {
+        status,
+        source_capture_count: 0,
+        proposal_count: proposalCount,
+        pending_review_count: pendingReviewCount,
+        ready_to_apply_count: 0,
+        revision_requested_count: 0,
+        applied_count: appliedCount,
+        rejected_count: 0,
+        unresolved_count: unresolvedCount,
+        proposal_paths: proposalPaths,
+        target_paths: targetPaths,
+    };
+}
+function durableOutputSummaryFromPayload(payload) {
+    if (!(0, protocol_1.isRecord)(payload.durable_output)) {
+        return legacyDurableOutputSummary(payload);
+    }
+    const raw = payload.durable_output;
+    const fallback = legacyDurableOutputSummary(payload);
+    return {
+        status: isDurableOutputStatus(raw.status) ? raw.status : fallback.status,
+        source_capture_count: nonNegativeInteger(raw.source_capture_count),
+        proposal_count: nonNegativeInteger(raw.proposal_count),
+        pending_review_count: nonNegativeInteger(raw.pending_review_count),
+        ready_to_apply_count: nonNegativeInteger(raw.ready_to_apply_count),
+        revision_requested_count: nonNegativeInteger(raw.revision_requested_count),
+        applied_count: nonNegativeInteger(raw.applied_count),
+        rejected_count: nonNegativeInteger(raw.rejected_count),
+        unresolved_count: nonNegativeInteger(raw.unresolved_count),
+        proposal_paths: normalizedStringList(raw.proposal_paths),
+        target_paths: normalizedStringList(raw.target_paths),
+    };
+}
+function compatibleMemoryCloseoutStatus(durableOutput, fallback) {
+    if (durableOutput.rejected_count > 0 || durableOutput.unresolved_count > 0) {
+        return 'conflict';
+    }
+    if (fallback === 'requires_wiki_bridge' && durableOutputNeedsReview(durableOutput)) {
+        return 'requires_wiki_bridge';
+    }
+    if (durableOutput.pending_review_count > 0
+        || durableOutput.ready_to_apply_count > 0
+        || durableOutput.revision_requested_count > 0) {
+        return durableOutput.applied_count > 0
+            ? 'partially_auto_saved'
+            : 'queued_for_review';
+    }
+    if (durableOutput.applied_count > 0) {
+        return 'auto_saved';
+    }
+    return fallback;
+}
+function durableOutputNeedsReview(durableOutput) {
+    return durableOutput.pending_review_count > 0
+        || durableOutput.ready_to_apply_count > 0
+        || durableOutput.revision_requested_count > 0;
+}
 function buildFinishTaskActions(payload) {
     const baseId = actionBaseId(payload, 'finish-task');
-    const memoryStatus = canonicalMemoryCloseoutStatus(payload);
-    if (memoryStatus === 'queued_for_review' ||
-        memoryStatus === 'partially_auto_saved' ||
-        memoryStatus === 'requires_wiki_bridge') {
+    const durableOutput = durableOutputSummaryFromPayload(payload);
+    const actions = [];
+    const hasMissingMemoryHub = Array.isArray(payload.memory_changes)
+        && payload.memory_changes.some((change) => (0, protocol_1.isRecord)(change) && change.reason === 'missing_memory_hub');
+    if (hasMissingMemoryHub) {
         return [{
-                action_id: `${baseId}:report-review`,
+                action_id: `${baseId}:structure_repair_required`,
                 kind: 'user_review',
                 priority: 100,
                 required: true,
                 timing: 'immediate',
-                reason_code: 'MEMORY_REVIEW_REQUIRED',
-                reason: 'Report that durable memory candidates await review in Obsidian; do not call finish_task again.',
+                reason_code: 'MEMORY_NOT_PERSISTED',
+                reason: 'Report that one or more MemoryRecords were not persisted because a canonical Hub needs Tracekeeper structure check/repair in Obsidian. Do not call finish_task again; after repair, handle the queued proposal or submit a new proposal according to the review contract.',
             }];
     }
+    if (durableOutputNeedsReview(durableOutput)) {
+        actions.push({
+            action_id: `${baseId}:report-review`,
+            kind: 'user_review',
+            priority: 100,
+            required: true,
+            timing: 'immediate',
+            reason_code: 'MEMORY_REVIEW_REQUIRED',
+            reason: `Report that durable Wiki/Memory output is ${durableOutput.status} and requires human review in Obsidian. Captured Source or Recall evidence does not prove that a Wiki/Memory target was applied; do not call finish_task again.`,
+        });
+    }
+    if (durableOutput.rejected_count > 0 || durableOutput.unresolved_count > 0) {
+        actions.push({
+            action_id: `${baseId}:report-not-persisted`,
+            kind: 'report_status',
+            priority: 100,
+            required: true,
+            timing: 'immediate',
+            reason_code: 'MEMORY_NOT_PERSISTED',
+            reason: `Report that durable Wiki/Memory output is ${durableOutput.status} and was not persisted. Captured Source or Recall evidence remains provenance only; do not call finish_task again.`,
+        });
+    }
+    if (actions.length > 0) {
+        return actions;
+    }
+    const reason = durableOutput.status === 'applied'
+        ? 'Report that the durable Wiki/Memory output was applied and do not call finish_task again.'
+        : durableOutput.source_capture_count > 0
+            ? 'Report that captured Source is readable provenance only and that no Wiki/Memory output was applied; do not call finish_task again.'
+            : 'Report that no durable Wiki/Memory output was linked at finish and do not call finish_task again.';
     return [{
             action_id: `${baseId}:report`,
             kind: 'report_status',
             priority: 100,
             required: true,
             timing: 'immediate',
-            reason_code: 'MEMORY_RECORDED',
-            reason: 'Report the returned memory closeout status and do not call finish_task again.',
+            reason_code: durableOutput.status === 'applied'
+                ? 'MEMORY_RECORDED'
+                : 'MEMORY_NOT_PERSISTED',
+            reason,
+        }];
+}
+function buildProposeMemoryActions(payload) {
+    const baseId = actionBaseId(payload, 'propose-memory');
+    if (payload.review_reason === 'missing_memory_hub') {
+        return [{
+                action_id: `${baseId}:structure_repair_required`,
+                kind: 'user_review',
+                priority: 100,
+                required: true,
+                timing: 'immediate',
+                reason_code: 'MEMORY_NOT_PERSISTED',
+                reason: 'The MemoryRecord was not persisted because its canonical Hub is missing or invalid. Ask the human to run Tracekeeper\'s explicit structure check/repair in Obsidian, then continue with the returned queued proposal under the human review/apply contract; submit a new candidate only if the result has no proposal_id or proposal_path.',
+            }];
+    }
+    if (payload.auto_applied === true) {
+        return [{
+                action_id: `${baseId}:report-recorded`,
+                kind: 'report_status',
+                priority: 100,
+                required: true,
+                timing: 'immediate',
+                reason_code: 'MEMORY_RECORDED',
+                reason: 'Report that the governed MemoryRecord was persisted at the returned path.',
+            }];
+    }
+    if (payload.memory_rule === 'disabled' || payload.persisted === false) {
+        return [{
+                action_id: `${baseId}:report-not-persisted`,
+                kind: 'report_status',
+                priority: 100,
+                required: true,
+                timing: 'immediate',
+                reason_code: 'MEMORY_NOT_PERSISTED',
+                reason: 'Report that the Memory candidate was ignored by the active scope policy and was not persisted or queued.',
+            }];
+    }
+    return [{
+            action_id: `${baseId}:report-review`,
+            kind: 'user_review',
+            priority: 100,
+            required: true,
+            timing: 'immediate',
+            reason_code: 'MEMORY_REVIEW_REQUIRED',
+            reason: 'Report that the Wiki or Memory proposal was queued and requires human review in Obsidian before it becomes persisted knowledge.',
         }];
 }
 function classifyToolError(message) {
@@ -663,8 +869,10 @@ function decorateToolResult(toolName, result, context) {
         decorated.next_actions = buildRecallActions(decorated, context, recallId, scope, matches);
     }
     if (toolName === 'tracekeeper.finish_task') {
-        const memoryStatus = canonicalMemoryCloseoutStatus(payload);
+        const durableOutput = durableOutputSummaryFromPayload(payload);
+        const memoryStatus = compatibleMemoryCloseoutStatus(durableOutput, canonicalMemoryCloseoutStatus(payload));
         decorated.memory_status = memoryStatus;
+        decorated.durable_output = durableOutput;
         decorated.workflow = {
             mode: 'tracked_task',
             state: 'finished',
@@ -676,13 +884,14 @@ function decorateToolResult(toolName, result, context) {
         };
         decorated.memory = {
             status: memoryStatus,
-            proposal_count: typeof payload.proposal_count === 'number' ? payload.proposal_count : 0,
+            proposal_count: durableOutput.proposal_count,
             auto_applied_count: typeof payload.auto_applied_count === 'number' ? payload.auto_applied_count : 0,
-            action_required: memoryStatus === 'queued_for_review' ||
-                memoryStatus === 'partially_auto_saved' ||
-                memoryStatus === 'requires_wiki_bridge',
+            action_required: durableOutputNeedsReview(durableOutput),
         };
         decorated.next_actions = buildFinishTaskActions(decorated);
+    }
+    if (toolName === 'tracekeeper.propose_memory') {
+        decorated.next_actions = buildProposeMemoryActions(decorated);
     }
     return toolResult(decorated);
 }
@@ -812,6 +1021,10 @@ async function knowledgeReadViewForContext(vaultRoot, context) {
         })();
     }
     return context.knowledgeReadViewPromise;
+}
+async function freshKnowledgeReadViewForContext(vaultRoot, context) {
+    const { knowledgeReadViewPromise: _cachedReadView, ...freshContext } = context;
+    return knowledgeReadViewForContext(vaultRoot, freshContext);
 }
 function projectMemoryRepository(vaultRoot, context) {
     if (context.vaultRepository) {
@@ -1004,7 +1217,7 @@ function buildArchitectureStatus(vaultRoot, context) {
 function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint, relatedWikiRaw, relatedSourcesRaw, context) {
     const options = pathSafetyOptions(context);
     const scan = scanVaultForContext(vaultRoot, context);
-    const pathSet = new Set(scan.notes.map((note) => note.relativePath.toLowerCase()));
+    const scannedPathByLowercase = new Map(scan.notes.map((note) => [note.relativePath.toLowerCase(), note.relativePath]));
     if (projectHint && !projectHint.trim()) {
         projectHint = '';
     }
@@ -1036,12 +1249,9 @@ function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint,
                 continue;
             }
             const lowerPath = notePath.toLowerCase();
-            if (pathSet.has(lowerPath)) {
-                return notePath;
-            }
-            const absolutePath = path.join(vaultRoot, notePath);
-            if (fs.existsSync(absolutePath)) {
-                return notePath;
+            const scannedPath = scannedPathByLowercase.get(lowerPath);
+            if (scannedPath && isValid(scannedPath)) {
+                return scannedPath;
             }
         }
         const title = rawReference.toLowerCase().replace(/\.md$/i, '');
@@ -1075,29 +1285,11 @@ function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint,
             missing_related_sources.push(reference);
         }
     }
-    if (memoryScope !== 'project') {
-        return {
-            missing_wiki_bridge: false,
-            related_wiki: dedupeAndNormalizeList(resolved),
-            missing_related_wiki: dedupeAndNormalizeList(missing_related_wiki),
-            related_sources: dedupeAndNormalizeList(resolvedSources),
-            missing_related_sources: dedupeAndNormalizeList(missing_related_sources),
-        };
-    }
-    const relatedWikiMissing = relatedWiki.length === 0 || missing_related_wiki.length > 0 || dedupeAndNormalizeList(resolved).length === 0;
-    if (relatedWikiMissing) {
-        return {
-            missing_wiki_bridge: true,
-            related_wiki: dedupeAndNormalizeList(resolved),
-            missing_related_wiki: dedupeAndNormalizeList(missing_related_wiki),
-            related_sources: dedupeAndNormalizeList(resolvedSources),
-            missing_related_sources: dedupeAndNormalizeList(missing_related_sources),
-        };
-    }
+    void memoryScope;
     return {
         missing_wiki_bridge: false,
         related_wiki: dedupeAndNormalizeList(resolved),
-        missing_related_wiki: [],
+        missing_related_wiki: dedupeAndNormalizeList(missing_related_wiki),
         related_sources: dedupeAndNormalizeList(resolvedSources),
         missing_related_sources: dedupeAndNormalizeList(missing_related_sources),
     };
@@ -1965,16 +2157,10 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
             continue;
         }
         if (proposalMode === 'auto_propose' && memoryRule === 'auto_write') {
-            const canAutoWrite = !(memoryScope === 'project' &&
-                bridgeMetadata.missing_wiki_bridge);
-            if (memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge) {
-                hasMissingWikiBridge = true;
-            }
             if (memoryScope === 'project' && bridgeMetadata.missing_related_sources.length > 0) {
                 hasMissingRelatedSources = true;
             }
-            if (canAutoWrite
-                && memoryScope === 'project'
+            if (memoryScope === 'project'
                 && projectMemoryReceipt !== null) {
                 if (projectMemoryReceipt?.outcome === 'immutable'
                     && !projectMemoryReceipt.memory_kinds.includes(group.kind)) {
@@ -1997,8 +2183,7 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
                     continue;
                 }
             }
-            if (canAutoWrite
-                && !(memoryScope === 'project' && projectMemoryReceipt !== null)) {
+            if (!(memoryScope === 'project' && projectMemoryReceipt !== null)) {
                 const autoTarget = resolveAutoMemoryTarget(vaultRoot, group.kind, '', projectHint, context, memoryScope);
                 if (autoTarget) {
                     const signature = buildFinishTaskProposalSignature(taskId, group.kind, group.values);
@@ -2090,6 +2275,18 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
             confidence_level: typeof predictedRecord.confidence_level === 'string' ? predictedRecord.confidence_level : null,
             effective_state: typeof resultRecord.predicted_state === 'string' ? resultRecord.predicted_state : null,
         };
+        if (resultRecord.memory_rule === 'disabled' && resultRecord.persisted === false) {
+            memoryChanges.push({
+                source,
+                change_kind: 'disabled',
+                candidate_index: index,
+                scope: candidate.scope,
+                reason: 'memory_rule_disabled',
+                previous_effective_state: null,
+                next_effective_state: null,
+            });
+            continue;
+        }
         const recordIdentity = (0, protocol_1.isRecord)(resultRecord.record_identity) ? resultRecord.record_identity : undefined;
         const transition = (0, protocol_1.isRecord)(resultRecord.proposal_transition_preview)
             ? resultRecord.proposal_transition_preview
@@ -2100,6 +2297,9 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
             change_kind: autoApplied ? 'record_written' : 'proposal_queued',
             candidate_index: index,
             scope: candidate.scope,
+            ...(typeof resultRecord.review_reason === 'string'
+                ? { reason: resultRecord.review_reason }
+                : {}),
             ...(typeof resultRecord.proposal_id === 'string' ? { proposal_id: resultRecord.proposal_id } : {}),
             ...(recordIdentity ? { record_identity: recordIdentity } : {}),
             previous_effective_state: null,
@@ -2491,12 +2691,120 @@ function extractMarkdownSection(body, allowedHeadings) {
     }
     return collected.join('\n').trim();
 }
-function buildWritebackPlan(proposal) {
+function readWritebackPlanEffectValue(frontmatter) {
+    const keys = ['writeback_effect', 'writebackEffect'];
+    const values = [];
+    for (const key of keys) {
+        const value = frontmatter[key];
+        if (value === undefined || value === null) {
+            continue;
+        }
+        if (typeof value !== 'string') {
+            throw new safety_1.ToolInputError(`writeback_effect must be a string: ${key}`);
+        }
+        const normalized = stripYamlQuotes(value.trim().toLowerCase());
+        if (normalized.length > 0) {
+            values.push(normalized);
+        }
+    }
+    const uniqueValues = [...new Set(values)];
+    if (!values.length) {
+        return null;
+    }
+    if (uniqueValues.length > 1) {
+        throw new safety_1.ToolInputError('Proposal writeback effect fields conflict.');
+    }
+    return uniqueValues[0] || null;
+}
+function normalizeWritebackPlanEffect(effectValue) {
+    const normalized = effectValue;
+    if (!normalized) {
+        return null;
+    }
+    switch (normalized) {
+        case 'append':
+            return 'append';
+        case 'create_memory_record':
+            return 'create_memory_record';
+        case 'create_wiki_note':
+            return CREATE_WIKI_NOTE_EFFECT;
+        default:
+            return null;
+    }
+}
+function isWritebackCreationConflict(error) {
+    if (error instanceof core_1.OperationConflictError) {
+        return true;
+    }
+    if (error instanceof Error) {
+        const errno = error;
+        if (errno.code === 'EEXIST' || errno.code === '409') {
+            return true;
+        }
+        const status = typeof error.statusCode === 'number'
+            ? error.statusCode
+            : typeof error.status === 'number'
+                ? error.status
+                : undefined;
+        if (status === 409 || status === 412) {
+            return true;
+        }
+        const name = error.name;
+        if (typeof name === 'string' && /conflict/i.test(name)) {
+            return true;
+        }
+    }
+    return false;
+}
+function resolveWritebackPlanEffect(proposal, targetState) {
+    const effectValue = readWritebackPlanEffectValue(proposal.frontmatter);
+    const declared = normalizeWritebackPlanEffect(effectValue);
+    if (declared === null && effectValue !== null) {
+        throw new safety_1.ToolInputError(`Unknown writeback_effect value: ${effectValue}`);
+    }
+    if (declared) {
+        return declared;
+    }
+    if (proposal.targetNote && (0, core_1.isKnowledgeWikiPath)(proposal.targetNote) && targetState === null) {
+        return 'create_wiki_note';
+    }
+    const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
+    if (claimKey && (!proposal.targetNote || !(0, core_1.isKnowledgeWikiPath)(proposal.targetNote))) {
+        return 'create_memory_record';
+    }
+    return 'append';
+}
+function buildWritebackPlanForTarget(proposal, targetState) {
+    let writebackEffect;
+    try {
+        writebackEffect = resolveWritebackPlanEffect(proposal, targetState);
+    }
+    catch (error) {
+        if (error instanceof safety_1.ToolInputError) {
+            return {
+                proposal,
+                targetNote: proposal.targetNote,
+                writebackContent: extractMarkdownSection(proposal.body, [
+                    'writeback',
+                    'approved writeback',
+                    'writeback content',
+                    '写回',
+                    '已批准写回',
+                    '写回内容',
+                ]),
+                ready: false,
+                reason: error.message,
+                effectKind: undefined,
+            };
+        }
+        throw error;
+    }
     const frontmatterWriteback = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['writeback_content', 'writebackContent']));
     const writebackContent = frontmatterWriteback ||
         extractMarkdownSection(proposal.body, ['writeback', 'approved writeback', 'writeback content', '写回', '已批准写回', '写回内容']);
-    const createsMemoryRecord = Boolean(stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key'])));
-    if (!proposal.targetNote && !createsMemoryRecord) {
+    const createsMemoryRecord = writebackEffect === 'create_memory_record';
+    const createsWikiNote = writebackEffect === 'create_wiki_note';
+    if (!proposal.targetNote && !createsMemoryRecord && !createsWikiNote) {
         return {
             proposal,
             targetNote: proposal.targetNote,
@@ -2523,12 +2831,22 @@ function buildWritebackPlan(proposal) {
             reason: 'approved proposal must include ## Writeback content',
         };
     }
+    if (createsWikiNote && targetState) {
+        return {
+            proposal,
+            targetNote: proposal.targetNote,
+            writebackContent,
+            ready: false,
+            reason: 'create_wiki_note target already exists',
+            effectKind: writebackEffect,
+        };
+    }
     return {
         proposal,
         targetNote: proposal.targetNote,
         writebackContent,
         ready: true,
-        effectKind: createsMemoryRecord ? 'create_memory_record' : 'append',
+        effectKind: writebackEffect,
     };
 }
 const WRITEBACK_CONFIRMATION_SCHEMA_VERSION = 1;
@@ -2636,6 +2954,11 @@ function proposalTransitionSnapshot(proposal) {
         throw new core_1.ProposalTransitionValidationError('Proposal is not a memory proposal.');
     }
     const frontmatterWriteback = proposalMultilineField(frontmatter, ['writeback_content', 'writebackContent'], 'Proposal writeback content');
+    const rawWritebackEffect = readWritebackPlanEffectValue(frontmatter);
+    const writebackEffect = normalizeWritebackPlanEffect(rawWritebackEffect);
+    if (rawWritebackEffect !== null && writebackEffect === null) {
+        throw new core_1.ProposalTransitionValidationError(`Unknown writeback_effect value: ${rawWritebackEffect}`);
+    }
     const bodyWriteback = extractMarkdownSection(parsed.body, ['writeback', 'approved writeback', 'writeback content', '写回', '已批准写回', '写回内容']);
     if (frontmatterWriteback
         && bodyWriteback
@@ -2653,6 +2976,7 @@ function proposalTransitionSnapshot(proposal) {
         status: proposalTransitionStatus(frontmatter),
         targetPath: proposalScalarField(frontmatter, ['target_note', 'targetNote', 'target_path', 'targetPath'], 'Proposal target'),
         writebackContent: frontmatterWriteback || bodyWriteback,
+        writebackEffect: writebackEffect || undefined,
         revisionComment: proposalMultilineField(frontmatter, ['revision_comment', 'revisionComment'], 'Revision comment'),
         revisionRequestedAt: proposalScalarField(frontmatter, ['revision_requested_at', 'revisionRequestedAt'], 'Revision request time'),
         revisionRequestedBy: proposalScalarField(frontmatter, ['revision_requested_by', 'revisionRequestedBy'], 'Revision requester'),
@@ -2760,6 +3084,7 @@ function isWritebackConfirmationBinding(value) {
         && typeof value.taskHadProposalPathEvidence === 'boolean';
     const hasPartialStableProposalReferenceFlags = value.taskHadProposalIdReference !== undefined
         || value.taskHadProposalPathEvidence !== undefined;
+    const hasAppliedProposalReferenceFlag = typeof value.taskHadAppliedProposalReference === 'boolean';
     return value.schemaVersion === WRITEBACK_CONFIRMATION_SCHEMA_VERSION
         && stringKeys.every((key) => typeof value[key] === 'string')
         && typeof value.previewNonce === 'string'
@@ -2784,6 +3109,9 @@ function isWritebackConfirmationBinding(value) {
         && typeof value.taskHadTargetReference === 'boolean'
         && typeof value.taskHadProposalReference === 'boolean'
         && (!hasPartialStableProposalReferenceFlags || hasStableProposalReferenceFlags)
+        && (value.taskHadAppliedProposalReference === undefined
+            || hasAppliedProposalReferenceFlag)
+        && (!hasAppliedProposalReferenceFlag || hasStableProposalReferenceFlags)
         && ((value.taskId === null
             && value.taskPath === null
             && value.taskContentHash === ''
@@ -2791,7 +3119,8 @@ function isWritebackConfirmationBinding(value) {
             && value.taskHadTargetReference === false
             && value.taskHadProposalReference === false
             && value.taskHadProposalIdReference !== true
-            && value.taskHadProposalPathEvidence !== true)
+            && value.taskHadProposalPathEvidence !== true
+            && value.taskHadAppliedProposalReference !== true)
             || (typeof value.taskId === 'string'
                 && value.taskId.length > 0
                 && typeof value.taskPath === 'string'
@@ -2810,7 +3139,8 @@ function isWritebackConfirmationBinding(value) {
         && Number.isSafeInteger(value.expiresAt)
         && (value.effectKind === undefined
             || value.effectKind === 'append'
-            || value.effectKind === 'create_memory_record');
+            || value.effectKind === 'create_memory_record'
+            || value.effectKind === 'create_wiki_note');
 }
 function createWritebackConfirmationToken(binding, context) {
     const payload = Buffer.from(JSON.stringify(binding), 'utf8').toString('base64url');
@@ -2891,6 +3221,13 @@ function buildApprovedWritebackBlock(proposalId, writebackContent) {
         marker,
     };
 }
+function buildApprovedWikiNoteWritebackBlock(proposalId, writebackContent, operationId) {
+    const marker = `^writeback-${proposalId.replace(/[^A-Za-z0-9._-]/g, '-')}`;
+    return {
+        block: `${writebackContent.trim()}\n\n<!-- writeback operation: ${operationId} -->\n${marker}`,
+        marker,
+    };
+}
 function writebackTargetFrame(writebackBlock) {
     return `\n\n${writebackBlock}\n`;
 }
@@ -2916,7 +3253,7 @@ function resolveWritebackTaskId(rawArgs, proposal) {
     }
     return explicit || proposal.taskId || null;
 }
-function validateApprovedWritebackTransition(snapshot, operationId, targetPath, targetExists, context, now) {
+function validateApprovedWritebackTransition(snapshot, operationId, targetPath, context, now, targetExists, targetCreationAllowed) {
     const approval = snapshot.lastTransition;
     if (!approval
         || approval.kind !== 'status'
@@ -2933,19 +3270,15 @@ function validateApprovedWritebackTransition(snapshot, operationId, targetPath, 
         now,
         actor: context.agentId || 'tracekeeper-runtime',
         targetAllowed: core_1.isAllowedProposalTargetPath,
-        targetExists: (relativePath) => targetExists && relativePath === targetPath,
+        targetExists: (relativePath) => relativePath === targetPath && targetExists(relativePath),
+        targetCreationAllowed: (relativePath) => relativePath === targetPath && targetCreationAllowed(relativePath),
     });
 }
 async function resolveApprovedMemoryRecordTargetPath(vaultRoot, proposal, context) {
-    if (proposal.targetNote) {
-        const explicit = (0, safety_1.normalizeNotePath)(proposal.targetNote, pathSafetyOptions(context));
-        if (explicit.startsWith(`${core_1.KNOWLEDGE_GLOBAL_MEMORY_DIR}/`)
-            || explicit.startsWith(`${core_1.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)) {
-            return explicit;
-        }
-        throw new safety_1.ToolInputError('Governed memory record target must stay inside a memory root.');
+    const scope = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['memory_scope'])).toLowerCase();
+    if (!scope) {
+        throw new safety_1.ToolInputError('Approved memory proposal requires an explicit memory_scope.');
     }
-    const scope = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['memory_scope'])).toLowerCase() || 'global';
     const agentType = (0, core_1.normalizeProjectAgentType)(context.observedClientType ?? context.clientName ?? 'custom');
     const safeProposalId = proposal.proposalId
         .replace(/[^A-Za-z0-9._-]+/g, '-')
@@ -2956,6 +3289,13 @@ async function resolveApprovedMemoryRecordTargetPath(vaultRoot, proposal, contex
         throw new safety_1.ToolInputError('Approved memory proposal id cannot form a record path.');
     }
     if (scope === 'global') {
+        if (proposal.targetNote) {
+            const explicit = (0, safety_1.normalizeNotePath)(proposal.targetNote, pathSafetyOptions(context));
+            if (!isCanonicalMemoryAgentTarget(explicit, `${core_1.KNOWLEDGE_GLOBAL_MEMORY_DIR}/agents/`)) {
+                throw new safety_1.ToolInputError('Approved Global MemoryRecord target must use the canonical Global agent namespace.');
+            }
+            return explicit;
+        }
         return `${core_1.KNOWLEDGE_GLOBAL_MEMORY_DIR}/agents/${agentType}/approved-${safeProposalId}.md`;
     }
     if (scope !== 'project') {
@@ -2965,16 +3305,52 @@ async function resolveApprovedMemoryRecordTargetPath(vaultRoot, proposal, contex
     if (!projectId) {
         throw new safety_1.ToolInputError('Approved project memory proposal requires project_id.');
     }
-    const view = await knowledgeReadViewForContext(vaultRoot, context);
-    const hub = [...view.catalog.values()].find((entry) => entry.frontmatter.type === 'project_memory_index'
-        && entry.frontmatter.project_id === projectId);
-    if (!hub) {
+    const snapshot = await projectMemoryApplication(vaultRoot, context).snapshot();
+    const route = (0, project_memory_1.resolveProjectMemoryWritableRoute)(snapshot, { projectId });
+    if (route.status !== 'existing') {
         throw new safety_1.ToolInputError('Approved project memory proposal has no exact project Hub.');
     }
-    return `${path.posix.dirname(hub.path)}/agents/${agentType}/approved-${safeProposalId}.md`;
+    const projectAgentsRoot = `${path.posix.dirname(route.binding.project_hub)}/agents/`;
+    if (proposal.targetNote) {
+        const explicit = (0, safety_1.normalizeNotePath)(proposal.targetNote, pathSafetyOptions(context));
+        if (!isCanonicalMemoryAgentTarget(explicit, projectAgentsRoot)) {
+            throw new safety_1.ToolInputError('Approved Project MemoryRecord target must use the exact project Hub agent namespace.');
+        }
+        return explicit;
+    }
+    return `${projectAgentsRoot}${agentType}/approved-${safeProposalId}.md`;
+}
+function isCanonicalMemoryAgentTarget(targetPath, agentsRoot) {
+    if (!targetPath.startsWith(agentsRoot))
+        return false;
+    const segments = targetPath.slice(agentsRoot.length).split('/');
+    if (segments.length !== 2)
+        return false;
+    const [agentType, filename] = segments;
+    return Boolean(agentType)
+        && agentType === (0, core_1.normalizeProjectAgentType)(agentType)
+        && /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(filename);
+}
+function memoryAgentTypeFromTarget(targetPath) {
+    const segments = targetPath.split('/');
+    const agentsIndex = segments.lastIndexOf('agents');
+    const agentType = agentsIndex >= 0 ? segments[agentsIndex + 1] : '';
+    if (!agentType || agentType !== (0, core_1.normalizeProjectAgentType)(agentType)) {
+        throw new safety_1.ToolInputError('Approved MemoryRecord target has an invalid Agent namespace.');
+    }
+    return agentType;
+}
+function memoryRecordReferencePath(reference) {
+    if (!reference)
+        return null;
+    const candidate = normalizeWikilinkOrSourceValue(reference).replace(/#.*$/, '');
+    return candidate.toLowerCase().endsWith('.md') ? candidate : `${candidate}.md`;
 }
 function buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, targetPath, operationId, context) {
-    const scopeValue = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['memory_scope'])).toLowerCase() || 'global';
+    const scopeValue = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['memory_scope'])).toLowerCase();
+    if (!scopeValue) {
+        throw new safety_1.ToolInputError('Approved memory proposal requires an explicit memory_scope.');
+    }
     if (scopeValue !== 'global' && scopeValue !== 'project') {
         throw new safety_1.ToolInputError('Approved memory proposal scope is invalid.');
     }
@@ -2988,24 +3364,21 @@ function buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, targetPath, oper
     }
     const relatedWiki = readFrontmatterStringList(proposal.frontmatter, 'related_wiki');
     const relatedSources = readFrontmatterStringList(proposal.frontmatter, 'related_sources');
-    const proposedEvidence = Array.isArray(proposal.frontmatter.evidence)
-        ? proposal.frontmatter.evidence.filter((value) => typeof value === 'string')
-        : [];
-    const evidence = [...new Set([...proposedEvidence, ...relatedSources, ...relatedWiki])];
+    const evidence = [...new Set([...relatedSources, ...relatedWiki])];
     const proposedAuthority = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['proposed_authority'])).toLowerCase();
-    const authority = proposedAuthority === 'user'
-        ? 'user'
-        : proposedAuthority === 'source' && evidence.length > 0
-            ? 'source'
-            : 'agent';
     const proposedConfidence = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['proposed_confidence'])).toLowerCase();
-    const confidence = proposedConfidence === 'verified' && evidence.length > 0
-        ? 'verified'
-        : proposedConfidence === 'supported' && evidence.length > 0
-            ? 'supported'
-            : proposedConfidence === 'uncertain'
-                ? 'uncertain'
-                : evidence.length > 0 ? 'inferred' : 'uncertain';
+    const governance = (0, core_1.deriveMemoryGovernance)({
+        proposed_authority: proposedAuthority === 'user' || proposedAuthority === 'source'
+            ? proposedAuthority
+            : 'agent',
+        proposed_confidence: (proposedConfidence === 'verified'
+            || proposedConfidence === 'supported'
+            || proposedConfidence === 'inferred'
+            || proposedConfidence === 'uncertain') ? proposedConfidence : 'uncertain',
+        evidence_count: evidence.length,
+        human_approved: proposedAuthority === 'user',
+        source_backed: relatedSources.length > 0,
+    });
     const declaredValue = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['declared_state'])).toLowerCase();
     const declaredState = ['active', 'disputed', 'retracted', 'review'].includes(declaredValue)
         ? declaredValue
@@ -3032,12 +3405,12 @@ function buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, targetPath, oper
         memory_id: memoryId,
         scope,
         project_id: scope === 'project' ? projectId : null,
-        agent_type: (0, core_1.normalizeProjectAgentType)(context.observedClientType ?? context.clientName ?? 'custom'),
+        agent_type: memoryAgentTypeFromTarget(targetPath),
         operation_id: operationId,
         memory_kind: proposal.proposalKind.replace(/[^a-z0-9_-]+/gi, '_').toLowerCase().slice(0, 64),
         claim_key: claimKey,
-        authority,
-        confidence_level: confidence,
+        authority: governance.authority,
+        confidence_level: governance.confidence_level,
         declared_state: declaredState,
         observed_at: readFrontmatterString(proposal.frontmatter, ['observed_at']) || new Date().toISOString(),
         valid_from: readFrontmatterString(proposal.frontmatter, ['valid_from']) || null,
@@ -3066,7 +3439,18 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
         : plan.targetNote, pathSafetyOptions(context));
     assertAllowedWritebackTarget(targetPath);
     const target = await readCurrentVaultTextState(vaultRoot, targetPath, context);
-    if (!target && plan.effectKind !== 'create_memory_record') {
+    if (!target && !plan.effectKind) {
+        throw new safety_1.ToolInputError('Writeback effect is missing from proposal plan.');
+    }
+    if (plan.effectKind === CREATE_WIKI_NOTE_EFFECT) {
+        if (target) {
+            throw new safety_1.ToolInputError('Create wiki note writeback requires a missing target.');
+        }
+        if (!(0, core_1.isKnowledgeWikiPath)(targetPath)) {
+            throw new safety_1.ToolInputError(`Create wiki note writeback requires a wiki target: ${targetPath}`);
+        }
+    }
+    else if (!target && plan.effectKind !== 'create_memory_record') {
         throw new safety_1.ToolInputError(`Writeback target does not exist: ${targetPath}`);
     }
     const taskPath = taskId ? buildTaskNotePath(taskId) : null;
@@ -3088,25 +3472,45 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
     const taskHadProposalPathEvidence = task
         ? readFrontmatterStringList(taskFrontmatter, 'proposal_paths').includes(proposal.path)
         : false;
+    const taskHadAppliedProposalReference = task
+        ? readFrontmatterStringList(taskFrontmatter, 'durable_output_applied_proposal_ids').includes(proposal.proposalId)
+        : false;
     const taskHadProposalReference = taskHadProposalIdReference;
     const taskLinkedContent = task && (!taskHadTargetReference
         || !taskHadProposalIdReference
-        || !taskHadProposalPathEvidence)
+        || !taskHadProposalPathEvidence
+        || !taskHadAppliedProposalReference)
         ? updateFrontmatterFields(task.content, {
             memory_writes: mergeFrontmatterList(taskFrontmatter, 'memory_writes', [targetPath]),
             proposal_ids: mergeFrontmatterList(taskFrontmatter, 'proposal_ids', [proposal.proposalId]),
             proposal_paths: mergeFrontmatterList(taskFrontmatter, 'proposal_paths', [proposal.path]),
+            durable_output_applied_proposal_ids: mergeFrontmatterList(taskFrontmatter, 'durable_output_applied_proposal_ids', [proposal.proposalId]),
         })
         : task?.content || '';
     const proposalRevision = (0, core_1.computeProposalRevision)(snapshot);
     const identity = buildApprovedWritebackOperationIdentity(proposal, proposalRevision, previewNonce);
-    validateApprovedWritebackTransition(snapshot, identity.operationId, targetPath, plan.effectKind === 'create_memory_record' || Boolean(target), context, new Date(issuedAt).toISOString());
+    const createsMemoryRecord = plan.effectKind === 'create_memory_record';
+    const createsWikiNote = plan.effectKind === CREATE_WIKI_NOTE_EFFECT;
+    const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
+    validateApprovedWritebackTransition(snapshot, identity.operationId, targetPath, context, new Date(issuedAt).toISOString(), (relativePath) => {
+        if (relativePath !== targetPath) {
+            return false;
+        }
+        if (plan.effectKind === 'create_memory_record'
+            || plan.effectKind === CREATE_WIKI_NOTE_EFFECT) {
+            return false;
+        }
+        return Boolean(target);
+    }, (relativePath) => relativePath === targetPath
+        && (createsWikiNote || (createsMemoryRecord && Boolean(claimKey))));
     const writeback = plan.effectKind === 'create_memory_record'
         ? {
             block: buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, targetPath, identity.operationId, context),
             marker: `memory-record:${snapshot.proposalId}`,
         }
-        : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
+        : plan.effectKind === CREATE_WIKI_NOTE_EFFECT
+            ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, identity.operationId)
+            : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
     const touchedNotes = [
         targetPath,
         proposal.path,
@@ -3136,6 +3540,7 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
             taskHadProposalReference,
             taskHadProposalIdReference,
             taskHadProposalPathEvidence,
+            taskHadAppliedProposalReference,
             writebackContentHash: hashText(snapshot.writebackContent),
             writebackBlockHash: hashText(writeback.block),
             writebackMarker: writeback.marker,
@@ -3173,6 +3578,11 @@ function writebackBindingPayload(binding, confirmationToken) {
             ? {
                 taskHadProposalIdReference: binding.taskHadProposalIdReference,
                 taskHadProposalPathEvidence: binding.taskHadProposalPathEvidence,
+                ...(typeof binding.taskHadAppliedProposalReference === 'boolean'
+                    ? {
+                        taskHadAppliedProposalReference: binding.taskHadAppliedProposalReference,
+                    }
+                    : {}),
             }
             : {}),
         writebackContentHash: binding.writebackContentHash,
@@ -3218,6 +3628,7 @@ function isApplyApprovedWritebackPayload(value) {
         && typeof value.taskHadProposalPathEvidence === 'boolean';
     const hasPartialStableProposalReferenceFlags = value.taskHadProposalIdReference !== undefined
         || value.taskHadProposalPathEvidence !== undefined;
+    const hasAppliedProposalReferenceFlag = typeof value.taskHadAppliedProposalReference === 'boolean';
     return value.schemaVersion === WRITEBACK_CONFIRMATION_SCHEMA_VERSION
         && requiredStrings.every((key) => typeof value[key] === 'string')
         && requiredStrings.every((key) => value[key].length <= 2048)
@@ -3242,6 +3653,9 @@ function isApplyApprovedWritebackPayload(value) {
         && typeof value.taskHadTargetReference === 'boolean'
         && typeof value.taskHadProposalReference === 'boolean'
         && (!hasPartialStableProposalReferenceFlags || hasStableProposalReferenceFlags)
+        && (value.taskHadAppliedProposalReference === undefined
+            || hasAppliedProposalReferenceFlag)
+        && (!hasAppliedProposalReferenceFlag || hasStableProposalReferenceFlags)
         && ((value.taskId === null
             && value.taskPath === null
             && value.taskContentHash === ''
@@ -3249,7 +3663,8 @@ function isApplyApprovedWritebackPayload(value) {
             && value.taskHadTargetReference === false
             && value.taskHadProposalReference === false
             && value.taskHadProposalIdReference !== true
-            && value.taskHadProposalPathEvidence !== true)
+            && value.taskHadProposalPathEvidence !== true
+            && value.taskHadAppliedProposalReference !== true)
             || (typeof value.taskId === 'string'
                 && value.taskId.length > 0
                 && typeof value.taskPath === 'string'
@@ -3263,7 +3678,8 @@ function isApplyApprovedWritebackPayload(value) {
         && new Set(value.touchedNotes).size === value.touchedNotes.length
         && (value.effectKind === undefined
             || value.effectKind === 'append'
-            || value.effectKind === 'create_memory_record');
+            || value.effectKind === 'create_memory_record'
+            || value.effectKind === 'create_wiki_note');
 }
 function formatFrontmatterUpdateValue(value) {
     if (Array.isArray(value)) {
@@ -3960,20 +4376,12 @@ async function appendAutoMemoryWriteAsync(vaultRoot, input) {
         duplicate: false,
     };
 }
-async function writeImmutableProjectMemory(vaultRoot, input) {
-    const project = await projectMemoryApplication(vaultRoot, input.context).ensureWritableProject({
-        projectId: input.projectId,
-        projectHint: input.projectHint,
-        repoPath: input.repoPath,
-    });
-    if (project.status === 'review_required') {
-        return project;
-    }
-    if (input.proposedAuthority === 'user' || input.proposedConfidence === 'verified') {
+async function writeImmutableMemoryRecord(vaultRoot, input) {
+    if (input.proposedAuthority === 'user') {
         return {
             status: 'review_required',
-            reason: 'authority_or_verification_requires_human_review',
-            warnings: ['Agent-originated memory cannot self-assign user authority or verified confidence.'],
+            reason: 'user_authority_requires_human_review',
+            warnings: ['Agent-originated memory cannot self-assign user authority.'],
         };
     }
     if (input.declaredState && input.declaredState !== 'active') {
@@ -3981,6 +4389,13 @@ async function writeImmutableProjectMemory(vaultRoot, input) {
             status: 'review_required',
             reason: 'lifecycle_transition_requires_human_review',
             warnings: ['Dispute, retraction, and review-state transitions require human review.'],
+        };
+    }
+    if ((input.supersedes?.length ?? 0) > 0 || (input.contradicts?.length ?? 0) > 0) {
+        return {
+            status: 'review_required',
+            reason: 'lifecycle_transition_requires_human_review',
+            warnings: ['Supersession and contradiction transitions require human review.'],
         };
     }
     const agentType = (0, core_1.normalizeProjectAgentType)(input.agentType);
@@ -3994,125 +4409,257 @@ async function writeImmutableProjectMemory(vaultRoot, input) {
         .update(`${input.operationId}\0${claimKey}\0${memoryKind}`, 'utf8')
         .digest('hex')
         .slice(0, 32)}`;
-    const evidence = [...new Set([
-            ...(input.evidence ?? []),
-            ...input.relatedSources,
-            ...input.relatedWiki,
-        ])];
-    const authority = input.proposedAuthority === 'source' && evidence.length > 0 ? 'source' : 'agent';
-    const confidenceLevel = input.proposedConfidence === 'supported' && evidence.length > 0
-        ? 'supported'
-        : input.proposedConfidence === 'uncertain'
-            ? 'uncertain'
-            : evidence.length > 0 ? 'inferred' : 'uncertain';
-    const currentView = await knowledgeReadViewForContext(vaultRoot, input.context);
-    const currentClaimRecords = currentView.memory.lifecycle.current.filter((row) => row.record.scope === 'project'
-        && row.record.project_id === project.binding.project_id
-        && row.record.claim_key === claimKey
-        && row.record.memory_id !== memoryId);
-    const declaredRelations = new Set([...(input.supersedes ?? []), ...(input.contradicts ?? [])]);
-    if (currentClaimRecords.length > 0
-        && currentClaimRecords.some((row) => !declaredRelations.has(row.record.memory_id))) {
-        return {
-            status: 'review_required',
-            reason: 'unresolved_claim_conflict',
-            warnings: ['An accepted current record already exists for this claim; declare a reviewed lifecycle relation.'],
-        };
-    }
-    const entryPath = (0, core_1.buildProjectMemoryEntryPath)({
-        projectKey: project.binding.project_key,
-        agentType,
-        operationKind: input.operationKind,
-        operationId: input.operationId,
+    const evidence = [...new Set([...input.relatedSources, ...input.relatedWiki])];
+    const hasVerifiedSourceEvidence = input.relatedSources.length > 0;
+    const governance = (0, core_1.deriveMemoryGovernance)({
+        proposed_authority: input.proposedAuthority,
+        proposed_confidence: input.proposedConfidence,
+        evidence_count: new Set([...input.relatedSources, ...input.relatedWiki]).size,
+        source_backed: hasVerifiedSourceEvidence,
     });
+    if (governance.authority === 'user' || governance.confidence_level === 'verified') {
+        throw new Error('Automatic MemoryRecord governance returned a human-only elevation.');
+    }
+    const authority = governance.authority;
+    const confidenceLevel = governance.confidence_level;
     const repository = projectMemoryRepository(vaultRoot, input.context);
-    const memoryLink = (target) => repository.generateMarkdownLink
-        ? repository.generateMarkdownLink(target, entryPath)
-        : `[[${target.replace(/\.md$/i, '')}]]`;
-    const relationLines = [
-        `- Project hub: ${memoryLink(project.binding.project_hub)}`,
-        ...input.relatedWiki.map((target) => `- Wiki: ${memoryLink(target)}`),
-        ...input.relatedSources.map((target) => `- Source: ${memoryLink(target)}`),
-    ];
-    const built = (0, core_1.buildMemoryRecord)({
-        path: entryPath,
-        memory_id: memoryId,
-        scope: 'project',
-        project_id: project.binding.project_id,
-        agent_type: agentType,
-        operation_id: input.operationId,
-        memory_kind: memoryKind,
-        claim_key: claimKey,
-        authority,
-        confidence_level: confidenceLevel,
-        declared_state: 'active',
-        observed_at: input.observedAt ?? input.createdAt,
-        valid_from: input.validFrom ?? null,
-        valid_to: input.validTo ?? null,
-        last_verified_at: input.lastVerifiedAt ?? null,
-        evidence,
-        supersedes: input.supersedes ?? [],
-        contradicts: input.contradicts ?? [],
-        project_hub: project.binding.project_hub,
-        global_hub: null,
-        related_wiki: input.relatedWiki,
-        related_sources: input.relatedSources,
-        body: ['# Project memory record', '', '## Relations', '', ...relationLines, '', '## Memory', '', input.body].join('\n'),
-    });
-    let status = 'created';
+    let canonicalProjectId = null;
+    if (input.scope === 'project') {
+        const preLockSnapshot = await projectMemoryApplication(vaultRoot, input.context).snapshot();
+        const preLockRoute = (0, project_memory_1.resolveProjectMemoryWritableRoute)(preLockSnapshot, {
+            projectId: input.projectId,
+            projectHint: input.projectHint,
+            repoPath: input.repoPath,
+        });
+        if (preLockRoute.status === 'review_required')
+            return preLockRoute;
+        canonicalProjectId = preLockRoute.binding.project_id;
+    }
+    const claimLockKey = memoryClaimLockKey(input.scope, canonicalProjectId, claimKey);
+    const release = await operationJournalForVault(vaultRoot).acquireLock(claimLockKey);
     try {
-        await repository.createText(entryPath, built.markdown);
-    }
-    catch (error) {
-        if (!(error instanceof core_1.OperationConflictError))
-            throw error;
-        const existing = await repository.readText(entryPath);
-        if (existing?.content !== built.markdown)
-            throw error;
-        status = 'exact_retry';
-    }
-    const duplicate = status === 'exact_retry';
-    const operationHash = `sha256:${crypto.createHash('sha256').update(built.markdown, 'utf8').digest('hex')}`;
-    const audit = await (0, audit_persistence_1.appendAuditEventAsync)(vaultRoot, {
-        tool: input.toolName,
-        targetPath: entryPath,
-        status: duplicate ? 'skipped' : 'written',
-        operationId: input.operationId,
-        taskId: input.taskId,
-        metadata: {
-            action: duplicate
-                ? 'project_memory.immutable_write.exact_retry'
-                : 'project_memory.immutable_write.created',
-            project_id: project.binding.project_id,
-            project_hub: project.binding.project_hub,
+        let projectId = null;
+        let projectHub = null;
+        let globalHub = null;
+        let projectKey = '';
+        if (input.scope === 'global') {
+            const hub = await readCanonicalMemoryHub(repository, core_1.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH);
+            if (!hub) {
+                return missingMemoryHubReview(core_1.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH);
+            }
+            globalHub = core_1.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH;
+        }
+        else {
+            const snapshot = await projectMemoryApplication(vaultRoot, input.context).snapshot();
+            const route = (0, project_memory_1.resolveProjectMemoryWritableRoute)(snapshot, {
+                projectId: input.projectId,
+                projectHint: input.projectHint,
+                repoPath: input.repoPath,
+            });
+            if (route.status === 'review_required')
+                return route;
+            if (route.status === 'materialize') {
+                return missingMemoryHubReview(route.binding.project_hub);
+            }
+            if (route.binding.project_id !== canonicalProjectId) {
+                return {
+                    status: 'review_required',
+                    reason: 'conflicting_project_identity',
+                    warnings: ['Project identity changed while acquiring the MemoryRecord claim lock.'],
+                };
+            }
+            projectId = route.binding.project_id;
+            projectHub = route.binding.project_hub;
+            projectKey = route.binding.project_key;
+        }
+        const entryPath = input.scope === 'global'
+            ? (0, core_1.buildGlobalMemoryEntryPath)({
+                agentType,
+                operationKind: input.operationKind,
+                operationId: input.operationId,
+            })
+            : (0, core_1.buildProjectMemoryEntryPath)({
+                projectKey,
+                agentType,
+                operationKind: input.operationKind,
+                operationId: input.operationId,
+            });
+        const currentView = await freshKnowledgeReadViewForContext(vaultRoot, input.context);
+        const relevantInvalidRecord = currentView.memory.invalidPaths.some((invalidPath) => {
+            if (invalidPath === entryPath)
+                return true;
+            const frontmatter = currentView.catalog.get(invalidPath)?.frontmatter;
+            if (!frontmatter)
+                return false;
+            return frontmatter.type === 'memory_record'
+                && frontmatter.scope === input.scope
+                && (frontmatter.project_id ?? null) === projectId
+                && frontmatter.claim_key === claimKey;
+        });
+        if (relevantInvalidRecord) {
+            return {
+                status: 'review_required',
+                reason: 'memory_snapshot_incomplete',
+                warnings: ['MemoryRecord lifecycle data is invalid or incomplete; repair the structure before automatic writeback.'],
+            };
+        }
+        const sameClaim = (row) => row.record.scope === input.scope
+            && row.record.project_id === projectId
+            && row.record.claim_key === claimKey
+            && row.record.memory_id !== memoryId;
+        if (currentView.memory.lifecycle.current.some(sameClaim)
+            || currentView.memory.lifecycle.conflicts.some(sameClaim)) {
+            return {
+                status: 'review_required',
+                reason: 'unresolved_claim_conflict',
+                warnings: ['A current or conflicted MemoryRecord already exists for this claim; a reviewed lifecycle transition is required.'],
+            };
+        }
+        const memoryLink = (target) => repository.generateMarkdownLink
+            ? repository.generateMarkdownLink(target, entryPath)
+            : `[[${target.replace(/\.md$/i, '')}]]`;
+        const relationLines = [
+            ...(projectHub ? [`- Project hub: ${memoryLink(projectHub)}`] : []),
+            ...(globalHub ? [`- Global hub: ${memoryLink(globalHub)}`] : []),
+            ...input.relatedWiki.map((target) => `- Wiki: ${memoryLink(target)}`),
+            ...input.relatedSources.map((target) => `- Source: ${memoryLink(target)}`),
+        ];
+        const built = (0, core_1.buildMemoryRecord)({
+            path: entryPath,
+            memory_id: memoryId,
+            scope: input.scope,
+            project_id: projectId,
             agent_type: agentType,
+            operation_id: input.operationId,
+            memory_kind: memoryKind,
+            claim_key: claimKey,
+            authority,
+            confidence_level: confidenceLevel,
+            declared_state: 'active',
+            observed_at: input.observedAt ?? input.createdAt,
+            valid_from: input.validFrom ?? null,
+            valid_to: input.validTo ?? null,
+            last_verified_at: input.lastVerifiedAt ?? null,
+            evidence,
+            supersedes: [],
+            contradicts: [],
+            project_hub: projectHub,
+            global_hub: globalHub,
+            related_wiki: input.relatedWiki,
+            related_sources: input.relatedSources,
+            body: [
+                `# ${input.scope === 'global' ? 'Global' : 'Project'} memory record`,
+                '',
+                '## Relations',
+                '',
+                ...relationLines,
+                '',
+                '## Memory',
+                '',
+                input.body,
+            ].join('\n'),
+        });
+        let status = 'created';
+        try {
+            await repository.createText(entryPath, built.markdown);
+        }
+        catch (error) {
+            if (!(error instanceof core_1.OperationConflictError))
+                throw error;
+            const existing = await repository.readText(entryPath);
+            if (existing?.content !== built.markdown)
+                throw error;
+            status = 'exact_retry';
+        }
+        const duplicate = status === 'exact_retry';
+        const operationHash = `sha256:${crypto.createHash('sha256').update(built.markdown, 'utf8').digest('hex')}`;
+        const audit = await (0, audit_persistence_1.appendAuditEventAsync)(vaultRoot, {
+            tool: input.toolName,
+            targetPath: entryPath,
+            status: duplicate ? 'skipped' : 'written',
+            operationId: input.operationId,
+            taskId: input.taskId,
+            metadata: {
+                action: duplicate
+                    ? 'memory_record.immutable_write.exact_retry'
+                    : 'memory_record.immutable_write.created',
+                memory_scope: input.scope,
+                project_id: projectId,
+                project_hub: projectHub,
+                global_hub: globalHub,
+                agent_type: agentType,
+                operation_kind: input.operationKind,
+                memory_kinds: input.memoryKinds,
+                memory_id: memoryId,
+                claim_key: claimKey,
+                operation_hash: operationHash,
+                hub_status: 'existing',
+            },
+        }, input.context);
+        return {
+            status,
+            path: entryPath,
+            project_id: projectId,
+            project_hub: projectHub,
+            global_hub: globalHub,
+            agent_type: agentType,
+            operation_id: input.operationId,
             operation_kind: input.operationKind,
             memory_kinds: input.memoryKinds,
+            operation_hash: operationHash,
+            hub_status: 'existing',
             memory_id: memoryId,
             claim_key: claimKey,
-            operation_hash: operationHash,
-            hub_status: project.hub_status,
-        },
-    }, input.context);
+            authority,
+            confidence_level: confidenceLevel,
+            effective_state: 'current',
+            activity_path: audit.path,
+            write_status: duplicate ? 'skipped' : 'written',
+            duplicate,
+        };
+    }
+    finally {
+        await release();
+    }
+}
+function missingMemoryHubReview(hubPath) {
     return {
-        status,
-        path: entryPath,
-        project_id: project.binding.project_id,
-        project_hub: project.binding.project_hub,
-        agent_type: agentType,
-        operation_id: input.operationId,
-        operation_kind: input.operationKind,
-        memory_kinds: input.memoryKinds,
-        operation_hash: operationHash,
-        hub_status: project.hub_status,
-        memory_id: memoryId,
-        claim_key: claimKey,
-        authority,
-        confidence_level: confidenceLevel,
-        effective_state: 'current',
-        activity_path: audit.path,
-        write_status: duplicate ? 'skipped' : 'written',
-        duplicate,
+        status: 'review_required',
+        reason: 'missing_memory_hub',
+        warnings: [
+            `structure_repair_required: canonical Memory Hub is missing or invalid at ${hubPath}.`,
+        ],
+    };
+}
+async function readCanonicalMemoryHub(repository, hubPath) {
+    try {
+        return await repository.readText(hubPath);
+    }
+    catch (error) {
+        if (error instanceof core_1.VaultPathError
+            && error.message.startsWith('Vault path is not a file:')) {
+            return null;
+        }
+        throw error;
+    }
+}
+function memoryClaimLockKey(scope, projectId, claimKey) {
+    return `memory-claim-v2:${scope}:${crypto.createHash('sha256')
+        .update(`${projectId ?? ''}\0${claimKey}`, 'utf8')
+        .digest('hex')}`;
+}
+async function writeImmutableProjectMemory(vaultRoot, input) {
+    const result = await writeImmutableMemoryRecord(vaultRoot, { ...input, scope: 'project' });
+    if (result.status === 'review_required')
+        return result;
+    if (!result.project_id || !result.project_hub || result.global_hub !== null) {
+        throw new Error('Project MemoryRecord writer returned an invalid scope binding.');
+    }
+    return {
+        ...result,
+        project_id: result.project_id,
+        project_hub: result.project_hub,
+        global_hub: null,
     };
 }
 async function findOperationOwnedNoteAsync(vaultRoot, allowedDir, filename, operationField, operationId, context) {
@@ -4139,6 +4686,9 @@ function emptyAgentTaskMetadata() {
         confidence: 'uncertain',
         warnings: [],
         client: '',
+        proposalIds: [],
+        proposalPaths: [],
+        sourceCaptures: [],
     };
 }
 function agentTaskMetadataFromFrontmatter(frontmatter) {
@@ -4163,6 +4713,9 @@ function agentTaskMetadataFromFrontmatter(frontmatter) {
             : 'derived',
         warnings: readFrontmatterStringList(frontmatter, 'project_identity_warnings'),
         client: readFrontmatterString(frontmatter, ['client']),
+        proposalIds: readFrontmatterStringList(frontmatter, 'proposal_ids'),
+        proposalPaths: readFrontmatterStringList(frontmatter, 'proposal_paths'),
+        sourceCaptures: readFrontmatterStringList(frontmatter, 'source_captures'),
     };
 }
 function projectIdentityValueMatches(field, left, right) {
@@ -4266,6 +4819,123 @@ function mergeFrontmatterList(frontmatter, key, values) {
         }
     }
     return Array.from(merged).join(', ');
+}
+function durableProposalStatusFromApproval(status) {
+    switch (status.trim().toLowerCase().replace(/[\s-]+/g, '_')) {
+        case 'pending':
+        case 'pending_review':
+            return 'pending_review';
+        case 'approved':
+        case 'ready_to_apply':
+            return 'ready_to_apply';
+        case 'revision_requested':
+            return 'revision_requested';
+        case 'applied':
+            return 'applied';
+        case 'rejected':
+            return 'rejected';
+        default:
+            return 'unresolved';
+    }
+}
+function normalizedTaskSourceCaptures(values, context) {
+    const captures = new Set();
+    for (const value of values) {
+        try {
+            const normalized = (0, safety_1.normalizeNotePath)(value, pathSafetyOptions(context));
+            if ((0, core_1.isKnowledgeSourcePath)(normalized)) {
+                captures.add(normalized);
+            }
+        }
+        catch {
+        }
+    }
+    return [...captures];
+}
+function unresolvedDurableProposalSnapshot(proposalId, proposalPath) {
+    return {
+        proposalId,
+        path: proposalPath,
+        proposalKind: '',
+        targetPath: '',
+        status: 'unresolved',
+        exact: false,
+    };
+}
+async function snapshotExactTaskProposal(vaultRoot, taskId, proposalId, rawPath, context) {
+    let proposalPath = '';
+    try {
+        const normalized = (0, safety_1.normalizeNotePath)(rawPath, pathSafetyOptions(context));
+        if (normalized.startsWith(`${REVIEW_QUEUE_PREFIX}/`)) {
+            proposalPath = normalized;
+        }
+    }
+    catch {
+    }
+    if (!proposalId || !proposalPath) {
+        return unresolvedDurableProposalSnapshot(proposalId, proposalPath);
+    }
+    try {
+        const text = await readVaultNoteContent(vaultRoot, proposalPath, context);
+        if (text === null) {
+            return unresolvedDurableProposalSnapshot(proposalId, proposalPath);
+        }
+        const document = memoryProposalDocumentFromText(vaultRoot, proposalPath, text, context);
+        const explicitProposalId = stripYamlQuotes(readFrontmatterString(document.frontmatter, ['proposal_id', 'proposalId']));
+        if (!explicitProposalId
+            || explicitProposalId !== proposalId
+            || document.taskId !== taskId) {
+            return unresolvedDurableProposalSnapshot(proposalId, proposalPath);
+        }
+        const rawTargetPath = document.targetNote.trim();
+        let targetPath = '';
+        if (rawTargetPath && (0, core_1.isAllowedProposalTargetPath)(rawTargetPath)) {
+            try {
+                targetPath = (0, safety_1.normalizeNotePath)(rawTargetPath, pathSafetyOptions(context));
+            }
+            catch {
+                targetPath = '';
+            }
+        }
+        const approvalStatus = stripYamlQuotes(readFrontmatterString(document.frontmatter, ['approval_status', 'approvalStatus', 'status']));
+        const durableStatus = approvalStatus
+            ? durableProposalStatusFromApproval(approvalStatus)
+            : 'unresolved';
+        return {
+            proposalId,
+            path: proposalPath,
+            proposalKind: document.proposalKind,
+            targetPath,
+            status: targetPath
+                ? durableStatus
+                : !rawTargetPath && durableStatus === 'pending_review'
+                    ? 'pending_review'
+                    : 'unresolved',
+            exact: true,
+        };
+    }
+    catch {
+        return unresolvedDurableProposalSnapshot(proposalId, proposalPath);
+    }
+}
+async function snapshotTaskDurableOutput(vaultRoot, taskId, metadata, context) {
+    const proposals = [];
+    const seenPairs = new Set();
+    const pairCount = Math.max(metadata.proposalIds.length, metadata.proposalPaths.length);
+    for (let index = 0; index < pairCount; index += 1) {
+        const proposalId = metadata.proposalIds[index]?.trim() || '';
+        const rawPath = metadata.proposalPaths[index]?.trim() || '';
+        const pairKey = `${proposalId}\0${rawPath}`;
+        if (seenPairs.has(pairKey)) {
+            continue;
+        }
+        seenPairs.add(pairKey);
+        proposals.push(await snapshotExactTaskProposal(vaultRoot, taskId, proposalId, rawPath, context));
+    }
+    return {
+        sourceCapturePaths: normalizedTaskSourceCaptures(metadata.sourceCaptures, context),
+        proposals,
+    };
 }
 function proposalReferenceMarker(proposalId) {
     const safeId = proposalId
@@ -4408,7 +5078,8 @@ async function linkApprovedWritebackTask(vaultRoot, payload, context) {
             || payload.taskHadTargetReference
             || payload.taskHadProposalReference
             || payload.taskHadProposalIdReference === true
-            || payload.taskHadProposalPathEvidence === true) {
+            || payload.taskHadProposalPathEvidence === true
+            || payload.taskHadAppliedProposalReference === true) {
             throw new core_1.OperationConflictError('Writeback task binding is invalid.');
         }
         return {
@@ -4428,9 +5099,11 @@ async function linkApprovedWritebackTask(vaultRoot, payload, context) {
     const frontmatter = (0, core_1.parseMarkdown)(current.content).frontmatter.fields;
     const usesStableProposalReferences = typeof payload.taskHadProposalIdReference === 'boolean'
         && typeof payload.taskHadProposalPathEvidence === 'boolean';
+    const usesAppliedProposalEvidence = typeof payload.taskHadAppliedProposalReference === 'boolean';
     const memoryWrites = new Set(readFrontmatterStringList(frontmatter, 'memory_writes'));
     const proposalIds = new Set(readFrontmatterStringList(frontmatter, 'proposal_ids'));
     const proposalPaths = new Set(readFrontmatterStringList(frontmatter, 'proposal_paths'));
+    const appliedProposalIds = new Set(readFrontmatterStringList(frontmatter, 'durable_output_applied_proposal_ids'));
     const legacyProposals = new Set(readFrontmatterStringList(frontmatter, 'proposals'));
     const hasProposalReference = usesStableProposalReferences
         ? proposalIds.has(payload.proposalId)
@@ -4438,11 +5111,15 @@ async function linkApprovedWritebackTask(vaultRoot, payload, context) {
     const hasProposalPathEvidence = usesStableProposalReferences
         ? proposalPaths.has(payload.proposalPath)
         : true;
+    const hasAppliedProposalReference = usesAppliedProposalEvidence
+        ? appliedProposalIds.has(payload.proposalId)
+        : true;
     const targetReferenceAdded = !payload.taskHadTargetReference;
     const proposalReferenceAdded = !payload.taskHadProposalReference;
     if (memoryWrites.has(payload.targetPath)
         && hasProposalReference
-        && hasProposalPathEvidence) {
+        && hasProposalPathEvidence
+        && hasAppliedProposalReference) {
         if (current.contentHash !== payload.taskLinkedContentHash) {
             throw new core_1.OperationConflictError('Writeback task changed after its durable update.');
         }
@@ -4458,7 +5135,9 @@ async function linkApprovedWritebackTask(vaultRoot, payload, context) {
     if (memoryWrites.has(payload.targetPath) !== payload.taskHadTargetReference
         || hasProposalReference !== payload.taskHadProposalReference
         || (usesStableProposalReferences
-            && hasProposalPathEvidence !== payload.taskHadProposalPathEvidence)) {
+            && hasProposalPathEvidence !== payload.taskHadProposalPathEvidence)
+        || (usesAppliedProposalEvidence
+            && hasAppliedProposalReference !== payload.taskHadAppliedProposalReference)) {
         throw new core_1.OperationConflictError('Writeback task references changed after preview.');
     }
     const next = updateFrontmatterFields(current.content, usesStableProposalReferences
@@ -4466,6 +5145,11 @@ async function linkApprovedWritebackTask(vaultRoot, payload, context) {
             memory_writes: mergeFrontmatterList(frontmatter, 'memory_writes', [payload.targetPath]),
             proposal_ids: mergeFrontmatterList(frontmatter, 'proposal_ids', [payload.proposalId]),
             proposal_paths: mergeFrontmatterList(frontmatter, 'proposal_paths', [payload.proposalPath]),
+            ...(usesAppliedProposalEvidence
+                ? {
+                    durable_output_applied_proposal_ids: mergeFrontmatterList(frontmatter, 'durable_output_applied_proposal_ids', [payload.proposalId]),
+                }
+                : {}),
         }
         : {
             memory_writes: mergeFrontmatterList(frontmatter, 'memory_writes', [payload.targetPath]),
@@ -4504,9 +5188,12 @@ async function rollbackApprovedWritebackTask(vaultRoot, payload, receipt, contex
         && typeof payload.taskHadProposalPathEvidence === 'boolean';
     const proposalPathEvidenceAdded = usesStableProposalReferences
         && payload.taskHadProposalPathEvidence === false;
+    const appliedProposalEvidenceAdded = typeof payload.taskHadAppliedProposalReference === 'boolean'
+        && payload.taskHadAppliedProposalReference === false;
     if (!receipt.targetReferenceAdded
         && !receipt.proposalReferenceAdded
-        && !proposalPathEvidenceAdded) {
+        && !proposalPathEvidenceAdded
+        && !appliedProposalEvidenceAdded) {
         return;
     }
     const current = await readCurrentVaultTextState(vaultRoot, receipt.taskPath, context);
@@ -4523,6 +5210,7 @@ async function rollbackApprovedWritebackTask(vaultRoot, payload, receipt, contex
     const memoryWrites = readFrontmatterStringList(frontmatter, 'memory_writes');
     const proposalIds = readFrontmatterStringList(frontmatter, 'proposal_ids');
     const proposalPaths = readFrontmatterStringList(frontmatter, 'proposal_paths');
+    const appliedProposalIds = readFrontmatterStringList(frontmatter, 'durable_output_applied_proposal_ids');
     const legacyProposals = readFrontmatterStringList(frontmatter, 'proposals');
     const nextMemoryWrites = receipt.targetReferenceAdded
         ? memoryWrites.filter((value) => value !== payload.targetPath)
@@ -4533,12 +5221,16 @@ async function rollbackApprovedWritebackTask(vaultRoot, payload, receipt, contex
     const nextProposalPaths = proposalPathEvidenceAdded
         ? proposalPaths.filter((value) => value !== payload.proposalPath)
         : proposalPaths;
+    const nextAppliedProposalIds = appliedProposalEvidenceAdded
+        ? appliedProposalIds.filter((value) => value !== payload.proposalId)
+        : appliedProposalIds;
     const nextLegacyProposals = !usesStableProposalReferences && receipt.proposalReferenceAdded
         ? legacyProposals.filter((value) => value !== payload.proposalPath)
         : legacyProposals;
     if (nextMemoryWrites.length === memoryWrites.length
         && nextProposalIds.length === proposalIds.length
         && nextProposalPaths.length === proposalPaths.length
+        && nextAppliedProposalIds.length === appliedProposalIds.length
         && nextLegacyProposals.length === legacyProposals.length) {
         return;
     }
@@ -4547,6 +5239,13 @@ async function rollbackApprovedWritebackTask(vaultRoot, payload, receipt, contex
             memory_writes: nextMemoryWrites.length > 0 ? nextMemoryWrites.join(', ') : null,
             proposal_ids: nextProposalIds.length > 0 ? nextProposalIds.join(', ') : null,
             proposal_paths: nextProposalPaths.length > 0 ? nextProposalPaths.join(', ') : null,
+            ...(typeof payload.taskHadAppliedProposalReference === 'boolean'
+                ? {
+                    durable_output_applied_proposal_ids: nextAppliedProposalIds.length > 0
+                        ? nextAppliedProposalIds.join(', ')
+                        : null,
+                }
+                : {}),
         }
         : {
             memory_writes: nextMemoryWrites.length > 0 ? nextMemoryWrites.join(', ') : null,
@@ -4918,17 +5617,15 @@ function toolDefinitions(capabilities) {
             !capabilities.includes(contract.capability)) {
             continue;
         }
+        const { required: inputRequired, ...inputSchemaKeywords } = contract.inputSchema;
         definitions.push({
             name: contract.name,
             title: contract.name,
             description: contract.description || '',
             inputSchema: {
-                type: 'object',
+                ...inputSchemaKeywords,
                 properties: { ...contract.inputSchema.properties },
-                ...(contract.inputSchema.required ? { required: [...contract.inputSchema.required] } : {}),
-                ...(contract.inputSchema.additionalProperties !== undefined
-                    ? { additionalProperties: contract.inputSchema.additionalProperties }
-                    : {}),
+                ...(inputRequired ? { required: [...inputRequired] } : {}),
             },
             outputSchema: contract.outputSchema,
             annotations: {
@@ -5110,6 +5807,9 @@ async function recoverPendingOperations(vaultRoot, context = {}) {
     const controller = new recovery_1.RuntimeRecoveryController(operationJournalForVault(vaultRoot), {
         isApplyApprovedWritebackPayload,
         isProposeMemoryOperationPayload,
+        isFinishTaskV2Payload: (payload) => isFinishTaskOperationPayload(payload)
+            && payload.memoryRecordWriteVersion === 2,
+        releaseIncompatibleFinishTaskBinding: (record) => releaseIncompatibleFinishTaskBinding(vaultRoot, record, context),
         invoke: async (request, record, requestedVaultRoot) => {
             const result = await callTool(request.tool, request.args, {
                 ...context,
@@ -5815,7 +6515,7 @@ async function handleListApprovedWritebacks(rawArgs, context) {
             continue;
         }
         const proposal = memoryProposalDocumentFromText(vaultRoot, note.path, content, context);
-        candidates.push(buildWritebackPlan(proposal));
+        candidates.push(await resolveApplyWritebackPlan(vaultRoot, proposal, context));
     }
     const entries = candidates
         .sort((a, b) => a.proposal.path.localeCompare(b.proposal.path))
@@ -5905,6 +6605,107 @@ function assertMatchingWritebackBinding(expected, current) {
         throw new core_1.OperationConflictError('Writeback confirmation is stale because the approved proposal, target, task, or touched-note plan changed.');
     }
 }
+async function resolveApprovedMemoryClaimIdentity(vaultRoot, payload, context) {
+    const proposal = await resolveMemoryProposalFromArgs(vaultRoot, { proposal_path: payload.proposalPath, task_id: payload.taskId }, context);
+    const explicitScope = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['memory_scope'])).toLowerCase();
+    const explicitClaimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
+    if (payload.effectKind !== 'create_memory_record'
+        && (!explicitScope || !explicitClaimKey)) {
+        return null;
+    }
+    if (!explicitScope) {
+        throw new core_1.OperationConflictError('Approved MemoryRecord is missing memory_scope.');
+    }
+    const scopeValue = explicitScope;
+    if (scopeValue !== 'global' && scopeValue !== 'project') {
+        throw new core_1.OperationConflictError('Approved MemoryRecord has an invalid memory_scope.');
+    }
+    const claimKey = explicitClaimKey;
+    if (!claimKey) {
+        throw new core_1.OperationConflictError('Approved MemoryRecord is missing claim_key.');
+    }
+    if (scopeValue === 'global') {
+        return { scope: 'global', projectId: null, claimKey, projectHub: null };
+    }
+    const requestedProjectId = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['project_id']));
+    if (!requestedProjectId) {
+        throw new core_1.OperationConflictError('Approved project MemoryRecord is missing project_id.');
+    }
+    const snapshot = await projectMemoryApplication(vaultRoot, context).snapshot();
+    const route = (0, project_memory_1.resolveProjectMemoryWritableRoute)(snapshot, { projectId: requestedProjectId });
+    if (route.status !== 'existing') {
+        throw new core_1.OperationConflictError(`missing_memory_hub: structure_repair_required for approved project MemoryRecord (${requestedProjectId}).`);
+    }
+    return {
+        scope: 'project',
+        projectId: route.binding.project_id,
+        claimKey,
+        projectHub: route.binding.project_hub,
+    };
+}
+async function validateApprovedMemoryHub(vaultRoot, identity, context) {
+    const repository = projectMemoryRepository(vaultRoot, context);
+    if (identity.scope === 'global') {
+        if (!await readCanonicalMemoryHub(repository, core_1.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH)) {
+            throw new core_1.OperationConflictError('missing_memory_hub: structure_repair_required for approved global MemoryRecord.');
+        }
+        return;
+    }
+    const snapshot = await projectMemoryApplication(vaultRoot, context).snapshot();
+    const route = (0, project_memory_1.resolveProjectMemoryWritableRoute)(snapshot, { projectId: identity.projectId });
+    if (route.status !== 'existing'
+        || route.binding.project_id !== identity.projectId
+        || route.binding.project_hub !== identity.projectHub) {
+        throw new core_1.OperationConflictError('missing_memory_hub: structure_repair_required for approved project MemoryRecord.');
+    }
+}
+async function validateApprovedMemoryLifecycle(vaultRoot, identity, targetPath, markdown, context) {
+    const parsed = (0, core_1.parseMarkdown)(markdown);
+    const proposed = (0, core_1.parseMemoryRecord)({
+        path: targetPath,
+        frontmatter: parsed.frontmatter.fields,
+        body: parsed.body,
+    });
+    if (proposed.scope !== identity.scope
+        || proposed.project_id !== identity.projectId
+        || proposed.claim_key !== identity.claimKey
+        || memoryRecordReferencePath(proposed.project_hub) !== identity.projectHub
+        || memoryRecordReferencePath(proposed.global_hub) !== (identity.scope === 'global' ? core_1.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH : null)) {
+        throw new core_1.OperationConflictError('Approved MemoryRecord identity changed outside its claim lock.');
+    }
+    const view = await freshKnowledgeReadViewForContext(vaultRoot, context);
+    const invalidRelations = [
+        ...proposed.related_wiki.map(memoryRecordReferencePath).filter((relationPath) => !relationPath || !(0, core_1.isKnowledgeWikiPath)(relationPath) || !view.catalog.has(relationPath)),
+        ...proposed.related_sources.map(memoryRecordReferencePath).filter((relationPath) => !relationPath || !(0, core_1.isKnowledgeSourcePath)(relationPath) || !view.catalog.has(relationPath)),
+    ];
+    if (invalidRelations.length > 0) {
+        throw new core_1.OperationConflictError(`Approved MemoryRecord relation evidence is stale or invalid: ${invalidRelations.join(', ')}.`);
+    }
+    const relevantInvalidRecord = view.memory.invalidPaths.some((invalidPath) => {
+        if (invalidPath === targetPath)
+            return true;
+        const frontmatter = view.catalog.get(invalidPath)?.frontmatter;
+        return Boolean(frontmatter)
+            && frontmatter?.type === 'memory_record'
+            && frontmatter?.scope === identity.scope
+            && (frontmatter?.project_id ?? null) === identity.projectId
+            && frontmatter?.claim_key === identity.claimKey;
+    });
+    if (relevantInvalidRecord) {
+        throw new core_1.OperationConflictError('Approved MemoryRecord lifecycle cannot be validated because the relevant claim is invalid.');
+    }
+    const records = [...view.memory.byId.values()]
+        .filter((record) => record.memory_id !== proposed.memory_id);
+    const lifecycle = (0, core_1.resolveMemoryLifecycle)({
+        generation: view.generation,
+        records: [...records, proposed],
+        now: new Date().toISOString(),
+    });
+    const proposedIssues = lifecycle.issues.filter((issue) => issue.memory_ids.includes(proposed.memory_id) || issue.reference === proposed.memory_id);
+    if (proposedIssues.length > 0) {
+        throw new core_1.OperationConflictError(`Approved MemoryRecord prospective lifecycle is invalid: ${proposedIssues.map((issue) => issue.code).join(', ')}.`);
+    }
+}
 async function currentWritebackEffect(vaultRoot, payload, operationId, context) {
     const proposal = await resolveMemoryProposalFromArgs(vaultRoot, {
         proposal_path: payload.proposalPath,
@@ -5912,12 +6713,16 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
     }, context);
     const snapshot = proposalTransitionSnapshot(proposal);
     const createsMemoryRecord = payload.effectKind === 'create_memory_record';
+    const createsWikiNote = payload.effectKind === CREATE_WIKI_NOTE_EFFECT;
+    const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
     const writeback = createsMemoryRecord
         ? {
             block: buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, payload.targetPath, operationId, context),
             marker: `memory-record:${snapshot.proposalId}`,
         }
-        : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
+        : createsWikiNote
+            ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, operationId)
+            : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
     const currentTaskPath = payload.taskId ? buildTaskNotePath(payload.taskId) : null;
     const currentTask = currentTaskPath
         ? await readCurrentVaultTextState(vaultRoot, currentTaskPath, context)
@@ -5937,10 +6742,20 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
         || writeback.marker !== payload.writebackMarker
         || currentTaskPath !== payload.taskPath
         || (currentTask?.contentHash || '') !== payload.taskContentHash
-        || (!createsMemoryRecord && !target)) {
+        || (!createsMemoryRecord && !createsWikiNote && !target)) {
         throw new core_1.OperationConflictError('Writeback confirmation is stale because current proposal or task state changed.');
     }
-    validateApprovedWritebackTransition(snapshot, operationId, payload.targetPath, createsMemoryRecord || Boolean(target), context, new Date(writebackConfirmationNow(context)).toISOString());
+    validateApprovedWritebackTransition(snapshot, operationId, payload.targetPath, context, new Date(writebackConfirmationNow(context)).toISOString(), (relativePath) => {
+        if (relativePath !== payload.targetPath) {
+            return false;
+        }
+        if (payload.effectKind === 'create_memory_record'
+            || payload.effectKind === CREATE_WIKI_NOTE_EFFECT) {
+            return false;
+        }
+        return Boolean(target);
+    }, (relativePath) => relativePath === payload.targetPath
+        && (createsWikiNote || (createsMemoryRecord && Boolean(claimKey))));
     const touchedNotes = [
         payload.targetPath,
         payload.proposalPath,
@@ -5950,17 +6765,17 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
     if ((0, core_1.computePayloadHash)(touchedNotes) !== (0, core_1.computePayloadHash)(payload.touchedNotes)) {
         throw new core_1.OperationConflictError('Writeback confirmation touched-note plan changed.');
     }
-    if (createsMemoryRecord) {
+    if (createsMemoryRecord || createsWikiNote) {
         if (!target) {
             return { target: null, writebackBlock: writeback.block, alreadyApplied: false };
         }
         if (target.contentHash === hashText(writeback.block)) {
             return { target, writebackBlock: writeback.block, alreadyApplied: true };
         }
-        throw new core_1.OperationConflictError('Approved memory record path already exists with different content.');
+        throw new core_1.OperationConflictError('Approved writeback target already exists with different content.');
     }
     if (!target) {
-        throw new core_1.OperationConflictError('Writeback target is unavailable.');
+        throw new core_1.OperationConflictError(`Writeback target does not exist: ${payload.targetPath}`);
     }
     if (reversibleWritebackTargetPrefix(target.content, payload) !== null) {
         return {
@@ -5983,6 +6798,7 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
     };
 }
 async function rollbackRuntimeWritebackTarget(vaultRoot, payload, context) {
+    const createsWikiNote = payload.effectKind === CREATE_WIKI_NOTE_EFFECT;
     if (payload.effectKind === 'create_memory_record') {
         const repository = projectMemoryRepository(vaultRoot, context);
         const target = await repository.readText(payload.targetPath);
@@ -5993,6 +6809,37 @@ async function rollbackRuntimeWritebackTarget(vaultRoot, payload, context) {
             throw new core_1.OperationConflictError('Approved memory record changed after creation and cannot be safely compensated.');
         }
         await repository.deleteText(payload.targetPath, target.version);
+        return;
+    }
+    if (createsWikiNote) {
+        const repository = context.vaultRepository;
+        const target = repository
+            ? await repository.readText(payload.targetPath)
+            : await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
+        if (!target) {
+            return;
+        }
+        if (hashText(target.content) !== payload.writebackBlockHash) {
+            throw new core_1.OperationConflictError('Approved wiki note was changed after creation and cannot be safely compensated.');
+        }
+        if (repository) {
+            if (!target.version) {
+                throw new core_1.OperationConflictError('Approved wiki note version is unavailable for compensation.');
+            }
+            await repository.deleteText(payload.targetPath, target.version);
+            return;
+        }
+        const targetAbsolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, payload.targetPath, pathSafetyOptions(context));
+        (0, safety_1.assertNoSymlinkSegments)(vaultRoot, targetAbsolute);
+        try {
+            fs.unlinkSync(targetAbsolute);
+        }
+        catch (error) {
+            if (error instanceof Error && error.code === 'ENOENT') {
+                return;
+            }
+            throw error;
+        }
         return;
     }
     const target = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
@@ -6020,6 +6867,20 @@ async function commitRuntimeProposalApplyTransition(vaultRoot, payload, operatio
         operationId,
         action: { kind: 'apply' },
     };
+    const createsMemoryRecord = payload.effectKind === 'create_memory_record';
+    const createsWikiNote = payload.effectKind === CREATE_WIKI_NOTE_EFFECT;
+    const isCreate = createsMemoryRecord || createsWikiNote;
+    const targetForTransition = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
+    if (isCreate) {
+        if (!targetForTransition) {
+            throw new core_1.ProposalTransitionValidationError('Writeback target was not created for approved writeback.');
+        }
+        if (targetForTransition.contentHash !== payload.writebackBlockHash) {
+            throw new core_1.ProposalTransitionValidationError('Writeback target changed after create draft was prepared.');
+        }
+    }
+    const ownedCreateTargetPath = isCreate ? payload.targetPath : null;
+    const ownedCreateTargetContentHash = isCreate ? payload.writebackBlockHash : null;
     if (context.proposalTransitionPort) {
         const decision = await context.proposalTransitionPort.transition({
             ...transition,
@@ -6027,6 +6888,8 @@ async function commitRuntimeProposalApplyTransition(vaultRoot, payload, operatio
             expectedFileHash: payload.proposalFileHash,
             now: new Date().toISOString(),
             actor: context.agentId || 'tracekeeper-runtime',
+            ownedCreateTargetPath: isCreate ? ownedCreateTargetPath : null,
+            ownedCreateTargetContentHash: isCreate ? ownedCreateTargetContentHash : null,
         });
         return decision.receipt;
     }
@@ -6035,13 +6898,14 @@ async function commitRuntimeProposalApplyTransition(vaultRoot, payload, operatio
         throw new core_1.ProposalTransitionConflictError('Writeback proposal does not exist.');
     }
     const proposal = memoryProposalDocumentFromText(vaultRoot, payload.proposalPath, proposalState.content, context);
-    const target = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
+    const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
     const decision = (0, core_1.transitionProposal)(proposalTransitionSnapshot(proposal), transition, {
         now: new Date().toISOString(),
         actor: context.agentId || 'tracekeeper-runtime',
         targetAllowed: core_1.isAllowedProposalTargetPath,
-        targetExists: (relativePath) => relativePath === payload.targetPath
-            && (payload.effectKind === 'create_memory_record' || target !== null),
+        targetExists: (relativePath) => relativePath === payload.targetPath && (!isCreate ? Boolean(targetForTransition) : false),
+        targetCreationAllowed: (relativePath) => relativePath === payload.targetPath
+            && (createsWikiNote || (createsMemoryRecord && Boolean(claimKey))),
     });
     if (decision.replayed) {
         return decision.receipt;
@@ -6080,13 +6944,28 @@ function assertJournaledWritebackRequest(rawArgs, payload, context) {
         throw new core_1.OperationConflictError('Writeback request task changed from the journaled operation.');
     }
 }
+async function resolveApplyWritebackPlan(vaultRoot, proposal, context) {
+    const normalizedTarget = proposal.targetNote
+        ? (0, safety_1.normalizeNotePath)(proposal.targetNote, pathSafetyOptions(context))
+        : '';
+    if (proposal.targetNote) {
+        assertAllowedWritebackTarget(normalizedTarget);
+    }
+    const targetState = proposal.targetNote
+        ? await readCurrentVaultTextState(vaultRoot, normalizedTarget, context)
+        : null;
+    const normalizedProposal = proposal.targetNote
+        ? { ...proposal, targetNote: normalizedTarget }
+        : proposal;
+    return buildWritebackPlanForTarget(normalizedProposal, targetState);
+}
 async function handleApplyApprovedWriteback(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
     const dryRun = coerceBoolean(rawArgs.dry_run, 'dry_run', false);
     if (dryRun) {
         const proposal = await resolveMemoryProposalFromArgs(vaultRoot, rawArgs, context);
         const taskId = resolveWritebackTaskId(rawArgs, proposal);
-        const plan = buildWritebackPlan(proposal);
+        const plan = await resolveApplyWritebackPlan(vaultRoot, proposal, context);
         if (!plan.ready || !plan.writebackContent) {
             throw new safety_1.ToolInputError(plan.reason || 'approved writeback is not ready to apply.');
         }
@@ -6107,6 +6986,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
             proposal_path: proposal.path,
             target_note: prepared.binding.targetPath,
             touched_notes: prepared.binding.touchedNotes,
+            writeback_effect: prepared.binding.effectKind || 'append',
             writeback_preview: prepared.writebackBlock,
             confirmation_token: confirmationToken,
             confirmation_expires_at: new Date(prepared.binding.expiresAt).toISOString(),
@@ -6184,7 +7064,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
         }
         const proposal = await resolveMemoryProposalFromArgs(vaultRoot, rawArgs, context);
         const taskId = resolveWritebackTaskId(rawArgs, proposal);
-        const plan = buildWritebackPlan(proposal);
+        const plan = await resolveApplyWritebackPlan(vaultRoot, proposal, context);
         if (!plan.ready || !plan.writebackContent) {
             throw new safety_1.ToolInputError(plan.reason || 'approved writeback is not ready to apply.');
         }
@@ -6203,37 +7083,92 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
         failureInjection: context.operationFailureInjection,
         port: {
             async applyTarget(currentPayload) {
-                const effect = await currentWritebackEffect(vaultRoot, currentPayload, identity.operationId, context);
-                if (effect.alreadyApplied) {
+                const claimIdentity = await resolveApprovedMemoryClaimIdentity(vaultRoot, currentPayload, context);
+                const apply = async () => {
+                    if (claimIdentity) {
+                        await validateApprovedMemoryHub(vaultRoot, claimIdentity, context);
+                    }
+                    const effect = await currentWritebackEffect(vaultRoot, currentPayload, identity.operationId, context);
+                    if (effect.alreadyApplied) {
+                        return;
+                    }
+                    if (currentPayload.effectKind === 'create_memory_record') {
+                        if (!claimIdentity) {
+                            throw new core_1.OperationConflictError('Approved MemoryRecord claim identity is unavailable.');
+                        }
+                        await validateApprovedMemoryLifecycle(vaultRoot, claimIdentity, currentPayload.targetPath, effect.writebackBlock, context);
+                        const repository = projectMemoryRepository(vaultRoot, context);
+                        try {
+                            await repository.createText(currentPayload.targetPath, effect.writebackBlock);
+                        }
+                        catch (error) {
+                            if (!isWritebackCreationConflict(error))
+                                throw error;
+                            const existingTarget = await repository.readText(currentPayload.targetPath);
+                            if (existingTarget?.content !== effect.writebackBlock)
+                                throw error;
+                        }
+                        return;
+                    }
+                    if (currentPayload.effectKind === CREATE_WIKI_NOTE_EFFECT) {
+                        if (context.vaultRepository) {
+                            try {
+                                await context.vaultRepository.createText(currentPayload.targetPath, effect.writebackBlock);
+                                return;
+                            }
+                            catch (error) {
+                                if (!isWritebackCreationConflict(error))
+                                    throw error;
+                                const existing = await context.vaultRepository.readText(currentPayload.targetPath);
+                                if (existing?.content !== effect.writebackBlock) {
+                                    throw error;
+                                }
+                            }
+                            return;
+                        }
+                        const writable = (0, safety_1.resolveSafeWritableNotePath)(vaultRoot, currentPayload.targetPath, core_1.KNOWLEDGE_WIKI_DIR, pathSafetyOptions(context));
+                        try {
+                            (0, safety_1.assertNoSymlinkSegments)(vaultRoot, writable.absolutePath);
+                            fs.mkdirSync(path.dirname(writable.absolutePath), { recursive: true });
+                            fs.writeFileSync(writable.absolutePath, effect.writebackBlock, { encoding: 'utf8', flag: 'wx' });
+                            return;
+                        }
+                        catch (error) {
+                            if (!(error instanceof Error) || error.code !== 'EEXIST') {
+                                throw error;
+                            }
+                            const existing = await readCurrentVaultTextState(vaultRoot, currentPayload.targetPath, context);
+                            if (!existing || existing.content !== effect.writebackBlock) {
+                                throw new core_1.OperationConflictError('Approved wiki note was not created exactly.');
+                            }
+                        }
+                        return;
+                    }
+                    if (!effect.target) {
+                        throw new core_1.OperationConflictError('Writeback target is unavailable.');
+                    }
+                    const targetWithWriteback = `${effect.target.content}${writebackTargetFrame(effect.writebackBlock)}`;
+                    if (context.vaultRepository) {
+                        if (!effect.target.version) {
+                            throw new core_1.OperationConflictError('Writeback target version is unavailable.');
+                        }
+                        await context.vaultRepository.replaceText(currentPayload.targetPath, effect.target.version, targetWithWriteback);
+                        return;
+                    }
+                    const targetAbsolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, currentPayload.targetPath, pathSafetyOptions(context));
+                    replaceTextFileAtomically(targetAbsolute, targetWithWriteback, effect.target.content);
+                };
+                if (!claimIdentity) {
+                    await apply();
                     return;
                 }
-                if (currentPayload.effectKind === 'create_memory_record') {
-                    const repository = projectMemoryRepository(vaultRoot, context);
-                    try {
-                        await repository.createText(currentPayload.targetPath, effect.writebackBlock);
-                    }
-                    catch (error) {
-                        if (!(error instanceof core_1.OperationConflictError))
-                            throw error;
-                        const existingTarget = await repository.readText(currentPayload.targetPath);
-                        if (existingTarget?.content !== effect.writebackBlock)
-                            throw error;
-                    }
-                    return;
+                const releaseClaimLock = await journal.acquireLock(memoryClaimLockKey(claimIdentity.scope, claimIdentity.projectId, claimIdentity.claimKey));
+                try {
+                    await apply();
                 }
-                if (!effect.target) {
-                    throw new core_1.OperationConflictError('Writeback target is unavailable.');
+                finally {
+                    await releaseClaimLock();
                 }
-                const targetWithWriteback = `${effect.target.content}${writebackTargetFrame(effect.writebackBlock)}`;
-                if (context.vaultRepository) {
-                    if (!effect.target.version) {
-                        throw new core_1.OperationConflictError('Writeback target version is unavailable.');
-                    }
-                    await context.vaultRepository.replaceText(currentPayload.targetPath, effect.target.version, targetWithWriteback);
-                    return;
-                }
-                const targetAbsolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, currentPayload.targetPath, pathSafetyOptions(context));
-                replaceTextFileAtomically(targetAbsolute, targetWithWriteback, effect.target.content);
             },
             async rollbackTarget(currentPayload) {
                 await rollbackRuntimeWritebackTarget(vaultRoot, currentPayload, context);
@@ -6262,9 +7197,11 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
                     sessionId: currentPayload.activitySessionId || undefined,
                     clientName: currentPayload.activityClientName || undefined,
                     metadata: {
-                        action: currentPayload.effectKind === 'create_memory_record'
-                            ? 'memory_record.apply'
-                            : 'writeback.apply',
+                        action: currentPayload.effectKind === CREATE_WIKI_NOTE_EFFECT
+                            ? 'wiki_note.create'
+                            : currentPayload.effectKind === 'create_memory_record'
+                                ? 'memory_record.apply'
+                                : 'writeback.apply',
                         proposal_id: currentPayload.proposalId,
                         proposal_path: currentPayload.proposalPath,
                         permission_level: 'review-gated apply',
@@ -6386,6 +7323,7 @@ async function handleProposeMemory(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
     const invocationContext = { ...context };
     const readView = await knowledgeReadViewForContext(vaultRoot, invocationContext);
+    const { knowledgeReadViewPromise: _cachedReadView, ...memoryWriteContext } = invocationContext;
     const preflightScan = lightweightScanFromReadView(vaultRoot, readView);
     context = {
         ...invocationContext,
@@ -6417,18 +7355,40 @@ async function handleProposeMemory(rawArgs, context) {
         },
         assertAllowed: (proposalKind, targetNote, projectHint, memoryScope) => assertMemoryProposalAllowed(proposalKind, targetNote, projectHint, context, memoryScope),
         memoryRule: (proposalKind, targetNote, projectHint, memoryScope) => memoryProposalRuleFor(proposalKind, targetNote, projectHint, context, memoryScope),
-        writeImmutableProjectMemory: (input) => writeImmutableProjectMemory(vaultRoot, {
+        writeImmutableMemoryRecord: (input) => writeImmutableMemoryRecord(vaultRoot, {
             ...input,
             toolName: 'tracekeeper.propose_memory',
-            context,
+            context: memoryWriteContext,
         }),
-        resolveAutoMemoryTarget: (proposalKind, targetNote, projectHint, memoryScope) => resolveAutoMemoryTarget(vaultRoot, proposalKind, targetNote, projectHint, context, memoryScope),
-        appendAutoMemoryWrite: (input) => appendAutoMemoryWriteAsync(vaultRoot, {
-            ...input,
-            toolName: 'tracekeeper.propose_memory',
-            context,
-        }),
+        resolveMemoryRecordTarget: async (input) => {
+            const agentType = (0, core_1.normalizeProjectAgentType)(input.agentType);
+            if (input.scope === 'global') {
+                return (0, core_1.buildGlobalMemoryEntryPath)({
+                    agentType,
+                    operationKind: 'propose_memory',
+                    operationId: input.operationId,
+                });
+            }
+            const snapshot = await projectMemoryApplication(vaultRoot, context).snapshot();
+            const route = (0, project_memory_1.resolveProjectMemoryWritableRoute)(snapshot, {
+                projectId: input.projectId,
+                projectHint: input.projectHint,
+                repoPath: input.repoPath,
+            });
+            if (route.status === 'review_required')
+                return null;
+            return (0, core_1.buildProjectMemoryEntryPath)({
+                projectKey: route.binding.project_key,
+                agentType,
+                operationKind: 'propose_memory',
+                operationId: input.operationId,
+            });
+        },
         findOwnedProposalNote: async (filename, operationId) => findOperationOwnedNoteAsync(vaultRoot, MEMORY_PROPOSAL_DIR, filename, 'proposal_operation_id', operationId, context),
+        isTargetNoteMissing: async (targetNote) => {
+            const state = await readCurrentVaultTextState(vaultRoot, targetNote, context);
+            return !state;
+        },
         writeProposalNote: (input) => buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.propose_memory', MEMORY_PROPOSAL_DIR, input.filename, input.frontmatter, input.body, input.taskId, context, input.metadata, input.operationId),
         ensureOwnedProposalIdentity: (proposalPath, proposalId, operationId) => ensureOperationOwnedProposalIdentity(vaultRoot, proposalPath, proposalId, 'proposal_operation_id', operationId, context),
         updateTaskMemoryWrite: async (taskId, memoryPath) => {
@@ -6693,30 +7653,22 @@ function buildSessionNoteBodyWithCloseout(context, summary, outcomes, nextAction
     ].join('\n');
     return lines.trim();
 }
-function buildFinishTaskNextActions(context, reviewProposalMode, proposalResult, projectHint, hasCloseoutCandidates) {
+function buildFinishTaskNextActions(context, durableOutput, projectHint) {
     const actions = [];
-    if (!hasCloseoutCandidates) {
-        actions.push(contentText(context, '任务追踪已记录；没有提交长期记忆候选。如果之后发现遗漏的长期信息，请将其作为新的 tracekeeper.propose_memory 候选提交，不要再次调用 tracekeeper.finish_task。', 'Task tracking was recorded with no durable memory candidates. If omitted durable information is discovered later, submit it as a new tracekeeper.propose_memory candidate; do not call tracekeeper.finish_task again.'));
+    if (durableOutputNeedsReview(durableOutput)) {
+        actions.push(contentText(context, `知识持久化状态为 ${durableOutput.status}；请在 Obsidian 的知识变更审核中处理。已捕获的 Source 或 Recall 结果不证明 Wiki/Memory 目标已写入。`, `Durable output is ${durableOutput.status}; handle it in Obsidian Knowledge Change Review. Captured Source or Recall results do not prove that the Wiki/Memory target was applied.`));
     }
-    if (reviewProposalMode === 'off') {
-        actions.push(contentText(context, '任务会话已记录；当前模式不会创建记忆建议或知识变更审核提案。', 'Task session was recorded; no memory suggestions or Knowledge Change Review proposals were created.'));
+    if (durableOutput.rejected_count > 0 || durableOutput.unresolved_count > 0) {
+        actions.push(contentText(context, `知识持久化状态为 ${durableOutput.status}，请求的 Wiki/Memory 输出未持久化；Source 仍只作为来源证据。`, `Durable output is ${durableOutput.status}; the requested Wiki/Memory output was not persisted, while Source remains provenance evidence only.`));
     }
-    if (reviewProposalMode === 'suggest') {
-        actions.push(contentText(context, '请查看本次响应中的 suggested_memory_updates；没有写入知识变更审核。', 'Review suggested_memory_updates in this response; nothing was written to Knowledge Change Review.'));
+    if (actions.length === 0 && durableOutput.status === 'applied') {
+        actions.push(contentText(context, '知识持久化状态为 applied；已应用的目标路径列在 durable_output.target_paths。', 'Durable output is applied; the applied target paths are listed in durable_output.target_paths.'));
     }
-    if (reviewProposalMode === 'review_queue' || reviewProposalMode === 'auto_propose') {
-        if (proposalResult.proposals.length > 0) {
-            actions.push(contentText(context, '请在 Obsidian 的知识变更审核中确认提案后再写入长期记忆。', 'Review proposed changes in Obsidian Knowledge Change Review before durable memory writeback.'));
-        }
-        if (proposalResult.autoAppliedMemoryUpdates.length > 0) {
-            actions.push(contentText(context, '项目记忆已按用户规则保存为独立的不可变操作条目。', 'Project memory was saved as a separate immutable operation entry according to the user rule.'));
-        }
-        if (proposalResult.hasMissingWikiBridge) {
-            actions.push(contentText(context, '部分项目记忆候选缺少 related_wiki 桥接关系，因此需要先审核。', 'Some project memory candidates need a related_wiki bridge before automatic project memory save.'));
-        }
-        if (actions.length === 0) {
-            actions.push(contentText(context, '任务追踪已记录；没有产生长期记忆候选。', 'Task tracking was recorded; no durable memory candidates were produced.'));
-        }
+    else if (actions.length === 0 && durableOutput.source_capture_count > 0) {
+        actions.push(contentText(context, '已捕获的 Source 可作为来源证据读取，但没有 Wiki/Memory 输出被应用。不要将 Source 或 Recall 可读性描述为知识写入成功。', 'Captured Source is readable provenance, but no Wiki/Memory output was applied. Do not describe Source or Recall readability as successful knowledge writeback.'));
+    }
+    else if (actions.length === 0) {
+        actions.push(contentText(context, '任务追踪已记录；结束时没有关联 Wiki/Memory 持久化输出。', 'Task tracking was recorded; no Wiki/Memory durable output was linked at finish.'));
     }
     if (projectHint) {
         actions.push(contentText(context, '下一次相关任务开始时，请用相同 project_hint 调用 tracekeeper.recall，并设置 scope="project_history"。', 'For the next related session, call tracekeeper.recall with scope="project_history" and the same project_hint.'));
@@ -6780,8 +7732,9 @@ function resolveCanonicalMemoryCloseoutStatus(reviewProposalMode, proposalResult
     if (reviewProposalMode === 'suggest') {
         return 'suggested';
     }
-    if (proposalResult.hasMissingWikiBridge && proposalResult.proposals.length > 0) {
-        return 'requires_wiki_bridge';
+    if (proposalResult.memoryChanges.length > 0
+        && proposalResult.memoryChanges.every((change) => change.change_kind === 'disabled')) {
+        return 'disabled';
     }
     switch (legacyStatus) {
         case 'auto_saved':
@@ -6851,6 +7804,23 @@ async function createDistillProposal(vaultRoot, taskId, proposalKind, kindLabel,
     });
     return { path: proposal.path, proposalId };
 }
+function isFinishTaskDurableOutputSnapshot(value) {
+    if (!(0, protocol_1.isRecord)(value)) {
+        return false;
+    }
+    return Array.isArray(value.sourceCapturePaths)
+        && value.sourceCapturePaths.every((entry) => typeof entry === 'string')
+        && Array.isArray(value.proposals)
+        && value.proposals.every((proposal) => {
+            return (0, protocol_1.isRecord)(proposal)
+                && typeof proposal.proposalId === 'string'
+                && typeof proposal.path === 'string'
+                && typeof proposal.proposalKind === 'string'
+                && typeof proposal.targetPath === 'string'
+                && durableProposalStatusFromApproval(String(proposal.status)) === proposal.status
+                && typeof proposal.exact === 'boolean';
+        });
+}
 function isFinishTaskOperationPayload(payload) {
     if (!(0, protocol_1.isRecord)(payload)) {
         return false;
@@ -6882,6 +7852,9 @@ function isFinishTaskOperationPayload(payload) {
     if (!Array.isArray(payload.preferences) || !payload.preferences.every((item) => typeof item === 'string')) {
         return false;
     }
+    if (!Array.isArray(payload.closeoutGroups)) {
+        return false;
+    }
     if (payload.memoryCandidateRecords !== undefined && (!Array.isArray(payload.memoryCandidateRecords) || !payload.memoryCandidateRecords.every((item) => {
         return (0, protocol_1.isRecord)(item)
             && typeof item.proposal_kind === 'string'
@@ -6902,8 +7875,15 @@ function isFinishTaskOperationPayload(payload) {
     if (!(0, protocol_1.isRecord)(payload.requestSnapshot) || typeof payload.requestSnapshot.task_id !== 'string') {
         return false;
     }
+    if (payload.memoryRecordWriteVersion !== undefined
+        && payload.memoryRecordWriteVersion !== 2) {
+        return false;
+    }
     if (payload.projectMemoryEntryVersion !== undefined
         && payload.projectMemoryEntryVersion !== 1) {
+        return false;
+    }
+    if (payload.memoryRecordWriteVersion === 2 && payload.closeoutGroups.length > 0) {
         return false;
     }
     if (payload.projectMemoryEntryVersion === 1
@@ -6911,6 +7891,10 @@ function isFinishTaskOperationPayload(payload) {
             || Number.isNaN(Date.parse(payload.projectMemoryCreatedAt))
             || typeof payload.projectMemoryAgentType !== 'string'
             || !payload.projectMemoryAgentType)) {
+        return false;
+    }
+    if (payload.durableOutputSnapshot !== undefined
+        && !isFinishTaskDurableOutputSnapshot(payload.durableOutputSnapshot)) {
         return false;
     }
     return true;
@@ -6924,6 +7908,336 @@ function projectIdentityFromFinishPayload(input) {
         confidence: input.projectHint || input.projectId || input.repoPath ? 'derived' : 'uncertain',
         warnings: ['legacy_finish_payload_without_project_identity'],
     };
+}
+function durableOutputSnapshotFromFinishPayload(input) {
+    return input.durableOutputSnapshot ?? {
+        sourceCapturePaths: [],
+        proposals: [],
+    };
+}
+async function buildFinishTaskDurableOutput(input, proposalResult, context) {
+    const snapshot = durableOutputSnapshotFromFinishPayload(input);
+    const proposals = [...snapshot.proposals];
+    const seenIds = new Set(proposals.map((proposal) => proposal.proposalId).filter(Boolean));
+    const seenPaths = new Set(proposals.map((proposal) => proposal.path).filter(Boolean));
+    for (const proposal of proposalResult.proposals) {
+        if (seenIds.has(proposal.proposalId) || seenPaths.has(proposal.path)) {
+            continue;
+        }
+        const generated = await snapshotExactTaskProposal(input.vaultRoot, input.taskId, proposal.proposalId, proposal.path, context);
+        proposals.push(generated);
+        if (generated.proposalId) {
+            seenIds.add(generated.proposalId);
+        }
+        if (generated.path) {
+            seenPaths.add(generated.path);
+        }
+    }
+    const counts = {
+        pending_review: 0,
+        ready_to_apply: 0,
+        revision_requested: 0,
+        applied: 0,
+        rejected: 0,
+        unresolved: 0,
+    };
+    for (const proposal of proposals) {
+        counts[proposal.status] += 1;
+    }
+    const targetPaths = new Set(proposals
+        .map((proposal) => proposal.targetPath)
+        .filter(Boolean));
+    const autoAppliedKeys = new Set();
+    for (const update of proposalResult.autoAppliedMemoryUpdates) {
+        const key = update.operation_id || `${update.kind}\0${update.path}`;
+        if (autoAppliedKeys.has(key)) {
+            continue;
+        }
+        autoAppliedKeys.add(key);
+        counts.applied += 1;
+        try {
+            const normalized = (0, safety_1.normalizeNotePath)(update.path, pathSafetyOptions(context));
+            if ((0, core_1.isAllowedProposalTargetPath)(normalized)) {
+                targetPaths.add(normalized);
+            }
+        }
+        catch {
+        }
+    }
+    const activeStatuses = Object.entries(counts)
+        .filter(([, count]) => count > 0)
+        .map(([status]) => status);
+    const status = activeStatuses.length === 0
+        ? 'none'
+        : activeStatuses.length === 1
+            ? activeStatuses[0]
+            : 'mixed';
+    return {
+        summary: {
+            status,
+            source_capture_count: snapshot.sourceCapturePaths.length,
+            proposal_count: proposals.length,
+            pending_review_count: counts.pending_review,
+            ready_to_apply_count: counts.ready_to_apply,
+            revision_requested_count: counts.revision_requested,
+            applied_count: counts.applied,
+            rejected_count: counts.rejected,
+            unresolved_count: counts.unresolved,
+            proposal_paths: [...new Set(proposals.map((proposal) => proposal.path).filter(Boolean))],
+            target_paths: [...targetPaths],
+        },
+        proposalIdsAtFinish: [
+            ...new Set(proposals
+                .filter((proposal) => proposal.exact)
+                .map((proposal) => proposal.proposalId)
+                .filter(Boolean)),
+        ],
+    };
+}
+function aggregateFinishTaskProposalReferences(input, proposalResult, sessionNotePath, context) {
+    const aggregated = [];
+    const seenIds = new Set();
+    const seenPaths = new Set();
+    const add = (proposal) => {
+        if (seenIds.has(proposal.proposalId)
+            || seenPaths.has(proposal.path)) {
+            return;
+        }
+        seenIds.add(proposal.proposalId);
+        seenPaths.add(proposal.path);
+        aggregated.push(proposal);
+    };
+    for (const proposal of durableOutputSnapshotFromFinishPayload(input).proposals) {
+        if (!proposal.exact || !proposal.proposalId || !proposal.path) {
+            continue;
+        }
+        const link = generateProposalMarkdownLink(context, proposal.path, sessionNotePath);
+        add({
+            kind: proposal.proposalKind || 'unknown',
+            proposalId: proposal.proposalId,
+            path: proposal.path,
+            linkTarget: proposal.path,
+            ...(link ? { link } : {}),
+        });
+    }
+    for (const proposal of proposalResult.proposals) {
+        add(proposal);
+    }
+    return aggregated;
+}
+function durableOutputFrontmatterFields(evidence) {
+    const durableOutput = evidence.summary;
+    return {
+        durable_output_status_at_finish: durableOutput.status,
+        durable_output_source_capture_count: String(durableOutput.source_capture_count),
+        durable_output_proposal_count: String(durableOutput.proposal_count),
+        durable_output_pending_review_count: String(durableOutput.pending_review_count),
+        durable_output_ready_to_apply_count: String(durableOutput.ready_to_apply_count),
+        durable_output_revision_requested_count: String(durableOutput.revision_requested_count),
+        durable_output_applied_count: String(durableOutput.applied_count),
+        durable_output_rejected_count: String(durableOutput.rejected_count),
+        durable_output_unresolved_count: String(durableOutput.unresolved_count),
+        durable_output_proposal_ids_at_finish: evidence.proposalIdsAtFinish.join(', '),
+        durable_output_proposal_paths: durableOutput.proposal_paths.join(', '),
+        durable_output_target_paths: durableOutput.target_paths.join(', '),
+    };
+}
+function isFinishTaskDurableOutputEvidenceConsistent(evidence, context) {
+    const summary = evidence.summary;
+    const stateCounts = [
+        ['pending_review', summary.pending_review_count],
+        ['ready_to_apply', summary.ready_to_apply_count],
+        ['revision_requested', summary.revision_requested_count],
+        ['applied', summary.applied_count],
+        ['rejected', summary.rejected_count],
+        ['unresolved', summary.unresolved_count],
+    ];
+    const activeStates = stateCounts.filter(([, count]) => count > 0);
+    const expectedStatus = activeStates.length === 0
+        ? 'none'
+        : activeStates.length === 1
+            ? activeStates[0][0]
+            : 'mixed';
+    if (summary.status !== expectedStatus) {
+        return false;
+    }
+    const nonAppliedProposalCount = summary.pending_review_count
+        + summary.ready_to_apply_count
+        + summary.revision_requested_count
+        + summary.rejected_count
+        + summary.unresolved_count;
+    const maximumProposalCount = nonAppliedProposalCount + summary.applied_count;
+    if (!Number.isSafeInteger(nonAppliedProposalCount)
+        || !Number.isSafeInteger(maximumProposalCount)
+        || summary.proposal_count < nonAppliedProposalCount
+        || summary.proposal_count > maximumProposalCount) {
+        return false;
+    }
+    const uniqueList = (values) => new Set(values).size === values.length;
+    if (!uniqueList(evidence.proposalIdsAtFinish)
+        || !uniqueList(summary.proposal_paths)
+        || !uniqueList(summary.target_paths)
+        || evidence.proposalIdsAtFinish.length > summary.proposal_count
+        || summary.proposal_paths.length > summary.proposal_count
+        || summary.target_paths.length > summary.proposal_count + summary.applied_count) {
+        return false;
+    }
+    const exactNonAppliedCount = summary.pending_review_count
+        + summary.ready_to_apply_count
+        + summary.revision_requested_count
+        + summary.rejected_count;
+    if (evidence.proposalIdsAtFinish.length < exactNonAppliedCount
+        || summary.proposal_paths.length < exactNonAppliedCount
+        || (summary.ready_to_apply_count
+            + summary.revision_requested_count
+            + summary.applied_count
+            + summary.rejected_count > 0
+            && summary.target_paths.length === 0)) {
+        return false;
+    }
+    if (evidence.proposalIdsAtFinish.some((proposalId) => proposalId.length === 0 || proposalId.length > 512)) {
+        return false;
+    }
+    const exactNormalizedPath = (value) => {
+        try {
+            const normalized = (0, safety_1.normalizeNotePath)(value, pathSafetyOptions(context));
+            return normalized === value ? normalized : null;
+        }
+        catch {
+            return null;
+        }
+    };
+    if (summary.proposal_paths.some((proposalPath) => {
+        const normalized = exactNormalizedPath(proposalPath);
+        return !normalized || !normalized.startsWith(`${REVIEW_QUEUE_PREFIX}/`);
+    })) {
+        return false;
+    }
+    return summary.target_paths.every((targetPath) => {
+        const normalized = exactNormalizedPath(targetPath);
+        return Boolean(normalized && (0, core_1.isAllowedProposalTargetPath)(normalized));
+    });
+}
+function durableOutputFromFrontmatter(frontmatter, context) {
+    const requiredKeys = [
+        'durable_output_status_at_finish',
+        'durable_output_source_capture_count',
+        'durable_output_proposal_count',
+        'durable_output_pending_review_count',
+        'durable_output_ready_to_apply_count',
+        'durable_output_revision_requested_count',
+        'durable_output_applied_count',
+        'durable_output_rejected_count',
+        'durable_output_unresolved_count',
+        'durable_output_proposal_ids_at_finish',
+        'durable_output_proposal_paths',
+        'durable_output_target_paths',
+    ];
+    if (!requiredKeys.every((key) => Object.prototype.hasOwnProperty.call(frontmatter, key))) {
+        return null;
+    }
+    const status = readFrontmatterString(frontmatter, ['durable_output_status_at_finish']);
+    if (!isDurableOutputStatus(status)) {
+        return null;
+    }
+    const count = (key) => {
+        const value = readFrontmatterString(frontmatter, [key]);
+        if (!/^\d+$/.test(value)) {
+            return null;
+        }
+        const parsed = Number(value);
+        return Number.isSafeInteger(parsed) ? parsed : null;
+    };
+    const counts = {
+        source_capture_count: count('durable_output_source_capture_count'),
+        proposal_count: count('durable_output_proposal_count'),
+        pending_review_count: count('durable_output_pending_review_count'),
+        ready_to_apply_count: count('durable_output_ready_to_apply_count'),
+        revision_requested_count: count('durable_output_revision_requested_count'),
+        applied_count: count('durable_output_applied_count'),
+        rejected_count: count('durable_output_rejected_count'),
+        unresolved_count: count('durable_output_unresolved_count'),
+    };
+    if (Object.values(counts).some((value) => value === null)) {
+        return null;
+    }
+    const evidence = {
+        summary: {
+            status,
+            source_capture_count: counts.source_capture_count,
+            proposal_count: counts.proposal_count,
+            pending_review_count: counts.pending_review_count,
+            ready_to_apply_count: counts.ready_to_apply_count,
+            revision_requested_count: counts.revision_requested_count,
+            applied_count: counts.applied_count,
+            rejected_count: counts.rejected_count,
+            unresolved_count: counts.unresolved_count,
+            proposal_paths: readFrontmatterStringList(frontmatter, 'durable_output_proposal_paths'),
+            target_paths: readFrontmatterStringList(frontmatter, 'durable_output_target_paths'),
+        },
+        proposalIdsAtFinish: readFrontmatterStringList(frontmatter, 'durable_output_proposal_ids_at_finish'),
+    };
+    return isFinishTaskDurableOutputEvidenceConsistent(evidence, context)
+        ? evidence
+        : null;
+}
+async function readFinishTaskDurableOutputEvidence(input, sessionNotePath, context, mode) {
+    const session = await readCurrentVaultTextState(input.vaultRoot, sessionNotePath, context);
+    const task = await readCurrentVaultTextState(input.vaultRoot, buildTaskNotePath(input.taskId), context);
+    const sessionFrontmatter = session
+        ? (0, core_1.parseMarkdown)(session.content).frontmatter.fields
+        : {};
+    const taskFrontmatter = task
+        ? (0, core_1.parseMarkdown)(task.content).frontmatter.fields
+        : {};
+    const sessionEvidence = session
+        ? durableOutputFromFrontmatter(sessionFrontmatter, context)
+        : null;
+    const taskEvidence = task
+        ? durableOutputFromFrontmatter(taskFrontmatter, context)
+        : null;
+    const sessionHasEvidenceFields = Object.keys(sessionFrontmatter)
+        .some((key) => key.startsWith('durable_output_'));
+    const taskHasEvidenceFields = Object.keys(taskFrontmatter)
+        .some((key) => key.startsWith('durable_output_'));
+    if (sessionEvidence
+        && taskEvidence
+        && JSON.stringify(sessionEvidence) !== JSON.stringify(taskEvidence)) {
+        throw new core_1.OperationConflictError('Finish-task durable-output evidence differs between the task and session records.');
+    }
+    if (mode === 'finalize') {
+        if (!sessionEvidence || !taskEvidence) {
+            throw new core_1.OperationConflictError('Finish-task durable-output evidence is not complete in both the task and session records.');
+        }
+        return sessionEvidence;
+    }
+    const trustedEvidence = sessionEvidence ?? taskEvidence;
+    if (trustedEvidence) {
+        return trustedEvidence;
+    }
+    if (sessionHasEvidenceFields || taskHasEvidenceFields) {
+        throw new core_1.OperationConflictError('Finish-task durable-output evidence is incomplete, invalid, or internally inconsistent.');
+    }
+    return null;
+}
+async function updateManagedRecordFields(vaultRoot, recordPath, fields, context) {
+    const current = await readCurrentVaultTextState(vaultRoot, recordPath, context);
+    if (!current) {
+        throw new core_1.OperationConflictError(`Tracekeeper-managed record is unavailable: ${recordPath}`);
+    }
+    const next = updateFrontmatterFields(current.content, fields);
+    if (next === current.content) {
+        return;
+    }
+    if (context.vaultRepository) {
+        if (!current.version) {
+            throw new core_1.OperationConflictError(`Tracekeeper-managed record version is unavailable: ${recordPath}`);
+        }
+        await context.vaultRepository.replaceText(current.path, current.version, next);
+        return;
+    }
+    const absolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, current.path, pathSafetyOptions(context));
+    replaceTextFileAtomically(absolute, next, current.content);
 }
 function buildFinishTaskRequestSnapshot(rawArgs) {
     const explicitIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs);
@@ -6962,6 +8276,7 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
     const memoryCandidateRecords = normalizeFinishTaskMemoryCandidateRecords(rawArgs.memory_candidate_records);
     const reviewProposalMode = DEFAULT_FINISH_TASK_REVIEW_MODE;
     const taskMetadata = await readAgentTaskMetadataAsync(vaultRoot, taskId, context);
+    const durableOutputSnapshot = await snapshotTaskDurableOutput(vaultRoot, taskId, taskMetadata, context);
     const identityScan = scanVaultForContext(vaultRoot, context);
     const explicitIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs, identityScan.notes);
     const projectIdentity = mergeTaskProjectIdentity(taskId, taskMetadata, explicitIdentity);
@@ -6977,7 +8292,7 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
     return {
         requestHash,
         requestSnapshot,
-        projectMemoryEntryVersion: 1,
+        memoryRecordWriteVersion: 2,
         projectMemoryCreatedAt: new Date().toISOString(),
         projectMemoryAgentType: (() => {
             const observed = context.observedClientType ?? (0, observed_client_1.normalizeObservedClientType)(client);
@@ -7013,6 +8328,7 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
         closeoutGroups,
         hasCloseoutCandidates: memoryCandidateRecords.length > 0,
         contentLanguage: contentLanguageFromContext(context),
+        durableOutputSnapshot,
     };
 }
 function resolveFinishTaskSessionNotePath(input, context) {
@@ -7105,9 +8421,6 @@ function buildFinishTaskProjectMemoryPlan(input, context) {
         return null;
     }
     const bridgeMetadata = resolveProjectMemoryBridgeMetadata(input.vaultRoot, 'project', input.projectHint, input.rawRelatedWiki ?? input.relatedWiki, input.rawRelatedSources ?? input.relatedSources, context);
-    if (bridgeMetadata.missing_wiki_bridge) {
-        return null;
-    }
     return { groups, bridgeMetadata };
 }
 function buildFinishTaskProjectMemoryBody(groups) {
@@ -7177,42 +8490,37 @@ async function writeFinishTaskCloseoutArtifacts(input, group, context, operation
         return;
     }
     if (input.reviewProposalMode === 'auto_propose' && memoryRule === 'auto_write') {
-        const canAutoWrite = !(memoryScope === 'project' &&
-            bridgeMetadata.missing_wiki_bridge);
-        if (canAutoWrite
-            && memoryScope === 'project') {
+        if (memoryScope === 'project') {
             return writeFinishTaskProjectMemoryArtifacts(input, context, operationId);
         }
-        if (canAutoWrite) {
-            const autoTarget = resolveAutoMemoryTarget(input.vaultRoot, group.kind, '', input.projectHint, context, memoryScope);
-            if (autoTarget) {
-                await appendAutoMemoryWriteAsync(input.vaultRoot, {
-                    toolName: 'tracekeeper.finish_task',
-                    proposalKind: group.kind,
-                    targetNote: autoTarget.targetNote,
-                    allowedDir: autoTarget.allowedDir,
-                    title: group.label,
-                    content: group.values.map((item) => `- ${item}`).join('\n'),
-                    taskId: input.taskId,
-                    context,
-                    operationId,
-                    projectHint: input.projectHint,
-                    sourceNote: sessionNotePath,
-                    memoryScope,
-                    relatedWiki: bridgeMetadata.related_wiki,
-                    relatedSources: bridgeMetadata.related_sources,
-                    architectureStatus: input.architectureStatus,
-                    missingGraphBridges: input.architectureStatus.missing_graph_bridges,
-                    missingWikiBridge: false,
-                    missingRelatedWiki: bridgeMetadata.missing_related_wiki,
-                    missingRelatedSources: bridgeMetadata.missing_related_sources,
-                    signature: buildFinishTaskProposalSignature(input.taskId, group.kind, group.values),
-                });
-                return;
-            }
+        const autoTarget = resolveAutoMemoryTarget(input.vaultRoot, group.kind, '', input.projectHint, context, memoryScope);
+        if (autoTarget) {
+            await appendAutoMemoryWriteAsync(input.vaultRoot, {
+                toolName: 'tracekeeper.finish_task',
+                proposalKind: group.kind,
+                targetNote: autoTarget.targetNote,
+                allowedDir: autoTarget.allowedDir,
+                title: group.label,
+                content: group.values.map((item) => `- ${item}`).join('\n'),
+                taskId: input.taskId,
+                context,
+                operationId,
+                projectHint: input.projectHint,
+                sourceNote: sessionNotePath,
+                memoryScope,
+                relatedWiki: bridgeMetadata.related_wiki,
+                relatedSources: bridgeMetadata.related_sources,
+                architectureStatus: input.architectureStatus,
+                missingGraphBridges: input.architectureStatus.missing_graph_bridges,
+                missingWikiBridge: false,
+                missingRelatedWiki: bridgeMetadata.missing_related_wiki,
+                missingRelatedSources: bridgeMetadata.missing_related_sources,
+                signature: buildFinishTaskProposalSignature(input.taskId, group.kind, group.values),
+            });
+            return;
         }
     }
-    await createFinishTaskProposal(input.vaultRoot, input.taskId, sessionNotePath, operationId, group.kind, group.label, group.values, input.projectHint, input.reviewProposalMode, memoryScope, bridgeMetadata.related_wiki, bridgeMetadata.related_sources, input.architectureStatus, input.architectureStatus.missing_graph_bridges, bridgeMetadata.missing_wiki_bridge, bridgeMetadata.missing_related_wiki, bridgeMetadata.missing_related_sources, context);
+    await createFinishTaskProposal(input.vaultRoot, input.taskId, sessionNotePath, operationId, group.kind, group.label, group.values, input.projectHint, input.reviewProposalMode, memoryScope, bridgeMetadata.related_wiki, bridgeMetadata.related_sources, input.architectureStatus, input.architectureStatus.missing_graph_bridges, false, bridgeMetadata.missing_related_wiki, bridgeMetadata.missing_related_sources, context);
 }
 async function updateFinishTaskRecord(input, context, operationId) {
     const projectIdentity = projectIdentityFromFinishPayload(input);
@@ -7230,9 +8538,13 @@ async function updateFinishTaskRecord(input, context, operationId) {
         memory_candidates: input.memoryCandidates,
     }, input.memoryCandidateRecords ?? [], context, operationId, input.projectMemoryEntryVersion === 1
         && buildFinishTaskProjectMemoryPlan(input, context) !== null);
-    const proposalPaths = proposalResult.proposals.map((proposal) => proposal.path);
-    const proposalIds = proposalResult.proposals.map((proposal) => proposal.proposalId);
+    const durableOutputEvidence = await readFinishTaskDurableOutputEvidence(input, sessionNote.path, context, 'repair') ?? await buildFinishTaskDurableOutput(input, proposalResult, context);
+    const durableOutput = durableOutputEvidence.summary;
+    const aggregatedProposals = aggregateFinishTaskProposalReferences(input, proposalResult, sessionNote.path, context);
+    const proposalPaths = aggregatedProposals.map((proposal) => proposal.path);
+    const proposalIds = aggregatedProposals.map((proposal) => proposal.proposalId);
     const autoWritePaths = proposalResult.autoAppliedMemoryUpdates.map((update) => update.path);
+    await updateManagedRecordFields(input.vaultRoot, sessionNote.path, durableOutputFrontmatterFields(durableOutputEvidence), context);
     const taskPath = await updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, {
         status: input.status,
         finished_at: new Date().toISOString(),
@@ -7253,6 +8565,7 @@ async function updateFinishTaskRecord(input, context, operationId) {
         project_identity_confidence: projectIdentity.confidence,
         project_identity_warnings: projectIdentity.warnings.join(', '),
         finish_operation_id: operationId,
+        ...durableOutputFrontmatterFields(durableOutputEvidence),
     }, context, {
         memory_writes: [sessionNote.path, ...autoWritePaths],
         proposal_ids: proposalIds,
@@ -7286,9 +8599,9 @@ async function updateFinishTaskRecord(input, context, operationId) {
             : ['- (none; task facts remain task history only)']),
         `^finish-${operationId}`,
     ].join('\n'), `^finish-${operationId}`);
-    await updateManagedProposalReferences(input.vaultRoot, sessionNote.path, proposalResult.proposals, context);
+    await updateManagedProposalReferences(input.vaultRoot, sessionNote.path, aggregatedProposals, context);
     if (taskPath) {
-        await updateManagedProposalReferences(input.vaultRoot, taskPath, proposalResult.proposals, context);
+        await updateManagedProposalReferences(input.vaultRoot, taskPath, aggregatedProposals, context);
     }
     return taskPath;
 }
@@ -7307,8 +8620,13 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         memory_candidates: input.memoryCandidates,
     }, input.memoryCandidateRecords ?? [], context, operationId, input.projectMemoryEntryVersion === 1
         && buildFinishTaskProjectMemoryPlan(input, context) !== null);
-    const memoryCloseoutStatus = resolveMemoryCloseoutStatus(input.reviewProposalMode, proposalResult, input.hasCloseoutCandidates);
-    const memoryCloseoutState = resolveCanonicalMemoryCloseoutStatus(input.reviewProposalMode, proposalResult, input.hasCloseoutCandidates, memoryCloseoutStatus);
+    const durableOutputEvidence = await readFinishTaskDurableOutputEvidence(input, sessionNote.path, context, 'finalize');
+    if (!durableOutputEvidence) {
+        throw new core_1.OperationConflictError('Finish-task durable-output evidence is unavailable at finalization.');
+    }
+    const durableOutput = durableOutputEvidence.summary;
+    const aggregatedProposals = aggregateFinishTaskProposalReferences(input, proposalResult, sessionNote.path, context);
+    const memoryCloseoutState = compatibleMemoryCloseoutStatus(durableOutput, resolveCanonicalMemoryCloseoutStatus(input.reviewProposalMode, proposalResult, input.hasCloseoutCandidates, resolveMemoryCloseoutStatus(input.reviewProposalMode, proposalResult, input.hasCloseoutCandidates)));
     const response = {
         ok: true,
         read_only: false,
@@ -7336,14 +8654,15 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         missing_graph_bridges: input.architectureStatus.missing_graph_bridges,
         missing_wiki_bridge: proposalResult.hasMissingWikiBridge,
         memory_status: memoryCloseoutState,
-        next_actions_for_agent: buildFinishTaskNextActions(context, input.reviewProposalMode, proposalResult, input.projectHint, input.hasCloseoutCandidates),
+        durable_output: durableOutput,
+        next_actions_for_agent: buildFinishTaskNextActions(context, durableOutput, input.projectHint),
     };
     if (proposalResult.hasMissingRelatedSources) {
         response.missing_related_sources = input.missingRelatedSources ?? [];
     }
     if (input.reviewProposalMode === 'auto_propose' || input.reviewProposalMode === 'review_queue') {
-        response.proposal_count = proposalResult.proposals.length;
-        response.proposals = proposalResult.proposals.map((proposal) => ({
+        response.proposal_count = durableOutput.proposal_count;
+        response.proposals = aggregatedProposals.map((proposal) => ({
             kind: proposal.kind,
             proposal_id: proposal.proposalId,
             path: proposal.path,
@@ -7414,6 +8733,41 @@ async function readTaskLifecycleStateAsync(vaultRoot, taskId, context) {
         throw error;
     }
 }
+async function releaseIncompatibleFinishTaskBinding(vaultRoot, record, context) {
+    const payload = (0, protocol_1.isRecord)(record.payload) ? record.payload : null;
+    const requestSnapshot = payload && (0, protocol_1.isRecord)(payload.requestSnapshot)
+        ? payload.requestSnapshot
+        : null;
+    const taskId = payload && typeof payload.taskId === 'string'
+        ? payload.taskId
+        : requestSnapshot && typeof requestSnapshot.task_id === 'string'
+            ? requestSnapshot.task_id
+            : '';
+    if (!taskId)
+        return;
+    const taskPath = buildTaskNotePath(taskId);
+    const current = await readCurrentVaultTextState(vaultRoot, taskPath, context);
+    if (!current)
+        return;
+    const frontmatter = (0, core_1.parseMarkdown)(current.content).frontmatter.fields;
+    const status = stripYamlQuotes(readFrontmatterString(frontmatter, ['status'])).toLowerCase();
+    const finishOperationId = stripYamlQuotes(readFrontmatterString(frontmatter, ['finish_operation_id']));
+    if (status !== 'closing' || finishOperationId !== record.operation_id)
+        return;
+    const next = updateFrontmatterFields(current.content, {
+        status: 'active',
+        finish_operation_id: null,
+    });
+    if (context.vaultRepository) {
+        if (!current.version) {
+            throw new core_1.OperationConflictError('Cannot release the unfinished finish_task binding without a task version.');
+        }
+        await context.vaultRepository.replaceText(current.path, current.version, next);
+        return;
+    }
+    const absolutePath = (0, safety_1.resolveSafeNotePath)(vaultRoot, current.path, pathSafetyOptions(context));
+    replaceTextFileAtomically(absolutePath, next, current.content);
+}
 async function handleFinishTask(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
     const invocationContext = { ...context };
@@ -7434,6 +8788,12 @@ async function handleFinishTask(rawArgs, context) {
         storedRequestHash: (payload) => (0, protocol_1.isRecord)(payload) && typeof payload.requestHash === 'string'
             ? payload.requestHash
             : '',
+        validateExistingOperation: (record, payload) => {
+            if (record.status !== 'completed'
+                && payload.memoryRecordWriteVersion !== 2) {
+                throw new core_1.OperationConflictError(`Cannot recover unfinished legacy finish_task operation "${record.operation_id}" without MemoryRecord v2 write semantics.`);
+            }
+        },
         buildPayload: (args, operationId, requestHash, requestSnapshot) => buildFinishTaskOperationPayload(args, context, operationId, requestHash, requestSnapshot),
         getTaskId: (payload) => payload.taskId,
         readLifecycle: (taskId) => readTaskLifecycleStateAsync(vaultRoot, taskId, context),

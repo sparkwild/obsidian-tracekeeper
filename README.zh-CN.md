@@ -2,13 +2,19 @@
 
 [English README](./README.md)
 
-Tracekeeper 是一个面向本地 Agent 知识体系的 Obsidian 插件：Memory 和 Wiki 使用同一套稳定结构。
+Tracekeeper 是一套基于 Obsidian 的本地优先知识与 AI 记忆系统。它让经用户明确连接的 AI Agent 通过仅限回环地址、受凭据保护的 MCP Runtime 召回限定范围的 Vault 上下文并提出持久化更新；Obsidian 始终是人工工作区，Vault 始终是事实来源。
 
-它把 AI 辅助工作变成可追踪、可审阅、可决定的候选内容：任务记忆、会话记录和记忆提案都留在 Obsidian 里。
+## Tracekeeper 能做什么
+
+- 在桌面端 Obsidian 运行时，通过本机 MCP Runtime 将 AI 工具连接到当前 Vault。
+- 召回选定范围内的 Vault 上下文并构建有限的 context pack，不开放不受限制的文件系统访问。
+- 让全局记忆和知识更新依次经过人工审核、写入预览与明确确认。
+- 可选地将项目记忆保存为不可变、带链接的 Markdown 条目，并用稳定操作身份保证重试安全。
+- 将持久知识保留在普通 Vault 文件中，不依赖 Tracekeeper 托管后端或外部数据库。
 
 ## 安装
 
-Tracekeeper 进入 Obsidian 社区插件目录后：
+从 Obsidian 社区插件目录安装 Tracekeeper：
 
 1. 打开 Obsidian **设置**。
 2. 进入 **第三方插件**。

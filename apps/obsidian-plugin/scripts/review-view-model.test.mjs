@@ -71,6 +71,8 @@ try {
 			claim_key: 'project:review-lifecycle',
 			proposed_authority: 'user',
 			proposed_confidence: 'verified',
+			review_reason: 'user_authority_requires_human_review',
+			review_warnings: ['Agent-originated memory cannot self-assign user authority.'],
 			declared_state: 'active',
 			observed_at: '2026-08-06T00:00:00.000Z',
 			supersedes: ['memory-old'],
@@ -97,11 +99,131 @@ try {
 	assert.equal(memoryProposal?.claimKey, 'project:review-lifecycle');
 	assert.equal(memoryProposal?.proposedAuthority, 'user');
 	assert.equal(memoryProposal?.proposedConfidence, 'verified');
+	assert.equal(memoryProposal?.reviewReason, 'user_authority_requires_human_review');
+	assert.deepEqual(memoryProposal?.reviewWarnings, [
+		'Agent-originated memory cannot self-assign user authority.',
+	]);
 	assert.deepEqual(memoryProposal?.supersedes, ['memory-old']);
 	assert.deepEqual(memoryProposal?.contradicts, ['memory-conflict']);
 	const lifecycleCreateValidity = reviewModule.getReviewProposalValidity(memoryProposal, { exists: false });
 	assert.equal(lifecycleCreateValidity.isComplete, true);
 	assert.equal(lifecycleCreateValidity.missingTargetEvidence, false);
+
+	const missingMemoryAppendWithoutClaim = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/missing-memory-append-no-claim.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'append-without-claim',
+			target_note: '01_knowledge/memory/projects/tracekeeper/memory.md',
+			writeback_effect: 'append',
+			writeback_content: 'append legacy',
+		},
+		body: '# Missing claim append\n',
+	});
+	const appendWithoutClaimValidity = reviewModule.getReviewProposalValidity(
+		{
+			...(missingMemoryAppendWithoutClaim || {}),
+			claimKey: '',
+		},
+		{ exists: false }
+	);
+	assert.equal(appendWithoutClaimValidity.isComplete, false);
+	assert.equal(appendWithoutClaimValidity.missingTargetEvidence, true);
+
+	const wikiCreateMissing = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/wiki-create-missing.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'wiki-create-missing',
+			target_note: '01_knowledge/wiki/new-topic.md',
+			writeback_content: 'new wiki content',
+		},
+		body: '# Missing wiki create\n',
+	});
+	assert.equal(wikiCreateMissing?.invalidWritebackEffect, false);
+	const wikiMissingCreateValidity = reviewModule.getReviewProposalValidity(wikiCreateMissing, { exists: false });
+	assert.equal(wikiMissingCreateValidity.isComplete, true);
+
+	const wikiCreateConflict = reviewModule.getReviewProposalValidity({
+		...wikiCreateMissing,
+		writebackEffect: 'create_wiki_note',
+	}, { exists: true });
+	assert.equal(wikiCreateConflict.isComplete, false);
+	assert.equal(wikiCreateConflict.effectTargetMismatch, false);
+
+	const wikiCreateTargetedMemory = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/wiki-create-memory.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'wiki-create-memory',
+			target_note: '01_knowledge/memory/projects/tracekeeper/memory.md',
+			writeback_effect: 'create_wiki_note',
+			writeback_content: 'should not be able',
+		},
+		body: '# Wiki create against memory target\n',
+	});
+	assert.equal(
+		reviewModule.getReviewProposalValidity(wikiCreateTargetedMemory, { exists: false }).isComplete,
+		false
+	);
+	assert.equal(
+		reviewModule.getReviewProposalValidity(wikiCreateTargetedMemory, { exists: false }).effectTargetMismatch,
+		true
+	);
+	const wikiCreateTargetedMemoryExisting = reviewModule.getReviewProposalValidity(
+		wikiCreateTargetedMemory,
+		{ exists: true }
+	);
+	assert.equal(wikiCreateTargetedMemoryExisting.effectTargetMismatch, true);
+	assert.equal(wikiCreateTargetedMemoryExisting.isComplete, false);
+	assert.equal(wikiCreateTargetedMemoryExisting.missingTargetEvidence, false);
+
+	const memoryCreateTargetedWikiExisting = reviewModule.getReviewProposalValidity(
+		reviewModule.parseMemoryProposalRecord({
+			filePath: 'review_queue/memory-create-to-wiki.md',
+			fields: {
+				type: 'memory-proposal',
+				proposal_id: 'memory-create-to-wiki',
+				target_note: '01_knowledge/wiki/topics/memory-like-target.md',
+				writeback_effect: 'create_memory_record',
+				writeback_content: 'this is wrong target type',
+			},
+			body: '# MemoryRecord create against wiki target',
+		}),
+		{ exists: true }
+	);
+	assert.equal(memoryCreateTargetedWikiExisting.effectTargetMismatch, true);
+	assert.equal(memoryCreateTargetedWikiExisting.isComplete, false);
+
+	const writebackEffectConflict = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/writeback-effect-conflict.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'writeback-effect-conflict',
+			target_note: '01_knowledge/wiki/conflict.md',
+			writeback_effect: 'append',
+			writebackEffect: 'create_memory_record',
+			writeback_content: 'content',
+		},
+		body: '# Effect conflict\n',
+	});
+	assert.ok(writebackEffectConflict);
+	assert.equal(writebackEffectConflict?.invalidWritebackEffect, true);
+	const writebackEffectArray = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/writeback-effect-array.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'writeback-effect-array',
+			target_note: '01_knowledge/wiki/conflict-array.md',
+			writeback_effect: ['append', 'create_wiki_note'],
+			writeback_content: 'content',
+		},
+		body: '# Effect array\n',
+	});
+	assert.ok(writebackEffectArray);
+	assert.equal(writebackEffectArray?.invalidWritebackEffect, true);
+	assert.equal(writebackEffectArray?.writebackEffect, undefined);
+
 	assert.equal(memoryProposal?.riskLevel, 'low');
 	assert.equal(memoryProposal?.revisionRequestedBy, 'agent');
 	assert.equal(memoryProposal?.evidence.length, 2);
@@ -114,6 +236,237 @@ try {
 	assert.match(memoryProposal?.contentHash || '', /^content:/);
 	assert.match(memoryProposal?.revision || '', /^revision:/);
 	assert.equal(memoryProposal?.targetNote, '01_knowledge/memory/projects/tracekeeper/memory.md');
+
+	const appliedCreateReceipt = {
+		schemaVersion: 1,
+		operationId: 'apply-create-wiki',
+		payloadHash: 'payload-hash',
+		kind: 'apply',
+		proposalPath: 'review_queue/applied-create-wiki.md',
+		proposalId: 'applied-create-wiki',
+		taskId: 'task-42',
+		previousStatus: 'approved',
+		nextStatus: 'applied',
+		expectedRevision: 'expected-revision',
+		expectedContentHash: 'expected-content-hash',
+		previousRevision: 'previous-revision',
+		committedRevision: 'committed-revision',
+		previousContentHash: 'previous-content-hash',
+		committedContentHash: 'applied-create-content-hash',
+		committedAt: '2026-08-10T01:02:03.000Z',
+	};
+	const appliedMetadataRecord = reviewModule.parseMemoryProposalRecord({
+		filePath: appliedCreateReceipt.proposalPath,
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: appliedCreateReceipt.proposalId,
+			approval_status: 'applied',
+			target_note: '01_knowledge/wiki/applied-create-wiki.md',
+			writeback_content: 'created Wiki body',
+			writeback_effect: 'create_wiki_note',
+			writeback_operation_id: appliedCreateReceipt.operationId,
+			writeback_applied_at: appliedCreateReceipt.committedAt,
+			writeback_target: '01_knowledge/wiki/applied-create-wiki.md',
+		},
+		body: '# Applied create Wiki\n',
+	});
+	assert.equal(appliedMetadataRecord?.writebackOperationId, 'apply-create-wiki');
+	assert.equal(appliedMetadataRecord?.writebackAppliedAt, '2026-08-10T01:02:03.000Z');
+	assert.equal(appliedMetadataRecord?.writebackTarget, '01_knowledge/wiki/applied-create-wiki.md');
+	const conflictingOperationMetadata = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/conflicting-operation.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'conflicting-operation',
+			approval_status: 'applied',
+			target_note: '01_knowledge/wiki/conflicting-operation.md',
+			writeback_content: 'content',
+			writeback_effect: 'create_wiki_note',
+			writeback_operation_id: 'canonical-operation',
+			writebackOperationId: 'conflicting-operation',
+		},
+		body: '# Conflicting operation metadata\n',
+	});
+	assert.equal(conflictingOperationMetadata?.invalidWritebackOperationId, true);
+	const placeholderOperationMetadata = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/placeholder-operation.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'placeholder-operation',
+			approval_status: 'applied',
+			target_note: '01_knowledge/wiki/placeholder-operation.md',
+			writeback_content: 'content',
+			writeback_effect: 'create_wiki_note',
+			writeback_operation_id: 'unknown',
+		},
+		body: '# Placeholder operation metadata\n',
+	});
+	assert.equal(placeholderOperationMetadata?.invalidWritebackOperationId, true);
+	const conflictingTargetMetadata = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/conflicting-target-metadata.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'conflicting-target-metadata',
+			approval_status: 'applied',
+			target_note: '01_knowledge/wiki/conflicting-target-metadata.md',
+			writeback_content: 'content',
+			writeback_effect: 'create_wiki_note',
+			writeback_target: '01_knowledge/wiki/conflicting-target-metadata.md',
+			writebackTarget: '01_knowledge/wiki/different-target.md',
+		},
+		body: '# Conflicting target metadata\n',
+	});
+	assert.equal(conflictingTargetMetadata?.invalidWritebackTarget, true);
+	const appliedCreateHistory = reviewModule.getReviewAppliedHistory({
+		...memoryProposal,
+		path: appliedCreateReceipt.proposalPath,
+		proposalId: appliedCreateReceipt.proposalId,
+		taskId: appliedCreateReceipt.taskId,
+		approvalStatus: 'applied',
+		targetNote: '01_knowledge/wiki/applied-create-wiki.md',
+		writebackEffect: 'create_wiki_note',
+		writebackOperationId: appliedCreateReceipt.operationId,
+		writebackAppliedAt: appliedCreateReceipt.committedAt,
+		writebackTarget: '01_knowledge/wiki/applied-create-wiki.md',
+		contentHash: appliedCreateReceipt.committedContentHash,
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: appliedCreateReceipt,
+	});
+	assert.equal(appliedCreateHistory?.receiptVerified, true);
+	assert.equal(appliedCreateHistory?.writebackEffect, 'create_wiki_note');
+	assert.equal(appliedCreateHistory?.operationId, 'apply-create-wiki');
+	const driftedTargetHistory = reviewModule.getReviewAppliedHistory({
+		...memoryProposal,
+		path: appliedCreateReceipt.proposalPath,
+		proposalId: appliedCreateReceipt.proposalId,
+		taskId: appliedCreateReceipt.taskId,
+		approvalStatus: 'applied',
+		targetNote: '01_knowledge/wiki/drifted-target.md',
+		writebackTarget: '01_knowledge/wiki/applied-create-wiki.md',
+		writebackEffect: 'create_wiki_note',
+		writebackOperationId: appliedCreateReceipt.operationId,
+		writebackAppliedAt: appliedCreateReceipt.committedAt,
+		contentHash: appliedCreateReceipt.committedContentHash,
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: appliedCreateReceipt,
+	});
+	assert.equal(driftedTargetHistory?.receiptVerified, false);
+	assert.equal(driftedTargetHistory?.targetNote, '01_knowledge/wiki/applied-create-wiki.md');
+	const missingWritebackTargetHistory = reviewModule.getReviewAppliedHistory({
+		...memoryProposal,
+		path: 'review_queue/missing-writeback-target.md',
+		proposalId: 'missing-writeback-target',
+		taskId: appliedCreateReceipt.taskId,
+		approvalStatus: 'applied',
+		targetNote: '01_knowledge/wiki/apply-expected-target.md',
+		writebackEffect: 'create_wiki_note',
+		writebackOperationId: appliedCreateReceipt.operationId,
+		writebackAppliedAt: appliedCreateReceipt.committedAt,
+		contentHash: appliedCreateReceipt.committedContentHash,
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: appliedCreateReceipt,
+	});
+	assert.equal(missingWritebackTargetHistory?.targetNote, '');
+	const invalidWritebackTargetHistory = reviewModule.getReviewAppliedHistory({
+		...memoryProposal,
+		path: 'review_queue/invalid-writeback-target.md',
+		proposalId: 'invalid-writeback-target',
+		taskId: appliedCreateReceipt.taskId,
+		approvalStatus: 'applied',
+		targetNote: '01_knowledge/wiki/apply-expected-target.md',
+		writebackTarget: 'unknown',
+		invalidWritebackTarget: true,
+		writebackEffect: 'create_wiki_note',
+		writebackOperationId: appliedCreateReceipt.operationId,
+		writebackAppliedAt: appliedCreateReceipt.committedAt,
+		contentHash: appliedCreateReceipt.committedContentHash,
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: appliedCreateReceipt,
+	});
+	assert.equal(invalidWritebackTargetHistory?.receiptVerified, false);
+	assert.equal(invalidWritebackTargetHistory?.targetNote, '');
+
+	const legacyAppliedHistory = reviewModule.getReviewAppliedHistory({
+		...memoryProposal,
+		path: 'review_queue/legacy-applied.md',
+		proposalId: 'legacy-applied',
+		approvalStatus: 'applied',
+		writebackEffect: undefined,
+		writebackOperationId: 'apply-legacy',
+		contentHash: 'legacy-applied-content-hash',
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: {
+			...appliedCreateReceipt,
+			operationId: 'apply-legacy',
+			proposalPath: 'review_queue/legacy-applied.md',
+			proposalId: 'legacy-applied',
+			committedContentHash: 'legacy-applied-content-hash',
+		},
+	});
+	assert.equal(legacyAppliedHistory?.receiptVerified, true);
+	assert.equal(legacyAppliedHistory?.writebackEffect, undefined);
+	assert.equal(reviewModule.getReviewAppliedHistory({
+		...memoryProposal,
+		path: appliedCreateReceipt.proposalPath,
+		proposalId: appliedCreateReceipt.proposalId,
+		taskId: appliedCreateReceipt.taskId,
+		approvalStatus: 'applied',
+		targetNote: '01_knowledge/wiki/applied-create-wiki.md',
+		writebackEffect: 'create_wiki_note',
+		writebackOperationId: appliedCreateReceipt.operationId,
+		writebackAppliedAt: '2026-08-10T01:02:04.000Z',
+		writebackTarget: '01_knowledge/wiki/applied-create-wiki.md',
+		contentHash: appliedCreateReceipt.committedContentHash,
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: appliedCreateReceipt,
+	})?.receiptVerified, false);
+	assert.equal(reviewModule.getReviewAppliedHistory({
+		...memoryProposal,
+		path: appliedCreateReceipt.proposalPath,
+		proposalId: appliedCreateReceipt.proposalId,
+		taskId: appliedCreateReceipt.taskId,
+		approvalStatus: 'applied',
+		targetNote: '01_knowledge/wiki/applied-create-wiki.md',
+		writebackEffect: 'create_wiki_note',
+		writebackOperationId: appliedCreateReceipt.operationId,
+		writebackAppliedAt: appliedCreateReceipt.committedAt,
+		writebackTarget: '01_knowledge/wiki/drifted-target.md',
+		contentHash: appliedCreateReceipt.committedContentHash,
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: appliedCreateReceipt,
+	})?.receiptVerified, false);
+	assert.equal(
+		reviewModule.getReviewAppliedHistory({
+			...memoryProposal,
+			path: appliedCreateReceipt.proposalPath,
+			proposalId: appliedCreateReceipt.proposalId,
+			taskId: appliedCreateReceipt.taskId,
+			approvalStatus: 'applied',
+			targetNote: '01_knowledge/wiki/applied-create-wiki.md',
+			writebackEffect: 'create_wiki_note',
+			writebackOperationId: appliedCreateReceipt.operationId,
+			writebackAppliedAt: appliedCreateReceipt.committedAt,
+			writebackTarget: '01_knowledge/wiki/drifted-target.md',
+			contentHash: appliedCreateReceipt.committedContentHash,
+			revision: appliedCreateReceipt.committedRevision,
+			lastTransition: appliedCreateReceipt,
+		})?.targetNote,
+		'01_knowledge/wiki/drifted-target.md'
+	);
+
+	const driftedAppliedHistory = reviewModule.getReviewAppliedHistory({
+		...memoryProposal,
+		path: appliedCreateReceipt.proposalPath,
+		proposalId: appliedCreateReceipt.proposalId,
+		taskId: appliedCreateReceipt.taskId,
+		approvalStatus: 'applied',
+		writebackEffect: 'append',
+		writebackOperationId: 'different-operation',
+		contentHash: 'drifted-content-hash',
+		lastTransition: appliedCreateReceipt,
+	});
+	assert.equal(driftedAppliedHistory?.receiptVerified, false);
+	assert.equal(driftedAppliedHistory?.writebackEffect, undefined);
 
 	const bodyOnlyProposal = reviewModule.parseMemoryProposalRecord({
 		filePath: 'review_queue/body-only.md',
@@ -243,7 +596,7 @@ try {
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...invalidTarget, approvalStatus: 'pending' }), 'incomplete');
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...legacyProposal, approvalStatus: 'approved' }), 'completed');
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 43 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 61 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

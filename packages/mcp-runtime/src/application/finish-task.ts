@@ -3,6 +3,7 @@ import {
 	RecoverableOperationRunner,
 	type OperationFailureInjection,
 	type OperationJournal,
+	type OperationRecord,
 } from '@tracekeeper/core';
 
 export interface FinishTaskRunnerStep {
@@ -27,6 +28,7 @@ export interface FinishTaskApplicationDependencies<TRawArgs extends object, TPay
 	};
 	loadExistingPayload(payload: unknown): boolean;
 	storedRequestHash(payload: unknown): string;
+	validateExistingOperation?(record: OperationRecord, payload: TPayload): void;
 	buildPayload(
 		rawArgs: TRawArgs,
 		operationId: string,
@@ -77,6 +79,7 @@ export class FinishTaskApplicationService<TRawArgs extends object, TPayload, TRe
 				);
 			}
 			operationPayload = existing.payload as TPayload;
+			dependencies.validateExistingOperation?.(existing, operationPayload);
 		} else {
 			operationPayload = await dependencies.buildPayload(
 				rawArgs,

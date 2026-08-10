@@ -333,6 +333,11 @@ test('application owner: injected dependencies execute global, project, and hist
 test('read view owner: bounded catalog recall never reads bodies and excludes archive and superseded memory by default', async (t) => {
 	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-recall-read-view-'));
 	t.after(() => fs.rmSync(vaultRoot, { recursive: true, force: true }));
+	const regressionToken = 'review-filter-regression-token';
+	const reviewQueueProposalPath = '00_tracekeeper/inbox/review_queue/proposal-propose-memory-ad497db02a981e82727485ea.md';
+	const controlActivityPath = '00_tracekeeper/control/agent_activity/review-filter-control.md';
+	const reviewFilterWikiPath = '01_knowledge/wiki/concepts/review-filter-wiki.md';
+	const reviewFilterSourcePath = '01_knowledge/sources/web/review-filter-source.md';
 	const memory = (memoryId, overrides = {}) => buildMemoryRecord({
 		path: `01_knowledge/memory/global/${memoryId}.md`,
 		memory_id: memoryId,
@@ -363,10 +368,43 @@ test('read view owner: bounded catalog recall never reads bodies and excludes ar
 	const currentMemory = memory('memory-current', {
 		observed_at: '2026-08-02T00:00:00Z',
 		supersedes: ['memory-old'],
+		body: `# memory-current\nlifecyclefixture memory-current\n${regressionToken}`,
 	});
 	const notes = [
 		note(vaultRoot, oldMemory.record.path, { content: oldMemory.markdown }),
 		note(vaultRoot, currentMemory.record.path, { content: currentMemory.markdown }),
+		note(vaultRoot, controlActivityPath, {
+			content: `# review filter control\n${regressionToken}`,
+			frontmatter: {
+				type: 'agent_activity',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+			},
+		}),
+		note(vaultRoot, reviewQueueProposalPath, {
+			content: `# review queue proposal\n${regressionToken}`,
+			frontmatter: {
+				type: 'memory_proposal',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+			},
+		}),
+		note(vaultRoot, reviewFilterSourcePath, {
+			content: `# review filter source\n${regressionToken}`,
+			frontmatter: {
+				type: 'captured_source',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+			},
+		}),
+		note(vaultRoot, reviewFilterWikiPath, {
+			content: `# review filter wiki\n${regressionToken}`,
+			frontmatter: {
+				type: 'wiki-concept',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+			},
+		}),
 		note(vaultRoot, '02_archive/atlas-history.md', {
 			frontmatter: { project_hint: 'atlas', project_id: 'atlas-id', type: 'agent-task', task_id: 'archived-task' },
 			content: '# Archived\narchivefixture historyfixture',
@@ -376,7 +414,7 @@ test('read view owner: bounded catalog recall never reads bodies and excludes ar
 		}),
 		note(vaultRoot, '01_knowledge/memory/projects/atlas/durable.md', {
 			frontmatter: { project_hint: 'atlas', project_id: 'atlas-id', type: 'memory' },
-			content: '# Atlas durable memory\n订单投影的既有架构决定。',
+			content: `# Atlas durable memory\n订单投影的既有架构决定。\n${regressionToken}`,
 		}),
 		note(vaultRoot, '00_tracekeeper/work/tasks/atlas-query-echo.md', {
 			frontmatter: { project_hint: 'atlas', project_id: 'atlas-id', type: 'agent_task' },
@@ -430,6 +468,31 @@ test('read view owner: bounded catalog recall never reads bodies and excludes ar
 	}, view);
 	assert.equal(queryEcho.entries[0].path, '01_knowledge/memory/projects/atlas/durable.md');
 	assert.match(queryEcho.entries.find((entry) => entry.path.endsWith('atlas-query-echo.md')).score_reason.join(' '), /query-echo penalty/);
+	const globalLeak = service.executeReadView({
+		scope: 'global',
+		query: regressionToken,
+		maxItems: 10,
+		vaultRoot,
+		projectIdentityInput: {},
+	}, view);
+	assert.equal(globalLeak.matches.some((entry) => entry.path.startsWith('00_tracekeeper/control/')), false);
+	assert.equal(globalLeak.matches.some((entry) => entry.path.startsWith('00_tracekeeper/inbox/')), false);
+	assert.equal(globalLeak.matches.some((entry) => entry.path === currentMemory.record.path), true);
+	assert.equal(globalLeak.matches.some((entry) => entry.path === reviewFilterSourcePath), true);
+	assert.equal(globalLeak.matches.some((entry) => entry.path === reviewFilterWikiPath), true);
+	assert.equal(globalLeak.matches.some((entry) => entry.path === '01_knowledge/memory/projects/atlas/durable.md'), true);
+	const project = service.executeReadView({
+		scope: 'project',
+		query: regressionToken,
+		maxItems: 10,
+		vaultRoot,
+		projectIdentityInput: { project_id: 'atlas-id', project_hint: 'atlas' },
+	}, view);
+	assert.equal(project.entries.some((entry) => entry.path.startsWith('00_tracekeeper/control/')), false);
+	assert.equal(project.entries.some((entry) => entry.path.startsWith('00_tracekeeper/inbox/')), false);
+	assert.equal(project.entries.some((entry) => entry.path === reviewFilterSourcePath), true);
+	assert.equal(project.entries.some((entry) => entry.path === reviewFilterWikiPath), true);
+	assert.equal(project.entries.some((entry) => entry.path === '01_knowledge/memory/projects/atlas/durable.md'), true);
 	assert.equal(contentReads, 0);
 });
 
@@ -532,7 +595,7 @@ test('application owner: injected clock exclusively controls the existing recenc
 test('contract: Recall retains public order, schema, capability, risk, effect, idempotency, and compatibility replacements', async (t) => {
 	const contract = getContractByName('tracekeeper.recall');
 	assert.ok(contract);
-	assert.equal(contract.version, 3);
+	assert.equal(contract.version, 4);
 	assert.equal(contract.visibility, 'public');
 	assert.equal(contract.capability, 'vault.read');
 	assert.equal(contract.risk, 'read-only');
@@ -545,6 +608,21 @@ test('contract: Recall retains public order, schema, capability, risk, effect, i
 	const definition = toolDefinitions(['vault.read']).find((entry) => entry.name === 'tracekeeper.recall');
 	assert.ok(definition);
 	assert.strictEqual(definition.outputSchema, contract.outputSchema);
+	assert.deepEqual(
+		Object.keys(definition.inputSchema).sort(),
+		Object.keys(contract.inputSchema).sort()
+	);
+	assert.deepEqual(definition.inputSchema.allOf, contract.inputSchema.allOf);
+	const proposeContract = getContractByName('tracekeeper.propose_memory');
+	const proposeDefinition = toolDefinitions(['memory.propose'])
+		.find((entry) => entry.name === 'tracekeeper.propose_memory');
+	assert.ok(proposeContract);
+	assert.ok(proposeDefinition);
+	assert.deepEqual(
+		Object.keys(proposeDefinition.inputSchema).sort(),
+		Object.keys(proposeContract.inputSchema).sort()
+	);
+	assert.deepEqual(proposeDefinition.inputSchema.allOf, proposeContract.inputSchema.allOf);
 	assert.deepEqual(definition.annotations, {
 		readOnlyHint: true,
 		destructiveHint: false,
@@ -611,6 +689,26 @@ test('scope and query: default/global/project/history routing, required queries,
 	assert.equal(taskHistoryResult.payload.recall.scope, 'task_history');
 	assert.equal(taskHistoryResult.payload.entries.length, 1);
 	assert.equal(taskHistoryResult.payload.entries[0].session_path, '00_tracekeeper/work/sessions/atlas-session.md');
+	for (const payload of [
+		defaultResult.payload,
+		projectResult.payload,
+		historyResult.payload,
+		taskHistoryResult.payload,
+	]) {
+		for (const key of [
+			'query', 'max_items', 'matched_count', 'scope_mode',
+			'index_state', 'snapshot_generation', 'snapshot_warning',
+		]) {
+			assert.equal(Object.prototype.hasOwnProperty.call(payload, key), true, `Recall must expose ${key}`);
+		}
+		assert.equal(payload.matches.length, payload.matched_count);
+		for (const match of payload.matches) {
+			assert.equal(typeof match.path, 'string');
+			assert.equal(typeof match.excerpt, 'string');
+			assert.equal(typeof match.why_matched, 'string');
+			assert.ok(match.relation_evidence && typeof match.relation_evidence === 'object');
+		}
+	}
 
 	for (const args of [
 		{ scope: 'global', query: '' },
@@ -1052,6 +1150,9 @@ test('workflow and output: zero-result behavior, stable recall correlation, boun
 		query: 'zzqnovaultmatch7b6065',
 	}, context);
 	assert.equal(zero.payload.recall.matched_count, 0);
+	assert.equal(zero.payload.matched_count, 0);
+	assert.equal(zero.payload.scope_mode, 'global');
+	assert.equal(zero.payload.query, 'zzqnovaultmatch7b6065');
 	assert.deepEqual(zero.payload.matches, []);
 	assert.equal(zero.payload.next_actions.length, 1);
 	assert.equal(zero.payload.next_actions[0].reason_code, 'RECALL_ZERO_MATCH');

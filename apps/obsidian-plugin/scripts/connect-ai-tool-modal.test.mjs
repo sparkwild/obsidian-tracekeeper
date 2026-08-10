@@ -4,6 +4,8 @@ import fs from 'node:fs';
 
 const settingsSource = fs.readFileSync('src/features/settings/tracekeeper-setting-tab.ts', 'utf8');
 const modalSource = fs.readFileSync('src/features/client-config/client-config-modals.ts', 'utf8');
+const mainSource = fs.readFileSync('src/main.ts', 'utf8');
+const oauthPendingSource = fs.readFileSync('src/features/client-config/oauth-pending.ts', 'utf8');
 const skillModalSource = fs.readFileSync('src/features/skill-installation/skill-install-modals.ts', 'utf8');
 const stylesSource = fs.readFileSync('styles.css', 'utf8');
 
@@ -25,6 +27,7 @@ for (const required of [
 	'private renderSetup',
 	'private renderManualBearer',
 	'private renderAuthorization',
+	'private refreshAgentState',
 	'private renderMaintenance',
 	'private renderSkill',
 	'createAgentIntegration',
@@ -32,6 +35,8 @@ for (const required of [
 	'issueManualBearerCredential',
 	'decideOAuthRequest',
 	'getPendingOAuthRequests',
+	'pendingOAuthRequestsForModal',
+	'selectedUnboundRequestId',
 	'copyToClipboard',
 	'buildManualMcpJsonConfig',
 	'revokeAndRemoveAgentIntegration',
@@ -65,6 +70,9 @@ for (const required of [
 	"role: 'alert'",
 	"'aria-live': 'assertive'",
 	'客户端',
+	'OAuth 客户端 ID',
+	'客户端自报名称（不可信）',
+	'Allowing it binds this OAuth client',
 	'Redirect origin',
 	'urlOrigin(pending.redirectUri)',
 	'完整 JSON 只在当前弹窗中显示',
@@ -73,6 +81,8 @@ for (const required of [
 	'Revocation deletes MCP setup, authorization, and Skill state records from Tracekeeper',
 	"'aria-live': 'polite'",
 	"'aria-atomic': 'true'",
+	'this.plugin.subscribeAgentStateChanges',
+	'this.stopAgentStateSubscription?.()',
 ]) {
 	assert.ok(modalSource.includes(required), `${required} must be present`);
 }
@@ -82,8 +92,8 @@ assert.equal(modalSource.includes('忘记 Agent 卡片'), false);
 assert.equal(modalSource.includes('Forget Agent card'), false);
 assert.equal(modalSource.includes('手工 Bearer'), false);
 assert.equal(modalSource.includes('Manual Bearer'), false);
-assert.equal(modalSource.includes('不可信'), false);
-assert.equal(modalSource.includes('untrusted'), false);
+assert.ok(modalSource.includes('不可信'));
+assert.ok(modalSource.includes('untrusted'));
 assert.equal(modalSource.includes("ui('移除配置', 'Remove configuration')"), false);
 assert.equal(modalSource.includes("ui('生成访问凭据', 'Generate access credential')"), false);
 assert.equal(modalSource.includes("ui('替换访问凭据', 'Replace access credential')"), false);
@@ -91,6 +101,43 @@ for (const forbiddenCredentialMetadata of ['credentialId', 'issuedAt', 'tokenDig
 	assert.equal(modalSource.includes(forbiddenCredentialMetadata), false, `${forbiddenCredentialMetadata} must stay out of the management modal`);
 }
 assert.match(modalSource, /this\.setTitle\(this\.mode === 'add'/);
+assert.match(modalSource, /subscribeAgentStateChanges\(\(\) => this\.refreshAgentState\(\)\)/);
+assert.match(modalSource, /refreshAgentState\(\)[\s\S]*getAgentIntegrationsSnapshot\(\)\.find[\s\S]*this\.renderPanel\(\)/);
+const authorizationStart = modalSource.indexOf('private renderAuthorization');
+const authorizationEnd = modalSource.indexOf('private renderMaintenance', authorizationStart);
+const authorizationSource = modalSource.slice(authorizationStart, authorizationEnd);
+assert.match(authorizationSource, /const pendingRequests = this\.pendingOAuthRequests\(\)/);
+assert.equal(authorizationSource.includes('this.plugin.getPendingOAuthRequests()'), false);
+const decisionStart = modalSource.indexOf('private async decide');
+const decisionEnd = modalSource.indexOf('private async refreshSettings', decisionStart);
+const decisionSource = modalSource.slice(decisionStart, decisionEnd);
+assert.match(decisionSource, /commitOAuthDecisionWithBestEffortRefresh/);
+assert.match(decisionSource, /\(\) => this\.plugin\.decideOAuthRequest/);
+assert.match(decisionSource, /\(\) => this\.refreshSettings\('content'\)/);
+assert.ok(decisionSource.indexOf('Unable to update OAuth approval') < decisionSource.indexOf('Authorization submitted'));
+assert.match(decisionSource, /refreshError[\s\S]*Agent view is stale/);
+assert.match(decisionSource, /this\.renderPanel\(\)/);
+assert.match(settingsSource, /commitOAuthDecisionWithBestEffortRefresh[\s\S]*\(\) => this\.plugin\.decideOAuthRequest\(requestId, \{ decision: 'deny' \}\)[\s\S]*\(\) => this\.refreshAgentList\(true\)/);
+assert.match(settingsSource, /request was denied, but the Agent list is stale/);
+assert.match(mainSource, /pruneExpiredPendingOAuthRequests\(\);[\s\S]*pendingOAuthRequests\.set/);
+assert.match(mainSource, /request\.expiresAt > now/);
+assert.match(mainSource, /pendingOAuthClientReservations\.reserve\(request, target\.integrationId\)/);
+assert.match(mainSource, /pendingOAuthClientReservations\.releaseRequest\(requestId\)/);
+assert.match(oauthPendingSource, /OAuth client already has a pending approval for another Agent integration/);
+assert.match(oauthPendingSource, /request\.expiresAt \+ OAUTH_AUTHORIZATION_CODE_RESERVATION_TTL_MS/);
+assert.match(mainSource, /getBoundOAuthClients: \(\) => uniqueOAuthClientOwners/);
+const issueStart = mainSource.indexOf('issueOAuthCredential: async');
+const issueEnd = mainSource.indexOf('revokeOAuthCredential: async', issueStart);
+const issueSource = mainSource.slice(issueStart, issueEnd);
+assert.match(issueSource, /enqueueAgentCredentialOperation/);
+assert.match(issueSource, /enqueueSingleOwnerOAuthCredentialIssue/);
+const coordinatorStart = oauthPendingSource.indexOf('export const enqueueSingleOwnerOAuthCredentialIssue');
+const coordinatorEnd = oauthPendingSource.indexOf('export const isActivePendingOAuthRequest', coordinatorStart);
+const coordinatorSource = oauthPendingSource.slice(coordinatorStart, coordinatorEnd);
+assert.ok(coordinatorSource.indexOf('assertOAuthClientOwnershipAvailable') < coordinatorSource.indexOf('return await issue()'));
+assert.match(coordinatorSource, /finally[\s\S]*reservations\.releaseClientOwner/);
+assert.match(settingsSource, /OAuth client ownership conflict/);
+assert.match(settingsSource, /not shown on any Agent card and cannot be allowed/);
 assert.equal(modalSource.includes("this.contentEl.createEl('h2'"), false);
 assert.equal(modalSource.includes("section.createEl('h4'"), false);
 const copyFlowStart = modalSource.indexOf('private renderCopyableCommand');
@@ -107,8 +154,12 @@ assert.equal(revokeFlowSource.includes('forgetAgentIntegration'), false);
 assert.match(modalSource, /structure: this\.onStructureChanged/);
 assert.match(modalSource, /content: this\.onChanged/);
 assert.match(modalSource, /createAgentIntegration[\s\S]*await this\.refreshSettings\('structure'\)/);
-assert.match(skillModalSource, /confirmSkillWrite[\s\S]*await this\.onChanged\?\.\(\)[\s\S]*this\.close\(\)/);
+assert.match(skillModalSource, /confirmSkillWrite[\s\S]*this\.close\(\)[\s\S]*await this\.onChanged\?\.\(\)/);
+assert.match(skillModalSource, /failed to refresh Skill state after confirmed write/);
 assert.match(skillModalSource, /verifyExternalSkill[\s\S]*await this\.onChanged\?\.\(\)[\s\S]*this\.close\(\)/);
+assert.match(settingsSource, /'add',\s*\(\) => this\.refreshAgentList\(true\),/);
+assert.match(settingsSource, /'manage',\s*\(\) => this\.refreshAgentList\(true\),/);
+assert.match(settingsSource, /renderClientSkillPrompt\([\s\S]*onChanged: \(\) => this\.refreshAgentList\(true\)/);
 
 for (const forbidden of [
 	'issueAgentPairingTicket',
@@ -163,4 +214,4 @@ assert.doesNotMatch(stylesSource, /\.tracekeeper-connect-ai-tool-modal__selector
 assert.match(stylesSource, /max-width:\s*min\(720px,\s*calc\(100vw - 32px\)\)/);
 assert.match(stylesSource, /@media \(max-width: 520px\)/);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 68 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 97 })}\n`);

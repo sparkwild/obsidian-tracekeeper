@@ -128,11 +128,14 @@ export function buildSkillInstallPrompt(state: SkillInstallState, localize: Loca
 		case 'update_available':
 			return {
 				label: localize('强化技能可更新', 'Skill update available'),
-				detail: localize('请选择目录确认更新；已有目录会先预览并备份，不会覆盖用户修改。', 'Choose a directory to preview an update. Existing files are backed up and local changes are never overwritten.'),
+				detail: localize(
+					`将按当前安装目录${state.targetDirectory ? ` ${state.targetDirectory}` : ''} 直接更新。写入前会重新校验并保留备份；检测到用户修改时不会覆盖。`,
+					`Update directly in the current installation directory${state.targetDirectory ? ` ${state.targetDirectory}` : ''}. The target is rechecked and backed up before writing; local modifications are never overwritten.`
+				),
 				...versions,
 				tone: 'warning',
 				action: 'update',
-				actionLabel: localize('选择目录更新', 'Choose directory to update'),
+				actionLabel: localize('更新', 'Update'),
 				assistantLabel: localize('AI 辅助更新', 'AI-assisted update'),
 			};
 		case 'legacy_install':

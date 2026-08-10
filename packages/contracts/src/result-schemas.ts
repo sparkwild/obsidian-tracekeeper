@@ -298,6 +298,13 @@ export const RECALL_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 		'tool',
 		'read_only',
 		'vault_root',
+		'query',
+		'max_items',
+		'matched_count',
+		'scope_mode',
+		'index_state',
+		'snapshot_generation',
+		'snapshot_warning',
 		'recall',
 		'matches',
 		'next_actions',
@@ -309,7 +316,7 @@ export const RECALL_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 		read_only: { const: true, type: 'boolean' },
 		vault_root: { type: 'string', minLength: 1 },
 		query: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-		max_items: { type: 'integer', minimum: 0 },
+		max_items: { type: 'integer', minimum: 1, maximum: 20 },
 		matched_count: { type: 'integer', minimum: 0 },
 		total_matches: { type: 'integer', minimum: 0 },
 		task_id: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
@@ -357,9 +364,11 @@ export const RECALL_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 					type: 'array',
 					items: {
 						type: 'object',
-						required: ['path', 'content_origin', 'instruction_trust'],
+						required: ['path', 'excerpt', 'why_matched', 'content_origin', 'instruction_trust', 'relation_evidence'],
 						properties: {
 							path: { type: 'string', minLength: 1 },
+							excerpt: { type: 'string' },
+							why_matched: { type: 'string', minLength: 1 },
 							content_origin: {
 								type: 'string',
 								enum: ['captured_source', 'tracekeeper_generated', 'vault_note'],
@@ -367,6 +376,7 @@ export const RECALL_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 							instruction_trust: { const: 'data_only', type: 'string' },
 							relation_evidence: {
 								type: 'object',
+								required: ['related_wiki', 'related_sources'],
 								properties: {
 									related_wiki: {
 										type: 'array',
@@ -440,6 +450,51 @@ export const RECALL_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 	additionalProperties: false,
 };
 
+const DURABLE_OUTPUT_STATUS_SCHEMA = {
+	type: 'string',
+	enum: [
+		'none',
+		'pending_review',
+		'ready_to_apply',
+		'revision_requested',
+		'applied',
+		'rejected',
+		'unresolved',
+		'mixed',
+	],
+};
+
+const DURABLE_OUTPUT_SUMMARY_SCHEMA: JsonSchema2020 = {
+	type: 'object',
+	required: [
+		'status',
+		'source_capture_count',
+		'proposal_count',
+		'pending_review_count',
+		'ready_to_apply_count',
+		'revision_requested_count',
+		'applied_count',
+		'rejected_count',
+		'unresolved_count',
+		'proposal_paths',
+		'target_paths',
+	],
+	properties: {
+		status: DURABLE_OUTPUT_STATUS_SCHEMA,
+		source_capture_count: { type: 'integer', minimum: 0 },
+		proposal_count: { type: 'integer', minimum: 0 },
+		pending_review_count: { type: 'integer', minimum: 0 },
+		ready_to_apply_count: { type: 'integer', minimum: 0 },
+		revision_requested_count: { type: 'integer', minimum: 0 },
+		applied_count: { type: 'integer', minimum: 0 },
+		rejected_count: { type: 'integer', minimum: 0 },
+		unresolved_count: { type: 'integer', minimum: 0 },
+		proposal_paths: { type: 'array', items: { type: 'string' } },
+		target_paths: { type: 'array', items: { type: 'string' } },
+	},
+	additionalProperties: false,
+};
+
 export const FINISH_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 	type: 'object',
 	required: [
@@ -455,6 +510,7 @@ export const FINISH_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 		'activity_path',
 		'workflow',
 		'memory',
+		'durable_output',
 		'status',
 		'next_actions',
 	],
@@ -491,6 +547,7 @@ export const FINISH_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 		missing_related_sources: { type: 'array', items: { type: 'string' } },
 		workflow: { type: 'object', additionalProperties: true },
 		memory: { type: 'object', additionalProperties: true },
+		durable_output: DURABLE_OUTPUT_SUMMARY_SCHEMA,
 		closeout_contract: { type: 'object', additionalProperties: true },
 		memory_candidate_records: { type: 'array', items: FINISH_TASK_CLAIM_RECORD_SCHEMA },
 		memory_changes: { type: 'array', items: FINISH_TASK_MEMORY_CHANGE_SCHEMA },
@@ -505,7 +562,7 @@ export const FINISH_TASK_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020 = {
 	allOf: [
 		COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA,
 		{
-			required: ['workflow', 'memory', 'status', 'next_actions'],
+			required: ['workflow', 'memory', 'durable_output', 'status', 'next_actions'],
 			properties: {
 				tool: { const: 'tracekeeper.finish_task' },
 				task_id: { type: 'string', minLength: 1 },
@@ -1085,7 +1142,7 @@ export const APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA: JsonSchema2020 = {
 			type: 'object',
 			required: [
 				'schema_version', 'ok', 'tool', 'read_only', 'dry_run', 'permission_level',
-				'proposal_id', 'proposal_path', 'target_note', 'touched_notes', 'writeback_preview',
+				'proposal_id', 'proposal_path', 'target_note', 'touched_notes', 'writeback_effect', 'writeback_preview',
 				'confirmation_token', 'confirmation_expires_at',
 			],
 			properties: {
@@ -1099,6 +1156,10 @@ export const APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA: JsonSchema2020 = {
 				proposal_path: { type: 'string', minLength: 1 },
 				target_note: { type: 'string', minLength: 1 },
 				touched_notes: STRING_ARRAY_SCHEMA,
+				writeback_effect: {
+					type: 'string',
+					enum: ['append', 'create_wiki_note', 'create_memory_record'],
+				},
 				writeback_preview: { type: 'string', minLength: 1 },
 				confirmation_token: { type: 'string', minLength: 1 },
 				confirmation_expires_at: { type: 'string', minLength: 1 },
@@ -1280,10 +1341,22 @@ const PROPOSE_MEMORY_COMMON_PROPERTIES = {
 	path: { type: 'string', minLength: 1 },
 	activity_path: { type: 'string', minLength: 1 },
 	warnings: STRING_ARRAY_SCHEMA,
+	persisted: { type: 'boolean' },
 	auto_applied: { type: 'boolean' },
 	duplicate: { type: 'boolean' },
-	memory_rule: { type: 'string', enum: ['review_queue', 'auto_write', 'disabled'] },
-	memory_scope: { type: 'string', enum: ['global', 'project'] },
+	proposal_destination: { type: 'string', enum: ['memory', 'wiki'] },
+	memory_rule: {
+		oneOf: [
+			{ type: 'string', enum: ['review_queue', 'auto_write', 'disabled'] },
+			{ type: 'null' },
+		],
+	},
+	memory_scope: {
+		oneOf: [
+			{ type: 'string', enum: ['global', 'project'] },
+			{ type: 'null' },
+		],
+	},
 	project_hint: NULLABLE_STRING_SCHEMA,
 	related_wiki: STRING_ARRAY_SCHEMA,
 	related_sources: STRING_ARRAY_SCHEMA,
@@ -1293,6 +1366,7 @@ const PROPOSE_MEMORY_COMMON_PROPERTIES = {
 	missing_wiki_bridge: { type: 'boolean' },
 	project_id: NULLABLE_STRING_SCHEMA,
 	project_hub: NULLABLE_STRING_SCHEMA,
+	global_hub: NULLABLE_STRING_SCHEMA,
 	agent_type: { type: 'string', minLength: 1 },
 	operation_hash: { type: 'string', minLength: 1 },
 	target_note: { type: 'string', minLength: 1 },
@@ -1303,6 +1377,9 @@ const PROPOSE_MEMORY_COMMON_PROPERTIES = {
 	proposal_id: NULLABLE_STRING_SCHEMA,
 	proposal_path: NULLABLE_STRING_SCHEMA,
 	proposal_link_target: { type: 'string', minLength: 1 },
+	review_reason: NULLABLE_STRING_SCHEMA,
+	review_warnings: STRING_ARRAY_SCHEMA,
+	next_actions: { type: 'array', items: AGENT_ACTION_SCHEMA },
 };
 
 export const PROPOSE_MEMORY_OUTPUT_SCHEMA: JsonSchema2020 = {
@@ -1315,6 +1392,7 @@ export const PROPOSE_MEMORY_OUTPUT_SCHEMA: JsonSchema2020 = {
 				'activity_path', 'warnings', 'auto_applied', 'duplicate', 'memory_rule', 'memory_scope',
 				'project_hint', 'related_wiki', 'related_sources', 'missing_related_sources',
 				'architecture_status', 'missing_graph_bridges', 'missing_wiki_bridge', 'proposal_id', 'proposal_path',
+				'next_actions',
 			],
 			properties: { ...PROPOSE_MEMORY_COMMON_PROPERTIES, auto_applied: { const: true, type: 'boolean' }, proposal_id: { const: null, type: 'null' }, proposal_path: { const: null, type: 'null' } },
 			additionalProperties: false,
@@ -1326,9 +1404,29 @@ export const PROPOSE_MEMORY_OUTPUT_SCHEMA: JsonSchema2020 = {
 				'activity_path', 'warnings', 'auto_applied', 'duplicate', 'proposal_id', 'proposal_path',
 				'proposal_link_target', 'memory_rule', 'memory_scope', 'project_hint', 'related_wiki',
 				'related_sources', 'missing_related_sources', 'architecture_status', 'missing_graph_bridges',
-				'missing_wiki_bridge',
+				'missing_wiki_bridge', 'review_reason', 'review_warnings', 'next_actions',
 			],
 			properties: { ...PROPOSE_MEMORY_COMMON_PROPERTIES, auto_applied: { const: false, type: 'boolean' }, proposal_id: { type: 'string', minLength: 1 }, proposal_path: { type: 'string', minLength: 1 } },
+			additionalProperties: false,
+		},
+		{
+			type: 'object',
+			required: [
+				'schema_version', 'ok', 'tool', 'operation_id', 'idempotency_key', 'status',
+				'persisted', 'warnings', 'auto_applied', 'duplicate', 'proposal_destination',
+				'memory_rule', 'memory_scope', 'project_hint', 'proposal_id', 'proposal_path',
+				'review_reason', 'review_warnings', 'next_actions',
+			],
+			properties: {
+				...PROPOSE_MEMORY_COMMON_PROPERTIES,
+				status: { const: 'ignored', type: 'string' },
+				persisted: { const: false, type: 'boolean' },
+				auto_applied: { const: false, type: 'boolean' },
+				proposal_destination: { const: 'memory', type: 'string' },
+				memory_rule: { const: 'disabled', type: 'string' },
+				proposal_id: { const: null, type: 'null' },
+				proposal_path: { const: null, type: 'null' },
+			},
 			additionalProperties: false,
 		},
 		PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,

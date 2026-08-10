@@ -1,7 +1,10 @@
 import {
 	ARCHIVE_REVIEW_QUEUE_DIR,
+	KNOWLEDGE_MEMORY_DIR,
+	KNOWLEDGE_WIKI_DIR,
 	computeProposalContentHash,
 	computeProposalRevision,
+	startsWithPathPrefix,
 	proposalTransitionReceiptFromFrontmatter,
 	type ProposalTransitionReceipt,
 	type ProposalTransitionSnapshot,
@@ -11,6 +14,8 @@ import { isReviewApprovalTargetPath } from './review-target-policy';
 type ParsedRecordValue = string | string[];
 
 type ParsedRecord = Record<string, ParsedRecordValue>;
+
+export type ProposalWritebackEffect = 'append' | 'create_memory_record' | 'create_wiki_note';
 
 export type MemoryProposalStatus =
 	| 'pending'
@@ -44,6 +49,8 @@ export interface MemoryProposalRecord {
 	claimKey: string;
 	proposedAuthority: string;
 	proposedConfidence: string;
+	reviewReason: string;
+	reviewWarnings: string[];
 	declaredState: string;
 	observedAt: string;
 	validFrom: string;
@@ -67,6 +74,14 @@ export interface MemoryProposalRecord {
 	revisionRequestedBy: string;
 	writebackContent: string;
 	writebackSource: 'frontmatter' | 'body' | 'none';
+	writebackEffect?: ProposalWritebackEffect;
+	invalidWritebackEffect?: boolean;
+	writebackOperationId: string;
+	invalidWritebackOperationId?: boolean;
+	writebackAppliedAt: string;
+	invalidWritebackAppliedAt?: boolean;
+	writebackTarget: string;
+	invalidWritebackTarget?: boolean;
 	archived: boolean;
 	contentHash: string;
 	fileContentHash: string;
@@ -82,6 +97,8 @@ export interface ReviewProposalValidity {
 	hasWritebackContent: boolean;
 	missingTargetNote: boolean;
 	invalidTargetNote: boolean;
+	invalidWritebackEffect: boolean;
+	effectTargetMismatch: boolean;
 	missingTargetEvidence: boolean;
 	missingWritebackContent: boolean;
 	isComplete: boolean;
@@ -89,6 +106,14 @@ export interface ReviewProposalValidity {
 
 export interface ReviewProposalTargetResolution {
 	exists?: boolean;
+}
+
+export interface ReviewAppliedHistory {
+	receiptVerified: boolean;
+	writebackEffect?: ProposalWritebackEffect;
+	operationId: string;
+	appliedAt: string;
+	targetNote: string;
 }
 
 interface MemoryProposalParseInput {
@@ -169,6 +194,32 @@ const firstString = (values: ParsedRecord, keys: string[]): string => {
 		}
 	}
 	return '';
+};
+
+const consistentScalarString = (
+	values: ParsedRecord,
+	keys: string[]
+): { value: string; invalid: boolean } => {
+	const found: string[] = [];
+	for (const key of keys) {
+		const raw = values[key];
+		if (raw === undefined) {
+			continue;
+		}
+		if (Array.isArray(raw)) {
+			return { value: '', invalid: true };
+		}
+		const normalized = normalizeProposalText(raw);
+		if (raw.trim() && !normalized) {
+			return { value: '', invalid: true };
+		}
+		if (normalized) {
+			found.push(normalized);
+		}
+	}
+	return new Set(found).size > 1
+		? { value: '', invalid: true }
+		: { value: found[0] || '', invalid: false };
 };
 
 const readStringList = (values: ParsedRecord, keys: string[]): string[] => {
@@ -263,6 +314,70 @@ const extractSectionText = (body: string, sectionNames: string[]): string => {
 
 const isMeaningfulProposalValue = (value: string): boolean => Boolean(normalizeProposalText(value));
 
+const hasValidWritebackTarget = (proposal: MemoryProposalRecord): boolean =>
+	!proposal.invalidWritebackTarget
+	&& isMeaningfulProposalValue(proposal.writebackTarget);
+
+const parseProposalWritebackEffect = (
+	fields: ParsedRecord
+): { effect: ProposalWritebackEffect | undefined; invalid: boolean } => {
+	let hasFieldViolation = false;
+	const readField = (key: string): string | undefined => {
+		const raw = fields[key];
+		if (Array.isArray(raw)) {
+			hasFieldViolation = true;
+			return undefined;
+		}
+		if (typeof raw === 'string') {
+			const normalized = normalizeProposalText(raw).toLowerCase();
+			if (!normalized) {
+				return undefined;
+			}
+			return normalized;
+		}
+		if (raw !== undefined) {
+			hasFieldViolation = true;
+		}
+		return undefined;
+	};
+	const normalizeWritebackEffect = (value: string): ProposalWritebackEffect | undefined => {
+		if (value === 'append') {
+			return 'append';
+		}
+		if (value === 'create_memory_record') {
+			return 'create_memory_record';
+		}
+		if (value === 'create_wiki_note') {
+			return 'create_wiki_note';
+		}
+		return undefined;
+	};
+
+	const effects = ['writeback_effect', 'writebackEffect']
+		.map((key) => {
+			const read = readField(key);
+			return read ? { key, effect: read } : null;
+		})
+		.filter((value): value is { key: string; effect: string } => value !== null);
+	if (hasFieldViolation) {
+		return { effect: undefined, invalid: true };
+	}
+	if (effects.length === 0) {
+		return { effect: undefined, invalid: false };
+	}
+	const parsed = effects.map((entry) => ({
+		key: entry.key,
+		effect: normalizeWritebackEffect(entry.effect),
+	}));
+	if (parsed.some((entry) => !entry.effect)) {
+		return { effect: undefined, invalid: true };
+	}
+	if (new Set(parsed.map((entry) => entry.effect)).size > 1) {
+		return { effect: undefined, invalid: true };
+	}
+	return { effect: parsed[0].effect, invalid: false };
+};
+
 export const getReviewProposalValidity = (
 	proposal: MemoryProposalRecord,
 	targetResolution: ReviewProposalTargetResolution = {}
@@ -276,6 +391,8 @@ export const getReviewProposalValidity = (
 			hasWritebackContent: true,
 			missingTargetNote: false,
 			invalidTargetNote: false,
+			invalidWritebackEffect: false,
+			effectTargetMismatch: false,
 			missingTargetEvidence: false,
 			missingWritebackContent: false,
 			isComplete: true,
@@ -285,20 +402,57 @@ export const getReviewProposalValidity = (
 	const hasTargetNote = isMeaningfulProposalValue(proposal.targetNote);
 	const targetPathAllowed = hasTargetNote && isReviewApprovalTargetPath(proposal.targetNote);
 	const targetExists = hasTargetNote && targetResolution.exists !== false;
-	const lifecycleCreate = Boolean(proposal.claimKey && hasTargetNote && targetPathAllowed);
-	const targetResolved = hasTargetNote && targetPathAllowed && (targetExists || lifecycleCreate);
-	const hasWritebackContent = isMeaningfulProposalValue(proposal.writebackContent);
+	const hasClaim = Boolean(proposal.claimKey);
+	const hasMeaningfulWriteback = isMeaningfulProposalValue(proposal.writebackContent);
+	const targetIsWiki = hasTargetNote
+		&& startsWithPathPrefix(proposal.targetNote, KNOWLEDGE_WIKI_DIR);
+	const targetIsMemory = hasTargetNote
+		&& startsWithPathPrefix(proposal.targetNote, KNOWLEDGE_MEMORY_DIR);
+	const effect = proposal.writebackEffect;
+	const effectTargetMismatch = hasTargetNote && (
+		(effect === 'create_wiki_note' && !targetIsWiki)
+		|| (effect === 'create_memory_record' && !targetIsMemory)
+	);
+	const canCreateMemoryForLegacy = effect === undefined
+		&& targetIsMemory
+		&& hasClaim;
+	const canCreateMemory = effect === 'create_memory_record'
+		&& targetIsMemory
+		&& hasClaim;
+	const canCreateWiki = (effect === 'create_wiki_note' && targetIsWiki)
+		|| (effect === undefined && targetIsWiki);
+	const canCreate = canCreateMemoryForLegacy || canCreateMemory || canCreateWiki;
+	const createConflict = (
+		(effect === 'create_wiki_note' && targetIsWiki)
+		|| (effect === 'create_memory_record' && targetIsMemory)
+	)
+		&& targetExists;
+	const targetResolved = hasTargetNote && targetPathAllowed
+		&& !effectTargetMismatch
+		&& (targetExists || canCreate);
+	const invalidWritebackEffect = Boolean(proposal.invalidWritebackEffect);
+	const missingTargetEvidence = hasTargetNote
+		&& targetPathAllowed
+		&& !targetExists
+		&& !canCreate
+		&& !effectTargetMismatch
+		&& !invalidWritebackEffect;
 	return {
 		hasTargetNote,
 		targetPathAllowed,
 		targetExists,
 		targetResolved,
-		hasWritebackContent,
+		hasWritebackContent: hasMeaningfulWriteback,
 		missingTargetNote: !hasTargetNote,
 		invalidTargetNote: hasTargetNote && !targetPathAllowed,
-		missingTargetEvidence: hasTargetNote && targetPathAllowed && !targetExists && !lifecycleCreate,
-		missingWritebackContent: !hasWritebackContent,
-		isComplete: targetResolved && hasWritebackContent,
+		invalidWritebackEffect,
+		effectTargetMismatch,
+		missingTargetEvidence,
+		missingWritebackContent: !hasMeaningfulWriteback,
+		isComplete: targetResolved
+			&& hasMeaningfulWriteback
+			&& !invalidWritebackEffect
+			&& !createConflict,
 	};
 };
 
@@ -377,15 +531,52 @@ export const proposalTransitionSnapshotFromRecord = (
 	status: proposal.approvalStatus,
 	targetPath: proposal.targetNote,
 	writebackContent: proposal.writebackContent,
+	writebackEffect: proposal.writebackEffect,
 	revisionComment: proposal.revisionComment,
 	revisionRequestedAt: proposal.revisionRequestedAt,
 	revisionRequestedBy: proposal.revisionRequestedBy,
 	archived: proposal.archived,
-	appliedOperationId: proposal.lastTransition?.kind === 'apply'
-		? proposal.lastTransition.operationId
-		: undefined,
+	appliedOperationId: proposal.writebackOperationId || (
+		proposal.lastTransition?.kind === 'apply'
+			? proposal.lastTransition.operationId
+			: undefined
+	),
 	lastTransition: proposal.lastTransition,
 });
+
+export const getReviewAppliedHistory = (
+	proposal: MemoryProposalRecord
+): ReviewAppliedHistory | null => {
+	if (proposal.approvalStatus !== 'applied') {
+		return null;
+	}
+	const receipt = proposal.lastTransition;
+	const validWritebackTarget = hasValidWritebackTarget(proposal);
+	const receiptVerified = Boolean(
+		receipt
+		&& receipt.kind === 'apply'
+		&& receipt.previousStatus === 'approved'
+		&& receipt.nextStatus === 'applied'
+		&& receipt.proposalPath === proposal.path
+		&& receipt.proposalId === proposal.proposalId
+		&& receipt.taskId === proposal.taskId
+		&& receipt.committedContentHash === proposal.contentHash
+		&& receipt.committedRevision === proposal.revision
+		&& !proposal.invalidWritebackOperationId
+		&& !proposal.invalidWritebackAppliedAt
+		&& !proposal.invalidWritebackTarget
+		&& (!proposal.writebackOperationId || proposal.writebackOperationId === receipt.operationId)
+		&& (!proposal.writebackAppliedAt || proposal.writebackAppliedAt === receipt.committedAt)
+		&& (!proposal.writebackTarget || proposal.writebackTarget === proposal.targetNote)
+	);
+	return {
+		receiptVerified,
+		writebackEffect: receiptVerified ? proposal.writebackEffect : undefined,
+		operationId: receiptVerified ? receipt?.operationId || '' : '',
+		appliedAt: receiptVerified ? receipt?.committedAt || '' : '',
+		targetNote: validWritebackTarget ? proposal.writebackTarget : '',
+	};
+};
 
 export const extractMemoryProposalRationale = (data: ParsedRecord, body: string): string => {
 	const frontmatterRationale = readMultilineString(data, [
@@ -448,6 +639,19 @@ export const parseMemoryProposalRecord = ({
 		: writebackContent
 			? 'body'
 			: 'none';
+	const { effect, invalid } = parseProposalWritebackEffect(fields);
+	const writebackOperation = consistentScalarString(
+		fields,
+		['writeback_operation_id', 'writebackOperationId']
+	);
+	const writebackAppliedAt = consistentScalarString(
+		fields,
+		['writeback_applied_at', 'writebackAppliedAt']
+	);
+	const writebackTarget = consistentScalarString(
+		fields,
+		['writeback_target', 'writebackTarget']
+	);
 	const rationale = extractMemoryProposalRationale(fields, body);
 	const lastTransition = proposalTransitionReceiptFromFrontmatter(
 		fields as Readonly<Record<string, unknown>>
@@ -465,6 +669,8 @@ export const parseMemoryProposalRecord = ({
 		claimKey: firstString(fields, ['claim_key', 'claimKey']) || '',
 		proposedAuthority: firstString(fields, ['proposed_authority', 'proposedAuthority']) || '',
 		proposedConfidence: firstString(fields, ['proposed_confidence', 'proposedConfidence']) || '',
+		reviewReason: firstString(fields, ['review_reason', 'reviewReason']) || '',
+		reviewWarnings: readStringList(fields, ['review_warnings', 'reviewWarnings']),
 		declaredState: firstString(fields, ['declared_state', 'declaredState']) || '',
 		observedAt: firstString(fields, ['observed_at', 'observedAt']) || '',
 		validFrom: firstString(fields, ['valid_from', 'validFrom']) || '',
@@ -487,6 +693,14 @@ export const parseMemoryProposalRecord = ({
 		revisionRequestedBy,
 		writebackContent,
 		writebackSource,
+		writebackEffect: effect,
+		invalidWritebackEffect: invalid,
+		writebackOperationId: writebackOperation.value,
+		invalidWritebackOperationId: writebackOperation.invalid,
+		writebackAppliedAt: writebackAppliedAt.value,
+		invalidWritebackAppliedAt: writebackAppliedAt.invalid,
+		writebackTarget: writebackTarget.value,
+		invalidWritebackTarget: writebackTarget.invalid,
 		archived: filePath === ARCHIVE_REVIEW_QUEUE_DIR
 			|| filePath.startsWith(`${ARCHIVE_REVIEW_QUEUE_DIR}/`),
 		fileContentHash: fileContentHash || '',

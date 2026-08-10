@@ -47,6 +47,7 @@ const legacyMigrationOperationQueues = new WeakMap<
 export interface MemoryInitializationPlan {
 	foldersToCreate: string[];
 	filesToCreate: string[];
+	invalidFiles?: string[];
 	missingAgentActivityHub: boolean;
 }
 
@@ -69,6 +70,7 @@ export interface TracekeeperStructureStatus {
 	detail: string;
 	missingFolders: string[];
 	missingFiles: string[];
+	invalidFiles: string[];
 	missingCount: number;
 	totalCount: number;
 }

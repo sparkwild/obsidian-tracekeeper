@@ -35,6 +35,7 @@ export class TracekeeperGraphHealthView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
+		this.containerEl.addClass('tracekeeper-item-view');
 		await this.refresh();
 	}
 
@@ -50,7 +51,6 @@ export class TracekeeperGraphHealthView extends ItemView {
 
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
 		const heading = header.createDiv();
-		heading.createEl('h2', { text: ui('知识图谱健康', 'Graph Health'), cls: 'tracekeeper-view__title' });
 		heading.createEl('p', {
 			text: `${ui('检查策略', 'Profile')}: ${graphProfileLabel(snapshot.profile)} • ${ui('最后刷新', 'Last refreshed')}: ${this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt))}`,
 			cls: 'tracekeeper-view__description',

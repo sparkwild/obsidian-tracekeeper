@@ -282,6 +282,7 @@ export class TracekeeperRuntimeLogView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
+		this.containerEl.addClass('tracekeeper-item-view');
 		await this.refresh();
 	}
 
@@ -302,10 +303,6 @@ export class TracekeeperRuntimeLogView extends ItemView {
 
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
 		const heading = header.createDiv();
-		heading.createEl('h2', {
-			text: ui('Agent 活动详情', 'Agent activity details'),
-			cls: 'tracekeeper-view__title',
-		});
 		heading.createEl('p', {
 			text: ui(
 				'查看 MCP 连接、认证拒绝和工具调用活动；不记录用户界面操作。',

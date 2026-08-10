@@ -48,8 +48,17 @@ export class InitializeMemoryStructureModal extends Modal {
 		const basePlan = this.snapshot.basePlan;
 		const legacyPlan = this.snapshot.legacyPlan;
 		const baseMissingCount = basePlan.foldersToCreate.length + basePlan.filesToCreate.length;
+		const invalidFiles = basePlan.invalidFiles ?? [];
 		const summary = contentEl.createDiv({ cls: 'tracekeeper-structure-check-summary tracekeeper-detail-grid' });
-		this.renderFact(summary, ui('基础结构', 'Base structure'), baseMissingCount === 0 ? ui('完整', 'Ready') : ui(`${baseMissingCount} 项缺失`, `${baseMissingCount} missing`));
+		this.renderFact(
+			summary,
+			ui('基础结构', 'Base structure'),
+			invalidFiles.length > 0
+				? ui(`${invalidFiles.length} 个路径无效`, `${invalidFiles.length} invalid path(s)`)
+				: baseMissingCount === 0
+					? ui('完整', 'Ready')
+					: ui(`${baseMissingCount} 项缺失`, `${baseMissingCount} missing`)
+		);
 		this.renderFact(summary, ui('旧目录', 'Legacy folders'), legacyPlan.legacyRoots.length === 0 ? ui('未发现', 'None') : ui(`${legacyPlan.legacyRoots.length} 个`, `${legacyPlan.legacyRoots.length}`));
 		this.renderFact(summary, ui('旧文件', 'Legacy files'), String(legacyPlan.fileCount));
 		this.renderFact(summary, ui('冲突', 'Conflicts'), String(legacyPlan.conflictCount));
@@ -77,14 +86,19 @@ export class InitializeMemoryStructureModal extends Modal {
 		}
 
 		if (this.snapshot.state === 'needs_repair') {
-			this.renderBaseRepair(contentEl, baseMissingCount);
+			this.renderBaseRepair(contentEl, baseMissingCount, invalidFiles);
 			return;
 		}
 
-		this.renderLegacyDetected(contentEl, legacyPlan, baseMissingCount);
+		this.renderLegacyDetected(contentEl, legacyPlan, baseMissingCount, invalidFiles);
 	}
 
-	private renderBaseRepair(contentEl: HTMLElement, missingCount: number): void {
+	private renderBaseRepair(contentEl: HTMLElement, missingCount: number, invalidFiles: string[]): void {
+		if (invalidFiles.length > 0) {
+			this.renderInvalidBasePaths(contentEl, invalidFiles);
+			this.renderCloseAction(contentEl);
+			return;
+		}
 		this.renderEmptyMessage(contentEl, {
 			title: ui('需要补齐基础结构。', 'Base structure needs repair.'),
 			text: ui(
@@ -116,7 +130,12 @@ export class InitializeMemoryStructureModal extends Modal {
 		});
 	}
 
-	private renderLegacyDetected(contentEl: HTMLElement, plan: LegacyStructurePlan, baseMissingCount: number): void {
+	private renderLegacyDetected(
+		contentEl: HTMLElement,
+		plan: LegacyStructurePlan,
+		baseMissingCount: number,
+		invalidFiles: string[]
+	): void {
 		const detail = contentEl.createDiv({ cls: 'tracekeeper-card' });
 		detail.createEl('h3', { text: ui('发现旧目录结构', 'Legacy structure found') });
 		detail.createEl('p', {
@@ -163,6 +182,10 @@ export class InitializeMemoryStructureModal extends Modal {
 
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		actions.createEl('button', { text: ui('取消', 'Cancel') }).addEventListener('click', () => this.close());
+		if (invalidFiles.length > 0) {
+			this.renderInvalidBasePaths(detail, invalidFiles);
+			return;
+		}
 		if (baseMissingCount > 0) {
 			const repair = actions.createEl('button', {
 				text: ui('先补齐基础结构', 'Repair base structure first'),
@@ -253,6 +276,19 @@ export class InitializeMemoryStructureModal extends Modal {
 				}
 			})();
 		});
+	}
+
+	private renderInvalidBasePaths(contentEl: HTMLElement, invalidFiles: string[]): void {
+		const blocked = contentEl.createDiv({ cls: 'tracekeeper-card' });
+		blocked.createEl('h3', { text: ui('基础结构修复已阻断', 'Base structure repair blocked') });
+		blocked.createEl('p', {
+			text: ui(
+				'以下必要文件路径被文件夹或其他非文件对象占用。Tracekeeper 不会删除或覆盖它们；请在 Obsidian 中处理路径冲突后重新运行结构检查。',
+				'The required file paths below are occupied by folders or other non-file entries. Tracekeeper will not delete or overwrite them. Resolve the path conflicts in Obsidian, then run structure check again.'
+			),
+		});
+		const list = blocked.createEl('ul');
+		for (const path of invalidFiles) list.createEl('li', { text: path });
 	}
 
 	private renderMigrationDone(contentEl: HTMLElement, result: LegacyMigrationResult): void {

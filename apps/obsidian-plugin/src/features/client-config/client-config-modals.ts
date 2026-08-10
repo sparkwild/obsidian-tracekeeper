@@ -6,6 +6,10 @@ import { renderClientSkillPrompt } from '../skill-installation/client-skill-prom
 import { refreshAgentConfiguration, type AgentConfigurationRefreshKind } from '../settings/agent-configuration-refresh';
 import type { AgentIntegrationSnapshot } from '../settings/agent-integrations';
 import { buildManualMcpJsonConfig, type ClientAuthMode, type GeneratedClientConfig } from './client-config';
+import {
+	commitOAuthDecisionWithBestEffortRefresh,
+	pendingOAuthRequestsForModal,
+} from './oauth-pending';
 
 /** Single-panel Agent integration management. Copying configuration is always explicit. */
 export class ConnectAiToolModal extends Modal {
@@ -15,6 +19,7 @@ export class ConnectAiToolModal extends Modal {
 	private selectedAuthMode: ClientAuthMode;
 	private skillExpanded = false;
 	private closed = false;
+	private stopAgentStateSubscription: (() => void) | null = null;
 
 	constructor(
 		app: App,
@@ -22,7 +27,8 @@ export class ConnectAiToolModal extends Modal {
 		private config: GeneratedClientConfig,
 		private mode: 'add' | 'manage',
 		private onChanged?: () => void | Promise<void>,
-		private onStructureChanged?: () => void | Promise<void>
+		private onStructureChanged?: () => void | Promise<void>,
+		private selectedUnboundRequestId = ''
 	) {
 		super(app);
 		this.selectedAuthMode = config.supportedAuthModes[0] ?? 'bearer';
@@ -31,6 +37,8 @@ export class ConnectAiToolModal extends Modal {
 	onOpen(): void {
 		this.closed = false;
 		this.skillExpanded = false;
+		this.stopAgentStateSubscription?.();
+		this.stopAgentStateSubscription = this.plugin.subscribeAgentStateChanges(() => this.refreshAgentState());
 		this.modalEl.setAttribute('role', 'dialog');
 		this.modalEl.setAttribute('aria-modal', 'true');
 		this.contentEl.empty();
@@ -47,6 +55,8 @@ export class ConnectAiToolModal extends Modal {
 
 	onClose(): void {
 		this.closed = true;
+		this.stopAgentStateSubscription?.();
+		this.stopAgentStateSubscription = null;
 		this.integration = null;
 		this.bearerToken = null;
 		this.skillExpanded = false;
@@ -82,6 +92,26 @@ export class ConnectAiToolModal extends Modal {
 		this.renderPanel();
 	}
 
+	private refreshAgentState(): void {
+		if (this.closed) return;
+		const integrationId = this.integration?.integrationId;
+		const current = this.plugin.getAgentIntegrationsSnapshot().find((entry) =>
+			integrationId
+				? entry.integrationId === integrationId
+				: entry.clientProfileId === this.config.clientId
+		);
+		if (current) {
+			this.integration = current;
+			if (this.config.supportedAuthModes.includes(current.authMode)) {
+				this.selectedAuthMode = current.authMode;
+			}
+		} else if (integrationId) {
+			this.integration = null;
+			this.bearerToken = null;
+		}
+		this.renderPanel();
+	}
+
 	private renderPanel(): void {
 		const container = this.panelEl;
 		if (!container || this.closed) return;
@@ -108,7 +138,7 @@ export class ConnectAiToolModal extends Modal {
 		if (this.selectedAuthMode === 'bearer') {
 			this.renderManualBearer(container);
 		} else {
-			const prioritizeAuthorization = !this.integration.credential && this.plugin.getPendingOAuthRequests().length > 0;
+			const prioritizeAuthorization = !this.integration.credential && this.pendingOAuthRequests().length > 0;
 			if (prioritizeAuthorization) this.renderAuthorization(container);
 			this.renderSetup(container);
 			if (!prioritizeAuthorization) this.renderAuthorization(container);
@@ -270,11 +300,13 @@ export class ConnectAiToolModal extends Modal {
 	private renderAuthorization(container: HTMLElement): void {
 		if (this.selectedAuthMode !== 'oauth') return;
 		const section = container.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__section' });
-		const pendingRequests = this.plugin.getPendingOAuthRequests();
+		const pendingRequests = this.pendingOAuthRequests();
 		if (pendingRequests.length === 0) {
 			section.createEl('p', { text: this.integration?.credential ? ui('OAuth 已授权。客户端完成 initialize 后才会显示已连接。', 'OAuth is authorized. Connected appears only after the client completes initialize.') : ui('客户端发起连接后，Tracekeeper 会在这里显示授权确认。', 'Tracekeeper shows an authorization confirmation here when the client connects.'), cls: 'tracekeeper-view__description' });
 		}
 		for (const pending of pendingRequests) {
+			const selectedForBinding = pending.requestId === this.selectedUnboundRequestId
+				&& this.integration?.oauthClient?.clientId !== pending.clientId;
 			const row = section.createDiv({
 				cls: 'tracekeeper-connect-ai-tool-modal__pending',
 				attr: { role: 'alert', 'aria-live': 'assertive', 'aria-atomic': 'true' },
@@ -284,12 +316,21 @@ export class ConnectAiToolModal extends Modal {
 			setIcon(icon, 'shield-alert');
 			heading.createEl('strong', { text: ui('需要授权确认', 'Authorization required') });
 			row.createEl('p', {
-				text: ui(`${this.config.displayName} 正在请求连接 Tracekeeper。请核对信息后选择授权或拒绝。`, `${this.config.displayName} is requesting access to Tracekeeper. Review the details, then allow or deny.`),
+				text: selectedForBinding
+					? ui(
+						`此请求尚未绑定到 Agent，也不会根据客户端自报名称自动归属。选择授权会把该 OAuth 客户端绑定到 ${this.config.displayName}。`,
+						`This request is not bound to an Agent and is not assigned from its self-reported client name. Allowing it binds this OAuth client to ${this.config.displayName}.`
+					)
+					: ui(
+						`${this.config.displayName} 已绑定的 OAuth 客户端正在请求连接 Tracekeeper。请核对信息后选择授权或拒绝。`,
+						`The OAuth client bound to ${this.config.displayName} is requesting access to Tracekeeper. Review the details, then allow or deny.`
+					),
 				cls: 'tracekeeper-connect-ai-tool-modal__pending-summary',
 			});
 			const details = row.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__pending-details' });
 			this.renderApprovalDetail(details, ui('Agent', 'Agent'), this.config.displayName);
-			this.renderApprovalDetail(details, ui('客户端', 'Client'), pending.clientNameClaim);
+			this.renderApprovalDetail(details, ui('OAuth 客户端 ID', 'OAuth client ID'), pending.clientId);
+			this.renderApprovalDetail(details, ui('客户端自报名称（不可信）', 'Self-reported client name (untrusted)'), pending.clientNameClaim);
 			this.renderApprovalDetail(details, ui('回调来源', 'Redirect origin'), urlOrigin(pending.redirectUri));
 			this.renderApprovalDetail(details, ui('访问范围', 'Scope'), pending.scope);
 			this.renderApprovalDetail(details, ui('MCP 资源', 'MCP resource'), pending.resource);
@@ -336,6 +377,15 @@ export class ConnectAiToolModal extends Modal {
 		container.createEl('span', { text: value });
 	}
 
+	private pendingOAuthRequests() {
+		return pendingOAuthRequestsForModal(
+			this.integration,
+			this.plugin.getAgentIntegrationsSnapshot(),
+			this.plugin.getPendingOAuthRequests(),
+			this.selectedUnboundRequestId
+		);
+	}
+
 	private renderSkill(container: HTMLElement): void {
 		renderClientSkillPrompt({
 			app: this.app,
@@ -353,16 +403,27 @@ export class ConnectAiToolModal extends Modal {
 	}
 
 	private async decide(requestId: string, decision: NonNullable<OAuthDecision>): Promise<void> {
+		let refreshError: unknown | null;
 		try {
-			await this.plugin.decideOAuthRequest(requestId, decision);
-			await this.refreshSettings('content');
-			this.renderPanel();
-			new Notice(decision.decision === 'allow'
-				? ui('授权确认已提交，正在等待客户端完成连接。', 'Authorization submitted. Waiting for the client to finish connecting.')
-				: ui('已拒绝此连接请求。', 'Connection request denied.'));
+			({ refreshError } = await commitOAuthDecisionWithBestEffortRefresh(
+				() => this.plugin.decideOAuthRequest(requestId, decision),
+				() => this.refreshSettings('content')
+			));
 		} catch (error) {
 			new Notice(error instanceof Error ? error.message : ui('无法更新 OAuth 审批。', 'Unable to update OAuth approval.'));
 			this.renderPanel();
+			return;
+		}
+		this.renderPanel();
+		new Notice(decision.decision === 'allow'
+			? ui('授权确认已提交，正在等待客户端完成连接。', 'Authorization submitted. Waiting for the client to finish connecting.')
+			: ui('已拒绝此连接请求。', 'Connection request denied.'));
+		if (refreshError) {
+			console.error('tracekeeper committed an OAuth decision but failed to refresh the Agent view', refreshError);
+			new Notice(ui(
+				'审批已提交，但 Agent 视图暂未刷新；Tracekeeper 已安排常规状态刷新。',
+				'The decision was submitted, but the Agent view is stale. Tracekeeper has scheduled its normal state refresh.'
+			));
 		}
 	}
 
@@ -376,7 +437,7 @@ export class ConnectAiToolModal extends Modal {
 	private statusLabel(): string {
 		if (!this.integration) return ui('未配置', 'Not configured');
 		if (this.integration.lastPreparedEndpoint && this.integration.lastPreparedEndpoint !== this.plugin.getMcpHttpEndpoint()) return ui('需要更新配置', 'Needs setup update');
-		if (this.selectedAuthMode === 'oauth' && this.plugin.getPendingOAuthRequests().length > 0 && !this.integration.credential) return ui('待审批', 'Approval pending');
+		if (this.selectedAuthMode === 'oauth' && this.pendingOAuthRequests().length > 0 && !this.integration.credential) return ui('待审批', 'Approval pending');
 		if (!this.integration.credential) return this.integration.setupCommandCopiedAt ? ui('配置未验证', 'Setup unverified') : ui('未授权', 'Not authorized');
 		return ui('已授权', 'Authorized');
 	}

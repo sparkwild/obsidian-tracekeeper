@@ -13,14 +13,25 @@ Use this route only inside `tracked_task` when the active user explicitly asks t
    - `tracekeeper.capture_source` with `mode: "external_reference"` only when an identifier is useful but no usable source text was obtained. Do not use an external reference as evidence for a new factual claim.
    - Classify the source as `web`, `file`, or `transcript`. Use the returned Source index path for relations; bounded `source_part` notes are storage members, not independent sources.
 5. Preserve raw material, quotations, and code in their original language. Write Agent-generated summaries and candidate memory text in the Runtime's returned `content_language`.
-6. Synthesize only from successfully captured source paths and verified Recall evidence. Call `tracekeeper.propose_memory` once for the intended candidate and include only valid `related_sources` and `related_wiki` paths.
+6. Synthesize only from successfully captured source paths and verified Recall evidence. Call `tracekeeper.propose_memory` once for the intended candidate and include only valid `related_sources` and `related_wiki` paths. A MemoryRecord candidate declares `memory_scope: "global"` or `memory_scope: "project"`; an explicit Wiki target does not.
 7. Call `tracekeeper.finish_task` once with the same real task id and the actual task status. Omit duplicate `memory_candidate_records` when the candidate was already submitted through `propose_memory`; task tracking is still recorded.
+
+At closeout, report task execution and `durable_output.status` separately. A
+captured Source remains Recallable/readable provenance while its synthesized
+proposal is pending or rejected. That read success must not be described as an
+applied Wiki/Memory result.
 
 ## Policy and authority
 
-An explicit request to research and save is a workflow trigger, not a permission grant. `capture_source` still requires `vault.write`; `propose_memory` still requires `memory.propose`; MCP policy still controls the target, review queue, and optional project auto-write. If a capability is missing, report which capability was unavailable and leave that step undone.
+An explicit request to research and save is a workflow trigger, not a permission grant. `capture_source` still requires `vault.write`; `propose_memory` still requires `memory.propose`; MCP policy still controls the target, review queue, and scope-specific Auto decision. If a capability is missing, report which capability was unavailable and leave that step undone.
 
-Global Memory and Wiki changes remain review-gated by default. A project candidate is auto-applied only when the user's existing policy permits it and the Runtime validates its Wiki bridge. Do not claim that a pending proposal is durable memory.
+Global Memory defaults to Review, while Global and Project Auto are both fully
+supported when the user's selected policy permits them. Wiki changes always
+enter review. Wiki and Source relations are optional; missing Wiki context does
+not block an otherwise eligible Memory Auto write. A supplied unverifiable
+relation enters review. Missing or invalid canonical Memory Hubs block
+persistence and require the explicit structure-repair flow. Do not claim that
+a pending proposal is durable memory.
 
 ## Retry and partial-result rules
 

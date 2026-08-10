@@ -1040,6 +1040,95 @@ test('review proposal window bounds body reads and prioritizes attention items',
 	assert.deepEqual(nextWindow.records.map((record) => record.path), [processedPath]);
 });
 
+test('agent task projection reads additive durable-output finish snapshots', async () => {
+	const taskPath = '00_tracekeeper/work/tasks/durable-output-snapshot.md';
+	const malformedPath = '00_tracekeeper/work/tasks/durable-output-malformed.md';
+	const fixture = createNativeVaultFixture({
+		files: {
+			[taskPath]: [
+				'---',
+				'type: agent-task',
+				'task_id: durable-output-snapshot',
+				'status: completed',
+				'durable_output_status_at_finish: Pending_Review',
+				'durable_output_proposal_count: 2',
+				'durable_output_source_capture_count: 3',
+				'durable_output_pending_review_count: 1',
+				'durable_output_ready_to_apply_count: 0',
+				'durable_output_revision_requested_count: 0',
+				'durable_output_applied_count: 1',
+				'durable_output_rejected_count: 0',
+				'durable_output_unresolved_count: 1',
+				'durable_output_proposal_ids_at_finish: proposal-one, proposal-two',
+				'durable_output_applied_proposal_ids: proposal-one',
+				'durable_output_proposal_paths: 00_tracekeeper/inbox/review_queue/proposal-one.md, 00_tracekeeper/inbox/review_queue/proposal-two.md',
+				'durable_output_target_paths: 01_knowledge/wiki/one.md, 01_knowledge/wiki/two.md',
+				'proposal_ids: [proposal-one, proposal-two]',
+				'proposal_paths: [00_tracekeeper/inbox/review_queue/proposal-one.md, 00_tracekeeper/inbox/review_queue/proposal-two.md]',
+				'source_captures: [00_tracekeeper/sources/source-one.md]',
+				'---',
+				'# Durable output snapshot',
+				'',
+			].join('\n'),
+			[malformedPath]: [
+				'---',
+				'type: agent-task',
+				'task_id: durable-output-malformed',
+				'durable_output_status_at_finish: future_status',
+				'durable_output_proposal_count: 1oops',
+				'durable_output_source_capture_count: -1',
+				'durable_output_applied_count: 2.5',
+				'durable_output_unresolved_count: 9007199254740992',
+				'---',
+				'# Malformed durable output snapshot',
+				'',
+			].join('\n'),
+		},
+	});
+	const repository = new ActivityRecordRepository(fixture.app);
+	const projected = await repository.readAgentTaskFile(fixture.file(taskPath));
+	assert.equal(projected.durableOutputStatusAtFinish, 'pending_review');
+	assert.equal(projected.durableOutputProposalCount, 2);
+	assert.equal(projected.durableOutputSourceCaptureCount, 3);
+	assert.equal(projected.durableOutputPendingReviewCount, 1);
+	assert.equal(projected.durableOutputReadyToApplyCount, 0);
+	assert.equal(projected.durableOutputRevisionRequestedCount, 0);
+	assert.equal(projected.durableOutputAppliedCount, 1);
+	assert.equal(projected.durableOutputRejectedCount, 0);
+	assert.equal(projected.durableOutputUnresolvedCount, 1);
+	assert.deepEqual(projected.durableOutputProposalIdsAtFinish, [
+		'proposal-one',
+		'proposal-two',
+	]);
+	assert.deepEqual(projected.durableOutputAppliedProposalIds, ['proposal-one']);
+	assert.deepEqual(projected.durableOutputProposalPaths, [
+		'00_tracekeeper/inbox/review_queue/proposal-one.md',
+		'00_tracekeeper/inbox/review_queue/proposal-two.md',
+	]);
+	assert.deepEqual(projected.durableOutputTargetPaths, [
+		'01_knowledge/wiki/one.md',
+		'01_knowledge/wiki/two.md',
+	]);
+	assert.deepEqual(projected.proposalIds, ['proposal-one', 'proposal-two']);
+	assert.equal(projected.proposalPaths.length, 2);
+	assert.deepEqual(projected.sourceCaptures, ['00_tracekeeper/sources/source-one.md']);
+
+	const malformed = await repository.readAgentTaskFile(fixture.file(malformedPath));
+	assert.equal(malformed.durableOutputStatusAtFinish, 'unresolved');
+	assert.equal(malformed.durableOutputProposalCount, 0);
+	assert.equal(malformed.durableOutputSourceCaptureCount, 0);
+	assert.equal(malformed.durableOutputPendingReviewCount, 0);
+	assert.equal(malformed.durableOutputReadyToApplyCount, 0);
+	assert.equal(malformed.durableOutputRevisionRequestedCount, 0);
+	assert.equal(malformed.durableOutputAppliedCount, 0);
+	assert.equal(malformed.durableOutputRejectedCount, 0);
+	assert.equal(malformed.durableOutputUnresolvedCount, 0);
+	assert.deepEqual(malformed.durableOutputProposalIdsAtFinish, []);
+	assert.deepEqual(malformed.durableOutputAppliedProposalIds, []);
+	assert.deepEqual(malformed.durableOutputProposalPaths, []);
+	assert.deepEqual(malformed.durableOutputTargetPaths, []);
+});
+
 test('managed path-only proposal references backfill once from one proven explicit id', async () => {
 	const proposalPath = '00_tracekeeper/inbox/review_queue/backfill.md';
 	const taskPath = '00_tracekeeper/work/tasks/backfill-task.md';

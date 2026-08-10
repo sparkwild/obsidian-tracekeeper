@@ -6,22 +6,46 @@ Provide accurate values for the fields exposed by the current `tracekeeper.finis
 
 - `task_id`: the exact identifier returned by `tracekeeper.start_task`.
 - status: completed, partial, or blocked according to actual outcome.
+- Returned `durable_output.status`: the Runtime's separate snapshot of exact
+  Wiki/Memory proposals linked to the task. Always report it when persistence
+  was requested; never infer it from task status.
 - summary: concise work performed and user-visible result.
 - decisions: decisions made during the task; these remain task facts unless copied into an explicit memory candidate.
 - unresolved items: risks, blockers, or intentionally deferred work.
 - next steps: concrete follow-up that remains useful after the current session.
 - `memory_candidate_records`: optional explicit durable-memory candidates. Every record must declare `scope: "global"` or `scope: "project"`; candidate project identity is independent from task context.
+- For an ordinary evidence-backed Agent candidate, use `proposed_authority: "agent"` and `proposed_confidence: "supported"`. Do not claim `user` authority or `verified` confidence on the user's behalf.
 - `related_wiki`: reuse only `relation_evidence.related_wiki[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
 - `related_sources`: reuse only `relation_evidence.related_sources[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
 
-Preserve known project graph context in the finish payload, but never invent, guess, or rewrite a Wiki or source path. If no verified relationship is available, omit the field and allow the MCP review policy to report the missing bridge or route the candidate to review.
+Preserve known project graph context in the finish payload, but never invent,
+guess, or rewrite a Wiki or source path. Wiki and Source relations are optional;
+omit either field when verified relationship evidence is unavailable. If a
+supplied relation cannot be verified, preserve the Runtime's warning or review
+outcome.
 
 Review semantics:
 
 - A proposal is pending until human review approves it.
 - Pending content is not durable memory or an applied Wiki update.
+- A captured Source, Source Recall match, or Source `read_note` result is
+  provenance evidence, not proof that a linked Wiki/Memory target was applied.
+- A direct `propose_memory` call is already linked to the task. Omit its
+  duplicate finish candidate as instructed, then use the returned
+  `durable_output` summary instead of accepting `no_candidates` as persistence
+  success.
 - Apply an approved proposal only when the user explicitly requests the apply action.
-- Missing Wiki context routes the proposal to review rather than weakening the boundary.
+- Direct `propose_memory` MemoryRecord candidates declare `memory_scope`;
+  `project_hint` is identity evidence, not scope authority. Explicit Wiki
+  targets do not require `memory_scope` and always enter review.
+- Global and Project Auto use the same immutable MemoryRecord v2 semantics.
+  Global defaults to Review; its fully supported Auto mode writes under the
+  canonical Global Memory Hub with `project_id: null`.
+- A missing or invalid canonical Hub blocks persistence and returns an explicit
+  structure-repair action. Never create a Hub from closeout or proposal writes.
+- Auto caps an Agent `verified` request to `supported`; user authority,
+  lifecycle or relation transitions, unresolved claim conflicts, and uncertain
+  project identity still require review.
 
 Task tracking and durable Memory are independent. A task without project identity
 can still submit a project candidate when that candidate supplies its own project

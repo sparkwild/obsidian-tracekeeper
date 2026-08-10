@@ -101,6 +101,12 @@ import {
 	type GeneratedClientConfig,
 } from './features/client-config/client-config';
 import {
+	PendingOAuthClientReservations,
+	assertOAuthClientOwnershipAvailable,
+	enqueueSingleOwnerOAuthCredentialIssue,
+	uniqueOAuthClientOwners,
+} from './features/client-config/oauth-pending';
+import {
 	ClientSkillAdapter,
 	ClientSkillPlanConflictError,
 	buildClientSkillProfile,
@@ -343,8 +349,8 @@ function buildControlFiles(language: ResolvedNoteContentLanguage): BaseStructure
 			path: TRACEKEEPER_PERMISSIONS_PATH,
 			content: noteContentText(
 				language,
-				'# 权限\n\n- 默认：自动化只读。\n- 写入记忆需要用户确认。\n',
-				'# Permissions\n\n- Default: read-only for automation.\n- User confirmation required for memory writes.\n'
+				'# 权限\n\n- 全局 MemoryRecord 默认进入审核；全局与项目写入遵循 Obsidian 中的记忆规则。\n- Wiki 变更始终需要用户审核。\n- Wiki 与 Source 关系均为可选。\n',
+				'# Permissions\n\n- Global MemoryRecords enter review by default; global and project writes follow the memory rules in Obsidian.\n- Wiki changes always require user review.\n- Wiki and Source relations are optional.\n'
 			),
 		},
 	];
@@ -427,6 +433,11 @@ export interface RuntimeViewStatus {
 	recovery: StreamableHttpRuntimeStatus['recovery'];
 }
 
+export interface GlobalMemoryHubStatus {
+	state: 'ready' | 'missing' | 'invalid';
+	path: string;
+}
+
 
 interface DesktopNodeApi {
 	fs: {
@@ -504,8 +515,9 @@ export default class TracekeeperPlugin extends Plugin {
 	settings: TracekeeperSettings = DEFAULT_SETTINGS;
 	private readonly mcpRuntimeLifecycle = new McpRuntimeLifecycleController();
 	private agentCredentialOperation: Promise<void> = Promise.resolve();
-	private readonly pendingOAuthDecisions = new Map<string, OAuthDecision>();
+	private readonly pendingOAuthDecisions = new Map<string, NonNullable<OAuthDecision>>();
 	private readonly pendingOAuthRequests = new Map<string, PendingOAuthRequest>();
+	private readonly pendingOAuthClientReservations = new PendingOAuthClientReservations();
 	private readonly skillPlanActions = new Map<string, {
 		action: Extract<SkillInstallAction, 'install' | 'update' | 'migrate'>;
 		clientId: string;
@@ -525,6 +537,7 @@ export default class TracekeeperPlugin extends Plugin {
 	private autoRefreshDebounceId: number | null = null;
 	private autoRefreshInFlight = false;
 	private agentStateViewRefreshQueued = false;
+	private readonly agentStateListeners = new Set<() => void>();
 	private settingTab: TracekeeperSettingTab | null = null;
 	private runtimeStatus: StreamableHttpRuntimeStatus = {
 		state: 'stopped',
@@ -1144,6 +1157,7 @@ export default class TracekeeperPlugin extends Plugin {
 		this.agentStateViewRefreshQueued = true;
 		window.setTimeout(() => {
 			this.agentStateViewRefreshQueued = false;
+			this.notifyAgentStateListeners();
 			const tasks: Array<Promise<void>> = [this.refreshActivityViews()];
 			if (this.settingTab?.isAgentListVisible()) {
 				tasks.push(this.settingTab.refreshAgentList());
@@ -1152,6 +1166,23 @@ export default class TracekeeperPlugin extends Plugin {
 				console.error('tracekeeper failed to refresh Agent state views', error);
 			});
 		}, 0);
+	}
+
+	subscribeAgentStateChanges(listener: () => void): () => void {
+		this.agentStateListeners.add(listener);
+		return () => {
+			this.agentStateListeners.delete(listener);
+		};
+	}
+
+	private notifyAgentStateListeners(): void {
+		for (const listener of [...this.agentStateListeners]) {
+			try {
+				listener();
+			} catch (error) {
+				console.error('tracekeeper failed to refresh an Agent state listener', error);
+			}
+		}
 	}
 
 	private async startMcpRuntime(): Promise<void> {
@@ -1181,8 +1212,7 @@ export default class TracekeeperPlugin extends Plugin {
 			},
 			writebackConfirmationSecret: this.settings.runtimeSecuritySecret,
 			oauthIntegration: this.buildOAuthIntegrationPort(),
-			getBoundOAuthClients: () => this.settings.agentIntegrations
-				.filter((entry) => entry.oauthClient)
+			getBoundOAuthClients: () => uniqueOAuthClientOwners(this.settings.agentIntegrations)
 				.map((entry) => ({
 					clientId: entry.oauthClient?.clientId ?? '',
 					clientNameClaim: entry.oauthClient?.clientNameClaim ?? '',
@@ -1260,6 +1290,7 @@ export default class TracekeeperPlugin extends Plugin {
 	private clearPendingOAuthState(): void {
 		this.pendingOAuthDecisions.clear();
 		this.pendingOAuthRequests.clear();
+		this.pendingOAuthClientReservations.clear();
 	}
 
 	private createStoppedRuntimeStatus(): StreamableHttpRuntimeStatus {
@@ -1298,9 +1329,10 @@ export default class TracekeeperPlugin extends Plugin {
 			resolvedMigrationId
 		);
 		const hasMissingBase = basePlan.foldersToCreate.length > 0 || basePlan.filesToCreate.length > 0;
+		const hasInvalidBase = (basePlan.invalidFiles?.length ?? 0) > 0;
 		const state = legacyPlan.legacyRoots.length > 0
 			? 'legacy_detected'
-			: hasMissingBase
+			: hasMissingBase || hasInvalidBase
 				? 'needs_repair'
 				: 'ready';
 		return { basePlan, legacyPlan, state };
@@ -1316,18 +1348,26 @@ export default class TracekeeperPlugin extends Plugin {
 			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.agentActivityHub) === null;
 
 		const filesToCreate: string[] = [];
+		const invalidFiles: string[] = [];
 		for (const filePath of [...CONTROL_FILE_PATHS, ...KNOWLEDGE_ENTRY_FILE_PATHS]) {
-			if (!this.app.vault.getAbstractFileByPath(filePath)) {
+			const entry = this.app.vault.getAbstractFileByPath(filePath);
+			if (!entry) {
 				filesToCreate.push(filePath);
+			} else if (!(entry instanceof TFile)) {
+				invalidFiles.push(filePath);
 			}
 		}
 		if (missingAgentActivityHub && !filesToCreate.includes(CONTROL_PATHS.agentActivityHub)) {
 			filesToCreate.push(CONTROL_PATHS.agentActivityHub);
+		} else {
+			const activityHub = this.app.vault.getAbstractFileByPath(CONTROL_PATHS.agentActivityHub);
+			if (activityHub && !(activityHub instanceof TFile)) invalidFiles.push(CONTROL_PATHS.agentActivityHub);
 		}
 
 		return {
 			foldersToCreate: missingFolders,
 			filesToCreate,
+			invalidFiles: [...new Set(invalidFiles)],
 			missingAgentActivityHub,
 		};
 	}
@@ -1338,11 +1378,13 @@ export default class TracekeeperPlugin extends Plugin {
 		const totalFolders = this.getNormalizedFolderPlan().length;
 		const expectedFiles = new Set<string>([...CONTROL_FILE_PATHS, ...KNOWLEDGE_ENTRY_FILE_PATHS]);
 		expectedFiles.add(CONTROL_PATHS.agentActivityHub);
+		const invalidFiles = plan.invalidFiles ?? [];
 		const missingCount = plan.foldersToCreate.length + plan.filesToCreate.length;
+		const issueCount = missingCount + invalidFiles.length;
 		const totalCount = totalFolders + expectedFiles.size;
 		const rootExists = this.app.vault.getAbstractFileByPath(CONTROL_PATHS.root) !== null;
 		const legacyRoots = this.legacyMigrationController.getLegacyRootFolders();
-		const state: StructureState = missingCount === 0
+		const state: StructureState = issueCount === 0
 			? legacyRoots.length > 0
 				? 'legacy_detected'
 				: 'initialized'
@@ -1360,6 +1402,7 @@ export default class TracekeeperPlugin extends Plugin {
 				),
 				missingFolders: [],
 				missingFiles: [],
+				invalidFiles: [],
 				missingCount,
 				totalCount,
 			};
@@ -1375,6 +1418,7 @@ export default class TracekeeperPlugin extends Plugin {
 				),
 				missingFolders: [],
 				missingFiles: [],
+				invalidFiles: [],
 				missingCount,
 				totalCount,
 			};
@@ -1383,14 +1427,28 @@ export default class TracekeeperPlugin extends Plugin {
 		return {
 			state,
 			label: state === 'partial' ? ui('需要补齐', 'Needs repair') : ui('需要校验', 'Needs check'),
-			detail: ui(
-				`缺少 ${missingCount} 个基础结构项。可补齐必要入口，不会移动或删除已有内容。`,
-				`${missingCount} base structure items are missing. Repair creates required entries only and will not move or delete existing content.`
-			),
+			detail: invalidFiles.length > 0
+				? ui(
+					`${invalidFiles.length} 个必要文件路径被非文件对象占用，持久化已阻止；Tracekeeper 不会覆盖这些路径。`,
+					`${invalidFiles.length} required file path(s) are occupied by non-file entries. Persistence is blocked, and Tracekeeper will not overwrite them.`
+				)
+				: ui(
+					`缺少 ${missingCount} 个基础结构项。可补齐必要入口，不会移动或删除已有内容。`,
+					`${missingCount} base structure items are missing. Repair creates required entries only and will not move or delete existing content.`
+				),
 			missingFolders: plan.foldersToCreate,
 			missingFiles: plan.filesToCreate,
+			invalidFiles,
 			missingCount,
 			totalCount,
+		};
+	}
+
+	getGlobalMemoryHubStatus(): GlobalMemoryHubStatus {
+		const entry = this.app.vault.getAbstractFileByPath(KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH);
+		return {
+			state: entry === null ? 'missing' : entry instanceof TFile ? 'ready' : 'invalid',
+			path: KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
 		};
 	}
 
@@ -1662,6 +1720,9 @@ export default class TracekeeperPlugin extends Plugin {
 
 	async initializeMemoryStructure(plan: MemoryInitializationPlan): Promise<void> {
 		try {
+			if ((plan.invalidFiles?.length ?? 0) > 0) {
+				throw new Error(`Structure repair is blocked by invalid paths: ${plan.invalidFiles?.join(', ')}`);
+			}
 			for (const folder of plan.foldersToCreate) {
 				await this.ensureFolderExists(folder);
 			}
@@ -2221,6 +2282,7 @@ export default class TracekeeperPlugin extends Plugin {
 					this.pendingOAuthDecisions.set(requestId, { decision: 'deny' });
 				}
 			});
+			this.pendingOAuthClientReservations.releaseIntegration(integrationId);
 			this.mcpRuntimeLifecycle.getRuntime()?.closeSessionsForIntegration?.(integrationId);
 			this.scheduleAgentStateViewRefresh();
 		});
@@ -2259,6 +2321,7 @@ export default class TracekeeperPlugin extends Plugin {
 					this.pendingOAuthDecisions.set(requestId, { decision: 'deny' });
 				}
 			});
+			this.pendingOAuthClientReservations.releaseIntegration(integrationId);
 			this.mcpRuntimeLifecycle.getRuntime()?.closeSessionsForIntegration?.(integrationId);
 			this.scheduleAgentStateViewRefresh();
 		});
@@ -2292,6 +2355,7 @@ export default class TracekeeperPlugin extends Plugin {
 			}
 			this.pendingOAuthDecisions.clear();
 			this.pendingOAuthRequests.clear();
+			this.pendingOAuthClientReservations.clear();
 			this.skillPlanActions.clear();
 			const runtime = this.mcpRuntimeLifecycle.getRuntime();
 			for (const integrationId of integrationIds) runtime?.closeSessionsForIntegration?.(integrationId);
@@ -2300,74 +2364,114 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	getPendingOAuthRequests(): PendingOAuthApproval[] {
+		this.pruneExpiredPendingOAuthRequests();
 		return [...this.pendingOAuthRequests.values()]
 			.filter((request) => !this.pendingOAuthDecisions.has(request.requestId))
 			.map((request) => ({
-			requestId: request.requestId,
-			clientNameClaim: request.clientNameClaim,
-			redirectUri: request.redirectUri,
-			resource: request.resource,
-			scope: request.scope,
-			issuedAt: request.issuedAt,
-			expiresAt: request.expiresAt,
-		}));
+				requestId: request.requestId,
+				clientId: request.clientId,
+				clientNameClaim: request.clientNameClaim,
+				redirectUri: request.redirectUri,
+				resource: request.resource,
+				scope: request.scope,
+				issuedAt: request.issuedAt,
+				expiresAt: request.expiresAt,
+			}));
 	}
 
-	async decideOAuthRequest(requestId: string, decision: OAuthDecision): Promise<void> {
-		if (!this.pendingOAuthRequests.has(requestId)) throw new Error('OAuth request is no longer pending.');
-		if (decision?.decision === 'allow' && !this.settings.agentIntegrations.some((entry) => entry.integrationId === decision.integrationId)) {
-			throw new Error('OAuth approval must target an existing Agent integration.');
+	async decideOAuthRequest(requestId: string, decision: NonNullable<OAuthDecision>): Promise<void> {
+		this.pruneExpiredPendingOAuthRequests();
+		const request = this.pendingOAuthRequests.get(requestId);
+		if (!request) throw new Error('OAuth request is no longer pending.');
+		if (decision?.decision === 'allow') {
+			const target = this.settings.agentIntegrations.find((entry) => entry.integrationId === decision.integrationId);
+			if (!target) throw new Error('OAuth approval must target an existing Agent integration.');
+			if (target.authMode !== 'oauth') throw new Error('OAuth approval must target an OAuth Agent integration.');
+			assertOAuthClientOwnershipAvailable(
+				this.getAgentIntegrationsSnapshot(),
+				target.integrationId,
+				request.clientId
+			);
+			if (target.oauthClient && target.oauthClient.clientId !== request.clientId) {
+				throw new Error('OAuth client does not match the selected Agent integration.');
+			}
+			if (target.credential && !target.oauthClient) {
+				throw new Error('Revoke the current Agent credential before binding a new OAuth client.');
+			}
+			this.pendingOAuthClientReservations.reserve(request, target.integrationId);
+		} else {
+			this.pendingOAuthClientReservations.releaseRequest(requestId);
 		}
 		this.pendingOAuthDecisions.set(requestId, decision);
 		this.scheduleAgentStateViewRefresh();
 	}
 
+	private pruneExpiredPendingOAuthRequests(now = Date.now()): void {
+		this.pendingOAuthClientReservations.prune(now);
+		for (const [requestId, request] of this.pendingOAuthRequests.entries()) {
+			if (request.expiresAt > now) continue;
+			this.pendingOAuthRequests.delete(requestId);
+			this.pendingOAuthDecisions.delete(requestId);
+		}
+	}
+
 	private buildOAuthIntegrationPort(): OAuthIntegrationPort {
 		return {
 			publishPendingRequest: async (request) => {
+				this.pruneExpiredPendingOAuthRequests();
 				this.pendingOAuthRequests.set(request.requestId, request);
 				this.scheduleAgentStateViewRefresh();
-				new Notice(ui('新的 MCP 连接请求正在等待授权，请打开对应 Agent 配置进行确认。', 'A new MCP connection request is waiting for authorization. Open the matching Agent configuration to review it.'));
+				new Notice(ui('新的 MCP 连接请求正在等待授权，请打开 Agent 配置进行确认。', 'A new MCP connection request is waiting for authorization. Open Agent configuration to review it.'));
 			},
 			readDecision: async (requestId) => {
+				this.pruneExpiredPendingOAuthRequests();
 				if (!this.pendingOAuthRequests.has(requestId)) return { decision: 'deny' };
 				const decision = this.pendingOAuthDecisions.get(requestId);
 				if (decision) {
 					this.pendingOAuthDecisions.delete(requestId);
 					this.pendingOAuthRequests.delete(requestId);
+					if (decision.decision === 'deny') {
+						this.pendingOAuthClientReservations.releaseRequest(requestId);
+					}
 					this.scheduleAgentStateViewRefresh();
 				}
 				return decision ?? null;
-			},
-			issueOAuthCredential: async (input) => this.enqueueAgentCredentialOperation(async () => {
-				const index = this.settings.agentIntegrations.findIndex((entry) => entry.integrationId === input.integrationId);
-				if (index < 0) throw new Error('Agent integration was not found.');
-				const current = this.settings.agentIntegrations[index];
-				if (current.authMode !== 'oauth') throw new Error('Agent integration is not in OAuth mode.');
-				if (current.oauthClient && (current.oauthClient.clientId !== input.clientId || current.oauthClient.redirectUris.join('|') !== input.redirectUris.join('|'))) {
-					throw new Error('OAuth client metadata does not match the bound Agent integration.');
-				}
-				const issued = issueAgentCredential(current, 'oauth', input.accessToken, new Date().toISOString(), input.credentialId);
-				const next: AgentIntegrationRecord = {
-					...issued.record,
-					oauthClient: current.oauthClient ?? {
-						clientId: input.clientId,
-						clientNameClaim: input.clientNameClaim,
-						redirectUris: [...input.redirectUris],
-						registeredAt: new Date().toISOString(),
-					},
-				};
-				const previous = this.settings.agentIntegrations;
-				this.settings.agentIntegrations = previous.map((entry, entryIndex) => entryIndex === index ? next : entry);
-				try {
-					await this.saveSettings();
-				} catch (error) {
-					this.settings.agentIntegrations = previous;
-					throw error;
-				}
-				this.scheduleAgentStateViewRefresh();
-				return { integrationId: input.integrationId, credentialId: next.credential?.credentialId ?? input.credentialId, accessToken: input.accessToken };
-			}),
+				},
+				issueOAuthCredential: async (input) => enqueueSingleOwnerOAuthCredentialIssue(
+					(operation) => this.enqueueAgentCredentialOperation(operation),
+					() => this.getAgentIntegrationsSnapshot(),
+					this.pendingOAuthClientReservations,
+					input,
+					async () => {
+						const index = this.settings.agentIntegrations.findIndex((entry) => entry.integrationId === input.integrationId);
+						if (index < 0) throw new Error('Agent integration was not found.');
+						const current = this.settings.agentIntegrations[index];
+						if (current.authMode !== 'oauth') throw new Error('Agent integration is not in OAuth mode.');
+						if (current.oauthClient && (current.oauthClient.clientId !== input.clientId || current.oauthClient.redirectUris.join('|') !== input.redirectUris.join('|'))) {
+							throw new Error('OAuth client metadata does not match the bound Agent integration.');
+						}
+						const issued = issueAgentCredential(current, 'oauth', input.accessToken, new Date().toISOString(), input.credentialId);
+						const next: AgentIntegrationRecord = {
+							...issued.record,
+							oauthClient: current.oauthClient ?? {
+								clientId: input.clientId,
+								clientNameClaim: input.clientNameClaim,
+								redirectUris: [...input.redirectUris],
+								registeredAt: new Date().toISOString(),
+							},
+						};
+						const previous = this.settings.agentIntegrations;
+						this.settings.agentIntegrations = previous.map((entry, entryIndex) => entryIndex === index ? next : entry);
+						try {
+							await this.saveSettings();
+						} catch (error) {
+							this.settings.agentIntegrations = previous;
+							throw error;
+						}
+						this.scheduleAgentStateViewRefresh();
+						return { integrationId: input.integrationId, credentialId: next.credential?.credentialId ?? input.credentialId, accessToken: input.accessToken };
+					}
+				),
 			revokeOAuthCredential: async (input) => {
 				const context = input.token ? this.verifyAgentCredential(input.token) : null;
 				const integrationId = input.integrationId ?? context?.integrationId;
@@ -2887,6 +2991,24 @@ export default class TracekeeperPlugin extends Plugin {
 		return plan;
 	}
 
+	async updateSkillAtInstalledDirectory(clientId: string): Promise<SkillInstallResult> {
+		const state = this.getSkillInstallState(clientId);
+		if (state.state !== 'update_available' || !state.targetDirectory) {
+			throw new ClientSkillPlanConflictError(ui(
+				'当前 Skill 已不再满足原路径更新条件，请重新检测状态。',
+				'The Skill is no longer eligible for an in-place update. Detect its current state again.'
+			));
+		}
+		const plan = this.prepareSkillWrite(clientId, state.targetDirectory);
+		if (plan.action !== 'update' || !plan.canConfirm) {
+			throw new ClientSkillPlanConflictError(ui(
+				'当前安装目录无法安全更新，请重新检测 Skill 状态。',
+				'The current installation directory cannot be updated safely. Detect the Skill state again.'
+			));
+		}
+		return this.confirmSkillWrite(plan.planId, clientId);
+	}
+
 	async confirmSkillWrite(planId: string, clientId: string): Promise<SkillInstallResult> {
 		const pendingPlan = this.skillPlanActions.get(planId);
 		if (!pendingPlan || pendingPlan.clientId !== clientId) {
@@ -2912,6 +3034,22 @@ export default class TracekeeperPlugin extends Plugin {
 		this.skillPlanActions.delete(planId);
 
 		const profile = this.getClientSkillProfile(result.clientId, result.targetDirectory);
+		const verified = this.requireClientSkillAdapter().detect({
+			...profile,
+			legacyTargetDirectories: [],
+		});
+		if (verified.state !== 'installed' || !verified.fileVerified) {
+			const detail = skillVerificationFailureDetail(verified, ui);
+			console.error('tracekeeper failed to verify client Skill after writing it', {
+				clientId: result.clientId,
+				targetDirectory: result.targetDirectory,
+				state: verified.state,
+			});
+			throw new Error(ui(
+				`强化技能文件已经写入，但自动验证失败：${detail}`,
+				`The Skill files were written, but automatic verification failed: ${detail}`
+			));
+		}
 		let receiptPersisted = true;
 		const previousReceipts = this.settings.skillInstallReceipts;
 		const previousOnboarding = this.settings.onboarding;
@@ -2945,13 +3083,22 @@ export default class TracekeeperPlugin extends Plugin {
 				`${actionLabel} ${ui(
 					'本地收据未完整保存；强化技能文件已经写入，请重新检测状态，不要重复安装。',
 					'The local receipt was not fully saved. Skill files were written; detect the current state instead of installing again.'
-				)}`
+				)}`,
+				10000
 			);
 		} else {
-			new Notice(profile.restartRequired
-				? `${actionLabel} ${ui('请重启客户端。', 'Restart the client.')}`
-				: `${actionLabel} ${ui('客户端通常会自动识别；若未出现再重启。', 'The client normally detects it automatically; restart only if it does not appear.')}`);
+			const activationGuidance = profile.restartRequired
+				? ui(
+					`已写入 v${TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version}；请重启 ${profile.displayName} 后使用新版本。`,
+					`v${TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version} was written. Restart ${profile.displayName} to use the new version.`
+				)
+				: ui(
+					`已写入 v${TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version}；客户端通常会自动识别，若未出现再重启。`,
+					`v${TRACEKEEPER_SKILL_BUNDLE.manifest.skill_version} was written. The client normally detects it automatically; restart only if it does not appear.`
+				);
+			new Notice(`${actionLabel} ${activationGuidance}`, action === 'update' ? 8000 : undefined);
 		}
+		this.scheduleAgentStateViewRefresh();
 		return result;
 	}
 
@@ -2987,7 +3134,10 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 		const selection = normalizeSkillDirectorySelection(selectedDirectory, desktopApi.path.join.bind(desktopApi.path));
 		const profile = this.getClientSkillProfile(clientId, selection.targetDirectory);
-		const detected = adapter.detect(profile);
+		const detected = adapter.detect({
+			...profile,
+			legacyTargetDirectories: [],
+		});
 		if (detected.state !== 'installed') {
 			throw new Error(skillVerificationFailureDetail(detected, ui));
 		}

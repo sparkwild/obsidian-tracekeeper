@@ -577,6 +577,8 @@ function catalogMetadataProjection(entry) {
 }
 function isCurrentReadViewEntry(entry, view) {
     const normalizedPath = entry.path.replace(/\\/g, '/');
+    if (!(0, core_1.isOrdinaryRecallPathEligible)(normalizedPath))
+        return false;
     if (normalizedPath === core_1.ARCHIVE_ROOT || normalizedPath.startsWith(`${core_1.ARCHIVE_ROOT}/`))
         return false;
     if (entry.type !== 'memory_record')
@@ -955,6 +957,7 @@ class RecallApplicationService {
             max_items: request.maxItems,
             matched_count: matches.length,
             total_matches: historyEntries.length,
+            scope_mode: 'project_history',
             ...readViewProvenance(view),
             candidates: candidateNotes.map((candidate) => candidate.path),
             candidate_notes: candidateNotes,
@@ -1060,6 +1063,7 @@ class RecallApplicationService {
             max_items: request.maxItems,
             matched_count: matches.length,
             total_matches: sortedMatches.length,
+            scope_mode: 'project_history',
             ...scanProvenance(scan),
             candidates: candidateNotes.map((candidate) => candidate.path),
             candidate_notes: candidateNotes,

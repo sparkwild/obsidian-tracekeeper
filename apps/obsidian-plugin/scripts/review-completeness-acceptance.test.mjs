@@ -25,7 +25,7 @@ assert.match(targetPolicySource, /segments\.some\(\(segment\) => segment === '\.
 assert.match(contextSource, /REVIEW_TARGET_CANDIDATE_LIMIT = 8/);
 assert.match(contextSource, /isReviewRemediationTargetPath/);
 assert.match(contextSource, /buildReviewDiffPreview/);
-assert.match(contextSource, /Approved Writeback:/);
+assert.match(contextSource, /writeback effect|ReviewTargetContext|buildReviewDiffPreview/);
 assert.match(contextSource, /sourcePathsForProposal/);
 assert.match(contextSource, /taskContextForProposal/);
 
@@ -34,7 +34,7 @@ assert.match(controllerSource, /readMemoryProposalFile\(file\)/);
 assert.match(reviewViewModelSource, /getReviewProposalValidity\(proposal,\s*targetResolution\)/);
 assert.match(viewSource, /Withdraw approval and complete/);
 assert.match(targetPolicySource, /isReviewRemediationTargetPath = \(value: string\)/);
-assert.match(viewSource, /existing Memory\/Wiki notes in this Vault/);
+assert.match(viewSource, /existing memory or knowledge notes in this Vault/);
 
 assert.match(modalSource, /createEl\('select'/);
 assert.match(modalSource, /Arbitrary paths are not accepted/);
@@ -44,10 +44,33 @@ assert.match(modalSource, /target note was not written/);
 
 assert.match(viewSource, /Task and source evidence/);
 assert.match(viewSource, /Current target context/);
-assert.match(viewSource, /Expected append diff/);
+assert.match(viewSource, /Content to append|Knowledge note to create|Memory to add/);
 assert.match(viewSource, /Approval does not write/);
+assert.match(viewSource, /Applied: knowledge note created/);
+assert.match(viewSource, /Historical writeback effect/);
+assert.match(viewSource, /Recorded writeback target/);
+assert.match(viewSource, /Only the recorded writeback target is shown/);
+assert.match(viewSource, /does not re-infer the effect from the target/);
+assert.match(contextSource, /Historical writeback effect:.*unknown/);
+assert.match(contextSource, /appliedHistory\.targetNote \|\| '\(not recorded\)'/);
+assert.doesNotMatch(contextSource, /appliedHistory\.targetNote \|\| target\.path/);
+assert.match(contextSource, /No append or create effect is inferred/);
 assert.match(viewSource, /Return for revision/);
 assert.match(viewSource, /Do not accept/);
+assert.doesNotMatch(`${viewSource}\n${modalSource}`, /变更提案|记忆提案|保存记忆候选/);
+assert.doesNotMatch(`${viewSource}\n${modalSource}`, /Change proposals?|Memory proposal|Save memory candidate/);
+assert.match(viewSource, /Review list/);
+assert.match(viewSource, /Change details/);
+assert.match(viewSource, /Technical details/);
+assert.match(viewSource, /Save as memory/);
+assert.match(viewSource, /Back to review list/);
+assert.match(viewSource, /const REVIEW_PAGE_SIZE = 5/);
+assert.match(stylesSource, /\.tracekeeper-review-inbox\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
+assert.match(stylesSource, /\.tracekeeper-review-inbox__row\.is-selected[\s\S]*?var\(--interactive-accent\)/);
+assert.match(modalSource, /tracekeeper-review-archive-modal__technical-details/);
+assert.match(modalSource, /tracekeeper-review-apply-modal__technical-details/);
+assert.match(modalSource, /targetDisplayName/);
+assert.equal((viewSource.match(/\(\) => this\.refreshSelectedProposal\(proposal\.path\)/g) || []).length, 3);
 
 assert.match(controllerSource, /dry_run: true/);
 assert.match(modalSource, /Generating writeback preview/);
@@ -63,4 +86,4 @@ assert.match(stylesSource, /button\.tracekeeper-confirm-button\s*\{[\s\S]*--trac
 assert.match(governanceSource, /incomplete proposal/i);
 assert.match(governanceSource, /Memory\/Wiki/i);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 43 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 66 })}\n`);

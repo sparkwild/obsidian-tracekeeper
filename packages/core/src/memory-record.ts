@@ -1,5 +1,6 @@
 import { stringify } from 'yaml';
 import { normalizeVaultRelativePath } from './knowledge-note';
+import { KNOWLEDGE_GLOBAL_MEMORY_DIR } from './knowledge-architecture';
 import type { ProjectMemoryEntry } from './project-memory';
 
 export const MEMORY_RECORD_SCHEMA_VERSION = 2 as const;
@@ -54,6 +55,12 @@ export interface BuiltMemoryRecord {
 	markdown: string;
 }
 
+export interface GlobalMemoryEntryPathInput {
+	agentType: string;
+	operationKind: string;
+	operationId: string;
+}
+
 export type MemoryRecordReadProjection =
 	| { kind: 'v2'; record: MemoryRecord; legacy: false }
 	| {
@@ -89,6 +96,7 @@ const STABLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const AGENT_TYPE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MEMORY_KIND_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const OPERATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const AUTHORITIES = new Set<MemoryAuthority>(['agent', 'source', 'user']);
 const CONFIDENCE_LEVELS = new Set<MemoryConfidenceLevel>([
 	'uncertain',
@@ -102,6 +110,25 @@ const DECLARED_STATES = new Set<MemoryDeclaredState>([
 	'retracted',
 	'review',
 ]);
+
+export function buildGlobalMemoryEntryPath(
+	input: GlobalMemoryEntryPathInput
+): string {
+	const agentType = requirePathIdentity(input.agentType, 'agentType', AGENT_TYPE_PATTERN);
+	const operationKind = requirePathIdentity(
+		input.operationKind,
+		'operationKind',
+		MEMORY_KIND_PATTERN
+	);
+	const operationId = requirePathIdentity(
+		input.operationId,
+		'operationId',
+		OPERATION_ID_PATTERN
+	);
+	return normalizeVaultRelativePath(
+		`${KNOWLEDGE_GLOBAL_MEMORY_DIR}/agents/${agentType}/${operationKind}-${operationId}.md`
+	);
+}
 
 export function parseMemoryRecord(source: MemoryRecordSource): MemoryRecord {
 	const path = normalizePath(source.path, 'path');
@@ -288,6 +315,17 @@ function projectStatusToDeclaredState(status: ProjectMemoryEntry['status']): Mem
 	if (status === 'disputed') return 'disputed';
 	if (status === 'review') return 'review';
 	return 'active';
+}
+
+function requirePathIdentity(
+	value: unknown,
+	field: string,
+	pattern: RegExp
+): string {
+	if (typeof value !== 'string' || !pattern.test(value)) {
+		throw new MemoryRecordValidationError(`${field} is invalid.`);
+	}
+	return value;
 }
 
 function normalizeClaimKey(value: unknown): string {

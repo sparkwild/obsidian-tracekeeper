@@ -18,6 +18,8 @@ export interface RecoveryInvocationResult {
 export interface RuntimeRecoveryControllerDependencies {
     isApplyApprovedWritebackPayload(payload: unknown): boolean;
     isProposeMemoryOperationPayload(payload: unknown): boolean;
+    isFinishTaskV2Payload?(payload: unknown): boolean;
+    releaseIncompatibleFinishTaskBinding?(record: OperationRecord, vaultRoot: string): Promise<void>;
     invoke(request: RecoveryToolRequest, record: OperationRecord, vaultRoot: string): Promise<RecoveryInvocationResult>;
 }
 export declare function recoveryRequestForRecord(record: OperationRecord, dependencies: Pick<RuntimeRecoveryControllerDependencies, 'isProposeMemoryOperationPayload'>): RecoveryToolRequest | null;

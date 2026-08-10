@@ -79,10 +79,10 @@ try {
 	const update = buildSkillInstallPrompt(state({ state: 'update_available', installedVersion: '2.0.0', expectedVersion: '2.2.0', updateAvailable: true, fileVerified: false }), localize);
 	assert.equal(update.action, 'update');
 	assert.equal(update.label, '强化技能可更新');
-	assert.equal(update.actionLabel, '选择目录更新');
+	assert.equal(update.actionLabel, '更新');
 	assert.equal(update.currentVersion, 'v2.0.0');
 	assert.equal(update.bundledVersion, 'v2.2.0');
-	assert.equal(update.detail, '请选择目录确认更新；已有目录会先预览并备份，不会覆盖用户修改。');
+	assert.equal(update.detail, '将按当前安装目录 /tmp/codex/tracekeeper 直接更新。写入前会重新校验并保留备份；检测到用户修改时不会覆盖。');
 	const legacy = buildSkillInstallPrompt(state({ state: 'legacy_install', installedVersion: '2.0.0', fileVerified: false }), localize);
 	assert.equal(legacy.action, 'migrate');
 	assert.equal(legacy.label, '强化技能位置待迁移');

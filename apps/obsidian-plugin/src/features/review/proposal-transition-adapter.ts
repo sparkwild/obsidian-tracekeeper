@@ -13,6 +13,7 @@ import {
 	computePayloadHash,
 	hashVaultContent,
 	isAllowedProposalTargetPath,
+	isKnowledgeWikiPath,
 	proposalTransitionReceiptFromFrontmatter,
 	transitionProposal,
 	type ProposalFrontmatterMutationValue,
@@ -23,14 +24,71 @@ import {
 	type ProposalTransitionStatus,
 } from '@tracekeeper/core';
 import type { ArchiveProposalInspection } from './review-queue-controller';
-import { withObsidianVaultPathLock } from '../../adapters/obsidian-vault-path-lock';
+import { withObsidianVaultPathLocks } from '../../adapters/obsidian-vault-path-lock';
 
 export interface ObsidianProposalTransitionRequest extends ProposalTransitionCommand {
 	proposalPath: string;
 	expectedFileHash?: string;
 	now?: string;
 	actor?: string;
+	ownedCreateTargetPath?: string | null;
+	ownedCreateTargetContentHash?: string | null;
 }
+
+interface OwnedCreateTargetProof {
+	path: string;
+	contentHash: string;
+}
+
+const ownedCreateTargetProof = (
+	request: ObsidianProposalTransitionRequest
+): OwnedCreateTargetProof | null => {
+	const path = request.ownedCreateTargetPath?.trim() || '';
+	const contentHash = request.ownedCreateTargetContentHash?.trim() || '';
+	if (!path && !contentHash) {
+		return null;
+	}
+	if (!path || !contentHash) {
+		throw new ProposalTransitionValidationError(
+			'Owned create target proof requires both path and content hash.'
+		);
+	}
+	if (request.action.kind !== 'apply') {
+		throw new ProposalTransitionValidationError(
+			'Owned create target proof is only valid for apply transitions.'
+		);
+	}
+	if (!isAllowedProposalTargetPath(path)) {
+		throw new ProposalTransitionValidationError(
+			'Owned create target proof is outside the allowed Memory or Wiki boundary.'
+		);
+	}
+	if (!/^[a-f0-9]{64}$/i.test(contentHash)) {
+		throw new ProposalTransitionValidationError(
+			'Owned create target content hash is invalid.'
+		);
+	}
+	return { path, contentHash: contentHash.toLowerCase() };
+};
+
+const verifyOwnedCreateTargetHash = async (
+	app: App,
+	targetPath: string,
+	expectedHash: string
+): Promise<void> => {
+	const targetFile = app.vault.getAbstractFileByPath(targetPath);
+	if (!(targetFile instanceof TFile)) {
+		throw new ProposalTransitionValidationError(
+			'Proposal writeback target disappeared before apply.'
+		);
+	}
+	const content = await app.vault.read(targetFile);
+	if (hashVaultContent(content) !== expectedHash) {
+		throw new ProposalTransitionValidationError(
+			'Proposal writeback target changed before apply.'
+		);
+	}
+};
 
 const scalarText = (value: unknown): string => {
 	if (typeof value === 'string') {
@@ -94,6 +152,26 @@ const multilineField = (
 		throw new ProposalTransitionValidationError(`${label} fields conflict.`);
 	}
 	return values[0] || '';
+};
+
+const parseWritebackEffect = (
+	frontmatter: Readonly<Record<string, unknown>>
+): 'append' | 'create_wiki_note' | 'create_memory_record' | undefined => {
+	const value = scalarField(frontmatter, ['writeback_effect', 'writebackEffect'], 'Proposal writeback effect');
+	if (!value) {
+		return undefined;
+	}
+	const normalized = value.trim().toLowerCase();
+	if (normalized === 'append') {
+		return 'append';
+	}
+	if (normalized === 'create_wiki_note') {
+		return 'create_wiki_note';
+	}
+	if (normalized === 'create_memory_record') {
+		return 'create_memory_record';
+	}
+	throw new ProposalTransitionValidationError('Proposal writeback effect is not supported.');
 };
 
 const extractWritebackSection = (body: string): string => {
@@ -264,6 +342,7 @@ const proposalSnapshot = (
 			'Proposal target'
 		),
 		writebackContent: frontmatterWriteback || bodyWriteback,
+		writebackEffect: parseWritebackEffect(frontmatter),
 		revisionComment: multilineField(
 			frontmatter,
 			['revision_comment', 'revisionComment'],
@@ -354,10 +433,21 @@ export class ObsidianProposalTransitionAdapter {
 	async transition(
 		request: ObsidianProposalTransitionRequest
 	): Promise<ProposalTransitionDecision> {
-		return withObsidianVaultPathLock(
+		const ownedCreateProof = ownedCreateTargetProof(request);
+		return withObsidianVaultPathLocks(
 			this.app.vault,
-			request.proposalPath,
+			[
+				request.proposalPath,
+				...(ownedCreateProof ? [ownedCreateProof.path] : []),
+			],
 			async () => {
+				if (ownedCreateProof) {
+					await verifyOwnedCreateTargetHash(
+						this.app,
+						ownedCreateProof.path,
+						ownedCreateProof.contentHash
+					);
+				}
 				const file = this.app.vault.getAbstractFileByPath(request.proposalPath);
 				if (!(file instanceof TFile)) {
 					throw new ProposalTransitionConflictError('Proposal is not available.');
@@ -377,13 +467,46 @@ export class ObsidianProposalTransitionAdapter {
 		);
 	}
 
-	private environment(request: ObsidianProposalTransitionRequest): ProposalTransitionEnvironment {
+	private environment(
+		request: ObsidianProposalTransitionRequest,
+		frontmatter: Readonly<Record<string, unknown>>
+	): ProposalTransitionEnvironment {
+		const claimKey = scalarField(
+			frontmatter,
+			['claim_key', 'claimKey'],
+			'Proposal claim key'
+		);
+		const isApply = request.action.kind === 'apply';
+		const ownedCreateProof = ownedCreateTargetProof(request);
+		const writebackEffect = parseWritebackEffect(frontmatter);
+		const isOwnedCreateTarget = (relativePath: string): boolean =>
+			isApply
+				&& writebackEffect !== 'append'
+				&& ownedCreateProof !== null
+				&& ownedCreateProof.path === relativePath;
 		return {
 			now: request.now || new Date().toISOString(),
 			actor: request.actor || 'user',
 			targetAllowed: isAllowedProposalTargetPath,
-			targetExists: (relativePath) =>
-				this.app.vault.getAbstractFileByPath(relativePath) instanceof TFile,
+			targetExists: (relativePath) => {
+				const file = this.app.vault.getAbstractFileByPath(relativePath);
+				const exists = file instanceof TFile;
+				if (isOwnedCreateTarget(relativePath)) {
+					if (!exists) {
+						throw new ProposalTransitionValidationError(
+							'Proposal writeback target disappeared before apply.'
+						);
+					}
+					return false;
+				}
+				return exists;
+			},
+			targetCreationAllowed: (relativePath) =>
+				Boolean(claimKey)
+				|| (
+					isOwnedCreateTarget(relativePath)
+					&& isKnowledgeWikiPath(relativePath)
+				),
 		};
 	}
 
@@ -405,7 +528,7 @@ export class ObsidianProposalTransitionAdapter {
 			committed = transitionProposal(
 				current,
 				request,
-				this.environment(request)
+				this.environment(request, frontmatter)
 			);
 			applyFrontmatterMutation(frontmatter, committed.frontmatter);
 		});
@@ -438,7 +561,7 @@ export class ObsidianProposalTransitionAdapter {
 			committed = transitionProposal(
 				current,
 				request,
-				this.environment(request)
+				this.environment(request, frontmatter)
 			);
 			if (committed.replayed) {
 				return content;

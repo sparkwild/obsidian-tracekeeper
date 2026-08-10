@@ -29,6 +29,7 @@ export class TracekeeperPermissionPolicyView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
+		this.containerEl.addClass('tracekeeper-item-view');
 		this.render();
 	}
 
@@ -37,7 +38,6 @@ export class TracekeeperPermissionPolicyView extends ItemView {
 		contentEl.empty();
 		contentEl.addClass('tracekeeper-view-root');
 
-		contentEl.createEl('h2', { text: ui('权限说明', 'Permission guide'), cls: 'tracekeeper-view__title' });
 		contentEl.createEl('p', {
 			text: ui(
 				'Agent 默认先读取和整理资料；全局记忆默认由你审核，项目记忆是否自动保存由记忆规则决定。',
