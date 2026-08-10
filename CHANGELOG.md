@@ -2,6 +2,23 @@
 
 All notable changes to Tracekeeper will be documented in this file.
 
+## [0.3.1] - Community Plugin Review Hardening
+
+### Fixed
+
+- Added Obsidian 1.13 settings search definitions with lifecycle-safe mounting, refresh, and teardown while preserving the existing settings page on the declared minimum version.
+- Replaced avoidable whole-vault lookups with exact or scoped traversal and routed plugin-initiated note removal through Obsidian's recoverable trash behavior.
+- Resolved the remaining official community-plugin scanner findings across the plugin, Core, and MCP Runtime without changing the public MCP tool surface.
+
+### Changed
+
+- Added a repository-root build mirror for automated community scanning while keeping the three packaged release assets unchanged.
+- Documented the plugin's bounded Markdown enumeration, direct filesystem, and write-only clipboard capabilities in the public README.
+
+### Security
+
+- Tightened operation identity and structured payload validation, including rejection of ASCII control characters and unsupported object values.
+
 ## [0.3.0] - Local Agent Runtime And Knowledge Governance
 
 ### Added

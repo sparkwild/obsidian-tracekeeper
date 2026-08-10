@@ -14,7 +14,7 @@ Tracekeeper is an Obsidian-native, local-first knowledge and AI-memory system. I
 
 ## Installation
 
-After Tracekeeper is approved for the Obsidian Community Plugins directory, install it there:
+Install Tracekeeper from the Obsidian Community Plugins directory:
 
 1. Open **Settings** in Obsidian.
 2. Go to **Community plugins**.
@@ -22,7 +22,7 @@ After Tracekeeper is approved for the Obsidian Community Plugins directory, inst
 4. Select **Browse**, search for **Tracekeeper**, then install it.
 5. Enable **Tracekeeper** from the installed plugins list.
 
-Before directory approval, or for manual installation and release-candidate testing, install from the matching GitHub release:
+For manual installation or release-candidate testing, install from the matching GitHub release:
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the release whose tag matches the version in `manifest.json`.
 2. Create `plugins/tracekeeper/` inside the vault's Obsidian configuration folder.

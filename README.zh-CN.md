@@ -14,7 +14,7 @@ Tracekeeper 是一套基于 Obsidian 的本地优先知识与 AI 记忆系统。
 
 ## 安装
 
-Tracekeeper 通过 Obsidian 社区插件目录审核后，可从目录中安装：
+从 Obsidian 社区插件目录安装 Tracekeeper：
 
 1. 打开 Obsidian **设置**。
 2. 进入 **第三方插件**。
@@ -22,7 +22,7 @@ Tracekeeper 通过 Obsidian 社区插件目录审核后，可从目录中安装�
 4. 点击 **浏览**，搜索 **Tracekeeper** 并安装。
 5. 在已安装插件列表中启用 **Tracekeeper**。
 
-在社区目录审核通过前，或需要手动安装、测试候选版本时，可以从版本一致的 GitHub Release 安装：
+需要手动安装或测试候选版本时，可以从版本一致的 GitHub Release 安装：
 
 1. 下载与 `manifest.json` 版本一致的 release 资产：`main.js`、`manifest.json`、`styles.css`。
 2. 在当前 vault 的 Obsidian 配置目录内创建 `plugins/tracekeeper/`。
