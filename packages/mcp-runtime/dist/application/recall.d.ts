@@ -134,6 +134,7 @@ export interface ProjectHistoryRecallApplicationResult extends RecallScanProvena
     max_items: number;
     matched_count: number;
     total_matches: number;
+    scope_mode: 'project_history';
     candidates: string[];
     candidate_notes: ProjectCandidate[];
     entries: ProjectHistoryEntry[];

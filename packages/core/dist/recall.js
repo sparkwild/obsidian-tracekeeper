@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.isOrdinaryRecallPathEligible = isOrdinaryRecallPathEligible;
 exports.scoreNote = scoreNote;
 exports.recallNotes = recallNotes;
 const knowledge_architecture_1 = require("./knowledge-architecture");
@@ -9,9 +10,9 @@ const RECENT_NOTE_WINDOW_DAYS = 14;
 const MAX_QUERY_TOKENS = 64;
 const MAX_NOTE_TOKENS = 4096;
 const EXCLUDED_RECALL_PREFIXES = [knowledge_architecture_1.TRACEKEEPER_CONTROL_DIR, knowledge_architecture_1.TRACEKEEPER_INBOX_DIR];
-function isExcludedFromRecall(note) {
-    const normalizedPath = note.relativePath.replace(/\\/g, '/').toLowerCase();
-    return EXCLUDED_RECALL_PREFIXES.some((prefix) => {
+function isOrdinaryRecallPathEligible(relativePath) {
+    const normalizedPath = relativePath.replace(/\\/g, '/').toLowerCase();
+    return !EXCLUDED_RECALL_PREFIXES.some((prefix) => {
         const normalizedPrefix = prefix.toLowerCase();
         return normalizedPath === normalizedPrefix || normalizedPath.startsWith(`${normalizedPrefix}/`);
     });
@@ -167,7 +168,7 @@ function recallNotes(notes, query, options = {}) {
     const limit = options.limit ?? DEFAULT_LIMIT;
     const matches = [];
     for (const note of notes) {
-        if (isExcludedFromRecall(note)) {
+        if (!isOrdinaryRecallPathEligible(note.relativePath)) {
             continue;
         }
         const score = scoreNote(note, tokens);

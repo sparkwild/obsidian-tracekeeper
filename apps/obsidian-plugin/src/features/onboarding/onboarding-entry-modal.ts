@@ -51,7 +51,7 @@ export class OnboardingEntryModal extends Modal {
 		});
 	}
 
-	private async invoke(handler?: (() => Promise<void> | void) | undefined): Promise<void> {
+	private async invoke(handler?: () => Promise<void> | void): Promise<void> {
 		if (!handler) {
 			return;
 		}

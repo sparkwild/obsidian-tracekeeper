@@ -157,8 +157,8 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 	'tracekeeper.finish_task': {
 		title: { zh: '结束任务', en: 'Finish task' },
 		description: {
-			zh: '任务结束时记录总结，并按记忆规则提交决策、方案调整、经验、偏好、后续动作和记忆候选。',
-			en: 'Records task closeout and submits decisions, solution changes, lessons, preferences, next actions, and memory candidates by rule.',
+			zh: '记录任务执行结果，并单独报告该任务关联的 Wiki/Memory 是否仍待审核、待写入、已写入或未解决。',
+			en: 'Records task execution and separately reports whether task-linked Wiki/Memory output is pending, ready, applied, or unresolved.',
 		},
 		category: { zh: '任务', en: 'Task' },
 	},
@@ -189,16 +189,16 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 	'tracekeeper.capture_source': {
 		title: { zh: '捕获资料来源', en: 'Capture source' },
 		description: {
-			zh: '把网页、文件或转录来源写入分类目录；大内容通过一个可见索引和有界分片保持可追溯。',
-			en: 'Routes web, file, or transcript sources to typed owners; large content stays traceable through one visible index and bounded parts.',
+			zh: '把网页、文件或转录保存为可读取的来源证据；它不代表关联的 Wiki/Memory 已经审核并写入。',
+			en: 'Saves web, file, or transcript material as readable source evidence; this does not mean a related Wiki/Memory proposal was applied.',
 		},
 		category: { zh: '资料', en: 'Source' },
 	},
 	'tracekeeper.propose_memory': {
 		title: { zh: '提交记忆提案', en: 'Propose memory' },
 		description: {
-			zh: '提交带 claim、证据、authority、confidence 和生命周期关系的记忆候选；全局默认审核，项目按规则处理。',
-			en: 'Submits memory candidates with claim, evidence, authority, confidence, and lifecycle relations; global defaults to review and project behavior follows policy.',
+			zh: '提交带证据和生命周期关系的 Wiki/Memory 候选；未自动写入的提案只有在审核并确认写入后才算已持久化。',
+			en: 'Submits evidence-backed Wiki/Memory candidates; a non-auto-applied proposal is persisted only after governed review and confirmed apply.',
 		},
 		category: { zh: '记忆', en: 'Memory' },
 	},
@@ -247,7 +247,7 @@ export class McpCapabilitiesModal extends Modal {
 			row.setAttr('aria-label', accessibleLabel);
 			row.setAttr('data-tooltip-position', 'top');
 			row.setAttr('title', tooltip);
-			row.createEl('span', {
+			row.createSpan({
 				text: category,
 				cls: 'tracekeeper-badge tracekeeper-capability-row__badge',
 			});

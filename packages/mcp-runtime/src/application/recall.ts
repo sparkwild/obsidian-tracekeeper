@@ -6,6 +6,7 @@ import {
 	TRACEKEEPER_SESSIONS_DIR,
 	TRACEKEEPER_TASKS_DIR,
 	isKnowledgeWikiPath,
+	isOrdinaryRecallPathEligible,
 	recallNotes,
 	type KnowledgeCatalogEntry,
 	type KnowledgeReadView,
@@ -188,6 +189,7 @@ export interface ProjectHistoryRecallApplicationResult extends RecallScanProvena
 	max_items: number;
 	matched_count: number;
 	total_matches: number;
+	scope_mode: 'project_history';
 	candidates: string[];
 	candidate_notes: ProjectCandidate[];
 	entries: ProjectHistoryEntry[];
@@ -904,6 +906,7 @@ function catalogMetadataProjection(entry: KnowledgeCatalogEntry): ScannedNote {
 
 function isCurrentReadViewEntry(entry: KnowledgeCatalogEntry, view: KnowledgeReadView): boolean {
 	const normalizedPath = entry.path.replace(/\\/g, '/');
+	if (!isOrdinaryRecallPathEligible(normalizedPath)) return false;
 	if (normalizedPath === ARCHIVE_ROOT || normalizedPath.startsWith(`${ARCHIVE_ROOT}/`)) return false;
 	if (entry.type !== 'memory_record') return true;
 	return view.memory.lifecycle.current.some((row) => row.record.path === entry.path);
@@ -1335,6 +1338,7 @@ export class RecallApplicationService {
 			max_items: request.maxItems,
 			matched_count: matches.length,
 			total_matches: historyEntries.length,
+			scope_mode: 'project_history',
 			...readViewProvenance(view),
 			candidates: candidateNotes.map((candidate) => candidate.path),
 			candidate_notes: candidateNotes,
@@ -1486,6 +1490,7 @@ export class RecallApplicationService {
 			max_items: request.maxItems,
 			matched_count: matches.length,
 			total_matches: sortedMatches.length,
+			scope_mode: 'project_history',
 			...scanProvenance(scan),
 			candidates: candidateNotes.map((candidate) => candidate.path),
 			candidate_notes: candidateNotes,

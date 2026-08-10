@@ -3,6 +3,13 @@ import type { AgentIntegrationSnapshot } from './agent-integrations';
 import type { GeneratedClientConfig } from '../client-config/client-config';
 import type { PendingOAuthApproval } from '../activity/activity-model';
 import { buildConnectionPresentation, type ConnectionPresentation } from '../client-config/agent-connection-view-model';
+import {
+	conflictingPendingOAuthRequests,
+	oauthClientOwnershipConflicts,
+	pendingOAuthRequestsForIntegration,
+	unboundPendingOAuthRequests,
+	type OAuthClientOwnershipConflict,
+} from '../client-config/oauth-pending';
 
 export interface VisibleAgentConfiguration {
 	agent: AgentConnectionRecord | null;
@@ -14,6 +21,9 @@ export interface VisibleAgentConfiguration {
 export interface AgentConfigurationViewModel {
 	visibleAgents: VisibleAgentConfiguration[];
 	candidateConfigs: GeneratedClientConfig[];
+	unboundOAuthRequests: PendingOAuthApproval[];
+	conflictingOAuthRequests: PendingOAuthApproval[];
+	oauthClientOwnershipConflicts: OAuthClientOwnershipConflict[];
 }
 
 export function buildAgentConfigurationViewModel(
@@ -26,6 +36,11 @@ export function buildAgentConfigurationViewModel(
 	const visibleAgents = clientConfigs.flatMap((config) => {
 		const integration = integrationByClient.get(config.clientId);
 		if (!integration) return [];
+		const integrationPendingRequests = pendingOAuthRequestsForIntegration(
+			integration,
+			integrations,
+			pendingOAuthRequests
+		);
 		const agent = recentAgents.find((candidate) => candidate.integrationId === integration.integrationId) ?? null;
 		const currentCredentialAgent = integration.credential
 			? recentAgents.find((candidate) =>
@@ -41,7 +56,7 @@ export function buildAgentConfigurationViewModel(
 				authMode: integration.authMode,
 				setupCommandCopiedAt: integration.setupCommandCopiedAt,
 					hasCredential: Boolean(integration.credential),
-					hasPendingApproval: integration.authMode === 'oauth' && pendingOAuthRequests.length > 0,
+					hasPendingApproval: integrationPendingRequests.length > 0,
 					clientReached: Boolean(agent?.connectedAt) || (integration.authMode === 'oauth' && Boolean(integration.lastAuthorizedAt)),
 				connected: Boolean(currentCredentialAgent?.connectedAt),
 				used: Boolean(agent?.lastUsedAt),
@@ -53,5 +68,8 @@ export function buildAgentConfigurationViewModel(
 	return {
 		visibleAgents,
 		candidateConfigs: clientConfigs.filter((config) => !integrationByClient.has(config.clientId)),
+		unboundOAuthRequests: unboundPendingOAuthRequests(integrations, pendingOAuthRequests),
+		conflictingOAuthRequests: conflictingPendingOAuthRequests(integrations, pendingOAuthRequests),
+		oauthClientOwnershipConflicts: oauthClientOwnershipConflicts(integrations),
 	};
 }

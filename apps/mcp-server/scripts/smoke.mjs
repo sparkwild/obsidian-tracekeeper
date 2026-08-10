@@ -1570,6 +1570,8 @@ async function main() {
 		assert.equal(typeof globalRecall.matches[0].why_matched, 'string');
 		assert.equal(globalRecall.matches[0].instruction_trust, 'data_only');
 		assert.equal(typeof globalRecall.matches[0].content_origin, 'string');
+		assert.ok(Array.isArray(globalRecall.matches[0].relation_evidence?.related_wiki));
+		assert.ok(Array.isArray(globalRecall.matches[0].relation_evidence?.related_sources));
 
 		const instructionBoundaryRecall = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.recall',
@@ -1737,11 +1739,25 @@ async function main() {
 		assert.equal(finishTask.suggestion_count, undefined);
 		assert.equal(finishTask.suggested_memory_updates, undefined);
 		assert.equal(finishTask.memory?.status, 'no_candidates');
+		assert.deepEqual(finishTask.durable_output, {
+			status: 'none',
+			source_capture_count: 0,
+			proposal_count: 0,
+			pending_review_count: 0,
+			ready_to_apply_count: 0,
+			revision_requested_count: 0,
+			applied_count: 0,
+			rejected_count: 0,
+			unresolved_count: 0,
+			proposal_paths: [],
+			target_paths: [],
+		});
 		assert.ok(Array.isArray(finishTask.next_actions));
 		assert.equal(finishTask.next_actions.some((action) => action.tool === 'tracekeeper.finish_task'), false);
+		assert.equal(finishTask.next_actions[0]?.reason_code, 'MEMORY_NOT_PERSISTED');
 		assert.ok(Array.isArray(finishTask.next_actions_for_agent));
-		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('no durable memory candidates')));
-		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('tracekeeper.propose_memory')));
+		assert.ok(finishTask.next_actions_for_agent.some((entry) => entry.includes('no Wiki/Memory durable output was linked at finish')));
+		assert.equal(finishTask.next_actions_for_agent.some((entry) => entry.includes('tracekeeper.propose_memory')), false);
 		assert.equal(finishTask.next_actions_for_agent.some((entry) => entry.includes('call tracekeeper.finish_task again with')), false);
 		assert.deepEqual(JSON.parse(finishTaskCall.content[0]?.text), finishTask, 'finish text fallback should match structuredContent');
 		assert.ok(
@@ -2368,6 +2384,55 @@ async function main() {
 
 		}
 
+		const scopedRecallCases = [
+			{
+				scope: 'project',
+				arguments: {
+					scope: 'project',
+					query: 'Initial project memory',
+					project_hint: 'demo',
+					max_items: 5,
+				},
+			},
+			{
+				scope: 'project_history',
+				arguments: {
+					scope: 'project_history',
+					project_hint: 'demo',
+					max_items: 5,
+				},
+			},
+			{
+				scope: 'task_history',
+				arguments: {
+					scope: 'task_history',
+					task_id: taskId,
+					max_items: 5,
+				},
+			},
+		];
+		for (const recallCase of scopedRecallCases) {
+			const scopedRecall = buildStructured(await client.call('tools/call', {
+				name: 'tracekeeper.recall',
+				arguments: recallCase.arguments,
+			}));
+			assert.equal(scopedRecall.ok, true);
+			assert.equal(scopedRecall.scope_mode, recallCase.scope);
+			assert.equal(scopedRecall.recall.scope, recallCase.scope);
+			assert.equal(scopedRecall.matched_count, scopedRecall.matches.length);
+			assert.equal(scopedRecall.recall.matched_count, scopedRecall.matches.length);
+			assert.ok(scopedRecall.matches.length >= 1);
+			for (const match of scopedRecall.matches) {
+				assert.equal(typeof match.path, 'string');
+				assert.equal(typeof match.excerpt, 'string');
+				assert.equal(typeof match.why_matched, 'string');
+				assert.equal(match.instruction_trust, 'data_only');
+				assert.ok(['captured_source', 'tracekeeper_generated', 'vault_note'].includes(match.content_origin));
+				assert.ok(Array.isArray(match.relation_evidence?.related_wiki));
+				assert.ok(Array.isArray(match.relation_evidence?.related_sources));
+			}
+		}
+
 		const distillSession = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.distill_session',
 			arguments: {
@@ -2410,6 +2475,9 @@ async function main() {
 				content: 'Smoke proposal content.',
 				evidence: 'smoke test',
 				target_note: '01_knowledge/memory/projects/demo/memory.md',
+				memory_scope: 'project',
+				project_hint: 'demo',
+				project_id: 'demo-proj-id',
 				risk_level: 'medium',
 				task_id: taskId,
 				idempotency_key: 'smoke-propose-memory',
@@ -2425,6 +2493,9 @@ async function main() {
 				content: 'Smoke proposal content.',
 				evidence: 'smoke test',
 				target_note: '01_knowledge/memory/projects/demo/memory.md',
+				memory_scope: 'project',
+				project_hint: 'demo',
+				project_id: 'demo-proj-id',
 				risk_level: 'medium',
 				task_id: taskId,
 				idempotency_key: 'smoke-propose-memory',
@@ -2439,6 +2510,9 @@ async function main() {
 					content: 'Changed proposal under the same retry key.',
 					evidence: 'smoke test',
 					target_note: '01_knowledge/memory/projects/demo/memory.md',
+					memory_scope: 'project',
+					project_hint: 'demo',
+					project_id: 'demo-proj-id',
 					risk_level: 'medium',
 					task_id: taskId,
 					idempotency_key: 'smoke-propose-memory',
@@ -2491,12 +2565,10 @@ async function main() {
 					evidence: 'smoke test',
 					risk_level: 'medium',
 					task_id: taskId,
+					memory_scope: 'project',
 					project_hint: 'demo',
-					related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
-					related_sources: [
-						'01_knowledge/sources/local-source.md',
-						'01_knowledge/sources/missing-source.md',
-					],
+					project_id: 'demo-proj-id',
+					related_sources: ['01_knowledge/sources/local-source.md'],
 					idempotency_key: 'smoke-auto-project-memory',
 				};
 				const autoMemory = buildStructured(await autoMemoryClient.call('tools/call', {
@@ -2512,8 +2584,9 @@ async function main() {
 				assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeAutoMemory);
 				assert.equal(Array.isArray(autoMemory.missing_graph_bridges), true);
 				assert.equal(autoMemory.missing_wiki_bridge, false);
+				assert.deepEqual(autoMemory.related_wiki, []);
 				assert.deepEqual(autoMemory.related_sources, ['01_knowledge/sources/local-source.md']);
-				assert.deepEqual(autoMemory.missing_related_sources, ['01_knowledge/sources/missing-source.md']);
+				assert.deepEqual(autoMemory.missing_related_sources, []);
 					const autoTargetText = fs.readFileSync(path.join(vaultRoot, autoMemory.path), 'utf8');
 					assert.ok(autoTargetText.includes('Auto-saved project memory from smoke test.'));
 					for (const requiredV2Field of [
@@ -2528,7 +2601,6 @@ async function main() {
 					]) {
 						assert.ok(autoTargetText.includes(requiredV2Field), `v2 memory should include ${requiredV2Field}`);
 					}
-					assert.ok(autoTargetText.includes('[[01_knowledge/wiki/hubs/smoke-hub'));
 					assert.ok(autoTargetText.includes('[[01_knowledge/sources/local-source'));
 				assert.equal(
 					fs.readFileSync(
@@ -2598,25 +2670,26 @@ async function main() {
 					'Auto-saved project memory from smoke test.',
 				]);
 			assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeAutoMemory);
-			const missingBridgeAutoMemory = buildStructured(await autoMemoryClient.call('tools/call', {
+			const unresolvedRelationMemory = buildStructured(await autoMemoryClient.call('tools/call', {
 				name: 'tracekeeper.propose_memory',
 				arguments: {
 					proposal_kind: 'project_update',
-					content: '- Missing wiki bridge path should fallback to review queue.',
+					content: '- An explicitly declared unresolved Wiki relation should require review.',
 					evidence: 'smoke test',
 					risk_level: 'medium',
 					task_id: taskId,
 					project_hint: 'demo',
+					project_id: 'demo-proj-id',
 					memory_scope: 'project',
 					related_wiki: ['nonexistent-wiki-note'],
 				},
 			}));
-			assert.equal(missingBridgeAutoMemory.ok, true);
-			assert.equal(missingBridgeAutoMemory.auto_applied, false);
-			assert.equal(missingBridgeAutoMemory.memory_rule, 'review_queue');
-			assert.equal(missingBridgeAutoMemory.missing_wiki_bridge, true);
+			assert.equal(unresolvedRelationMemory.ok, true);
+			assert.equal(unresolvedRelationMemory.auto_applied, false);
+			assert.equal(unresolvedRelationMemory.memory_rule, 'auto_write');
+			assert.equal(unresolvedRelationMemory.review_reason, 'unresolved_relation_evidence');
 			assert.equal(countReviewQueueFiles(vaultRoot), queueCountBeforeAutoMemory + 1);
-			assert.equal(fs.readFileSync(path.join(vaultRoot, missingBridgeAutoMemory.path), 'utf8').includes('related_wiki'), true);
+			assert.equal(fs.readFileSync(path.join(vaultRoot, unresolvedRelationMemory.path), 'utf8').includes('related_wiki'), true);
 
 			const autoFinishStart = buildStructured(await autoMemoryClient.call('tools/call', {
 				name: 'tracekeeper.start_task',
@@ -2682,34 +2755,34 @@ async function main() {
 			assert.equal(autoFinish.architecture_status === 'healthy' || autoFinish.architecture_status === 'needs_attention', true);
 			assert.equal(Array.isArray(autoFinish.missing_graph_bridges), true);
 
-			const autoFinishBridgeStart = buildStructured(await autoMemoryClient.call('tools/call', {
+			const autoFinishRelationStart = buildStructured(await autoMemoryClient.call('tools/call', {
 				name: 'tracekeeper.start_task',
 				arguments: {
-					goal: 'Smoke finish task with missing wiki bridge.',
+					goal: 'Smoke finish task with an explicitly unresolved relation.',
 					project_hint: 'demo',
 					project_id: 'demo-proj-id',
 					idempotency_key: 'smoke-auto-finish-bridge-start',
 				},
 			}));
-			const autoFinishBridgeFallback = buildStructured(await autoMemoryClient.call('tools/call', {
+			const autoFinishRelationReview = buildStructured(await autoMemoryClient.call('tools/call', {
 				name: 'tracekeeper.finish_task',
 				arguments: {
-					task_id: autoFinishBridgeStart.task_id,
-					summary: 'Smoke finish task with missing wiki bridge.',
+					task_id: autoFinishRelationStart.task_id,
+					summary: 'Smoke finish task with an explicitly unresolved relation.',
 					status: 'completed',
-					outcomes: ['Project finish should use review queue'],
+					outcomes: ['Explicit unresolved relations should use the review queue'],
 					next_actions: ['Review proposal candidates'],
-					decisions: ['Wiki bridge is required for project auto save'],
-					solution_changes: ['Added fallback behavior'],
-					lessons: ['Missing wiki bridge should force review queue'],
-					preferences: ['Prefer explicit review queue fallback'],
+					decisions: ['Wiki relations are optional, but declared unresolved relations require review'],
+					solution_changes: ['Separated optional relation absence from unresolved relation evidence'],
+					lessons: ['Do not auto-apply explicitly unresolved relations'],
+					preferences: ['Prefer explicit review for unresolved relation evidence'],
 					project_hint: 'demo',
 					project_id: 'demo-proj-id',
 					related_wiki: ['missing-wiki-demo-note'],
 					related_sources: ['01_knowledge/sources/local-source.md'],
 					memory_candidate_records: [{
 						proposal_kind: 'project_update',
-						content: 'Missing wiki bridge should force review queue.',
+						content: 'An explicitly unresolved Wiki relation should require review.',
 						scope: 'project',
 						project_hint: 'demo',
 						project_id: 'demo-proj-id',
@@ -2719,11 +2792,11 @@ async function main() {
 					}],
 				},
 			}));
-			assert.equal(autoFinishBridgeFallback.ok, true);
-			assert.equal(autoFinishBridgeFallback.memory_status, 'requires_wiki_bridge');
-			assert.equal(autoFinishBridgeFallback.proposal_count, 1);
-			assert.equal(autoFinishBridgeFallback.auto_applied_count, 0);
-			assert.equal(autoFinishBridgeFallback.missing_wiki_bridge, true);
+			assert.equal(autoFinishRelationReview.ok, true);
+			assert.equal(autoFinishRelationReview.memory_status, 'queued_for_review');
+			assert.equal(autoFinishRelationReview.proposal_count, 1);
+			assert.equal(autoFinishRelationReview.auto_applied_count, 0);
+			assert.equal(autoFinishRelationReview.memory_changes[0].reason, 'unresolved_relation_evidence');
 			await autoMemoryClient.deleteSession();
 		} finally {
 			await autoMemoryClient.close().catch(() => {});

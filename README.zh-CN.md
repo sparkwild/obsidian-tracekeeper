@@ -2,13 +2,19 @@
 
 [English README](./README.md)
 
-Tracekeeper 是一个面向本地 Agent 知识体系的 Obsidian 插件：Memory 和 Wiki 使用同一套稳定结构。
+Tracekeeper 是一套基于 Obsidian 的本地优先知识与 AI 记忆系统。它让经用户明确连接的 AI Agent 通过仅限回环地址、受凭据保护的 MCP Runtime 召回限定范围的 Vault 上下文并提出持久化更新；Obsidian 始终是人工工作区，Vault 始终是事实来源。
 
-它把 AI 辅助工作变成可追踪、可审阅、可决定的候选内容：任务记忆、会话记录和记忆提案都留在 Obsidian 里。
+## Tracekeeper 能做什么
+
+- 在桌面端 Obsidian 运行时，通过本机 MCP Runtime 将 AI 工具连接到当前 Vault。
+- 召回选定范围内的 Vault 上下文并构建有限的 context pack，不开放不受限制的文件系统访问。
+- Wiki 变更始终经过人工审核，审核通过后仍需写入预览与明确确认。
+- 按用户为 Global 或 Project 选择的策略，将记忆保存为受治理的不可变 Markdown 记录，并用稳定操作身份保证重试安全。
+- 将持久知识保留在普通 Vault 文件中，不依赖 Tracekeeper 托管后端或外部数据库。
 
 ## 安装
 
-Tracekeeper 进入 Obsidian 社区插件目录后：
+Tracekeeper 通过 Obsidian 社区插件目录审核后，可从目录中安装：
 
 1. 打开 Obsidian **设置**。
 2. 进入 **第三方插件**。
@@ -16,7 +22,7 @@ Tracekeeper 进入 Obsidian 社区插件目录后：
 4. 点击 **浏览**，搜索 **Tracekeeper** 并安装。
 5. 在已安装插件列表中启用 **Tracekeeper**。
 
-如需手动安装或测试候选版本，可以从版本一致的 GitHub Release 安装：
+在社区目录审核通过前，或需要手动安装、测试候选版本时，可以从版本一致的 GitHub Release 安装：
 
 1. 下载与 `manifest.json` 版本一致的 release 资产：`main.js`、`manifest.json`、`styles.css`。
 2. 在当前 vault 的 Obsidian 配置目录内创建 `plugins/tracekeeper/`。
@@ -31,16 +37,16 @@ Tracekeeper 的核心想法是把边界划清楚：
 
 - Memory 记录任务、会话、决策、偏好和项目连续性。
 - Wiki 组织可复用主题、hub、来源和图谱入口。
-- Memory 和 Wiki 通过明确 wikilink 串起来，让 Obsidian 图谱和 Agent 召回看到同一套结构。
+- 当存在已验证关系时，Memory 可以链接 Wiki 或 Source，让 Obsidian 图谱和 Agent Recall 使用同一结构，但并不要求每条记忆都必须有 Wiki。
 - 不需要外部数据库，也不需要自动同步其他 App 数据。
 
-AI 可以帮助回忆上下文、草拟提案、整理长期记忆，但是否写入、怎么写入，最后由你决定。
+AI 可以帮助回忆上下文、草拟提案、整理长期记忆。持久化策略由你选择：Review 保留最终写入决定，Auto 只允许受治理的不可变 MemoryRecord v2 写入。
 
 ## 背景
 
 个人知识库经常卡在两个极端：有价值的内容停留在一次性对话里，无法沉淀；或者自动化写入太积极，把 vault 变得混乱。Tracekeeper 选择站在中间。
 
-Tracekeeper 会把 AI 给出的整理结果当成候选记忆提案。你可以在熟悉的 Obsidian 环境里检查它、修改它、通过审核、退回修改或不采纳。
+Tracekeeper 会按明确策略路由 AI 的持久化输出。Wiki 变更和 Review 记忆保持可检查并需要人工审核；符合 Auto 条件的记忆仍必须经过相同的验证、身份、生命周期和冲突控制，之后才能创建不可变记录。
 
 ## 首次使用
 
@@ -59,7 +65,7 @@ Tracekeeper 在桌面端 Obsidian 开启时提供本机 Streamable HTTP MCP Runt
 
 每种客户端最多一张卡、每张卡最多一个活动凭据。凭据属于具体集成，可独立替换或撤销；撤销只关闭该卡的 Session，不卸载 Skill。成功请求统一使用 Runtime 固定的 `local-user` 能力集合，MCP `clientInfo` 只作为不可信观察信息。高级区的“撤销全部 Agent 访问”会清空所有凭据和待审批请求、终止全部 Session，但保留卡片和 Skill。
 
-AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 vault 上下文、构建 context pack、记录有限范围内的工作笔记，并按你的记忆规则提交更新。全局记忆默认进入知识变更审核；启用项目自动保存后，每次符合条件的操作都会在稳定项目 Hub 下创建自己的不可变 Markdown 条目。
+AI 工具通过 `tracekeeper.*` MCP tools 连接 Tracekeeper。连接后，助手可以读取选定的 Vault 上下文、构建 context pack、记录有限范围内的工作笔记，并按你的记忆规则提交更新。新安装默认使用 Global Review 和 Project Auto，你也可以分别为两个范围选择 Review 或 Auto。符合 Auto 条件的操作会在规范的 Global 或 Project Hub 下创建自己的不可变 MemoryRecord v2 条目。
 
 Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选择 `no_track`、`recall_only` 或 `tracked_task`；tracked 工作只启动一次、使用返回的 task id、召回最小必要上下文并只结束一次。它不会保存 token、授予权限或复制 MCP 实现。召回内容会明确标记为知识数据而非指令，结构化 MCP action 则减少客户端二次猜测。参见 [Agent 工作流](./docs/features/AGENT_WORKFLOW.md)。
 
@@ -75,11 +81,11 @@ Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选
 
 ## 知识变更审核
 
-全局长期记忆默认必须先进入知识变更审核。AI 助手提出的全局 durable memory 更新会先成为变更提案；图谱健康建议和结构迁移冲突也会进入同一个审核界面等待你确认。你可以决定通过审核、退回修改或不采纳。
+全局长期记忆默认先进入知识变更审核。选择 Global Review 时，AI 助手提出的全局 durable memory 更新会先成为变更提案；Wiki 变更、图谱健康建议和结构迁移冲突也会进入同一个审核界面等待你确认。你可以决定通过审核、退回修改或不采纳。Global Auto 必须由用户明确选择，并且只能写入受治理的 MemoryRecord v2 条目。
 
 审核通过和写入是两个独立动作。只有提案通过审核、完成预览并经你明确确认后，Tracekeeper 才会把内容写入对应目标笔记。
 
-项目记忆默认自动保存为 `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/` 下的只创建条目。稳定操作身份会让完全相同的重试复用同一条目，并拒绝使用已存在身份覆盖不同载荷。每个新条目都会通过 Obsidian 原生链接连接稳定项目 Hub，以及已验证的 Wiki 或 Source 笔记。现有项目 `memory.md` 仍可读取并列入目录，但不会被自动改写、拆分或迁移。
+项目记忆默认自动保存为 `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/` 下的只创建条目。稳定操作身份会让完全相同的重试复用同一条目，并拒绝使用已存在身份覆盖不同载荷。每个新条目都会连接稳定项目 Hub，并在存在关系时通过 Obsidian 原生链接连接已验证的 Wiki 或 Source 笔记；Wiki 和 Source 关系都是可选的。现有项目 `memory.md` 仍可读取并列入目录，但不会被自动改写、拆分或迁移。
 
 `tracekeeper.recall` 始终是按相关性选取的结果。当 Agent 需要完整枚举全局或项目记忆时，唯一规范的只读工具 `tracekeeper.memory` 会在同一个索引代次内分页列出当前、历史、冲突、待审核与旧版元数据，并且不返回笔记正文。
 
@@ -107,9 +113,9 @@ Tracekeeper 通过只读的 `tracekeeper.lint` 统一检查 Obsidian wikilink �
 ## 设计原则
 
 - Vault 优先：Obsidian 仍然是长期知识的归宿。
-- 人工审核优先：长期记忆变更应当先经过确认。
+- 策略控制持久化：Global Review 是默认值，用户选择的 Auto 只允许受治理的不可变记忆记录。
 - 可追踪优先：知识需要保留足够上下文，方便之后重新理解和判断。
-- AI 是协作者：助手负责整理和提出建议，但不拥有你的 vault。
+- AI 是协作者：助手负责整理和提出建议，Vault、策略与审核决定始终属于用户。
 
 ## 安全模型
 

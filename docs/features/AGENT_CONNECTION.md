@@ -81,16 +81,30 @@ Agent Bearer.
 
 OAuth temporary requests, authorization codes, PKCE challenges, and unbound DCR
 records stay in memory. A pending request contains only the opaque request
-handle, client claim, redirect origin, resource, scope, challenge, and bounded
-timestamps. Obsidian's approval view displays the target Agent, the client name
-supplied by the client, redirect origin, resource, scope, and expiry.
+handle, OAuth client identifier, client claim, redirect origin, resource, scope,
+challenge, and bounded timestamps. A request whose client identifier already
+belongs to an Agent integration appears only on that Agent's card. A first-time
+unbound request appears once at the Agent-settings level and is never assigned
+from the untrusted client-name claim. Expired requests are removed from pending
+state and do not consume pending-request capacity.
 
-Allow binds the request to the explicitly selected `integrationId`. The one-time
-authorization code is additionally bound to integration, credential, OAuth
-client, redirect URI, resource, and PKCE challenge. Token persistence happens
-before the response is returned; on persistence failure the old credential stays
-valid and the client receives `server_error`. RFC 7009-style revoke accepts
-unknown tokens without revealing whether they existed.
+Allow explicitly binds an unbound request to the user-selected `integrationId`;
+the approval view identifies that binding action without treating the client
+name as trusted identity. The one-time authorization code is additionally bound
+to integration, credential, OAuth client, redirect URI, resource, and PKCE
+challenge. Token persistence happens before the response is returned; on
+persistence failure the old credential stays valid and the client receives
+`server_error`. RFC 7009-style revoke accepts unknown tokens without revealing
+whether they existed.
+
+One OAuth `clientId` has at most one effective Agent-integration owner. Approval
+reserves that owner through the authorization-code lifetime, and credential
+issuance serially rechecks ownership immediately before persistence. Historical
+duplicate owners fail closed without silently rewriting settings: no Agent card
+claims the request, Settings shows one group-level conflict, and authorization
+remains blocked until the human revokes or removes the duplicate owner. A view
+refresh failure after an approval decision does not undo or misreport the
+already committed decision.
 
 The browser waiting/success/error pages are same-origin, `no-store`,
 `no-referrer`, CSP-protected, script-free surfaces. They contain no credential,
@@ -100,14 +114,24 @@ approval button, or opaque handle beyond the waiting URL required for polling.
 
 The companion Skill teaches `no_track`, `recall_only`, and `tracked_task` habits;
 it never grants Runtime permissions or proves MCP use. Skill installation keeps
-the existing preview, confirm, backup, rollback, symlink, and receipt controls.
-The user explicitly chooses a Skills root through the desktop directory picker;
-Tracekeeper appends one `tracekeeper` directory unless that directory was chosen
-directly. Officially documented locations are shown only as suggestions. An
-AI-assisted panel can export the complete local bundle to a versioned plugin
-source directory and provide a selectable prompt; copying that prompt is not
-installation. A direct install or an external directory verification must pass
-the bundle and manifest hash checks before the card shows **installed**.
+the existing write-plan, recheck, backup, rollback, symlink, and receipt
+controls. Initial installation and location changes explicitly choose a Skills
+root through the desktop directory picker and confirm the preview; Tracekeeper
+appends one `tracekeeper` directory unless that directory was chosen directly.
+When a receipt-backed installation has a verified older bundle, Settings offers
+an in-place **Update** action. It uses the recorded target directory without
+asking for the directory or a second confirmation, while still creating a
+short-lived plan, rechecking the files immediately before writing, retaining a
+backup, and refusing modified or newer content. Officially documented locations
+are shown only as suggestions. While an in-place update runs, the card exposes
+an explicit busy state and progress message. Success replaces the same card with
+the verified **installed** state immediately and leaves a longer restart notice;
+failure remains actionable without claiming that a successful write failed only
+because a view refresh failed. An AI-assisted panel can export the complete local
+bundle to a versioned plugin source directory and provide a selectable prompt;
+copying that prompt is not installation. A direct install, in-place update, or
+external directory verification must pass the bundle and manifest hash checks
+before the card shows **installed**.
 
 Settings owns connection, authorization, revocation, replacement, card removal,
 and Skill actions. Activity may show recent non-secret integration and

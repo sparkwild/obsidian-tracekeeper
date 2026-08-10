@@ -363,6 +363,7 @@ export interface ApprovedWritebackPreview {
 	target_note: string;
 	touched_notes: string[];
 	writeback_preview: string;
+	writeback_effect: 'append' | 'create_wiki_note' | 'create_memory_record';
 	confirmation_token: string;
 	confirmation_expires_at: string;
 }
@@ -375,12 +376,12 @@ export interface ReviewQueueControllerHost {
 	normalizeVaultPath(path: string): string;
 	loadReviewKnowledgeSnapshot(): Promise<ReviewKnowledgeSnapshot>;
 	waitForNativePath(sourcePath: string, targetPath: string): Promise<void>;
-	readArchiveReceipt(operationId: string): Promise<unknown | null>;
+	readArchiveReceipt(operationId: string): Promise<unknown>;
 	writeArchiveReceipt(
 		receipt: ArchiveMemoryProposalReceipt,
 		expectedBindingHash: string | null
 	): Promise<void>;
-	readArchiveTargetClaim(targetHash: string): Promise<unknown | null>;
+	readArchiveTargetClaim(targetHash: string): Promise<unknown>;
 	writeArchiveTargetClaim(
 		claim: ArchiveMemoryProposalTargetClaim,
 		expectedBindingHash: string | null
@@ -394,7 +395,7 @@ export interface ReviewProposalTransitionOwner {
 }
 
 const createReviewOperationId = (): string => {
-	const operationId = globalThis.crypto?.randomUUID?.();
+	const operationId = window.crypto?.randomUUID?.();
 	if (!operationId) {
 		throw new Error('Secure review operation identifiers are unavailable.');
 	}
@@ -444,6 +445,11 @@ private isApprovedWritebackPreview(value: unknown): value is ApprovedWritebackPr
 			&& typeof value.proposal_path === 'string'
 			&& typeof value.target_note === 'string'
 			&& typeof value.writeback_preview === 'string'
+			&& (
+				value.writeback_effect === 'append'
+				|| value.writeback_effect === 'create_wiki_note'
+				|| value.writeback_effect === 'create_memory_record'
+			)
 			&& typeof value.confirmation_token === 'string'
 			&& value.confirmation_token.length > 0
 			&& typeof value.confirmation_expires_at === 'string'
@@ -794,7 +800,12 @@ async applyApprovedWriteback(
 					`Archive destination is owned by another or unknown operation: ${item.destinationPath}.`
 				);
 			}
-			const file = source instanceof TFile ? source : destination as TFile;
+			const file = source ?? destination;
+			if (!(file instanceof TFile)) {
+				throw new Error(
+					`Archive source/destination file is unavailable for ${item.proposalId}.`
+				);
+			}
 			const current = await this.inspectArchiveProposal(file.path);
 			if (
 				current.proposalId !== item.proposalId
@@ -1695,7 +1706,7 @@ async applyApprovedWriteback(
 				value.status === 'completed'
 				&& (
 					value.completedAt === null
-					|| Date.parse(value.completedAt as string)
+					|| Date.parse(value.completedAt)
 						< Date.parse(value.startedAt)
 				)
 			)

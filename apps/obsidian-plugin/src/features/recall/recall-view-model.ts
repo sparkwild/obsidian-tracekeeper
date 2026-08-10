@@ -113,7 +113,7 @@ const normalizeMatch = (match: unknown, fallbackScope: TracekeeperRecallScope): 
 			reason: '',
 		};
 	}
-	const recallMatch = match as ParsedRecord;
+	const recallMatch = match;
 	const scope = normalizeMemoryRecallScope(firstString(recallMatch, ['scope']) || fallbackScope);
 	const scoreRaw = recallMatch.score;
 	const score = typeof scoreRaw === 'number'

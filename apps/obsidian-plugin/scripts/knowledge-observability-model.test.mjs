@@ -122,8 +122,12 @@ try {
 	const conflictTwoPath = '01_knowledge/memory/global/conflict-two.md';
 	const reviewMemoryPath = '01_knowledge/memory/global/review.md';
 	const sourcePath = '01_knowledge/sources/web/example.md';
+	const sourcePartOnePath = '01_knowledge/sources/web/example.parts/part-0001.md';
+	const sourcePartTwoPath = '01_knowledge/sources/web/example.parts/part-0002.md';
 	const sourcePartPath = '01_knowledge/sources/transcripts/interview.part-001.md';
 	const missingSourcePath = '01_knowledge/sources/files/missing.md';
+	const exampleSourceId = `source-${'a'.repeat(32)}`;
+	const exampleContentHash = `sha256:${'b'.repeat(64)}`;
 	const index = {
 		state: 'ready',
 		generation: 7,
@@ -184,17 +188,41 @@ try {
 					type: 'source_capture',
 					source: 'https://example.com',
 					source_kind: 'web',
-					source_id: 'src_example',
-					content_hash: 'sha256:example',
+					source_id: exampleSourceId,
+					content_hash: exampleContentHash,
 					route: '01_knowledge/sources/web',
 					part_count: 2,
 					part_manifest: [
-						'01_knowledge/sources/web/example.part-001.md',
-						'01_knowledge/sources/web/example.part-002.md',
+						sourcePartOnePath,
+						sourcePartTwoPath,
 					],
 					index_path: sourcePath,
 					mode: 'extracted_snapshot',
 					task_id: 'task-1',
+				},
+			}),
+			note(sourcePartOnePath, {
+				title: 'Example part 1',
+				type: 'source_part',
+				frontmatter: {
+					type: 'source_part',
+					source_id: exampleSourceId,
+					content_hash: `sha256:${'c'.repeat(64)}`,
+					part_number: 1,
+					part_count: 2,
+					parent_source: sourcePath,
+				},
+			}),
+			note(sourcePartTwoPath, {
+				title: 'Example part 2',
+				type: 'source_part',
+				frontmatter: {
+					type: 'source_part',
+					source_id: exampleSourceId,
+					content_hash: `sha256:${'d'.repeat(64)}`,
+					part_number: 2,
+					part_count: 2,
+					parent_source: sourcePath,
 				},
 			}),
 			note(sourcePartPath, {
@@ -340,13 +368,14 @@ try {
 	assert.ok(captured);
 	assert.equal(source.records.some((record) => record.path === sourcePartPath), false);
 	assert.equal(captured.indexPath, sourcePath);
-	assert.equal(captured.sourceId, 'src_example');
-	assert.equal(captured.contentHash, 'sha256:example');
+	assert.equal(captured.sourceId, exampleSourceId);
+	assert.equal(captured.contentHash, exampleContentHash);
 	assert.equal(captured.route, '01_knowledge/sources/web');
 	assert.equal(captured.partCount, 2);
+	assert.deepEqual(captured.evidenceIssues, []);
 	assert.deepEqual(captured.partManifest, [
-		'01_knowledge/sources/web/example.part-001.md',
-		'01_knowledge/sources/web/example.part-002.md',
+		sourcePartOnePath,
+		sourcePartTwoPath,
 	]);
 	assert.deepEqual(captured.taskPaths, ['00_tracekeeper/work/tasks/task-1.md']);
 	assert.deepEqual(captured.proposalPaths, ['00_tracekeeper/inbox/review_queue/proposal-1.md']);
@@ -398,8 +427,312 @@ try {
 	assert.equal(legacySource.records[0].route, '');
 	assert.equal(legacySource.records[0].partCount, 0);
 	assert.deepEqual(legacySource.records[0].partManifest, []);
+	assert.equal(legacySource.records[0].state, 'incomplete');
+	assert.deepEqual(legacySource.records[0].evidenceIssues, [
+		'type',
+		'source_kind',
+		'source_id',
+		'content_hash',
+		'route',
+		'mode',
+		'part_count',
+		'part_manifest',
+	]);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 38 })}\n`);
+	const receiptRoot = '01_knowledge/sources/files';
+	const receiptSourceId = `source-${'1'.repeat(32)}`;
+	const sourceReceipt = {
+		type: 'source_capture',
+		source: 'receipt.txt',
+		source_kind: 'file',
+		source_id: receiptSourceId,
+		content_hash: `sha256:${'2'.repeat(64)}`,
+		route: receiptRoot,
+		part_count: 0,
+		part_manifest: [],
+		mode: 'local_copy',
+	};
+	const withoutField = (record, field) => {
+		const next = { ...record };
+		delete next[field];
+		return next;
+	};
+	const receiptPaths = {
+		sourceRequestSingle: `${receiptRoot}/source-request-single.md`,
+		directMultipart: `${receiptRoot}/direct-multipart.md`,
+		directPartOne: `${receiptRoot}/direct-multipart.parts/part-0001.md`,
+		directPartTwo: `${receiptRoot}/direct-multipart.parts/part-0002.md`,
+		missingId: `${receiptRoot}/missing-id.md`,
+		missingHash: `${receiptRoot}/missing-hash.md`,
+		missingRoute: `${receiptRoot}/missing-route.md`,
+		missingParts: `${receiptRoot}/missing-parts.md`,
+		inconsistentParts: `${receiptRoot}/inconsistent-parts.md`,
+		missingChild: `${receiptRoot}/missing-child.md`,
+		mismatchedChild: `${receiptRoot}/mismatched-child.md`,
+		mismatchedChildPart: `${receiptRoot}/mismatched-child.parts/part-0001.md`,
+		zeroWithChild: `${receiptRoot}/zero-with-child.md`,
+		zeroWithChildPart: `${receiptRoot}/zero-with-child.parts/part-0001.md`,
+	};
+	const receiptSnapshot = buildSourceStatusSnapshot({
+		index: {
+			...index,
+			notes: [
+				note('01_knowledge/sources/index.md'),
+				note(receiptPaths.sourceRequestSingle, {
+					type: 'source_capture',
+					frontmatter: sourceReceipt,
+				}),
+				note(receiptPaths.directMultipart, {
+					type: 'source_capture',
+					frontmatter: {
+						...sourceReceipt,
+						index_path: receiptPaths.directMultipart,
+						source_operation_id: 'capture-source-direct-receipt',
+						part_count: 2,
+						part_manifest: [receiptPaths.directPartOne, receiptPaths.directPartTwo],
+					},
+				}),
+				note(receiptPaths.directPartOne, {
+					type: 'source_part',
+					frontmatter: {
+						type: 'source_part',
+						source_id: receiptSourceId,
+						content_hash: `sha256:${'3'.repeat(64)}`,
+						part_number: 1,
+						part_count: 2,
+						parent_source: receiptPaths.directMultipart,
+					},
+				}),
+				note(receiptPaths.directPartTwo, {
+					type: 'source_part',
+					frontmatter: {
+						type: 'source_part',
+						source_id: receiptSourceId,
+						content_hash: `sha256:${'4'.repeat(64)}`,
+						part_number: 2,
+						part_count: 2,
+						parent_source: receiptPaths.directMultipart,
+					},
+				}),
+				note(receiptPaths.missingId, {
+					type: 'source_capture',
+					frontmatter: withoutField(sourceReceipt, 'source_id'),
+				}),
+				note(receiptPaths.missingHash, {
+					type: 'source_capture',
+					frontmatter: withoutField(sourceReceipt, 'content_hash'),
+				}),
+				note(receiptPaths.missingRoute, {
+					type: 'source_capture',
+					frontmatter: withoutField(sourceReceipt, 'route'),
+				}),
+				note(receiptPaths.missingParts, {
+					type: 'source_capture',
+					frontmatter: withoutField(withoutField(sourceReceipt, 'part_count'), 'part_manifest'),
+				}),
+				note(receiptPaths.inconsistentParts, {
+					type: 'source_capture',
+					frontmatter: {
+						...sourceReceipt,
+						part_count: 2,
+						part_manifest: [`${receiptRoot}/inconsistent-parts.parts/part-0001.md`],
+					},
+				}),
+				note(receiptPaths.missingChild, {
+					type: 'source_capture',
+					frontmatter: {
+						...sourceReceipt,
+						part_count: 1,
+						part_manifest: [`${receiptRoot}/missing-child.parts/part-0001.md`],
+					},
+				}),
+				note(receiptPaths.mismatchedChild, {
+					type: 'source_capture',
+					frontmatter: {
+						...sourceReceipt,
+						part_count: 1,
+						part_manifest: [receiptPaths.mismatchedChildPart],
+					},
+				}),
+				note(receiptPaths.mismatchedChildPart, {
+					type: 'source_part',
+					frontmatter: {
+						type: 'source_part',
+						source_id: `source-${'9'.repeat(32)}`,
+						content_hash: 'invalid-hash',
+						part_number: 2,
+						part_count: 2,
+						parent_source: `${receiptRoot}/another-parent.md`,
+					},
+				}),
+				note(receiptPaths.zeroWithChild, {
+					type: 'source_capture',
+					frontmatter: sourceReceipt,
+				}),
+				note(receiptPaths.zeroWithChildPart, {
+					type: 'source_part',
+					frontmatter: {
+						type: 'source_part',
+						source_id: receiptSourceId,
+						content_hash: `sha256:${'5'.repeat(64)}`,
+						part_number: 1,
+						part_count: 1,
+						parent_source: receiptPaths.zeroWithChild,
+					},
+				}),
+			],
+			errors: [],
+		},
+		proposals: [],
+		tasks: [],
+		requests: [],
+		missingSourceFolder: false,
+		missingRequestFolder: false,
+	});
+	assert.equal(receiptSnapshot.totalItems, 10);
+	assert.equal(receiptSnapshot.records.some((record) => record.path === '01_knowledge/sources/index.md'), false);
+	const receiptByPath = new Map(receiptSnapshot.records.map((record) => [record.path, record]));
+	assert.equal(receiptByPath.get(receiptPaths.sourceRequestSingle)?.state, 'captured');
+	assert.deepEqual(receiptByPath.get(receiptPaths.sourceRequestSingle)?.evidenceIssues, []);
+	assert.equal(receiptByPath.get(receiptPaths.directMultipart)?.state, 'captured');
+	assert.deepEqual(receiptByPath.get(receiptPaths.directMultipart)?.evidenceIssues, []);
+	assert.deepEqual(receiptByPath.get(receiptPaths.missingId)?.evidenceIssues, ['source_id']);
+	assert.deepEqual(receiptByPath.get(receiptPaths.missingHash)?.evidenceIssues, ['content_hash']);
+	assert.deepEqual(receiptByPath.get(receiptPaths.missingRoute)?.evidenceIssues, ['route']);
+	assert.deepEqual(receiptByPath.get(receiptPaths.missingParts)?.evidenceIssues, ['part_count', 'part_manifest']);
+	assert.ok(receiptByPath.get(receiptPaths.inconsistentParts)?.evidenceIssues.includes('part_manifest'));
+	assert.ok(receiptByPath.get(receiptPaths.missingChild)?.evidenceIssues.includes('source_part'));
+	assert.deepEqual(
+		receiptByPath.get(receiptPaths.mismatchedChild)?.evidenceIssues,
+		[
+			'part_manifest',
+			'source_part.parent_source',
+			'source_part.source_id',
+			'source_part.content_hash',
+			'source_part.part_count',
+			'source_part.part_number',
+		]
+	);
+	assert.deepEqual(receiptByPath.get(receiptPaths.zeroWithChild)?.evidenceIssues, ['part_manifest']);
+	assert.equal(
+		receiptSnapshot.records.filter((record) => record.state === 'incomplete').length,
+		8
+	);
+
+	const classifyReceipt = (recordPath, frontmatter, parts = []) => {
+		const snapshot = buildSourceStatusSnapshot({
+			index: {
+				...index,
+				notes: [note(recordPath, { type: 'source_capture', frontmatter }), ...parts],
+				errors: [],
+			},
+			proposals: [],
+			tasks: [],
+			requests: [],
+			missingSourceFolder: false,
+			missingRequestFolder: false,
+		});
+		return snapshot.records.find((record) => record.path === recordPath);
+	};
+	const equivalentAliasesPath = `${receiptRoot}/equivalent-aliases.md`;
+	const equivalentAliases = classifyReceipt(equivalentAliasesPath, {
+		...sourceReceipt,
+		sourceUrl: ' receipt.txt ',
+		sourceKind: ' FILE ',
+		sourceId: ` ${receiptSourceId} `,
+		contentHash: ` sha256:${'2'.repeat(64)} `,
+		sourceRoute: `./${receiptRoot}`,
+		sourceMode: ' LOCAL_COPY ',
+		partCount: '0',
+		partManifest: [],
+	});
+	assert.equal(equivalentAliases?.state, 'captured');
+	assert.deepEqual(equivalentAliases?.evidenceIssues, []);
+
+	const arrayFields = classifyReceipt(`${receiptRoot}/array-fields.md`, {
+		...sourceReceipt,
+		type: ['source_capture'],
+		source: ['receipt.txt'],
+		source_kind: ['file'],
+		source_id: [receiptSourceId],
+		content_hash: [`sha256:${'2'.repeat(64)}`],
+		route: [receiptRoot],
+		mode: ['local_copy'],
+		part_count: [0],
+		part_manifest: '[]',
+	});
+	assert.deepEqual(arrayFields?.evidenceIssues, [
+		'type',
+		'source',
+		'source_kind',
+		'source_id',
+		'content_hash',
+		'route',
+		'mode',
+		'part_count',
+		'part_manifest',
+	]);
+	const malformedPartTypePath = `${receiptRoot}/malformed-part-type.md`;
+	const malformedPartType = classifyReceipt(malformedPartTypePath, {
+		...sourceReceipt,
+		type: ['source_part', 'source_capture'],
+	});
+	assert.equal(malformedPartType?.path, malformedPartTypePath);
+	assert.equal(malformedPartType?.state, 'incomplete');
+	assert.deepEqual(malformedPartType?.evidenceIssues, ['type']);
+
+	for (const [field, aliasOverride] of [
+		['source', { sourceUrl: 'different.txt' }],
+		['source_kind', { sourceKind: 'web' }],
+		['source_id', { sourceId: `source-${'8'.repeat(32)}` }],
+		['content_hash', { contentHash: `sha256:${'8'.repeat(64)}` }],
+		['route', { sourceRoute: '01_knowledge/sources/web' }],
+		['mode', { sourceMode: 'external_reference' }],
+		['part_count', { partCount: 1 }],
+		['part_manifest', { partManifest: [`${receiptRoot}/conflicting.parts/part-0001.md`] }],
+	]) {
+		const record = classifyReceipt(`${receiptRoot}/conflict-${field}.md`, {
+			...sourceReceipt,
+			...aliasOverride,
+		});
+		assert.ok(record?.evidenceIssues.includes(field));
+	}
+
+	const childAliasConflictPath = `${receiptRoot}/child-alias-conflict.md`;
+	const childAliasConflictPartPath = `${receiptRoot}/child-alias-conflict.parts/part-0001.md`;
+	const childAliasConflict = classifyReceipt(
+		childAliasConflictPath,
+		{
+			...sourceReceipt,
+			part_count: 1,
+			part_manifest: [childAliasConflictPartPath],
+		},
+		[
+			note(childAliasConflictPartPath, {
+				type: 'source_part',
+				frontmatter: {
+					type: 'source_part',
+					parent_source: childAliasConflictPath,
+					parentSource: `./${childAliasConflictPath}`,
+					source_id: receiptSourceId,
+					sourceId: `source-${'7'.repeat(32)}`,
+					content_hash: [`sha256:${'6'.repeat(64)}`],
+					part_count: 1,
+					partCount: 2,
+					part_number: 1,
+					partNumber: [1],
+				},
+			}),
+		]
+	);
+	assert.deepEqual(childAliasConflict?.evidenceIssues, [
+		'source_part.source_id',
+		'source_part.content_hash',
+		'source_part.part_count',
+		'source_part.part_number',
+	]);
+
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 77 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

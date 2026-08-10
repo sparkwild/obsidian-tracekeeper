@@ -144,8 +144,12 @@ export class SkillInstallPreviewModal extends Modal {
 			confirm.disabled = true;
 			back.disabled = true;
 			void this.plugin.confirmSkillWrite(plan.planId, this.clientId).then(async () => {
-				await this.onChanged?.();
 				this.close();
+				try {
+					await this.onChanged?.();
+				} catch (error) {
+					console.error('tracekeeper failed to refresh Skill state after confirmed write', error);
+				}
 			}).catch(() => {
 				confirm.disabled = false;
 				back.disabled = false;
@@ -156,7 +160,7 @@ export class SkillInstallPreviewModal extends Modal {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value });
 	}
 }
@@ -261,7 +265,7 @@ export class SkillAiAssistantModal extends Modal {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value });
 	}
 }

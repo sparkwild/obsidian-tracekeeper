@@ -1,7 +1,7 @@
 {
 	"name": "obsidian-tracekeeper",
 	"version": "0.3.0",
-	"description": "Review AI-proposed wiki and memory updates before they reach your vault.",
+	"description": "Connect AI agents to your vault through a local MCP runtime, with scoped recall and governed memory updates.",
 	"private": true,
 	"workspaces": [
 		"packages/core",

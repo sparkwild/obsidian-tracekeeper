@@ -35,6 +35,7 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
+		this.containerEl.addClass('tracekeeper-item-view');
 		await this.refresh();
 	}
 
@@ -50,15 +51,14 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 		const runtime = runtimeViewModel(status, ui);
 
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
-		header.createEl('h2', { text: ui('连接状态', 'Connection status'), cls: 'tracekeeper-view__title' });
+		header.createEl('p', {
+			text: runtime.detail,
+			cls: 'tracekeeper-view__description',
+		});
 		const headerActions = header.createDiv({ cls: 'tracekeeper-action-row' });
 		const refresh = headerActions.createEl('button', { text: ui('刷新', 'Refresh') });
 		refresh.addEventListener('click', () => {
 			void this.refresh();
-		});
-		contentEl.createEl('p', {
-			text: runtime.detail,
-			cls: 'tracekeeper-view__description',
 		});
 		this.renderAgentAuthentication(contentEl, connections.recentAgents);
 
@@ -139,7 +139,7 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-agent-connection-card' });
 		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
 		header.createEl('h3', { text: ui('Agent 认证', 'Agent authentication') });
-		header.createEl('span', {
+		header.createSpan({
 			text: latestAgent
 				? ui('已观察到认证活动', 'Authenticated activity observed')
 				: ui('未观察到认证活动', 'No authenticated activity observed'),
@@ -185,7 +185,7 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value });
 	}
 }

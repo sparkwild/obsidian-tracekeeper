@@ -39,33 +39,101 @@ export function renderClientSkillPrompt({
 	const title = skill.createEl(collapsible ? 'summary' : 'div', { cls: 'tracekeeper-settings-client-skill__title' });
 	title.createEl('strong', { text: ui(`增强 ${config.displayName} 的记忆协作`, `Enhance ${config.displayName} with memory collaboration`) });
 	if (presentation === 'optional') {
-		title.createEl('span', { text: ui('推荐，可稍后', 'Recommended, optional for now'), cls: 'tracekeeper-badge tracekeeper-badge--muted' });
+		title.createSpan({ text: ui('推荐，可稍后', 'Recommended, optional for now'), cls: 'tracekeeper-badge tracekeeper-badge--muted' });
 	}
 	if (collapsible) {
-		title.createEl('span', { text: prompt.label, cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}` });
+		title.createSpan({ text: prompt.label, cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}` });
 	} else {
-		skill.createEl('span', { text: prompt.label, cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}` });
+		skill.createSpan({ text: prompt.label, cls: `tracekeeper-badge tracekeeper-badge--${prompt.tone}` });
 	}
 	const body = skill.createDiv({ cls: 'tracekeeper-settings-client-skill__body' });
 	if (presentation === 'optional') {
-		body.createEl('div', {
+		body.createDiv({
 			text: ui('强化技能帮助 Agent 在合适任务中查找相关记忆并正确收尾，不会增加访问权限。', 'The Skill helps the Agent find relevant memories and close tasks correctly without adding access permissions.'),
 			cls: 'tracekeeper-settings-client-skill__benefit',
 		});
 	}
-	body.createEl('div', { text: prompt.detail, cls: 'tracekeeper-settings-client-skill__detail' });
+	body.createDiv({ text: prompt.detail, cls: 'tracekeeper-settings-client-skill__detail' });
 	const actions = skill.createDiv({ cls: 'tracekeeper-settings-client-skill__actions' });
 	if (prompt.action) {
-		const choose = actions.createEl('button', { text: prompt.actionLabel, cls: 'mod-cta' });
-		choose.addEventListener('click', () => {
-			choose.disabled = true;
+		const operationStatus = prompt.action === 'update'
+			? body.createDiv({
+				cls: 'tracekeeper-settings-client-skill__operation-status',
+				attr: {
+					role: 'status',
+					'aria-live': 'polite',
+					'aria-atomic': 'true',
+				},
+			})
+			: null;
+		const actionButton = actions.createEl('button', { text: prompt.actionLabel, cls: 'mod-cta' });
+		actionButton.addEventListener('click', () => {
+			if (prompt.action === 'update' && operationStatus) {
+				actionButton.disabled = true;
+				actionButton.setAttribute('aria-busy', 'true');
+				actionButton.setText(ui('更新中…', 'Updating…'));
+				operationStatus.classList.remove('is-error', 'is-success');
+				operationStatus.setText(ui(
+					'正在重新校验并更新原安装目录…',
+					'Revalidating and updating the existing installation directory…'
+				));
+				void (async () => {
+					try {
+						await plugin.setOnboardingClientId(config.clientId);
+						await plugin.updateSkillAtInstalledDirectory(config.clientId);
+					} catch (error) {
+						console.error('tracekeeper failed to update Skill in its installed directory', error);
+						actionButton.disabled = false;
+						actionButton.removeAttribute('aria-busy');
+						actionButton.setText(prompt.actionLabel);
+						operationStatus.classList.add('is-error');
+						operationStatus.setText(ui(
+							'更新未完成。请根据提示处理后重试。',
+							'The update did not complete. Follow the notice, then try again.'
+						));
+						new Notice(error instanceof Error ? error.message : ui('无法更新 Skill。', 'Unable to update the Skill.'));
+						return;
+					}
+
+					actionButton.removeAttribute('aria-busy');
+					actionButton.setText(ui('已更新', 'Updated'));
+					operationStatus.classList.add('is-success');
+					operationStatus.setText(ui('更新成功，正在刷新状态…', 'Update complete. Refreshing status…'));
+					try {
+						await onChanged?.();
+					} catch (error) {
+						console.error('tracekeeper updated Skill but failed to refresh its visible state', error);
+						operationStatus.classList.remove('is-success');
+						operationStatus.classList.add('is-error');
+						operationStatus.setText(ui(
+							'Skill 已更新，但页面状态刷新失败。请重新打开设置页。',
+							'The Skill was updated, but the page did not refresh. Reopen Settings.'
+						));
+						new Notice(ui(
+							'Skill 已更新，但设置页刷新失败。请重新打开设置页。',
+							'The Skill was updated, but Settings did not refresh. Reopen Settings.'
+						), 8000);
+						return;
+					}
+					if (actionButton.isConnected) {
+						operationStatus.setText(ui(
+							'更新成功。请按提示重启客户端。',
+							'Update complete. Restart the client when prompted.'
+						));
+					}
+				})();
+				return;
+			}
+			actionButton.disabled = true;
 			void plugin.setOnboardingClientId(config.clientId)
 				.then(() => new SkillInstallPreviewModal(app, plugin, config.clientId, onChanged).open())
 				.catch((error) => {
 					console.error('tracekeeper failed to open Skill directory selection', error);
-					new Notice(ui('无法打开目录选择。', 'Unable to open directory selection.'));
+					new Notice(error instanceof Error
+						? error.message
+						: ui('无法打开目录选择。', 'Unable to open directory selection.'));
 				})
-				.finally(() => { choose.disabled = false; });
+				.finally(() => { actionButton.disabled = false; });
 		});
 	}
 	if (prompt.assistantLabel) {

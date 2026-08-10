@@ -2,6 +2,7 @@ import { ItemView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import type { SourceRequestRecord } from '../activity/activity-model';
 import {
+	type SourceCaptureEvidenceIssue,
 	type SourceStatusQuery,
 	type SourceStatusRecord,
 	type SourceStatusSnapshot,
@@ -9,6 +10,26 @@ import {
 import { ui } from '../../ui/localization';
 import { TRACEKEEPER_SOURCE_STATUS_VIEW } from '../../ui/view-types';
 import { trimText } from '../shared/markdown-record-parser';
+
+const sourceEvidenceIssueLabel = (issue: SourceCaptureEvidenceIssue): string => {
+	switch (issue) {
+		case 'type': return ui('记录类型（type）', 'Record type (type)');
+		case 'source': return ui('原始来源（source）', 'Original source (source)');
+		case 'source_kind': return ui('资料类型（source_kind）', 'Source type (source_kind)');
+		case 'source_id': return ui('来源标识（source_id）', 'Source ID (source_id)');
+		case 'content_hash': return ui('内容哈希（content_hash）', 'Content hash (content_hash)');
+		case 'route': return ui('存储路由（route）', 'Storage route (route)');
+		case 'mode': return ui('捕获模式（mode）', 'Capture mode (mode)');
+		case 'part_count': return ui('分片数量（part_count）', 'Part count (part_count)');
+		case 'part_manifest': return ui('分片清单（part_manifest）', 'Part manifest (part_manifest)');
+		case 'source_part': return ui('分片文件（source_part）', 'Part file (source_part)');
+		case 'source_part.parent_source': return ui('分片父记录（source_part.parent_source）', 'Part parent (source_part.parent_source)');
+		case 'source_part.source_id': return ui('分片来源标识（source_part.source_id）', 'Part source ID (source_part.source_id)');
+		case 'source_part.content_hash': return ui('分片内容哈希（source_part.content_hash）', 'Part content hash (source_part.content_hash)');
+		case 'source_part.part_count': return ui('分片总数（source_part.part_count）', 'Child part count (source_part.part_count)');
+		case 'source_part.part_number': return ui('分片序号（source_part.part_number）', 'Part number (source_part.part_number)');
+	}
+};
 
 export class TracekeeperSourceStatusView extends ItemView {
 	private query: SourceStatusQuery = { page: 1 };
@@ -42,6 +63,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
+		this.containerEl.addClass('tracekeeper-item-view');
 		await this.refresh();
 	}
 
@@ -61,12 +83,10 @@ export class TracekeeperSourceStatusView extends ItemView {
 		contentEl.addClass('tracekeeper-view-root');
 
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
-		const heading = header.createDiv();
-		heading.createEl('h2', { text: ui('来源状态', 'Source status'), cls: 'tracekeeper-view__title' });
-		heading.createEl('p', {
+		header.createEl('p', {
 			text: ui(
-				'查看已捕获资料，以及可用的任务、知识提案和收尾记录关系。',
-				'Inspect captured sources and their available task, proposal, and final-note relationships.'
+				'查看完整捕获、不完整或旧版资料记录，以及可用的任务、知识提案和收尾记录关系。',
+				'Inspect complete captures, incomplete or legacy source records, and their available task, proposal, and final-note relationships.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
@@ -95,7 +115,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 			});
 		}
 
-		this.renderCapturedSources(contentEl, snapshot);
+		this.renderSourceRecords(contentEl, snapshot);
 		this.renderRequests(contentEl, snapshot.requests, snapshot.missingRequestFolder);
 	}
 
@@ -104,7 +124,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 		status.createEl('strong', {
 			text: ui(`${snapshot.totalItems} 条资料记录`, `${snapshot.totalItems} source records`),
 		});
-		status.createEl('div', {
+		status.createDiv({
 			text: `${ui('索引代次', 'Index generation')} ${snapshot.indexGeneration} · ${ui('最后刷新', 'Last refreshed')} ${this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt))}`,
 			cls: 'tracekeeper-view__description',
 		});
@@ -154,9 +174,9 @@ export class TracekeeperSourceStatusView extends ItemView {
 		}
 	}
 
-	private renderCapturedSources(container: HTMLElement, snapshot: SourceStatusSnapshot): void {
+	private renderSourceRecords(container: HTMLElement, snapshot: SourceStatusSnapshot): void {
 		const section = container.createDiv({ cls: 'tracekeeper-card' });
-		section.createEl('h3', { text: ui('已捕获资料', 'Captured sources') });
+		section.createEl('h3', { text: ui('资料记录', 'Source records') });
 
 		if (snapshot.missingSourceFolder) {
 			this.renderEmptyState(
@@ -174,12 +194,12 @@ export class TracekeeperSourceStatusView extends ItemView {
 				section,
 				snapshot.focused
 					? ui('所选任务没有可显示的资料证据', 'No source evidence is available for the selected task')
-					: ui('还没有已捕获资料', 'No captured sources yet'),
+					: ui('还没有资料记录', 'No source records yet'),
 				snapshot.focused
 					? ui('可返回全部资料，或打开任务记录检查原始引用。', 'Show all sources or open the task record to inspect its original references.')
 					: ui(
-						'Agent 完成资料获取后，应先调用 capture_source；成功保存的 Markdown 会出现在这里。',
-						'After acquiring material, the Agent should call capture_source first. Successfully saved Markdown appears here.'
+						'Agent 完成资料获取后，应先调用 capture_source；完整捕获和可读取的不完整或旧版记录都会显示在这里并明确区分。',
+						'After acquiring material, the Agent should call capture_source first. Complete captures and readable incomplete or legacy records appear here with distinct states.'
 					)
 			);
 		} else {
@@ -196,15 +216,19 @@ export class TracekeeperSourceStatusView extends ItemView {
 		const header = item.createDiv({ cls: 'tracekeeper-card__header' });
 		const title = header.createDiv();
 		title.createEl('strong', { text: record.title || ui('未命名资料', 'Untitled source') });
-		title.createEl('div', { text: record.path, cls: 'tracekeeper-observability-record__path' });
-		header.createEl('span', {
+		title.createDiv({ text: record.path, cls: 'tracekeeper-observability-record__path' });
+		header.createSpan({
 			text: record.state === 'captured'
 				? ui('已捕获', 'Captured')
-				: ui('证据缺失', 'Missing evidence'),
+				: record.state === 'incomplete'
+					? ui('捕获证据不完整', 'Incomplete capture evidence')
+					: ui('证据缺失', 'Missing evidence'),
 			cls: `tracekeeper-badge ${
 				record.state === 'captured'
 					? 'tracekeeper-badge--success'
-					: 'tracekeeper-badge--error'
+					: record.state === 'incomplete'
+						? 'tracekeeper-badge--warning'
+						: 'tracekeeper-badge--error'
 			}`,
 		});
 
@@ -232,6 +256,20 @@ export class TracekeeperSourceStatusView extends ItemView {
 				`${record.taskPaths.length} tasks · ${record.proposalPaths.length} proposals · ${record.finalNotePaths.length} final notes`
 			)
 		);
+		if (record.state === 'incomplete') {
+			this.renderDetail(
+				details,
+				ui('缺失或无效字段', 'Missing or invalid fields'),
+				record.evidenceIssues.map(sourceEvidenceIssueLabel).join(ui('、', ', '))
+			);
+			item.createEl('p', {
+				text: ui(
+					'此记录仍可读取，但不能证明捕获成功。请核对上方缺失或无效的回执字段。',
+					'This record remains readable, but it cannot prove a successful capture. Check the missing or invalid receipt fields above.'
+				),
+				cls: 'tracekeeper-view__description',
+			});
+		}
 		if (record.source && record.source !== record.path) {
 			item.createEl('p', {
 				text: `${ui('原始来源', 'Original source')}: ${trimText(record.source, 180)}`,
@@ -248,9 +286,9 @@ export class TracekeeperSourceStatusView extends ItemView {
 		const actions = item.createDiv({ cls: 'tracekeeper-action-row' });
 		this.renderOpenButton(
 			actions,
-			record.state === 'captured'
-				? ui('打开资料', 'Open source')
-				: ui('打开引用证据', 'Open reference evidence'),
+			record.state === 'missing'
+				? ui('打开引用证据', 'Open reference evidence')
+				: ui('打开资料', 'Open source'),
 			record.evidencePath
 		);
 		this.renderRelationshipButtons(actions, ui('任务', 'Task'), record.taskPaths);
@@ -271,7 +309,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 			);
 		});
 		if (paths.length > 3) {
-			container.createEl('span', {
+			container.createSpan({
 				text: ui(`另有 ${paths.length - 3} 条`, `${paths.length - 3} more`),
 				cls: 'tracekeeper-view__description',
 			});
@@ -310,7 +348,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 			this.renderEmptyState(
 				body,
 				ui('当前没有资料请求', 'No material requests'),
-				ui('已捕获资料仍会独立显示在上方。', 'Captured sources remain visible above.')
+				ui('资料记录仍会独立显示在上方。', 'Source records remain visible above.')
 			);
 			return;
 		}
@@ -322,17 +360,17 @@ export class TracekeeperSourceStatusView extends ItemView {
 
 	private renderRequest(container: HTMLElement, request: SourceRequestRecord): void {
 		const item = container.createEl('li', { cls: 'tracekeeper-view__item' });
-		item.createEl('div', {
+		item.createDiv({
 			text: `${this.plugin.formatDisplayTime(request.sortTimestamp)} • ${request.sourceKind} • ${request.status}`,
 		});
 		if (request.source) {
-			item.createEl('div', { text: `${ui('来源', 'Source')}: ${trimText(request.source, 120)}` });
+			item.createDiv({ text: `${ui('来源', 'Source')}: ${trimText(request.source, 120)}` });
 		}
 		if (request.purpose) {
-			item.createEl('div', { text: `${ui('用途', 'Purpose')}: ${request.purpose}` });
+			item.createDiv({ text: `${ui('用途', 'Purpose')}: ${request.purpose}` });
 		}
 		if (request.relatedProject) {
-			item.createEl('div', { text: `${ui('关联项目', 'Related project')}: ${request.relatedProject}` });
+			item.createDiv({ text: `${ui('关联项目', 'Related project')}: ${request.relatedProject}` });
 		}
 		item.createEl('small', { text: `${ui('文件', 'File')}: ${request.path}` });
 		const actionRow = item.createDiv({ cls: 'tracekeeper-action-row' });
@@ -368,7 +406,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value || ui('暂无', 'None') });
 	}
 
@@ -383,7 +421,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 			this.query = { ...this.query, page: snapshot.page - 1 };
 			void this.refresh();
 		});
-		pagination.createEl('span', {
+		pagination.createSpan({
 			text: ui(
 				`第 ${snapshot.page} / ${snapshot.totalPages} 页`,
 				`Page ${snapshot.page} of ${snapshot.totalPages}`

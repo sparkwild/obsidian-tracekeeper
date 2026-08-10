@@ -68,6 +68,13 @@ function recallSuccess() {
 		...envelope('tracekeeper.recall'),
 		read_only: true,
 		vault_root: 'vault',
+		query: 'q',
+		max_items: 10,
+		matched_count: 0,
+		scope_mode: 'global',
+		index_state: 'ready',
+		snapshot_generation: 0,
+		snapshot_warning: null,
 		recall: {
 			recall_id: 'recall-1',
 			scope: 'global',
@@ -112,6 +119,19 @@ function finishTaskSuccess() {
 		workflow: { mode: 'tracked_task', state: 'finished' },
 		memory: { status: 'no_candidates' },
 		memory_status: 'no_candidates',
+		durable_output: {
+			status: 'none',
+			source_capture_count: 0,
+			proposal_count: 0,
+			pending_review_count: 0,
+			ready_to_apply_count: 0,
+			revision_requested_count: 0,
+			applied_count: 0,
+			rejected_count: 0,
+			unresolved_count: 0,
+			proposal_paths: [],
+			target_paths: [],
+		},
 		memory_candidate_records: [],
 		memory_changes: [],
 		proposal_transition_receipts: [],
@@ -281,8 +301,37 @@ const successFixtures = new Map([
 				proposal_path: 'Tracekeeper/Proposals/proposal-1.md',
 				target_note: 'Memory/project.md',
 				touched_notes: [],
+				writeback_effect: 'append',
 				writeback_preview: 'preview',
 				confirmation_token: 'token',
+				confirmation_expires_at: '2026-08-03T00:01:00.000Z',
+			},
+			{
+				...envelope('tracekeeper.apply_approved_writeback'),
+				read_only: true,
+				dry_run: true,
+				permission_level: 'review-gated apply',
+				proposal_id: 'proposal-wiki-create',
+				proposal_path: 'Tracekeeper/Proposals/proposal-wiki-create.md',
+				target_note: '01_knowledge/wiki/new-topic.md',
+				touched_notes: [],
+				writeback_effect: 'create_wiki_note',
+				writeback_preview: 'wiki create preview',
+				confirmation_token: 'wiki-create-token',
+				confirmation_expires_at: '2026-08-03T00:01:00.000Z',
+			},
+			{
+				...envelope('tracekeeper.apply_approved_writeback'),
+				read_only: true,
+				dry_run: true,
+				permission_level: 'review-gated apply',
+				proposal_id: 'proposal-memory-create',
+				proposal_path: 'Tracekeeper/Proposals/proposal-memory-create.md',
+				target_note: '01_knowledge/memory/global/new-record.md',
+				touched_notes: [],
+				writeback_effect: 'create_memory_record',
+				writeback_preview: 'memory create preview',
+				confirmation_token: 'memory-create-token',
 				confirmation_expires_at: '2026-08-03T00:01:00.000Z',
 			},
 			{
@@ -422,6 +471,7 @@ const successFixtures = new Map([
 					},
 					proposal_id: null,
 					proposal_path: null,
+					next_actions: [],
 				},
 			{
 				...envelope('tracekeeper.propose_memory'),
@@ -445,6 +495,9 @@ const successFixtures = new Map([
 				architecture_status: 'healthy',
 				missing_graph_bridges: [],
 				missing_wiki_bridge: false,
+				review_reason: 'memory_rule_requires_human_review',
+				review_warnings: ['The active memory rule requires human review before writeback.'],
+				next_actions: [],
 			},
 		],
 	],
@@ -502,5 +555,51 @@ test('every public success fixture requires the common schema version', () => {
 			const result = validateStructuredContent(invalid, contract.resultSchema);
 			assert.equal(result.valid, false, `${tool} accepted a success result without schema_version`);
 		}
+	}
+});
+
+test('approved writeback dry-run requires an explicit writeback effect', () => {
+	const contract = getContractByName('tracekeeper.apply_approved_writeback');
+	assert.ok(contract);
+	const fixture = successFixtures
+		.get('tracekeeper.apply_approved_writeback')
+		.find((candidate) => candidate.dry_run === true);
+	assert.ok(fixture);
+	const invalid = { ...fixture };
+	delete invalid.writeback_effect;
+	const result = validateStructuredContent(invalid, contract.resultSchema);
+	assert.equal(result.valid, false);
+});
+
+test('Recall match relation_evidence requires both canonical relation arrays', () => {
+	const contract = getContractByName('tracekeeper.recall');
+	assert.ok(contract);
+	const base = recallSuccess();
+	const match = {
+		path: '01_knowledge/wiki/test.md',
+		excerpt: 'test',
+		why_matched: 'lexical match',
+		content_origin: 'vault_note',
+		instruction_trust: 'data_only',
+		relation_evidence: {
+			related_wiki: [],
+			related_sources: [],
+		},
+	};
+	const valid = {
+		...base,
+		matched_count: 1,
+		recall: { ...base.recall, matched_count: 1 },
+		matches: [match],
+	};
+	assert.equal(validateStructuredContent(valid, contract.resultSchema).valid, true);
+	for (const omitted of ['related_wiki', 'related_sources']) {
+		const relation_evidence = { ...match.relation_evidence };
+		delete relation_evidence[omitted];
+		const result = validateStructuredContent({
+			...valid,
+			matches: [{ ...match, relation_evidence }],
+		}, contract.resultSchema);
+		assert.equal(result.valid, false, `Recall accepted relation_evidence without ${omitted}`);
 	}
 });

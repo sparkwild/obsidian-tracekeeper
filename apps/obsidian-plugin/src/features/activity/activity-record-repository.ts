@@ -17,6 +17,7 @@ import { REVIEW_QUEUE_PATH } from '../review/review-queue-model';
 import {
 	AGENT_TASKS_PATH,
 	type ActivityTimelineRecordWindow,
+	type DurableOutputStatusAtFinish,
 	type AgentTaskRecord,
 	type ContextPackRecord,
 	type SourceCaptureRecord,
@@ -28,6 +29,7 @@ import {
 	readFrontmatter,
 	readStringList,
 	snippetFromText,
+	type ParsedRecord,
 } from '../shared/markdown-record-parser';
 
 const SOURCE_REQUESTS_PATH = TRACEKEEPER_AGENT_REQUESTS_DIR;
@@ -824,7 +826,8 @@ private cachedFirstString(
 				return String(value);
 			}
 			if (Array.isArray(value)) {
-				const first = value.find((entry) =>
+				const entries: readonly unknown[] = value;
+				const first = entries.find((entry) =>
 					typeof entry === 'string' && entry.trim()
 				);
 				if (typeof first === 'string') {
@@ -833,6 +836,47 @@ private cachedFirstString(
 			}
 		}
 		return '';
+	}
+
+	private parseTaskSnapshotCount(
+		data: ParsedRecord,
+		keys: readonly string[]
+	): number {
+		for (const key of keys) {
+			const rawValue = firstString(data, [key]);
+			if (!/^\d+$/.test(rawValue)) {
+				continue;
+			}
+			const parsed = Number(rawValue);
+			if (Number.isSafeInteger(parsed)) {
+				return parsed;
+			}
+		}
+		return 0;
+	}
+
+	private parseDurableOutputStatusAtFinish(
+		data: ParsedRecord
+	): DurableOutputStatusAtFinish {
+		const status = firstString(data, ['durable_output_status_at_finish', 'durableOutputStatusAtFinish']);
+		const trimmed = status.trim().toLowerCase();
+		const valid: DurableOutputStatusAtFinish[] = [
+			'none',
+			'pending_review',
+			'ready_to_apply',
+			'revision_requested',
+			'applied',
+			'rejected',
+			'unresolved',
+			'mixed',
+		];
+		if (!trimmed) {
+			return '';
+		}
+		if (valid.includes(trimmed as DurableOutputStatusAtFinish)) {
+			return trimmed as DurableOutputStatusAtFinish;
+		}
+		return 'unresolved';
 	}
 
 private cachedFrontmatter(file: TFile): Readonly<Record<string, unknown>> | null {
@@ -901,6 +945,7 @@ async readAgentTaskFile(file: TFile): Promise<AgentTaskRecord> {
 		const proposalIds = readStringList(data, ['proposal_ids', 'proposalIds']);
 		const proposalPaths = readStringList(data, ['proposal_paths', 'proposalPaths']);
 		const legacyProposalPaths = readStringList(data, ['proposals']);
+		const durableOutputStatusAtFinish = this.parseDurableOutputStatusAtFinish(data);
 
 		return {
 			path,
@@ -920,6 +965,55 @@ async readAgentTaskFile(file: TFile): Promise<AgentTaskRecord> {
 			proposalIds,
 			proposalPaths,
 			proposals: proposalPaths.length > 0 ? proposalPaths : legacyProposalPaths,
+			durableOutputStatusAtFinish,
+			durableOutputProposalCount: this.parseTaskSnapshotCount(
+				data,
+				['durable_output_proposal_count', 'durableOutputProposalCount']
+			),
+			durableOutputSourceCaptureCount: this.parseTaskSnapshotCount(
+				data,
+				['durable_output_source_capture_count', 'durableOutputSourceCaptureCount']
+			),
+			durableOutputPendingReviewCount: this.parseTaskSnapshotCount(
+				data,
+				['durable_output_pending_review_count', 'durableOutputPendingReviewCount']
+			),
+			durableOutputReadyToApplyCount: this.parseTaskSnapshotCount(
+				data,
+				['durable_output_ready_to_apply_count', 'durableOutputReadyToApplyCount']
+			),
+			durableOutputRevisionRequestedCount: this.parseTaskSnapshotCount(
+				data,
+				['durable_output_revision_requested_count', 'durableOutputRevisionRequestedCount']
+			),
+			durableOutputAppliedCount: this.parseTaskSnapshotCount(
+				data,
+				['durable_output_applied_count', 'durableOutputAppliedCount']
+			),
+			durableOutputRejectedCount: this.parseTaskSnapshotCount(
+				data,
+				['durable_output_rejected_count', 'durableOutputRejectedCount']
+			),
+			durableOutputUnresolvedCount: this.parseTaskSnapshotCount(
+				data,
+				['durable_output_unresolved_count', 'durableOutputUnresolvedCount']
+			),
+			durableOutputProposalIdsAtFinish: readStringList(
+				data,
+				['durable_output_proposal_ids_at_finish', 'durableOutputProposalIdsAtFinish']
+			),
+			durableOutputAppliedProposalIds: readStringList(
+				data,
+				['durable_output_applied_proposal_ids', 'durableOutputAppliedProposalIds']
+			),
+			durableOutputProposalPaths: readStringList(
+				data,
+				['durable_output_proposal_paths', 'durableOutputProposalPaths']
+			),
+			durableOutputTargetPaths: readStringList(
+				data,
+				['durable_output_target_paths', 'durableOutputTargetPaths']
+			),
 			memoryCandidates: readStringList(data, ['memory_candidates', 'memoryCandidates']),
 			snippet: snippetFromText(parsed.body, objective || file.basename),
 			sortTimestamp,

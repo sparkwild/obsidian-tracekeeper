@@ -371,7 +371,7 @@ export class ObsidianKnowledgeIndexAdapter {
 				}
 			}
 			await new Promise<void>((resolve) => {
-				globalThis.setTimeout(resolve, 25);
+				window.setTimeout(resolve, 25);
 			});
 		} while (Date.now() <= deadline);
 		throw new MetadataUnavailableError(newPath);

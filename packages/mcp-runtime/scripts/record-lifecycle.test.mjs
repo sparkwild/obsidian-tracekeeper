@@ -183,6 +183,7 @@ test('new proposals persist and return a path-independent proposal id', async ()
 			proposal_kind: 'decision',
 			content: 'Persist stable proposal identity.',
 			claim_key: 'global:stable-proposal-identity',
+			memory_scope: 'global',
 			proposed_authority: 'user',
 			proposed_confidence: 'verified',
 			declared_state: 'active',
@@ -464,6 +465,7 @@ test('concurrent MCP Agent activity uses one idempotent UTC shard', async () => 
 				task_id: task.task_id,
 				proposal_kind: 'decision',
 				content: 'Retry one proposal audit event.',
+				memory_scope: 'global',
 				idempotency_key: 'record-lifecycle-audit-retry',
 			};
 			await invoke('tracekeeper.propose_memory', args, fixture.context);

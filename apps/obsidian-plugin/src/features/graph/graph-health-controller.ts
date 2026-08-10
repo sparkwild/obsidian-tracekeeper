@@ -34,7 +34,11 @@ async loadGraphHealthSnapshot(): Promise<GraphHealthSnapshot> {
 			console.error('tracekeeper failed to load graph health', error);
 			return this.emptyGraphHealthSnapshot(
 				profile,
-				error instanceof Error ? error.message : String(error || 'Unknown graph health error.')
+				error instanceof Error
+					? error.message
+					: typeof error === 'string' && error
+						? error
+						: 'Unknown graph health error.'
 			);
 		}
 	}

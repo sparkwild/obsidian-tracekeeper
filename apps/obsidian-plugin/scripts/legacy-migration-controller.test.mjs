@@ -11,6 +11,7 @@ import { build } from 'esbuild';
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-legacy-migration-controller-test-'));
 const bundlePath = path.join(tempRoot, 'legacy-migration-controller.bundle.cjs');
 const require = createRequire(import.meta.url);
+globalThis.window = globalThis;
 
 function errorMessage(error) {
 	return error instanceof Error ? error.message : String(error);

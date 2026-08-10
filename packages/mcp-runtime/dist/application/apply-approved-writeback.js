@@ -14,6 +14,7 @@ function boundedWritebackPayload(payload) {
         && typeof payload.taskHadProposalPathEvidence === 'boolean';
     const hasPartialStableProposalReferenceFlags = payload.taskHadProposalIdReference !== undefined
         || payload.taskHadProposalPathEvidence !== undefined;
+    const hasAppliedProposalReferenceFlag = typeof payload.taskHadAppliedProposalReference === 'boolean';
     const requiredStrings = [
         'proposalId',
         'proposalPath',
@@ -47,8 +48,12 @@ function boundedWritebackPayload(payload) {
         || typeof payload.taskHadProposalReference !== 'boolean'
         || (payload.effectKind !== undefined
             && payload.effectKind !== 'append'
-            && payload.effectKind !== 'create_memory_record')
+            && payload.effectKind !== 'create_memory_record'
+            && payload.effectKind !== 'create_wiki_note')
         || (hasPartialStableProposalReferenceFlags && !hasStableProposalReferenceFlags)
+        || (payload.taskHadAppliedProposalReference !== undefined
+            && !hasAppliedProposalReferenceFlag)
+        || (hasAppliedProposalReferenceFlag && !hasStableProposalReferenceFlags)
         || (payload.taskId === null
             && (payload.taskPath !== null
                 || payload.taskContentHash !== ''
@@ -56,7 +61,8 @@ function boundedWritebackPayload(payload) {
                 || payload.taskHadTargetReference
                 || payload.taskHadProposalReference
                 || payload.taskHadProposalIdReference === true
-                || payload.taskHadProposalPathEvidence === true))
+                || payload.taskHadProposalPathEvidence === true
+                || payload.taskHadAppliedProposalReference === true))
         || (payload.taskId !== null
             && (payload.taskId.length === 0
                 || payload.taskPath === null
@@ -106,6 +112,11 @@ function boundedWritebackPayload(payload) {
             ? {
                 taskHadProposalIdReference: payload.taskHadProposalIdReference,
                 taskHadProposalPathEvidence: payload.taskHadProposalPathEvidence,
+                ...(hasAppliedProposalReferenceFlag
+                    ? {
+                        taskHadAppliedProposalReference: payload.taskHadAppliedProposalReference,
+                    }
+                    : {}),
             }
             : {}),
         writebackContentHash: payload.writebackContentHash,
@@ -124,7 +135,8 @@ function boundedWritebackPayload(payload) {
 function isWritebackBoundaryConflict(error) {
     return error instanceof core_1.OperationConflictError
         || error instanceof core_1.ProposalTransitionValidationError
-        || error instanceof core_1.ProposalTransitionStateError;
+        || error instanceof core_1.ProposalTransitionStateError
+        || error instanceof core_1.ProposalTransitionConflictError;
 }
 function failureStatusForWritebackBoundary(error) {
     return isWritebackBoundaryConflict(error)

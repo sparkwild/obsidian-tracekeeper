@@ -53,8 +53,8 @@ assert.ok(clientRow.includes("ui('管理 Agent', 'Manage Agent')"));
 assert.ok(clientRow.includes("'manage'"));
 assert.ok(clientRow.includes('() => this.renderSettings()'));
 assert.ok(clientRow.includes('renderClientSkillPrompt'));
-assert.ok(source.includes("case 'used': return ui('已连接', 'Connected');"));
-assert.equal(source.includes("case 'used': return ui('已使用', 'Used');"), false);
+assert.ok(source.includes("case 'used': return ui('已使用', 'Used');"));
+assert.equal(source.includes("case 'used': return ui('已连接', 'Connected');"), false);
 
 assert.equal(serviceSection.includes('renderObservedAiToolsSetting'), false);
 assert.equal(serviceSection.includes('renderConnectAiToolSetting'), false);
@@ -65,11 +65,12 @@ assert.equal(source.includes("ui('连接 AI 工具', 'Connect AI tool')"), false
 assert.equal(agentSection.includes('for (const config of snapshot.clientConfigs)'), false);
 assert.equal(agentSection.includes('snapshot.clientConfigs.find'), false);
 assert.equal(agentSection.includes("createEl('select'"), false);
-assert.ok(source.includes('async refreshAgentList(): Promise<void>'));
+assert.ok(source.includes('async refreshAgentList(force = false): Promise<void>'));
 assert.ok(source.includes('isAgentListVisible(): boolean'));
 assert.ok(source.includes('tracekeeper-settings-agent-list-host'));
 assert.ok(source.includes('buildAgentListFingerprint'));
 assert.ok(source.includes('agentListRefreshPending'));
+assert.ok(source.includes('agentListForceRefreshPending'));
 assert.ok(source.includes('agentListRefreshPromise'));
 assert.ok(source.includes('drainAgentListRefreshes'));
 assert.ok(source.includes('if (this.agentListRefreshPromise) return this.agentListRefreshPromise'));
@@ -78,8 +79,10 @@ assert.ok(source.includes('focusAgentConfiguration(): void'));
 assert.ok(source.includes("setAttribute('data-tracekeeper-section', 'agent-configuration')"));
 assert.ok(source.includes('this.renderAgentClientConfigSection(containerEl, snapshot)'));
 assert.ok(source.includes(".addClass('tracekeeper-settings-agent-list-host')"));
-assert.ok(source.includes("host.ownerDocument.createElement('div')"));
+assert.ok(source.includes('const stagingEl = host.createDiv()'));
+assert.ok(source.includes('stagingEl.remove()'));
 assert.ok(source.includes('host.replaceWith(replacement)'));
+assert.ok(source.includes('shouldReplaceAgentConfiguration(this.agentListFingerprint, fingerprint, force)'));
 assert.equal(source.includes("containerEl.createDiv({\n\t\t\tcls: 'tracekeeper-settings-agent-list-host'"), false);
 assert.ok(source.includes("scrollIntoView({ block: 'start', behavior: 'auto' })"));
 const settingsRender = methodBody('async renderSettings', 'buildAgentListFingerprint');
@@ -124,6 +127,9 @@ assert.ok(mainSource.includes('Boolean(this.settingTab?.isAgentListVisible())'))
 assert.ok(mainSource.includes('tasks.push(this.settingTab.refreshAgentList())'));
 assert.ok(mainSource.includes("openSettingsTab(focus?: 'agent-configuration')"));
 assert.ok(mainSource.includes('private scheduleAgentStateViewRefresh(): void'));
+assert.ok(source.includes('isSettingGroupHTMLElement(groupEl)'));
+assert.equal(source.includes('groupEl instanceof HTMLElement'), false);
+assert.match(source, /failed to refresh Agent settings list'[\s\S]*throw error;/);
 
 for (const forbidden of [
 	'observedClientNameRaw',
@@ -147,4 +153,4 @@ assert.equal(styles.includes('.tracekeeper-settings-section'), false);
 assert.equal(styles.includes('.tracekeeper-settings-observed-tools'), false);
 assert.equal(styles.includes('.tracekeeper-settings-observed-tool'), false);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 92 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 95 })}\n`);

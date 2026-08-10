@@ -47,10 +47,30 @@ try {
 	assert.doesNotMatch(modalSource.slice(verifyFlowStart), /pickSkillDirectory/);
 	assert.match(mainSource, /properties: \['openDirectory', 'createDirectory', 'showHiddenFiles'\]/);
 	assert.match(mainSource, /skillVerificationFailureDetail\(detected, ui\)/);
+	const directUpdateStart = mainSource.indexOf('async updateSkillAtInstalledDirectory');
+	const confirmSkillWriteStart = mainSource.indexOf('async confirmSkillWrite');
+	assert.ok(directUpdateStart >= 0 && confirmSkillWriteStart > directUpdateStart);
+	const directUpdateSource = mainSource.slice(directUpdateStart, confirmSkillWriteStart);
+	assert.match(directUpdateSource, /state\.state !== 'update_available'/);
+	assert.match(directUpdateSource, /!state\.targetDirectory/);
+	assert.match(directUpdateSource, /this\.prepareSkillWrite\(clientId, state\.targetDirectory\)/);
+	assert.match(directUpdateSource, /plan\.action !== 'update' \|\| !plan\.canConfirm/);
+	assert.match(directUpdateSource, /return this\.confirmSkillWrite\(plan\.planId, clientId\)/);
+	const prepareAiSkillAssistantStart = mainSource.indexOf('async prepareAiSkillAssistant', confirmSkillWriteStart);
+	const confirmSkillWriteSource = mainSource.slice(confirmSkillWriteStart, prepareAiSkillAssistantStart);
+	assert.match(confirmSkillWriteSource, /detect\(\{[\s\S]*legacyTargetDirectories: \[\][\s\S]*verified\.state !== 'installed'/);
+	assert.ok(
+		confirmSkillWriteSource.indexOf("verified.state !== 'installed'")
+			< confirmSkillWriteSource.indexOf('recordSkillInstallReceipt'),
+		'Direct Skill writes must be verified before the install receipt is recorded'
+	);
+	assert.match(confirmSkillWriteSource, /请重启 \$\{profile\.displayName\} 后使用新版本/);
+	assert.match(confirmSkillWriteSource, /action === 'update' \? 8000 : undefined/);
+	assert.match(confirmSkillWriteSource, /this\.scheduleAgentStateViewRefresh\(\);[\s\S]*return result;/);
 	assert.match(stylesSource, /\.tracekeeper-skill-directory-row \{[\s\S]*?flex/);
 	assert.match(stylesSource, /\.tracekeeper-skill-directory-row input \{[\s\S]*?text-overflow: ellipsis/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 20 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 31 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

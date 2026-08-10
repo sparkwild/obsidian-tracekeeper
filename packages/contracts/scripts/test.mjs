@@ -177,6 +177,7 @@ assert.deepStrictEqual(
 assert.deepStrictEqual(FINISH_TASK_OUTPUT_SCHEMA, getContractByName('tracekeeper.finish_task').outputSchema, 'finish_task output schema must use FINISH_TASK_OUTPUT_SCHEMA');
 
 const recallContract = getContractByName('tracekeeper.recall');
+assert.equal(recallContract.version, 4);
 assert.match(recallContract.description, /active local Obsidian Vault/i, 'recall should identify the local Vault boundary');
 assert.deepStrictEqual(
 	recallContract.inputSchema.properties.scope.enum,
@@ -184,6 +185,14 @@ assert.deepStrictEqual(
 	'recall should expose task history scope',
 );
 assert(Object.prototype.hasOwnProperty.call(recallContract.inputSchema.properties, 'task_id'));
+assert.equal(recallContract.inputSchema.properties.query.minLength, 1);
+assert.equal(recallContract.inputSchema.properties.max_items.minimum, 1);
+assert.equal(recallContract.inputSchema.properties.max_items.maximum, 20);
+assert.deepStrictEqual(recallContract.inputSchema.allOf[0].else.required, ['query']);
+assert.deepStrictEqual(
+	recallContract.inputSchema.allOf[0].if.properties.scope.enum,
+	['project_history', 'task_history'],
+);
 
 const memoryContract = getContractByName('tracekeeper.memory');
 assert.equal(memoryContract.capability, 'vault.read');
@@ -217,7 +226,7 @@ assert.match(memoryContract.description, /metadata only/i);
 assert.match(memoryContract.description, /read_note/i);
 
 const finishContract = getContractByName('tracekeeper.finish_task');
-assert.equal(finishContract.version, 3);
+assert.equal(finishContract.version, 4);
 assert.equal(finishContract.inputSchema.properties.memory_candidates, undefined);
 assert.equal(finishContract.inputSchema.properties.review_proposal_mode, undefined);
 assert.equal(finishContract.inputSchema.properties.memory_scope, undefined);
@@ -229,6 +238,7 @@ assert.match(
 );
 
 const proposeMemoryContract = getContractByName('tracekeeper.propose_memory');
+assert.equal(proposeMemoryContract.version, 4);
 const captureSourceContract = getContractByName('tracekeeper.capture_source');
 assert.match(proposeMemoryContract.description, /active local Obsidian Vault/i, 'propose_memory should identify its local destination');
 assert.match(proposeMemoryContract.description, /does not write to an external Wiki service/i, 'propose_memory should reject external-Wiki ambiguity');
@@ -236,6 +246,11 @@ assert.match(
 	proposeMemoryContract.inputSchema.properties.target_note.description,
 	/01_knowledge\/wiki\/\*\*/i,
 	'propose_memory target_note should describe the local Wiki convention',
+);
+assert.deepStrictEqual(proposeMemoryContract.inputSchema.allOf[0].else.required, ['memory_scope']);
+assert.match(
+	proposeMemoryContract.inputSchema.allOf[0].if.properties.target_note.pattern,
+	/01_knowledge\/wiki/,
 );
 for (const property of [
 	'claim_key',
@@ -268,7 +283,14 @@ for (const property of ['project_id', 'repo_path']) {
 		`propose_memory should expose ${property}`,
 	);
 }
-for (const property of ['record_identity', 'predicted_record', 'predicted_state', 'proposal_transition_preview']) {
+for (const property of [
+	'record_identity',
+	'predicted_record',
+	'predicted_state',
+	'proposal_transition_preview',
+	'review_reason',
+	'review_warnings',
+]) {
 	assert(
 		hasSchemaProperty(proposeMemoryContract.outputSchema, property),
 		`propose_memory output should expose ${property}`,
@@ -401,6 +423,7 @@ for (const reasonCode of ['TASK_CONTEXT_REQUIRED', 'TASK_CLOSEOUT_REQUIRED', 'RE
 	assert(AGENT_ACTION_REASON_CODES.includes(reasonCode), `agent action reason codes should include ${reasonCode}`);
 }
 assert(AGENT_ACTION_REASON_CODES.includes('MEMORY_REVIEW_REQUIRED'), 'agent action reason codes should include MEMORY_REVIEW_REQUIRED');
+assert(AGENT_ACTION_REASON_CODES.includes('MEMORY_NOT_PERSISTED'), 'agent action reason codes should include MEMORY_NOT_PERSISTED');
 
 assert(Array.isArray(AGENT_ACTION_SCHEMA.required), 'AGENT_ACTION_SCHEMA should have required list');
 for (const requiredField of ['action_id', 'kind', 'priority', 'required', 'timing', 'reason_code', 'reason']) {

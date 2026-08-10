@@ -9,11 +9,13 @@ const require = createRequire(import.meta.url);
 const { callTool, recoverPendingOperations } = require('../dist/index.js');
 const { ApplyApprovedWritebackService } = require('../dist/application/apply-approved-writeback.js');
 const {
+	buildMemoryRecord,
 	computePayloadHash,
 	computeProposalContentHash,
 	computeProposalRevision,
 	NodeFileOperationJournal,
 	OperationConflictError,
+	parseMarkdown,
 	transitionProposal,
 } = require('@tracekeeper/core');
 
@@ -76,6 +78,11 @@ function readAuditText(vaultRoot) {
 		.join('\n');
 }
 
+function assertWikiCreatePreview(value) {
+	assert.ok(value.includes('<!-- writeback operation: writeback-'), 'create_wiki_note preview should include owned marker');
+	assert.ok(value.includes(MARKER), 'create_wiki_note preview should include the proposal marker');
+}
+
 function renderFrontmatterValue(value) {
 	if (Array.isArray(value)) {
 		return JSON.stringify(value);
@@ -93,8 +100,12 @@ function approvedProposalTransition({
 	taskId = 'atomic-task',
 	targetPath = TARGET_PATH,
 	writeback = DEFAULT_WRITEBACK,
+	writeback_effect = undefined,
 	operationId = `review-approve-${proposalId}`,
 } = {}) {
+	const isCreateEffect = writeback_effect === 'create_wiki_note'
+		|| writeback_effect === 'create_memory_record';
+	const pendingWritebackEffect = writeback_effect === undefined ? undefined : { writebackEffect: writeback_effect };
 	const pending = {
 		path: proposalPath,
 		classification: 'memory_proposal',
@@ -108,6 +119,7 @@ function approvedProposalTransition({
 		revisionRequestedAt: '',
 		revisionRequestedBy: '',
 		archived: false,
+		...pendingWritebackEffect,
 	};
 	return transitionProposal(
 		pending,
@@ -121,12 +133,14 @@ function approvedProposalTransition({
 			now: APPROVAL_TIME,
 			actor: 'atomic-test-reviewer',
 			targetAllowed: () => true,
-			targetExists: () => true,
+			targetExists: () => !isCreateEffect,
+			targetCreationAllowed: () => true,
 		}
 	);
 }
 
 function proposalText(overrides = {}) {
+	const includeApprovalReceipt = overrides.includeApprovalReceipt !== false;
 	const baseFields = {
 		type: 'memory-proposal',
 		proposal_id: 'atomic-proposal',
@@ -138,19 +152,22 @@ function proposalText(overrides = {}) {
 		risk_level: 'medium',
 		...overrides.fields,
 	};
-	const approval = approvedProposalTransition({
-		proposalPath: overrides.path || PROPOSAL_PATH,
-		proposalId: String(baseFields.proposal_id),
-		proposalKind: String(baseFields.proposal_kind),
-		taskId: String(baseFields.task_id),
-		targetPath: String(baseFields.target_note),
-		writeback: overrides.writeback ?? DEFAULT_WRITEBACK,
-	});
-	const fields = overrides.includeApprovalReceipt === false
-		? baseFields
+	const fields = includeApprovalReceipt
+		? {
+			...baseFields,
+			...approvedProposalTransition({
+				proposalPath: overrides.path || PROPOSAL_PATH,
+				proposalId: String(baseFields.proposal_id),
+				proposalKind: String(baseFields.proposal_kind),
+				taskId: String(baseFields.task_id),
+				targetPath: String(baseFields.target_note),
+				writeback: overrides.writeback ?? DEFAULT_WRITEBACK,
+				writeback_effect: overrides.fields?.writeback_effect || overrides.fields?.writebackEffect,
+			}).frontmatter,
+			...overrides.fields,
+		}
 		: {
 			...baseFields,
-			...approval.frontmatter,
 			...overrides.fields,
 		};
 	const frontmatter = Object.entries(fields)
@@ -253,7 +270,7 @@ function lifecycleProposalText(writeback = 'Approved governed memory content.') 
 }
 
 function createLifecycleFixture(t, options = {}) {
-	return createFixture(t, {
+	const fixture = createFixture(t, {
 		...options,
 		skipTarget: true,
 		proposalFields: {
@@ -262,6 +279,65 @@ function createLifecycleFixture(t, options = {}) {
 		},
 		writeback: options.writeback ?? 'Approved governed memory content.',
 	});
+	if (options.globalHubDirectory) {
+		fs.mkdirSync(fixture.absolute('01_knowledge/memory/global/index.md'), { recursive: true });
+	} else {
+		fixture.write('01_knowledge/memory/global/index.md', options.globalHubText ?? '');
+	}
+	fixture.write('01_knowledge/wiki/approved-memory.md', '# Approved memory evidence\n');
+	return fixture;
+}
+
+function writeCurrentLifecycleRecord(fixture, {
+	memoryId = 'approved-memory-prior',
+	supersedes = [],
+} = {}) {
+	const recordPath = `01_knowledge/memory/global/agents/custom/prior-${memoryId}.md`;
+	const built = buildMemoryRecord({
+		path: recordPath,
+		memory_id: memoryId,
+		scope: 'global',
+		project_id: null,
+		agent_type: 'custom',
+		operation_id: `prior-${memoryId}`,
+		memory_kind: 'project_update',
+		claim_key: LIFECYCLE_PROPOSAL_FIELDS.claim_key,
+		authority: 'user',
+		confidence_level: 'supported',
+		declared_state: 'active',
+		observed_at: '2026-07-29T00:00:00.000Z',
+		valid_from: null,
+		valid_to: null,
+		last_verified_at: '2026-07-29T00:00:00.000Z',
+		evidence: [],
+		supersedes,
+		contradicts: [],
+		project_hub: null,
+		global_hub: '01_knowledge/memory/global/index.md',
+		related_wiki: [],
+		related_sources: [],
+		body: '# Prior approved memory\n\nPrior current claim.',
+	});
+	fixture.write(recordPath, built.markdown);
+	return { path: recordPath, memoryId };
+}
+
+function writeProjectLifecycleHub(fixture, projectKey, projectId) {
+	const hubPath = `01_knowledge/memory/projects/${projectKey}/index.md`;
+	fixture.write(hubPath, [
+		'---',
+		'schema_version: 1',
+		'type: project_memory_index',
+		`project_id: ${projectId}`,
+		`project_key: ${projectKey}`,
+		`project_hint: ${projectKey}`,
+		`repo_path: /work/${projectKey}`,
+		'---',
+		'',
+		`# ${projectKey}`,
+		'',
+	].join('\n'));
+	return hubPath;
 }
 
 test('approved lifecycle proposal creates one immutable v2 memory record after preview', async (t) => {
@@ -283,6 +359,230 @@ test('approved lifecycle proposal creates one immutable v2 memory record after p
 	const replayed = await apply(fixture, tokenFrom(dryRun));
 	assert.equal(replayed.isError, false, JSON.stringify(replayed.structuredContent));
 	assert.equal(fixture.read(targetPath), contentBeforeReplay);
+});
+
+test('approved MemoryRecord creation fails closed without explicit memory_scope', async (t) => {
+	const fixture = createLifecycleFixture(t, {
+		proposalFields: { memory_scope: null },
+	});
+	const result = await preview(fixture);
+	assert.equal(result.isError, true);
+	assert.match(String(result.structuredContent?.error || ''), /memory_scope/i);
+	assert.equal(fs.existsSync(fixture.absolute(LIFECYCLE_PROPOSAL_FIELDS.target_note)), false);
+});
+
+test('approved MemoryRecord rejects explicit targets bound to another scope or project Hub', async (t) => {
+	for (const item of [
+		{
+			label: 'Global scope into Project root',
+			fields: {
+				memory_scope: 'global',
+				target_note: '01_knowledge/memory/projects/atlas/agents/custom/cross-scope.md',
+			},
+		},
+		{
+			label: 'Project scope into Global root',
+			fields: {
+				memory_scope: 'project',
+				project_id: 'atlas-id',
+				target_note: '01_knowledge/memory/global/agents/custom/cross-scope.md',
+			},
+		},
+		{
+			label: 'Project scope into another Project root',
+			fields: {
+				memory_scope: 'project',
+				project_id: 'atlas-id',
+				target_note: '01_knowledge/memory/projects/orion-key/agents/custom/cross-project.md',
+			},
+		},
+		{
+			label: 'Global target without an Agent namespace',
+			fields: {
+				memory_scope: 'global',
+				target_note: '01_knowledge/memory/global/agents/non-namespaced.md',
+			},
+		},
+		{
+			label: 'Global target with a nested Agent namespace',
+			fields: {
+				memory_scope: 'global',
+				target_note: '01_knowledge/memory/global/agents/custom/nested/record.md',
+			},
+		},
+		{
+			label: 'Project target with a nested Agent namespace',
+			fields: {
+				memory_scope: 'project',
+				project_id: 'atlas-id',
+				target_note: '01_knowledge/memory/projects/atlas-key/agents/custom/nested/record.md',
+			},
+		},
+	]) {
+		await t.test(item.label, async (t) => {
+			const fixture = createLifecycleFixture(t, { proposalFields: item.fields });
+			writeProjectLifecycleHub(fixture, 'atlas-key', 'atlas-id');
+			writeProjectLifecycleHub(fixture, 'orion-key', 'orion-id');
+			const result = await preview(fixture);
+			assert.equal(result.isError, true);
+			assert.match(String(result.structuredContent?.error || ''), /Global agent namespace|project Hub agent namespace/i);
+			assert.equal(fs.existsSync(fixture.absolute(item.fields.target_note)), false);
+		});
+	}
+});
+
+test('approved Project MemoryRecord binds the exact project Hub and canonical Agent namespace', async (t) => {
+	const targetPath = '01_knowledge/memory/projects/atlas-key/agents/codex/approved-atlas.md';
+	const fixture = createLifecycleFixture(t, {
+		proposalFields: {
+			memory_scope: 'project',
+			project_id: 'atlas-id',
+			target_note: targetPath,
+		},
+	});
+	writeProjectLifecycleHub(fixture, 'atlas-key', 'atlas-id');
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assert.equal(dryRun.structuredContent.target_note, targetPath);
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+	const parsed = parseMarkdown(fixture.read(targetPath));
+	assert.equal(parsed.frontmatter.fields.scope, 'project');
+	assert.equal(parsed.frontmatter.fields.project_id, 'atlas-id');
+	assert.equal(parsed.frontmatter.fields.agent_type, 'codex');
+	assert.equal(
+		parsed.frontmatter.fields.project_hub,
+		'[[01_knowledge/memory/projects/atlas-key/index]]'
+	);
+});
+
+test('approved MemoryRecord derives authority only from fresh verified relations', async (t) => {
+	await t.test('Wiki evidence supports confidence but cannot grant Source authority', async (t) => {
+		const fixture = createLifecycleFixture(t, {
+			proposalFields: {
+				proposed_authority: 'source',
+				proposed_confidence: 'supported',
+				evidence: ['invented-source-assertion'],
+				related_sources: [],
+			},
+		});
+		const dryRun = await preview(fixture);
+		const result = await apply(fixture, tokenFrom(dryRun));
+		assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+		const record = parseMarkdown(fixture.read(dryRun.structuredContent.target_note)).frontmatter.fields;
+		assert.equal(record.authority, 'agent');
+		assert.equal(record.confidence_level, 'supported');
+		assert.deepEqual(record.evidence, ['[[01_knowledge/wiki/approved-memory]]']);
+		assert.equal(JSON.stringify(record).includes('invented-source-assertion'), false);
+	});
+
+	await t.test('raw evidence alone cannot grant Source authority or supported confidence', async (t) => {
+		const fixture = createLifecycleFixture(t, {
+			proposalFields: {
+				proposed_authority: 'source',
+				proposed_confidence: 'supported',
+				evidence: ['invented-source-assertion'],
+				related_wiki: [],
+				related_sources: [],
+			},
+		});
+		const dryRun = await preview(fixture);
+		const result = await apply(fixture, tokenFrom(dryRun));
+		assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+		const record = parseMarkdown(fixture.read(dryRun.structuredContent.target_note)).frontmatter.fields;
+		assert.equal(record.authority, 'agent');
+		assert.equal(record.confidence_level, 'inferred');
+		assert.deepEqual(record.evidence, []);
+	});
+
+	await t.test('fresh Source evidence may grant Source authority', async (t) => {
+		const sourcePath = '01_knowledge/sources/web/approved-source.md';
+		const fixture = createLifecycleFixture(t, {
+			proposalFields: {
+				proposed_authority: 'source',
+				proposed_confidence: 'supported',
+				related_wiki: [],
+				related_sources: [sourcePath],
+			},
+		});
+		fixture.write(sourcePath, '# Approved source\n');
+		const dryRun = await preview(fixture);
+		const result = await apply(fixture, tokenFrom(dryRun));
+		assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+		const record = parseMarkdown(fixture.read(dryRun.structuredContent.target_note)).frontmatter.fields;
+		assert.equal(record.authority, 'source');
+		assert.equal(record.confidence_level, 'supported');
+		assert.deepEqual(record.evidence, [`[[${sourcePath.replace(/\.md$/, '')}]]`]);
+	});
+});
+
+test('approved MemoryRecord rejects relation evidence removed after preview', async (t) => {
+	const sourcePath = '01_knowledge/sources/web/stale-approved-source.md';
+	const fixture = createLifecycleFixture(t, {
+		proposalFields: {
+			proposed_authority: 'source',
+			proposed_confidence: 'supported',
+			related_wiki: [],
+			related_sources: [sourcePath],
+		},
+	});
+	fixture.write(sourcePath, '# Stale source\n');
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	fs.unlinkSync(fixture.absolute(sourcePath));
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(String(result.structuredContent?.error || ''), /relation evidence is stale or invalid/i);
+	assert.equal(fs.existsSync(fixture.absolute(dryRun.structuredContent.target_note)), false);
+});
+
+test('approved Global MemoryRecord maps a non-file Hub collision to structure repair', async (t) => {
+	const fixture = createLifecycleFixture(t, { globalHubDirectory: true });
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(
+		String(result.structuredContent?.error || ''),
+		/missing_memory_hub.*structure_repair_required/i
+	);
+	assert.equal(fs.existsSync(fixture.absolute(dryRun.structuredContent.target_note)), false);
+});
+
+test('approved MemoryRecord applies a valid reviewed supersession transition', async (t) => {
+	const fixture = createLifecycleFixture(t);
+	const prior = writeCurrentLifecycleRecord(fixture);
+	fixture.write(PROPOSAL_PATH, proposalText({
+		fields: {
+			...LIFECYCLE_PROPOSAL_FIELDS,
+			supersedes: [prior.memoryId],
+		},
+		writeback: 'Approved successor content.',
+	}));
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+	const created = parseMarkdown(fixture.read(dryRun.structuredContent.target_note));
+	assert.deepEqual(created.frontmatter.fields.supersedes, [prior.memoryId]);
+	assert.equal(fixture.read(prior.path).includes('Prior current claim.'), true);
+});
+
+test('approved MemoryRecord rejects a dangling lifecycle transition prospectively', async (t) => {
+	const fixture = createLifecycleFixture(t);
+	fixture.write(PROPOSAL_PATH, proposalText({
+		fields: {
+			...LIFECYCLE_PROPOSAL_FIELDS,
+			supersedes: ['missing-memory-id'],
+		},
+		writeback: 'Invalid successor content.',
+	}));
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(String(result.structuredContent?.error || ''), /dangling_supersedes/i);
+	assert.equal(fs.existsSync(fixture.absolute(dryRun.structuredContent.target_note)), false);
 });
 
 test('lifecycle proposal conflict compensates the exact created MemoryRecord before applied state', async (t) => {
@@ -393,7 +693,7 @@ function assertRejectedWithoutWrite(fixture, result, targetPaths = [fixture.targ
 	assert.equal(result.isError, true, 'stale or invalid confirmation must be rejected');
 	assert.match(
 		String(result.structuredContent?.error || ''),
-		/stale|expired|confirmation|conflict|changed|allowed target|approval|receipt|corrupt|authentication|protected Vault boundary/i
+		/stale|expired|confirmation|conflict|changed|allowed target|approval|receipt|corrupt|authentication|protected Vault boundary|Writeback target does not exist|does not exist|unavailable/i
 	);
 	for (const targetPath of targetPaths) {
 		if (fs.existsSync(fixture.absolute(targetPath))) {
@@ -408,6 +708,14 @@ function assertRejectedWithoutWrite(fixture, result, targetPaths = [fixture.targ
 
 function countOccurrences(content, needle) {
 	return content.split(needle).length - 1;
+}
+
+function taskAppliedProposalIds(fixture) {
+	const value = parseMarkdown(fixture.read(TASK_PATH)).frontmatter.fields
+		.durable_output_applied_proposal_ids;
+	return (Array.isArray(value) ? value : String(value || '').split(','))
+		.map((entry) => String(entry).trim())
+		.filter(Boolean);
 }
 
 async function operationRecords(fixture) {
@@ -631,12 +939,56 @@ function createDirectServiceFixture(t, overrides = {}) {
 
 test('dry-run returns a bounded opaque confirmation token', async (t) => {
 	const fixture = createFixture(t);
+	const taskBeforePreview = fixture.read(TASK_PATH);
 	const result = await preview(fixture);
 	assert.equal(result.isError, false);
 	assert.equal(typeof result.structuredContent?.confirmation_token, 'string');
 	assert.ok(result.structuredContent.confirmation_token.length >= 32);
 	assert.equal(typeof result.structuredContent?.confirmation_expires_at, 'string');
 	assert.equal(result.structuredContent.confirmation_token.includes('Atomic writeback content'), false);
+	assert.equal(fixture.read(TASK_PATH), taskBeforePreview);
+	assert.deepEqual(taskAppliedProposalIds(fixture), []);
+});
+
+test('actual apply records exact proposal-id evidence in the linked task', async (t) => {
+	const fixture = createFixture(t);
+	const previewResult = await preview(fixture);
+	assert.deepEqual(taskAppliedProposalIds(fixture), []);
+
+	const applied = await apply(fixture, tokenFrom(previewResult));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.deepEqual(taskAppliedProposalIds(fixture), ['atomic-proposal']);
+	const operation = await operationRecord(fixture);
+	assert.equal(operation.payload.taskHadAppliedProposalReference, false);
+});
+
+test('applied proposal-id evidence is confirmation-bound before the target write', async (t) => {
+	const fixture = createFixture(t);
+	const previewResult = await preview(fixture);
+	fixture.write(TASK_PATH, fixture.read(TASK_PATH).replace(
+		'status: active',
+		'status: active\ndurable_output_applied_proposal_ids: atomic-proposal'
+	));
+
+	const result = await apply(fixture, tokenFrom(previewResult));
+	assertRejectedWithoutWrite(fixture, result);
+	assert.deepEqual(taskAppliedProposalIds(fixture), ['atomic-proposal']);
+});
+
+test('approved writeback without a task never writes task apply evidence', async (t) => {
+	const fixture = createFixture(t, {
+		proposalFields: { task_id: '' },
+	});
+	const taskBefore = fixture.read(TASK_PATH);
+	const previewResult = await preview(fixture, { task_id: null });
+	assert.equal(previewResult.isError, false, JSON.stringify(previewResult.structuredContent));
+	const result = await apply(fixture, tokenFrom(previewResult), { task_id: null });
+	assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+	assert.equal(fixture.read(TASK_PATH), taskBefore);
+	assert.deepEqual(taskAppliedProposalIds(fixture), []);
+	const operation = await operationRecord(fixture);
+	assert.equal(operation.payload.taskId, null);
+	assert.equal(operation.payload.taskHadAppliedProposalReference, false);
 });
 
 test('dry-run rejects an approved proposal without a committed approval receipt', async (t) => {
@@ -818,6 +1170,7 @@ test('proposal drift after the target effect is compensated and becomes a termin
 	assert.match(String(result.structuredContent?.error || ''), /conflict|changed/i);
 	assert.equal(fixture.read(TARGET_PATH), originalTarget);
 	assert.equal(fixture.read(TASK_PATH), originalTask);
+	assert.deepEqual(taskAppliedProposalIds(fixture), []);
 	assert.match(fixture.read(PROPOSAL_PATH), /Proposal drift after the target effect/);
 	assert.match(fixture.read(PROPOSAL_PATH), /approval_status: approved/);
 	const conflicted = await operationRecord(fixture);
@@ -1093,6 +1446,509 @@ test('writeback target policy is a positive Memory or Wiki allowlist', async (t)
 	assert.equal(fixture.read(outsideTarget).includes('^writeback-'), false);
 });
 
+test('legacy missing wiki proposal defaults to create_wiki_note', async (t) => {
+	const wikiPath = '01_knowledge/wiki/legacy-missing-wiki-note.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assertWikiCreatePreview(dryRun.structuredContent.writeback_preview);
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.equal(countOccurrences(fixture.read(wikiPath), `<!-- writeback operation: writeback-`), 1);
+	assert.ok(fixture.read(wikiPath).includes(MARKER));
+});
+
+test('legacy existing wiki proposal still appends', async (t) => {
+	const wikiPath = '01_knowledge/wiki/legacy-existing-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assert.ok(dryRun.structuredContent.writeback_preview.includes(`## Approved Writeback: atomic-proposal`));
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.equal(countOccurrences(fixture.read(wikiPath), `## Approved Writeback: atomic-proposal`), 1);
+});
+
+test('legacy existing wiki proposal with claim_key still appends', async (t) => {
+	const wikiPath = '01_knowledge/wiki/legacy-claim-key-existing.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				claim_key: 'legacy-wiki-claim',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assert.ok(dryRun.structuredContent.writeback_preview.includes(`## Approved Writeback: atomic-proposal`));
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.equal(countOccurrences(fixture.read(wikiPath), `## Approved Writeback: atomic-proposal`), 1);
+});
+
+test('legacy missing wiki proposal with claim_key creates missing wiki file', async (t) => {
+	const wikiPath = '01_knowledge/wiki/legacy-claim-key-missing.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				claim_key: 'legacy-wiki-claim-missing',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assertWikiCreatePreview(dryRun.structuredContent.writeback_preview);
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.equal(countOccurrences(fixture.read(wikiPath), `<!-- writeback operation: writeback-`), 1);
+	assert.ok(fixture.read(wikiPath).includes(MARKER));
+});
+
+test('explicit create_wiki_note rejects when target exists', async (t) => {
+	const wikiPath = '01_knowledge/wiki/existing-wiki-fence.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create_wiki_note',
+			},
+		})
+	);
+	fixture.write(wikiPath, '# Existing wiki note\n');
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, true);
+	assert.match(
+		String(dryRun.structuredContent?.error || ''),
+		/create_wiki_note target already exists|create wiki note writeback requires a missing target/i
+	);
+});
+
+test('review queue does not advertise an occupied create_wiki_note target as ready', async (t) => {
+	const wikiPath = '01_knowledge/wiki/occupied-wiki-listing.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		proposalFields: {
+			writeback_effect: 'create_wiki_note',
+		},
+	});
+	const result = await callTool(
+		'tracekeeper.review_queue',
+		{ action: 'list_approved' },
+		fixture.context
+	);
+	assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+	const entry = result.structuredContent.entries.find(
+		(candidate) => candidate.proposal_id === 'atomic-proposal'
+	);
+	assert.ok(entry, 'approved proposal should be present in the review queue');
+	assert.equal(entry.ready_to_apply, false);
+	assert.match(String(entry.blocker || ''), /create_wiki_note.*already exists/i);
+});
+
+test('review queue advertises a missing create_wiki_note target as ready', async (t) => {
+	const wikiPath = '01_knowledge/wiki/missing-wiki-listing.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+		proposalFields: {
+			writeback_effect: 'create_wiki_note',
+		},
+	});
+	const result = await callTool(
+		'tracekeeper.review_queue',
+		{ action: 'list_approved' },
+		fixture.context
+	);
+	assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+	const entry = result.structuredContent.entries.find(
+		(candidate) => candidate.proposal_id === 'atomic-proposal'
+	);
+	assert.ok(entry, 'approved proposal should be present in the review queue');
+	assert.equal(entry.ready_to_apply, true);
+	assert.equal(entry.blocker, null);
+});
+
+test('explicit append rejects when wiki target is missing', async (t) => {
+	const wikiPath = '01_knowledge/wiki/missing-wiki-append.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'append',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assertRejectedWithoutWrite(fixture, dryRun, [wikiPath]);
+	assert.match(
+		String(dryRun.structuredContent?.error || ''),
+		/does not exist|does not.*exist/i
+	);
+});
+
+test('explicit create_wiki_note succeeds when wiki target is missing', async (t) => {
+	const wikiPath = '01_knowledge/wiki/missing-wiki-create.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create_wiki_note',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.equal(countOccurrences(fixture.read(wikiPath), `<!-- writeback operation: writeback-`), 1);
+	assert.ok(fixture.read(wikiPath).includes(MARKER));
+	assert.equal(countOccurrences(fixture.readAudit(), 'action: wiki_note.create'), 1);
+});
+
+test('competing create_wiki_note previews cannot share or compensate target ownership', async (t) => {
+	const wikiPath = '01_knowledge/wiki/competing-create-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create_wiki_note',
+			},
+		})
+	);
+	const firstPreview = await preview(fixture);
+	const competingPreview = await preview(fixture);
+	assert.equal(firstPreview.isError, false, JSON.stringify(firstPreview.structuredContent));
+	assert.equal(competingPreview.isError, false, JSON.stringify(competingPreview.structuredContent));
+	assert.notEqual(tokenFrom(firstPreview), tokenFrom(competingPreview));
+	assert.notEqual(
+		firstPreview.structuredContent.writeback_preview,
+		competingPreview.structuredContent.writeback_preview
+	);
+
+	const firstApplied = await apply(fixture, tokenFrom(firstPreview));
+	assert.equal(firstApplied.isError, false, JSON.stringify(firstApplied.structuredContent));
+	const ownedTarget = fixture.read(wikiPath);
+	assert.equal(ownedTarget, firstPreview.structuredContent.writeback_preview);
+
+	const competingApply = await apply(fixture, tokenFrom(competingPreview));
+	assert.equal(competingApply.isError, true);
+	assert.match(
+		String(competingApply.structuredContent?.error || ''),
+		/already exists|stale|conflict|changed|is applied/i
+	);
+	assert.equal(fixture.read(wikiPath), ownedTarget);
+	assert.equal(countOccurrences(ownedTarget, '<!-- writeback operation: writeback-'), 1);
+	assert.equal(countOccurrences(ownedTarget, MARKER), 1);
+});
+
+test('unknown writeback_effect is fail-closed', async (t) => {
+	const wikiPath = '01_knowledge/wiki/unknown-effect-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			includeApprovalReceipt: false,
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create-unknown',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, true);
+	assert.match(String(dryRun.structuredContent?.error || ''), /unknown writeback_effect value/i);
+});
+
+test('non-string writeback_effect is fail-closed', async (t) => {
+	const wikiPath = '01_knowledge/wiki/non-string-effect-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			includeApprovalReceipt: false,
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: ['append'],
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, true);
+	assert.match(String(dryRun.structuredContent?.error || ''), /writeback_effect must be a string/i);
+});
+
+test('object writeback_effect is fail-closed', async (t) => {
+	const wikiPath = '01_knowledge/wiki/object-effect-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			includeApprovalReceipt: false,
+			fields: {
+				target_note: wikiPath,
+				writebackEffect: { mode: 'create_wiki_note' },
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, true);
+	assert.match(String(dryRun.structuredContent?.error || ''), /writeback_effect must be a string/i);
+});
+
+test('conflicting writeback effect aliases are fail-closed', async (t) => {
+	const wikiPath = '01_knowledge/wiki/alias-conflict-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			includeApprovalReceipt: false,
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'append',
+				writebackEffect: 'create_wiki_note',
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, true);
+	assert.match(String(dryRun.structuredContent?.error || ''), /Proposal writeback effect fields conflict/i);
+});
+
+test('create_wiki_note exact retry is deduplicated', async (t) => {
+	const wikiPath = '01_knowledge/wiki/retry-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+			},
+			writeback: DEFAULT_WRITEBACK,
+		})
+	);
+	const dryRun = await preview(fixture);
+	const token = tokenFrom(dryRun);
+	const first = await apply(fixture, token);
+	const second = await apply(fixture, token);
+	assert.equal(first.isError, false);
+	assert.deepEqual(second.structuredContent, first.structuredContent);
+	assert.equal(countOccurrences(fixture.readAudit(), 'action: wiki_note.create'), 1);
+	assert.equal(countOccurrences(fixture.read(wikiPath), MARKER), 1);
+});
+
+test('create_wiki_note proposal conflict triggers exact-hash rollback', async (t) => {
+	const wikiPath = '01_knowledge/wiki/rollback-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	fixture.context.operationFailureInjection = (context) => {
+		if (context.phase === 'before_step' && context.stepName === 'mark_proposal_applied') {
+			fixture.write(
+				PROPOSAL_PATH,
+				proposalText({
+					writeback: 'Mutated proposal to force transition conflict.',
+					fields: {
+						target_note: wikiPath,
+						writeback_effect: 'create_wiki_note',
+					},
+				})
+			);
+		}
+	};
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.equal(fs.existsSync(fixture.absolute(wikiPath)), false);
+	assert.equal((await operationRecord(fixture)).status, 'conflicted');
+});
+
+test('create_wiki_note compensation preserves a target changed after owned creation', async (t) => {
+	const wikiPath = '01_knowledge/wiki/changed-owned-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create_wiki_note',
+			},
+		})
+	);
+	const originalTask = fixture.read(TASK_PATH);
+	const dryRun = await preview(fixture);
+	fixture.context.operationFailureInjection = (context) => {
+		if (context.phase === 'before_step' && context.stepName === 'mark_proposal_applied') {
+			fixture.write(wikiPath, `${fixture.read(wikiPath)}\nUser change after creation.\n`);
+			fixture.write(
+				PROPOSAL_PATH,
+				proposalText({
+					writeback: 'Mutated proposal after the owned Wiki target changed.',
+					fields: {
+						target_note: wikiPath,
+						writeback_effect: 'create_wiki_note',
+					},
+				})
+			);
+		}
+	};
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(String(result.structuredContent?.error || ''), /conflict|compensat|changed/i);
+	assert.match(fixture.read(wikiPath), /User change after creation/);
+	assert.equal(fixture.read(TASK_PATH), originalTask);
+	assert.match(fixture.read(PROPOSAL_PATH), /approval_status: approved/);
+	assert.equal((await operationRecord(fixture)).status, 'conflicted');
+});
+
+test('create_wiki_note refuses to mark the proposal applied when its owned target disappears', async (t) => {
+	const wikiPath = '01_knowledge/wiki/disappearing-created-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+				writeback_effect: 'create_wiki_note',
+			},
+		})
+	);
+	const originalTask = fixture.read(TASK_PATH);
+	const dryRun = await preview(fixture);
+	fixture.context.operationFailureInjection = (context) => {
+		if (context.phase === 'before_step' && context.stepName === 'mark_proposal_applied') {
+			fs.unlinkSync(fixture.absolute(wikiPath));
+		}
+	};
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(
+		String(result.structuredContent?.error || ''),
+		/not created|does not exist|unavailable|conflict|disappeared/i
+	);
+	assert.equal(fs.existsSync(fixture.absolute(wikiPath)), false);
+	assert.equal(fixture.read(TASK_PATH), originalTask);
+	assert.match(fixture.read(PROPOSAL_PATH), /approval_status: approved/);
+	assert.equal((await operationRecord(fixture)).status, 'conflicted');
+});
+
+test('create_wiki_note recovery resumes without duplicating the target', async (t) => {
+	const wikiPath = '01_knowledge/wiki/recovery-wiki.md';
+	const fixture = createFixture(t, {
+		targetPath: wikiPath,
+		skipTarget: true,
+	});
+	fixture.write(
+		PROPOSAL_PATH,
+		proposalText({
+			fields: {
+				target_note: wikiPath,
+			},
+		})
+	);
+	const dryRun = await preview(fixture);
+	const token = tokenFrom(dryRun);
+	let interrupted = false;
+	fixture.context.operationFailureInjection = (context) => {
+		if (!interrupted && context.phase === 'after_step' && context.stepName === 'apply_target') {
+			interrupted = true;
+			throw new Error('interrupt after wiki create');
+		}
+	};
+	const interruptedResult = await apply(fixture, token);
+	assert.equal(interruptedResult.isError, true);
+	const beforeRecovery = fixture.read(wikiPath);
+	delete fixture.context.operationFailureInjection;
+	const recovery = await recoverPendingOperations(fixture.vaultRoot, fixture.context);
+	assert.equal(recovery.recovered.length, 1);
+	assert.equal(recovery.failed.length, 0);
+	assert.equal(recovery.skipped.length, 0);
+	assert.equal(fixture.read(wikiPath), beforeRecovery);
+	const completed = await operationRecord(fixture);
+	assert.equal(completed.status, 'completed');
+});
+
 test('exact apply retry returns one receipt and one durable effect', async (t) => {
 	const fixture = createFixture(t);
 	const previewResult = await preview(fixture);
@@ -1102,6 +1958,14 @@ test('exact apply retry returns one receipt and one durable effect', async (t) =
 	assert.equal(first.isError, false);
 	assert.deepEqual(second.structuredContent, first.structuredContent);
 	assert.equal(fixture.read(TARGET_PATH).split(MARKER).length - 1, 1);
+	assert.deepEqual(taskAppliedProposalIds(fixture), ['atomic-proposal']);
+	assert.equal(
+		countOccurrences(
+			fixture.read(TASK_PATH),
+			'durable_output_applied_proposal_ids:'
+		),
+		1
+	);
 	const operation = await operationRecord(fixture);
 	const taskReceipt = assertBoundedTaskLinkStep(
 		operation,

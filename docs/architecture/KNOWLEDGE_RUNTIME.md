@@ -44,6 +44,11 @@ truth. A stale replacement fails instead of silently overwriting newer content.
 5. The Agent consumes excerpts, match reasons, and verified relations first,
    then reads a complete note only when necessary.
 
+Source candidates are durable provenance, not approved synthesis. Their
+presence in Recall or `read_note` does not imply that any linked Wiki/Memory
+proposal has been approved or applied; the finish-task durable-output summary
+owns that closeout distinction.
+
 The index is disposable. Status exposes readiness and generation, and a rebuild
 can reproduce it from Markdown.
 
@@ -59,20 +64,32 @@ relations. The read model resolves these immutable records into `current`,
 cyclic, duplicate-current, or unresolved records fail into review diagnostics
 instead of an arbitrary winner.
 
+Agent-originated evidence may establish at most `supported` confidence during
+Global or Project Auto. A requested `verified` level is capped to `supported`
+rather than forcing an otherwise eligible Memory candidate into the queue. User
+authority, non-active lifecycle transitions, unresolved current-claim
+conflicts, and uncertain project identity remain review-gated. Queued proposals
+persist the policy reason and warnings shown by the Obsidian review surface.
+
 One stable `project_id` owns a project hub at
 `01_knowledge/memory/projects/<project-key>/index.md`. The display hint and
-observed Agent type are metadata, not authorization or identity. A missing hub
-may be materialized only from an exact normalized repository path; hint-only,
-ambiguous, or conflicting evidence is review-bound.
+observed Agent type are metadata, not authorization or identity. A direct
+Memory candidate declares global or project scope; `project_hint` never selects
+scope. A missing or invalid canonical Global or project Hub blocks persistence
+and returns an explicit structure-repair action. Hub creation belongs to that
+human-initiated structure flow, not the memory write.
 
-Eligible `propose_memory` and `finish_task` operations use exclusive create to
-write one immutable entry under
-`01_knowledge/memory/projects/<project-key>/agents/<agent-type>/`. The entry
-path and canonical operation hash make exact retries converge and changed
-payloads conflict. Entries link to the hub and verified Wiki or Source notes
-through the production repository's `FileManager.generateMarkdownLink()`
-boundary, so the shared native edge DTO and Obsidian Backlinks provide the
-aggregate without rewriting the hub.
+Eligible `propose_memory` and `finish_task` operations use one scope-aware
+writer and exclusive create to write an immutable entry under
+`01_knowledge/memory/global/agents/<agent-type>/` or
+`01_knowledge/memory/projects/<project-key>/agents/<agent-type>/`. A Global
+record has `project_id: null`. The entry path and canonical operation hash make
+exact retries converge and changed payloads conflict. Entries always link to
+their Hub and may link to verified Wiki or Source notes through the production
+repository's `FileManager.generateMarkdownLink()` boundary. Missing relations
+are valid; explicitly supplied but unverifiable relations enter review. The
+shared native edge DTO and Obsidian Backlinks provide the aggregate without
+rewriting the Hub.
 
 Legacy project `memory.md` and other unkeyed Memory notes remain byte-preserved
 read members but never become v2 operation records automatically. Recall
@@ -111,9 +128,9 @@ promoted.
 
 ## Recoverable Writes
 
-Task closeout, project auto-memory, source and proposal creation, and approved
-writeback use operation identity proportional to their risk. Coordinated
-operations use:
+Task closeout, Global and Project auto-memory, source and proposal creation, and
+approved writeback use operation identity proportional to their risk.
+Coordinated operations use:
 
 - stable operation and idempotency identities;
 - payload-hash conflict detection;
@@ -134,6 +151,13 @@ payload nor a plaintext completed result; callers recover those values only
 through the journal API. Legacy plaintext records are rewritten in sealed form
 on a subsequent safe save, while incompatible body-bearing writeback records
 are quarantined instead of replayed.
+
+A finish operation snapshots exact proposal ids and review-owner paths already
+managed by its task before journaling. That snapshot, plus any finish-generated
+or auto-applied output, produces the separate durable-output result. Missing,
+mismatched, or out-of-owner references remain unresolved evidence. Exact finish
+retries return the original snapshot instead of reinterpreting a proposal after
+later human review.
 
 Proposal identity is independent of its current path. Active review enumerates
 only the review queue, while history lookup resolves the same explicit

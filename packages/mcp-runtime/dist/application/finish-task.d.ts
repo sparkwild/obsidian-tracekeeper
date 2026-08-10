@@ -1,4 +1,4 @@
-import { type OperationFailureInjection, type OperationJournal } from '@tracekeeper/core';
+import { type OperationFailureInjection, type OperationJournal, type OperationRecord } from '@tracekeeper/core';
 export interface FinishTaskRunnerStep {
     name: string;
     execute(): Promise<unknown>;
@@ -19,6 +19,7 @@ export interface FinishTaskApplicationDependencies<TRawArgs extends object, TPay
     };
     loadExistingPayload(payload: unknown): boolean;
     storedRequestHash(payload: unknown): string;
+    validateExistingOperation?(record: OperationRecord, payload: TPayload): void;
     buildPayload(rawArgs: TRawArgs, operationId: string, requestHash: string, requestSnapshot: unknown): Promise<TPayload>;
     getTaskId(payload: TPayload): string;
     readLifecycle(taskId: string): Promise<FinishTaskLifecycleState | null>;

@@ -15,6 +15,8 @@ const modalsOutput = path.join(tempRoot, 'review-modals.cjs');
 const transitionAdapterOutput = path.join(tempRoot, 'proposal-transition-adapter.cjs');
 const require = createRequire(import.meta.url);
 
+globalThis.window = globalThis;
+
 const hashContent = (value) => createHash('sha256').update(value, 'utf8').digest('hex');
 const proposalPath = '00_tracekeeper/inbox/review_queue/proposal.md';
 const targetPath = '01_knowledge/wiki/stale-target.md';
@@ -37,10 +39,14 @@ const obsidianStub = {
 					constructor(options = {}) {
 						this.text = options.text || '';
 						this.value = options.value || '';
+						this.cls = options.cls || '';
+						this.classes = new Set(String(this.cls).split(/\\s+/).filter(Boolean));
+						this.attributes = { ...(options.attr || {}) };
 						this.children = [];
 						this.handlers = {};
 						this.disabled = false;
 						this.focused = false;
+						this.open = false;
 					}
 					empty() {
 						this.children = [];
@@ -55,6 +61,9 @@ const obsidianStub = {
 					createDiv(options = {}) {
 						return this.createEl('div', options);
 					}
+					createSpan(options = {}) {
+						return this.createEl('span', options);
+					}
 					addEventListener(name, handler) {
 						this.handlers[name] = handler;
 					}
@@ -62,14 +71,24 @@ const obsidianStub = {
 						this.text = String(value);
 					}
 					setAttr(name, value) {
-						this[name] = value;
+						this.attributes[name] = String(value);
+						this[name] = String(value);
+					}
+					setAttribute(name, value) {
+						this.attributes[name] = String(value);
+						this[name] = String(value);
 					}
 					focus() {
 						this.focused = true;
 						globalThis.__tracekeeperFocusedElement = this;
 					}
-					addClass() {}
+					addClass(value) {
+						for (const className of String(value).split(/\\s+/).filter(Boolean)) {
+							this.classes.add(className);
+						}
+					}
 				}
+					globalThis.__tracekeeperReviewFakeElement = FakeElement;
 				export function getLanguage() {
 					return 'en';
 				}
@@ -155,10 +174,11 @@ const obsidianStub = {
 					onOpen() {}
 				}
 				export class WorkspaceLeaf {}
-				export class ItemView {
-					constructor(leaf) {
-						this.app = leaf?.app || {};
-						this.contentEl = leaf?.contentEl || {};
+					export class ItemView {
+						constructor(leaf) {
+							this.app = leaf?.app || {};
+							this.contentEl = leaf?.contentEl || new FakeElement();
+							this.containerEl = leaf?.containerEl || new FakeElement();
 					}
 					async onOpen() {}
 				}
@@ -183,6 +203,19 @@ const makeProposalRecord = (overrides = {}) => {
 		proposedBy: overrides.proposedBy || 'agent',
 		relatedProject: overrides.relatedProject || '',
 		memoryScope: overrides.memoryScope || '',
+		projectId: overrides.projectId || '',
+		claimKey: overrides.claimKey || '',
+		proposedAuthority: overrides.proposedAuthority || 'agent',
+		proposedConfidence: overrides.proposedConfidence || 'inferred',
+		reviewReason: overrides.reviewReason || '',
+		reviewWarnings: overrides.reviewWarnings || [],
+		declaredState: overrides.declaredState || 'active',
+		observedAt: overrides.observedAt || '',
+		validFrom: overrides.validFrom || '',
+		validTo: overrides.validTo || '',
+		lastVerifiedAt: overrides.lastVerifiedAt || '',
+		supersedes: overrides.supersedes || [],
+		contradicts: overrides.contradicts || [],
 		taskId: overrides.taskId || 'task-1',
 		sourceSessionNote: overrides.sourceSessionNote || '',
 		targetNote: overrides.targetNote === undefined ? targetPath : overrides.targetNote,
@@ -201,6 +234,14 @@ const makeProposalRecord = (overrides = {}) => {
 			? '- original writeback line'
 			: overrides.writebackContent,
 		writebackSource: overrides.writebackSource || 'frontmatter',
+		writebackEffect: overrides.writebackEffect,
+		invalidWritebackEffect: overrides.invalidWritebackEffect || false,
+		writebackOperationId: overrides.writebackOperationId || '',
+		invalidWritebackOperationId: overrides.invalidWritebackOperationId || false,
+		writebackAppliedAt: overrides.writebackAppliedAt || '',
+		invalidWritebackAppliedAt: overrides.invalidWritebackAppliedAt || false,
+		writebackTarget: overrides.writebackTarget || '',
+		invalidWritebackTarget: overrides.invalidWritebackTarget || false,
 		archived: overrides.archived || false,
 		fileContentHash: overrides.fileContentHash || '',
 		lastTransition: overrides.lastTransition,
@@ -214,6 +255,7 @@ const makeProposalRecord = (overrides = {}) => {
 		status: record.approvalStatus,
 		targetPath: record.targetNote,
 		writebackContent: record.writebackContent,
+		writebackEffect: overrides.writebackEffect,
 		revisionComment: record.revisionComment,
 		revisionRequestedAt: record.revisionRequestedAt,
 		revisionRequestedBy: record.revisionRequestedBy,
@@ -246,7 +288,7 @@ const currentProposalFromFile = (file) => {
 			? 'legacy_migration_review'
 			: 'other_review_item';
 	return makeProposalRecord({
-	path: file.path,
+		path: file.path,
 	classification,
 	proposalId: file.frontmatter.proposal_id,
 	proposalKind: file.frontmatter.proposal_kind || classification,
@@ -268,12 +310,13 @@ const currentProposalFromFile = (file) => {
 	writebackContent: file.frontmatter.writeback_content
 		|| file.body.match(/## Writeback\s*\n\n([\s\S]*)/i)?.[1]?.trim()
 		|| '',
+		writebackEffect: file.frontmatter.writeback_effect || file.frontmatter.writebackEffect,
 	lastTransition: proposalTransitionReceiptFromFrontmatterForTest?.(file.frontmatter),
 	fileContentHash: hashContent(renderFileContent(file)),
 	});
 };
 
-function makeInitialFile() {
+function makeInitialFile({ targetNotePath = targetPath, proposalFields = {} } = {}) {
 	const file = {
 		__tracekeeper_kind: 'file',
 		path: proposalPath,
@@ -285,9 +328,10 @@ function makeInitialFile() {
 			proposal_id: 'proposal-1',
 			proposal_kind: 'memory',
 			approval_status: 'pending',
-			target_note: targetPath,
+			target_note: targetNotePath,
 			writeback_content: '- original writeback line',
 			task_id: 'task-1',
+			...proposalFields,
 		},
 		body: '# Proposal\n\n## Writeback\n\n- original writeback line\n',
 	};
@@ -296,18 +340,22 @@ function makeInitialFile() {
 }
 
 function createHarness(options = {}) {
+	const proposalTargetPath = options.targetPath || targetPath;
 	const files = new Map();
 	const auditLog = [];
 	let committedWrites = 0;
 	let refreshes = 0;
 	let mutationCount = 0;
-	const initialFile = makeInitialFile();
+	const initialFile = makeInitialFile({
+		targetNotePath: proposalTargetPath,
+		proposalFields: options.proposalFields || {},
+	});
 	files.set(proposalPath, initialFile);
-	files.set(targetPath, {
+	files.set(proposalTargetPath, {
 		__tracekeeper_kind: 'file',
-		path: targetPath,
+		path: proposalTargetPath,
 		extension: 'md',
-		basename: 'stale-target',
+		basename: proposalTargetPath.split('/').pop() || 'stale-target',
 		stat: { mtime: Date.parse('2026-07-30T00:00:00.000Z') },
 		frontmatter: { title: 'Stale target' },
 		body: '# Stale target\n',
@@ -386,6 +434,7 @@ function createHarness(options = {}) {
 				status: current.approvalStatus,
 				targetPath: current.targetNote,
 				writebackContent: current.writebackContent,
+				writebackEffect: current.writebackEffect,
 				revisionComment: current.revisionComment,
 				revisionRequestedAt: current.revisionRequestedAt,
 				revisionRequestedBy: current.revisionRequestedBy,
@@ -451,6 +500,7 @@ function createHarness(options = {}) {
 		initialFile,
 		staleSnapshot: makeProposalRecord({
 			fileContentHash: hashContent(renderFileContent(initialFile)),
+			writebackEffect: initialFile.frontmatter.writeback_effect || initialFile.frontmatter.writebackEffect,
 		}),
 		get committedWrites() {
 			return committedWrites;
@@ -472,6 +522,29 @@ function findElement(root, predicate) {
 		}
 	}
 	return null;
+}
+
+function findElements(root, predicate, matches = []) {
+	if (predicate(root)) {
+		matches.push(root);
+	}
+	for (const child of root.children || []) {
+		findElements(child, predicate, matches);
+	}
+	return matches;
+}
+
+function elementHasClass(element, className) {
+	return Boolean(element?.classes?.has(className));
+}
+
+function collectElementText(root, { skipDetails = false } = {}) {
+	if (skipDetails && root.tag === 'details') {
+		return '';
+	}
+	return [root.text, ...(root.children || []).map((child) => collectElementText(child, { skipDetails }))]
+		.filter(Boolean)
+		.join('\n');
 }
 
 function renderNativeProposal(fields, body = '# Proposal\n\n## Writeback\n\n- native writeback\n') {
@@ -502,6 +575,7 @@ function parseNativeProposal(content) {
 }
 
 function nativeSnapshot(overrides = {}) {
+	const writebackEffect = overrides.writebackEffect || overrides.writeback_effect;
 	return {
 		path: proposalPath,
 		classification: 'memory_proposal',
@@ -511,6 +585,7 @@ function nativeSnapshot(overrides = {}) {
 		status: 'pending',
 		targetPath: targetPath,
 		writebackContent: '- native writeback',
+		writebackEffect: writebackEffect === '' ? undefined : writebackEffect,
 		revisionComment: '',
 		revisionRequestedAt: '',
 		revisionRequestedBy: '',
@@ -519,14 +594,16 @@ function nativeSnapshot(overrides = {}) {
 }
 
 function createNativeTransitionHarness(options = {}) {
+	const harnessTargetPath = options.targetPath || targetPath;
 	const proposalFields = {
 		type: 'memory-proposal',
 		proposal_id: 'proposal-1',
 		proposal_kind: 'memory',
 		approval_status: 'pending',
 		status: 'pending',
-		target_note: targetPath,
+		target_note: harnessTargetPath,
 		task_id: 'task-1',
+		...options.proposalFields,
 	};
 	const proposalFile = {
 		__tracekeeper_kind: 'file',
@@ -539,7 +616,7 @@ function createNativeTransitionHarness(options = {}) {
 	};
 	const targetFile = {
 		__tracekeeper_kind: 'file',
-		path: targetPath,
+		path: harnessTargetPath,
 		extension: 'md',
 		basename: 'stale-target',
 		stat: { mtime: Date.parse('2026-07-30T00:00:00.000Z') },
@@ -547,7 +624,7 @@ function createNativeTransitionHarness(options = {}) {
 	};
 	const files = new Map([
 		[proposalPath, proposalFile],
-		[targetPath, targetFile],
+		[harnessTargetPath, targetFile],
 	]);
 	let frontmatterWrites = 0;
 	let textWrites = 0;
@@ -557,6 +634,9 @@ function createNativeTransitionHarness(options = {}) {
 		vault: {
 			getAbstractFileByPath(filePath) {
 				return files.get(filePath) || null;
+			},
+			async read(file) {
+				return file.content;
 			},
 			async process(file, updater) {
 				textCalls += 1;
@@ -642,7 +722,11 @@ try {
 	]);
 
 	const { ReviewQueueController } = require(controllerOutput);
-	const { TracekeeperReviewQueueView } = require(viewOutput);
+	const {
+		TracekeeperReviewQueueView,
+		reviewStatusFailureMessage,
+		reviewStatusFailureReason,
+	} = require(viewOutput);
 	const {
 		ApprovedWritebackApplyModal,
 		ReviewQueueArchiveModal,
@@ -661,6 +745,22 @@ try {
 	proposalTransitionReceiptFromFrontmatterForTest =
 		proposalTransitionReceiptFromFrontmatter;
 	transitionProposalForTest = transitionProposal;
+
+	test('review status errors expose localized, actionable failure reasons', () => {
+		const missingTarget = new Error('Proposal target does not exist.');
+		missingTarget.name = 'ProposalTransitionValidationError';
+		assert.equal(
+			reviewStatusFailureReason(missingTarget),
+			'The target note does not exist; confirm whether this change can create a new target.'
+		);
+		assert.equal(
+			reviewStatusFailureMessage(missingTarget),
+			'Failed to update review status: The target note does not exist; confirm whether this change can create a new target.'
+		);
+		const invalidState = new Error('Proposal transition approved -> rejected is not allowed.');
+		invalidState.name = 'ProposalTransitionStateError';
+		assert.match(reviewStatusFailureMessage(invalidState), /current change state.*does not allow/i);
+	});
 
 	test('native transition adapter commits frontmatter-only status through processFrontMatter', async () => {
 		const harness = createNativeTransitionHarness();
@@ -808,7 +908,7 @@ try {
 			},
 		});
 		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
-		const snapshot = nativeSnapshot();
+		const snapshot = nativeSnapshot({ writebackEffect: 'append' });
 		await assert.rejects(
 			() => adapter.transition({
 				proposalPath,
@@ -826,12 +926,15 @@ try {
 
 	test('native transition adapter rejects target disappearance inside the atomic callback', async () => {
 		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				writeback_effect: 'append',
+			},
 			beforeTextMutation({ files }) {
 				files.delete(targetPath);
 			},
 		});
 		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
-		const snapshot = nativeSnapshot();
+		const snapshot = nativeSnapshot({ writeback_effect: 'append' });
 		await assert.rejects(
 			() => adapter.transition({
 				proposalPath,
@@ -845,6 +948,267 @@ try {
 		);
 		assert.equal(harness.textWrites, 0);
 		assert.equal(harness.proposalFile.frontmatter.approval_status, 'pending');
+	});
+
+	test('native transition adapter approves a lifecycle proposal before its MemoryRecord target exists', async () => {
+		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				claim_key: 'review.lifecycle-create',
+			},
+			beforeTextMutation({ files }) {
+				files.delete(targetPath);
+			},
+		});
+		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
+		const snapshot = nativeSnapshot();
+		const decision = await adapter.transition({
+			proposalPath,
+			expectedRevision: computeProposalRevision(snapshot),
+			expectedContentHash: computeProposalContentHash(snapshot),
+			operationId: 'review-approve-lifecycle-create',
+			action: { kind: 'status', nextStatus: 'approved' },
+			now: '2026-07-30T00:00:04.500Z',
+		});
+		assert.equal(decision.state.status, 'approved');
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
+		assert.equal(harness.files.has(targetPath), false);
+	});
+
+	test('native transition adapter applies a create-wiki proposal when target exists but apply-owned path is set', async () => {
+		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_wiki_note',
+			},
+		});
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			writeback_effect: 'create_wiki_note',
+		});
+		await assert.rejects(
+			() => new ObsidianProposalTransitionAdapter(harness.app).transition({
+				proposalPath,
+				expectedRevision: computeProposalRevision(snapshot),
+				expectedContentHash: computeProposalContentHash(snapshot),
+				operationId: 'review-apply-create-path-without-flag',
+				action: { kind: 'apply' },
+				now: '2026-07-30T00:01:00.000Z',
+			}),
+			/Proposal writeback target already exists/i
+		);
+		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
+		const decision = await adapter.transition({
+			proposalPath,
+			expectedRevision: computeProposalRevision(snapshot),
+			expectedContentHash: computeProposalContentHash(snapshot),
+			operationId: 'review-apply-own-target',
+			action: { kind: 'apply' },
+			ownedCreateTargetPath: targetPath,
+			ownedCreateTargetContentHash: hashContent('# Target\n'),
+			now: '2026-07-30T00:01:00.000Z',
+		});
+		assert.equal(decision.state.status, 'applied');
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'applied');
+		assert.equal(harness.proposalFile.frontmatter.status, 'applied');
+		assert.equal(harness.textWrites, 1);
+	});
+
+	test('native transition adapter rejects owned create-memory apply without a claim key', async () => {
+		const memoryTargetPath = '01_knowledge/memory/global/agents/test/memory-no-claim.md';
+		const harness = createNativeTransitionHarness({
+			targetPath: memoryTargetPath,
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_memory_record',
+			},
+		});
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			targetPath: memoryTargetPath,
+			writeback_effect: 'create_memory_record',
+		});
+		await assert.rejects(
+			() => new ObsidianProposalTransitionAdapter(harness.app).transition({
+				proposalPath,
+				expectedRevision: computeProposalRevision(snapshot),
+				expectedContentHash: computeProposalContentHash(snapshot),
+				operationId: 'review-apply-create-memory-without-claim',
+				action: { kind: 'apply' },
+				ownedCreateTargetPath: memoryTargetPath,
+				ownedCreateTargetContentHash: hashContent('# Target\n'),
+				now: '2026-07-30T00:01:10.000Z',
+			}),
+			/target does not exist/i
+		);
+		assert.equal(harness.textWrites, 0);
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
+	});
+
+	test('native transition adapter applies an owned create-memory target with a claim key', async () => {
+		const memoryTargetPath = '01_knowledge/memory/global/agents/test/memory-with-claim.md';
+		const harness = createNativeTransitionHarness({
+			targetPath: memoryTargetPath,
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_memory_record',
+				claim_key: 'review.create-memory-with-claim',
+			},
+		});
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			targetPath: memoryTargetPath,
+			writeback_effect: 'create_memory_record',
+		});
+		const decision = await new ObsidianProposalTransitionAdapter(harness.app).transition({
+			proposalPath,
+			expectedRevision: computeProposalRevision(snapshot),
+			expectedContentHash: computeProposalContentHash(snapshot),
+			operationId: 'review-apply-create-memory-with-claim',
+			action: { kind: 'apply' },
+			ownedCreateTargetPath: memoryTargetPath,
+			ownedCreateTargetContentHash: hashContent('# Target\n'),
+			now: '2026-07-30T00:01:20.000Z',
+		});
+		assert.equal(decision.state.status, 'applied');
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'applied');
+		assert.equal(harness.textWrites, 1);
+	});
+
+	test('native transition adapter rejects an owned create-wiki apply when the target disappears inside callback', async () => {
+		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_wiki_note',
+			},
+			beforeTextMutation({ files }) {
+				files.delete(targetPath);
+			},
+		});
+		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			writeback_effect: 'create_wiki_note',
+		});
+		await assert.rejects(
+			() => adapter.transition({
+				proposalPath,
+				expectedRevision: computeProposalRevision(snapshot),
+				expectedContentHash: computeProposalContentHash(snapshot),
+				operationId: 'review-apply-own-target-disappeared',
+				action: { kind: 'apply' },
+				ownedCreateTargetPath: targetPath,
+				ownedCreateTargetContentHash: hashContent('# Target\n'),
+				now: '2026-07-30T00:01:30.000Z',
+			}),
+			/disappeared before apply|target does not exist/i
+		);
+		assert.equal(harness.textWrites, 0);
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
+		assert.equal(harness.proposalFile.frontmatter.status, 'approved');
+	});
+
+	test('native transition adapter rejects a stale owned create-wiki target hash during apply', async () => {
+		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_wiki_note',
+			},
+		});
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			writeback_effect: 'create_wiki_note',
+		});
+		const adapter = new ObsidianProposalTransitionAdapter(harness.app);
+		const request = {
+			proposalPath,
+			expectedRevision: computeProposalRevision(snapshot),
+			expectedContentHash: computeProposalContentHash(snapshot),
+			operationId: 'review-apply-own-target-hash-mismatch',
+			action: { kind: 'apply' },
+			ownedCreateTargetPath: targetPath,
+			ownedCreateTargetContentHash: '0'.repeat(64),
+			now: '2026-07-30T00:01:45.000Z',
+		};
+		const transitionResult = await adapter.transition(request).then(
+			() => ({ decision: true }),
+			(error) => ({ error })
+		);
+		const error = transitionResult.error;
+		assert.ok(
+			error instanceof Error,
+			'expected transition to reject with hash mismatch'
+		);
+		assert.match(String(error), /changed before apply/i);
+		assert.equal(harness.textWrites, 0);
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
+		assert.equal(harness.proposalFile.frontmatter.status, 'approved');
+	});
+
+	for (const [label, proof] of [
+		['path only', { ownedCreateTargetPath: targetPath }],
+		['hash only', { ownedCreateTargetContentHash: hashContent('# Target\n') }],
+	]) {
+		test(`native transition adapter rejects incomplete owned create proof with ${label}`, async () => {
+			const harness = createNativeTransitionHarness({
+				proposalFields: {
+					approval_status: 'approved',
+					status: 'approved',
+					writeback_effect: 'create_wiki_note',
+				},
+			});
+			const snapshot = nativeSnapshot({
+				status: 'approved',
+				writeback_effect: 'create_wiki_note',
+			});
+			await assert.rejects(
+				() => new ObsidianProposalTransitionAdapter(harness.app).transition({
+					proposalPath,
+					expectedRevision: computeProposalRevision(snapshot),
+					expectedContentHash: computeProposalContentHash(snapshot),
+					operationId: `review-apply-incomplete-owned-proof-${label.replace(/\s+/g, '-')}`,
+					action: { kind: 'apply' },
+					...proof,
+					now: '2026-07-30T00:01:50.000Z',
+				}),
+				/requires both path and content hash/i
+			);
+			assert.equal(harness.textWrites, 0);
+			assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
+		});
+	}
+
+	test('native transition adapter rejects owned create proof outside the knowledge boundary', async () => {
+		const harness = createNativeTransitionHarness({
+			proposalFields: {
+				approval_status: 'approved',
+				status: 'approved',
+				writeback_effect: 'create_wiki_note',
+			},
+		});
+		const snapshot = nativeSnapshot({
+			status: 'approved',
+			writeback_effect: 'create_wiki_note',
+		});
+		await assert.rejects(
+			() => new ObsidianProposalTransitionAdapter(harness.app).transition({
+				proposalPath,
+				expectedRevision: computeProposalRevision(snapshot),
+				expectedContentHash: computeProposalContentHash(snapshot),
+				operationId: 'review-apply-owned-proof-outside-boundary',
+				action: { kind: 'apply' },
+				ownedCreateTargetPath: '00_tracekeeper/control/forbidden.md',
+				ownedCreateTargetContentHash: hashContent('# Target\n'),
+				now: '2026-07-30T00:01:55.000Z',
+			}),
+			/outside the allowed Memory or Wiki boundary/i
+		);
+		assert.equal(harness.textWrites, 0);
+		assert.equal(harness.proposalFile.frontmatter.approval_status, 'approved');
 	});
 
 	test('native transition adapter rejects an intervening status before draft mutation', async () => {
@@ -1007,6 +1371,7 @@ try {
 					target_note: targetPath,
 					touched_notes: [targetPath, proposalPath],
 					writeback_preview: 'preview',
+					writeback_effect: 'append',
 				};
 			},
 		});
@@ -1019,6 +1384,56 @@ try {
 		await assert.rejects(
 			() => controller.previewApprovedWriteback(harness.staleSnapshot),
 			/confirmation|invalid preview/i
+		);
+	});
+
+	test('preview rejects missing or unknown writebackEffect', async () => {
+		const missingEffectHarness = createHarness({
+			async executeLocalTool() {
+				return {
+					proposal_id: 'proposal-1',
+					proposal_path: proposalPath,
+					target_note: targetPath,
+					touched_notes: [targetPath, proposalPath],
+					writeback_preview: 'preview',
+					confirmation_token: 'opaque-confirmation-token',
+					confirmation_expires_at: '2026-07-30T00:01:00.000Z',
+				};
+			},
+		});
+		const missingEffectController = new ReviewQueueController(
+			missingEffectHarness.app,
+			missingEffectHarness.records,
+			missingEffectHarness.host,
+			missingEffectHarness.transitionOwner
+		);
+		await assert.rejects(
+			() => missingEffectController.previewApprovedWriteback(missingEffectHarness.staleSnapshot),
+			/confirmation|invalid preview|unsupported|writeback mode/i
+		);
+		const unknownEffectHarness = createHarness({
+			async executeLocalTool() {
+				return {
+					proposal_id: 'proposal-1',
+					proposal_path: proposalPath,
+					target_note: targetPath,
+					touched_notes: [targetPath, proposalPath],
+					writeback_preview: 'preview',
+					writeback_effect: 'create-wiki-note',
+					confirmation_token: 'opaque-confirmation-token',
+					confirmation_expires_at: '2026-07-30T00:01:00.000Z',
+				};
+			},
+		});
+		const unknownEffectController = new ReviewQueueController(
+			unknownEffectHarness.app,
+			unknownEffectHarness.records,
+			unknownEffectHarness.host,
+			unknownEffectHarness.transitionOwner
+		);
+		await assert.rejects(
+			() => unknownEffectController.previewApprovedWriteback(unknownEffectHarness.staleSnapshot),
+			/confirmation|invalid preview|unsupported|writeback mode/i
 		);
 	});
 
@@ -1042,6 +1457,7 @@ try {
 			target_note: targetPath,
 			touched_notes: [targetPath, proposalPath],
 			writeback_preview: 'preview',
+			writeback_effect: 'append',
 			confirmation_token: 'opaque-confirmation-token',
 			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
 		};
@@ -1063,16 +1479,51 @@ try {
 			target_note: targetPath,
 			touched_notes: [targetPath, proposalPath],
 			writeback_preview: 'preview',
+			writeback_effect: 'append',
 			confirmation_token: 'opaque-confirmation-token',
 			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
 		};
 		const modal = new ApprovedWritebackApplyModal({}, plugin, makeProposalRecord(), () => {});
 		modal.renderReady(preview);
+		const technicalDetails = findElement(modal.contentEl, (element) => element.tag === 'details');
+		assert.ok(technicalDetails);
+		assert.equal(technicalDetails.open, false);
+		assert.match(collectElementText(technicalDetails), /Technical details/);
+		assert.equal(collectElementText(modal.contentEl, { skipDetails: true }).includes(targetPath), false);
+		assert.equal(collectElementText(modal.contentEl, { skipDetails: true }).includes('proposal-1'), false);
+		assert.equal(collectElementText(technicalDetails).includes(targetPath), true);
+		assert.equal(collectElementText(technicalDetails).includes('proposal-1'), true);
 		const cancel = findElement(modal.contentEl, (element) => element.text === 'Cancel');
-		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm apply');
+		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm append');
 		assert.ok(cancel);
 		assert.ok(confirm);
 		assert.equal(cancel.focused, true);
+		confirm.handlers.click();
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(receivedPreview, preview);
+	});
+
+	test('apply modal uses create-Wiki confirmation copy for create_wiki_note', async () => {
+		let receivedPreview;
+		const plugin = {
+			async applyApprovedWriteback(_proposal, preview) {
+				receivedPreview = preview;
+			},
+		};
+		const preview = {
+			proposal_id: 'proposal-1',
+			proposal_path: proposalPath,
+			target_note: targetPath,
+			touched_notes: [targetPath, proposalPath],
+			writeback_preview: 'preview',
+			writeback_effect: 'create_wiki_note',
+			confirmation_token: 'opaque-confirmation-token',
+			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
+		};
+		const modal = new ApprovedWritebackApplyModal({}, plugin, makeProposalRecord(), () => {});
+		modal.renderReady(preview);
+		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm knowledge note creation');
+		assert.ok(confirm);
 		confirm.handlers.click();
 		await new Promise((resolve) => setImmediate(resolve));
 		assert.equal(receivedPreview, preview);
@@ -1092,12 +1543,13 @@ try {
 			target_note: targetPath,
 			touched_notes: [targetPath, proposalPath],
 			writeback_preview: 'preview',
+			writeback_effect: 'append',
 			confirmation_token: 'opaque-confirmation-token',
 			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
 		};
 		const modal = new ApprovedWritebackApplyModal({}, plugin, makeProposalRecord(), () => {});
 		modal.renderReady(preview);
-		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm apply');
+		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm append');
 		assert.ok(confirm);
 		confirm.handlers.click();
 		await new Promise((resolve) => setImmediate(resolve));
@@ -1114,7 +1566,115 @@ try {
 		assert.equal(globalThis.__tracekeeperFocusedElement, confirm);
 	});
 
-	test('archive modal shows exact paths and commits the displayed preview', async () => {
+	test('apply modal preserves create-Wiki confirmation copy after a bounded retry', async () => {
+		globalThis.__tracekeeperReviewNotices = [];
+		const plugin = {
+			async applyApprovedWriteback() {
+				throw new Error('stale preview');
+			},
+		};
+		const preview = {
+			proposal_id: 'proposal-1',
+			proposal_path: proposalPath,
+			target_note: targetPath,
+			touched_notes: [targetPath, proposalPath],
+			writeback_preview: 'preview',
+			writeback_effect: 'create_wiki_note',
+			confirmation_token: 'opaque-confirmation-token',
+			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
+		};
+		const modal = new ApprovedWritebackApplyModal({}, plugin, makeProposalRecord(), () => {});
+		modal.renderReady(preview);
+		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm knowledge note creation');
+		assert.ok(confirm);
+		confirm.handlers.click();
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(confirm.text, 'Confirm knowledge note creation');
+	});
+
+	test('apply modal uses Wiki-specific intro, progress, and completion copy', async () => {
+		globalThis.__tracekeeperReviewNotices = [];
+		let onAppliedCalled = false;
+		const plugin = {
+			async applyApprovedWriteback() {},
+		};
+		const preview = {
+			proposal_id: 'proposal-1',
+			proposal_path: proposalPath,
+			target_note: '01_knowledge/wiki/new-note.md',
+			touched_notes: [proposalPath],
+			writeback_preview: 'preview',
+			writeback_effect: 'create_wiki_note',
+			confirmation_token: 'opaque-confirmation-token',
+			confirmation_expires_at: '2026-07-30T00:01:00.000Z',
+		};
+		const modal = new ApprovedWritebackApplyModal({}, plugin, makeProposalRecord(), () => {
+			onAppliedCalled = true;
+		});
+		modal.renderReady(preview);
+		const intro = findElement(
+			modal.contentEl,
+			(element) => typeof element.text === 'string' && (
+				element.text.includes('新建为知识笔记')
+					|| element.text.includes('knowledge note content')
+			)
+		);
+		assert.ok(intro);
+		const confirm = findElement(modal.contentEl, (element) => element.text === 'Confirm knowledge note creation');
+		assert.ok(confirm);
+		confirm.handlers.click();
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(onAppliedCalled, true);
+		assert.match(globalThis.__tracekeeperReviewNotices.join('|'), /Knowledge note created/);
+	});
+
+	test('edit modal shows friendly target labels without exposing target paths', () => {
+		const candidatePath = '01_knowledge/wiki/technical-target-path.md';
+		const context = {
+			target: {
+				path: candidatePath,
+				title: 'Readable target title',
+				exists: true,
+				allowed: true,
+				excerpt: 'Readable target context.',
+			},
+			targetCandidates: [{
+				path: candidatePath,
+				title: 'Readable target title',
+				kind: 'wiki',
+				reason: 'current',
+				excerpt: 'Readable target context.',
+			}],
+		};
+		const modal = new ReviewQueueEditProposalModal(
+			{},
+			{},
+			makeProposalRecord({ targetNote: candidatePath }),
+			context,
+			() => {}
+		);
+		modal.onOpen();
+		const visibleText = collectElementText(modal.contentEl);
+		assert.match(visibleText, /Readable target title/);
+		assert.match(visibleText, /Knowledge note · Current target/);
+		assert.equal(visibleText.includes(candidatePath), false);
+
+		const unavailableModal = new ReviewQueueEditProposalModal(
+			{},
+			{},
+			makeProposalRecord({ targetNote: candidatePath }),
+			{
+				...context,
+				target: { ...context.target, exists: false },
+				targetCandidates: [],
+			},
+			() => {}
+		);
+		unavailableModal.onOpen();
+		assert.equal(collectElementText(unavailableModal.contentEl).includes(candidatePath), false);
+	});
+
+	test('archive modal keeps exact paths in technical details and commits the displayed preview', async () => {
 		let committedPreview;
 		let archivedReceipt;
 		const receipt = {
@@ -1168,13 +1728,20 @@ try {
 			}
 		);
 		modal.renderReady(preview);
+		const technicalDetails = findElement(modal.contentEl, (element) => element.tag === 'details');
+		assert.ok(technicalDetails);
+		assert.equal(technicalDetails.open, false);
+		const ordinaryArchiveText = collectElementText(modal.contentEl, { skipDetails: true });
+		assert.equal(ordinaryArchiveText.includes(proposalPath), false);
+		assert.equal(ordinaryArchiveText.includes('proposal-1'), false);
+		assert.equal(ordinaryArchiveText.includes('00_tracekeeper/work/tasks/task-1.md'), false);
 		const exactPath = findElement(
-			modal.contentEl,
+			technicalDetails,
 			(element) => element.text ===
 				`${proposalPath} → 02_archive/review_queue/proposal.md`
 		);
 		const managedPath = findElement(
-			modal.contentEl,
+			technicalDetails,
 			(element) => element.text === '00_tracekeeper/work/tasks/task-1.md'
 		);
 		const cancel = findElement(modal.contentEl, (element) => element.text === 'Cancel');
@@ -1276,6 +1843,9 @@ try {
 
 	test('approval rechecks target existence inside the native mutation callback', async () => {
 		const harness = createHarness({
+			proposalFields: {
+				writeback_effect: 'append',
+			},
 			beforeMutation({ files }) {
 				files.delete(targetPath);
 			},
@@ -1446,7 +2016,7 @@ try {
 		assert.ok(textarea);
 		textarea.value = '- unsaved user revision';
 		textarea.handlers.input();
-		const save = findElement(modal.contentEl, (element) => element.text === 'Save proposal draft');
+		const save = findElement(modal.contentEl, (element) => element.text === 'Save changes');
 		assert.ok(save);
 		save.handlers.click();
 		await new Promise((resolve) => setImmediate(resolve));
@@ -1616,6 +2186,236 @@ try {
 		assert.match(harness.auditLog[0], /next_status: approved/);
 		assert.match(harness.auditLog[0], /operation_id: review-/);
 		assert.doesNotMatch(harness.auditLog[0], /original writeback line/);
+	});
+
+	test('review queue uses single-pane navigation, five-item pages, and collapsed technical details', async () => {
+		const proposals = Array.from({ length: 7 }, (_, index) => {
+			const ordinal = index + 1;
+			return makeProposalRecord({
+				path: `00_tracekeeper/inbox/review_queue/technical-record-${ordinal}.md`,
+				proposalId: `technical-record-id-${ordinal}`,
+				proposalKind: ordinal === 2 ? 'task_decision' : 'memory',
+				relatedProject: `Project ${ordinal}`,
+				taskId: `technical-task-id-${ordinal}`,
+				targetNote: `01_knowledge/wiki/technical-target-${ordinal}.md`,
+				claimKey: `technical-claim-${ordinal}`,
+				evidence: [`00_tracekeeper/evidence/technical-evidence-${ordinal}.md`],
+				relatedSources: [`01_knowledge/sources/technical-source-${ordinal}.md`],
+				supersedes: [`technical-memory-id-${ordinal}`],
+				approvalStatus: 'rejected',
+				writebackContent: `# Hidden heading\n\nReadable summary ${ordinal}`,
+				sortTimestamp: Date.parse(`2026-07-${String(30 - index).padStart(2, '0')}T00:00:00.000Z`),
+			});
+		});
+		const contexts = Object.fromEntries(proposals.map((proposal, index) => [
+			proposal.path,
+			{
+				proposalPath: proposal.path,
+				indexState: 'ready',
+				target: {
+					path: proposal.targetNote,
+					title: `Readable target ${index + 1}`,
+					exists: true,
+					allowed: true,
+					excerpt: '',
+				},
+				targetCandidates: [],
+				task: null,
+				sources: [],
+				priorMemory: index === 1
+					? [{
+						path: '01_knowledge/memory/technical-prior-path-2.md',
+						memoryId: 'technical-prior-memory-id-2',
+						authority: 'agent',
+						confidence: 'supported',
+						effectiveState: 'current',
+						observedAt: '',
+						excerpt: '',
+					}]
+					: [],
+				diffPreview: '',
+			},
+		]));
+		const snapshot = {
+			proposals,
+			totalProposalCount: proposals.length,
+			windowOffset: 0,
+			windowLimit: 250,
+			isTruncated: false,
+			contexts,
+			indexState: 'ready',
+			missingReviewQueueFolder: false,
+			updatedAt: '2026-07-30T00:00:00.000Z',
+		};
+		const app = {
+			vault: {
+				getAbstractFileByPath() {
+					return null;
+				},
+			},
+			workspace: {
+				getLeaf() {
+					return { openFile: async () => {} };
+				},
+			},
+		};
+		const plugin = {
+			formatDisplayTime(value) {
+				return new Date(value).toISOString();
+			},
+			formatRiskLabel(value) {
+				return value;
+			},
+		};
+		const view = new TracekeeperReviewQueueView({ app }, plugin);
+		view.activeFilter = 'all';
+
+		await view.render(snapshot);
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__row')).length, 5);
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'is-selected')).length, 0);
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__list')).length, 1);
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__detail')).length, 0);
+		assert.match(collectElementText(view.contentEl), /Page 1 of 2 · 1–5 of 7/);
+
+		const initialRows = findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__row'));
+		initialRows[1].handlers.click();
+		await Promise.resolve();
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__list')).length, 0);
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__detail')).length, 1);
+		assert.match(collectElementText(view.contentEl), /Reviewing 2 of 7/);
+		assert.match(collectElementText(view.contentEl), /Save task decision/);
+
+		const technicalDetails = findElement(view.contentEl, (element) => element.tag === 'details');
+		assert.ok(technicalDetails);
+		assert.equal(technicalDetails.open, false);
+		assert.match(collectElementText(technicalDetails), /Technical details/);
+		const ordinaryDetailText = collectElementText(view.contentEl, { skipDetails: true });
+		for (const hiddenValue of [
+			'00_tracekeeper/inbox/review_queue/technical-record-2.md',
+			'technical-record-id-2',
+			'01_knowledge/wiki/technical-target-2.md',
+			'technical-task-id-2',
+			'technical-claim-2',
+			'01_knowledge/sources/technical-source-2.md',
+			'technical-prior-memory-id-2',
+		]) {
+			assert.equal(ordinaryDetailText.includes(hiddenValue), false, `${hiddenValue} must stay inside Technical details`);
+			assert.equal(collectElementText(technicalDetails).includes(hiddenValue), true, `${hiddenValue} must remain available in Technical details`);
+		}
+
+		const back = findElement(view.contentEl, (element) => element.text === '← Back to review list');
+		assert.ok(back);
+		back.handlers.click();
+		await Promise.resolve();
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__list')).length, 1);
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__detail')).length, 0);
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'is-selected')).length, 1);
+		assert.match(collectElementText(view.contentEl), /Last viewed/);
+
+		const next = findElement(view.contentEl, (element) => element.text === 'Next');
+		assert.ok(next);
+		next.handlers.click();
+		await Promise.resolve();
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__row')).length, 2);
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'is-selected')).length, 0);
+		assert.match(collectElementText(view.contentEl), /Page 2 of 2 · 6–7 of 7/);
+
+		const batchActions = findElement(view.contentEl, (element) => element.text === 'Batch actions');
+		assert.ok(batchActions);
+		batchActions.handlers.click();
+		await Promise.resolve();
+		const batchRows = findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__row'));
+		assert.equal(batchRows.length, 2);
+		assert.equal(batchRows.every((row) => row.tag === 'label'), true);
+		assert.equal(batchRows.some((row) => findElement(row, (element) => element.tag === 'button')), false);
+		const firstCheckbox = findElement(batchRows[0], (element) => element.tag === 'input');
+		assert.ok(firstCheckbox);
+		assert.match(firstCheckbox.attributes['aria-label'], /Select knowledge change:/);
+		firstCheckbox.checked = true;
+		firstCheckbox.handlers.change();
+		await Promise.resolve();
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'is-checked')).length, 1);
+		assert.match(collectElementText(view.contentEl), /Selected/);
+	});
+
+	test('rejecting a detail moves it into processed review without losing its position', async () => {
+		const proposal = makeProposalRecord({
+			approvalStatus: 'pending',
+			writebackContent: 'Readable change',
+			targetNote: '01_knowledge/wiki/review-target.md',
+		});
+		const snapshot = {
+			proposals: [proposal],
+			totalProposalCount: 1,
+			windowOffset: 0,
+			windowLimit: 250,
+			isTruncated: false,
+			contexts: {
+				[proposal.path]: {
+					proposalPath: proposal.path,
+					indexState: 'ready',
+					target: {
+						path: proposal.targetNote,
+						title: 'Review target',
+						exists: true,
+						allowed: true,
+						excerpt: '',
+					},
+					targetCandidates: [],
+					task: null,
+					sources: [],
+					priorMemory: [],
+					diffPreview: 'Readable change',
+				},
+			},
+			indexState: 'ready',
+			missingReviewQueueFolder: false,
+			updatedAt: '2026-07-30T00:00:00.000Z',
+		};
+		const plugin = {
+			async loadMemoryReviewQueueSnapshot() {
+				return snapshot;
+			},
+			async updateMemoryProposalStatus(_proposal, status) {
+				proposal.approvalStatus = status;
+			},
+			formatDisplayTime(value) {
+				return new Date(value).toISOString();
+			},
+			formatRiskLabel(value) {
+				return value;
+			},
+		};
+		const view = new TracekeeperReviewQueueView({ app: { vault: { getAbstractFileByPath: () => null } } }, plugin);
+		view.activeFilter = 'needs_review';
+		await view.render(snapshot);
+		const row = findElement(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__row'));
+		assert.ok(row);
+		row.handlers.click();
+		await Promise.resolve();
+		const reject = findElement(view.contentEl, (element) => element.text === 'Do not accept');
+		assert.ok(reject);
+		reject.handlers.click();
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(view.activeFilter, 'history');
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__detail')).length, 1);
+		assert.match(collectElementText(view.contentEl), /Reviewing 1 of 1/);
+		const back = findElement(view.contentEl, (element) => element.text === '← Back to review list');
+		assert.ok(back);
+		back.handlers.click();
+		await Promise.resolve();
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'is-selected')).length, 1);
+
+		proposal.approvalStatus = 'revision_requested';
+		await view.refreshSelectedProposal(proposal.path);
+		assert.equal(view.activeFilter, 'awaiting_revision');
+		assert.match(collectElementText(view.contentEl), /Reviewing 1 of 1/);
+
+		proposal.approvalStatus = 'pending';
+		proposal.writebackContent = '';
+		await view.refreshSelectedProposal(proposal.path);
+		assert.equal(view.activeFilter, 'needs_completion');
+		assert.match(collectElementText(view.contentEl), /Reviewing 1 of 1/);
 	});
 
 	test('mixed batch status transitions continue and report partial results', async () => {

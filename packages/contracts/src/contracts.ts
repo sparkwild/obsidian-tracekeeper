@@ -347,7 +347,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.recall',
-		version: 3,
+		version: 4,
 		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -358,8 +358,9 @@ export const toolContracts = [
 		useCase: 'recall',
 		description:
 			'[read-only] Find relevant memory, Wiki, source, or task-tracking notes in the active local Obsidian Vault before read_note. Supports global, project, project_history, and task_history scopes.',
-		inputSchema: withToolInput({
-			query: { type: 'string', description: 'Recall query text. Required unless scope is project_history or task_history.' },
+		inputSchema: {
+			...withToolInput({
+			query: { type: 'string', minLength: 1, description: 'Recall query text. Required unless scope is project_history or task_history.' },
 			task_id: { type: 'string', description: 'Optional exact task id for task_history recall.' },
 			scope: {
 				type: 'string',
@@ -371,8 +372,17 @@ export const toolContracts = [
 			repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
 			repo: { type: 'string', description: 'Alias of repo_path for repository-scoped matching.' },
 			project_path: { type: 'string', description: 'Alias of repo_path for workspace/project path matching.' },
-			max_items: { type: 'integer', description: 'Maximum number of matches to return.' },
-		}),
+			max_items: { type: 'integer', minimum: 1, maximum: 20, description: 'Maximum number of matches to return.' },
+			}),
+			allOf: [{
+				if: {
+					required: ['scope'],
+					properties: { scope: { enum: ['project_history', 'task_history'] } },
+				},
+				then: {},
+				else: { required: ['query'] },
+			}],
+		},
 		...withResultSchema(RECALL_OUTPUT_SCHEMA),
 	},
 	{
@@ -685,7 +695,7 @@ export const toolContracts = [
 		workflowRole: 'review',
 		useCase: 'apply_approved_writeback',
 		description:
-			'[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content to the local Vault target note.',
+			'[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content to an existing local Vault target or creates the explicitly approved missing Wiki/MemoryRecord target after a fresh confirmation preview.',
 		inputSchema: withToolInput({
 			proposal_id: { type: 'string', description: 'Proposal id to apply.' },
 			proposal_path: { type: 'string', description: 'Vault-relative proposal note path.' },
@@ -760,7 +770,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.finish_task',
-		version: 3,
+		version: 4,
 		visibility: 'public',
 		capability: 'workflow.manage',
 		risk: 'low-risk-write',
@@ -770,12 +780,12 @@ export const toolContracts = [
 		workflowRole: 'task-finish',
 		useCase: 'finish_task',
 		description:
-			'[low-risk write] Record the task execution summary and explicitly submitted durable memory candidates at task closeout.',
+			'[low-risk write] Record task execution closeout and report durable Wiki/Memory output separately. The result includes direct proposals already linked to the task; a captured Source or Recall match does not prove that proposed knowledge was applied.',
 		inputSchema: withToolInput(
 			{
 				task_id: { type: 'string', description: 'Task id.' },
 				summary: { type: 'string', description: 'Task summary.' },
-				status: { type: 'string', enum: ['completed', 'partial', 'blocked'], description: 'Final task status.' },
+				status: { type: 'string', enum: ['completed', 'partial', 'blocked'], description: 'Final task execution status only; inspect durable_output in the result for Wiki/Memory persistence state.' },
 				outcomes: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Optional outcomes.' },
 				decisions: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
@@ -930,7 +940,7 @@ export const toolContracts = [
 		workflowRole: 'source',
 		useCase: 'capture_source',
 		description:
-			'[low-risk write] Save user-provided source metadata or content under sources. Does not fetch external content.',
+			'[low-risk write] Save user-provided source evidence under Sources. Does not fetch external content and does not apply a Wiki or Memory proposal; a captured Source remains readable provenance, not proof that synthesized knowledge was persisted.',
 		inputSchema: withToolInput(
 			{
 				source: { type: 'string', description: 'Source identifier (usually URL or local path).' },
@@ -962,7 +972,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.propose_memory',
-		version: 3,
+		version: 4,
 		visibility: 'public',
 		capability: 'memory.propose',
 		risk: 'low-risk-write',
@@ -972,8 +982,9 @@ export const toolContracts = [
 		workflowRole: 'memory',
 		useCase: 'propose_memory',
 		description:
-			'[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. Global memory stays review-gated by default.',
-		inputSchema: withToolInput(
+			'[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. When auto_applied is false, the proposal is not persisted knowledge until governed apply completes.',
+		inputSchema: {
+			...withToolInput(
 			{
 				proposal_kind: { type: 'string', description: 'Proposal kind.' },
 				content: { type: 'string', description: 'Proposal markdown/text content.' },
@@ -1043,7 +1054,11 @@ export const toolContracts = [
 					type: 'string',
 					description: 'Optional repository/workspace path used to resolve and corroborate local project identity.',
 				},
-				memory_scope: { type: 'string', enum: ['global', 'project'], description: 'Optional memory scope override.' },
+				memory_scope: {
+					type: 'string',
+					enum: ['global', 'project'],
+					description: 'Required for a MemoryRecord candidate. Omit for an explicit 01_knowledge/wiki/** target.',
+				},
 				related_wiki: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
 					description: 'Optional verified local Vault Wiki note paths, conventionally under 01_knowledge/wiki/**.',
@@ -1060,7 +1075,18 @@ export const toolContracts = [
 				},
 			},
 			['proposal_kind', 'content'],
-		),
+			),
+			allOf: [{
+				if: {
+					required: ['target_note'],
+					properties: {
+						target_note: { type: 'string', pattern: '^01_knowledge/wiki(?:/|$)' },
+					},
+				},
+				then: {},
+				else: { required: ['memory_scope'] },
+			}],
+		},
 		...withResultSchema(PROPOSE_MEMORY_OUTPUT_SCHEMA),
 	},
 ] as const satisfies readonly ToolContract<TracekeeperToolName>[];

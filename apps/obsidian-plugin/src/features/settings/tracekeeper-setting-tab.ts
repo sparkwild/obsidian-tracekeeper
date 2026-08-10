@@ -2,11 +2,14 @@ import { App, Menu, Notice, PluginSettingTab, Setting, SettingGroup } from 'obsi
 import type TracekeeperPlugin from '../../main';
 import type { AgentConnectionsSnapshot } from '../activity/activity-model';
 import type { GeneratedClientConfig } from '../client-config/client-config';
-import type { AgentIntegrationSnapshot } from './agent-integrations';
 import { ConnectAiToolModal } from '../client-config/client-config-modals';
+import {
+	canBindPendingOAuthRequest,
+	commitOAuthDecisionWithBestEffortRefresh,
+} from '../client-config/oauth-pending';
 import { McpCapabilitiesModal } from '../runtime/mcp-capabilities-modal';
 import { RuntimeAccessResetModal } from '../runtime/runtime-access-reset-modal';
-import { DEFAULT_MCP_HOST, DEFAULT_MCP_PORT } from '../runtime/runtime-defaults';
+import { DEFAULT_MCP_PORT } from '../runtime/runtime-defaults';
 import { runtimeToneBadgeClass, runtimeViewModel } from '../runtime/runtime-view-model';
 import {
 	AUTO_REFRESH_INTERVAL_OPTIONS,
@@ -19,6 +22,10 @@ import {
 import { ui } from '../../ui/localization';
 import { renderClientSkillPrompt } from '../skill-installation/client-skill-prompt';
 import { buildAgentConfigurationViewModel } from './agent-configuration-view-model';
+import {
+	isSettingGroupHTMLElement,
+	shouldReplaceAgentConfiguration,
+} from './agent-configuration-refresh';
 
 const AGENT_CONFIGURATION_FOCUS_SETTLE_DELAY_MS = 200;
 
@@ -28,6 +35,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	private agentListHostEl: HTMLElement | null = null;
 	private agentListFingerprint = '';
 	private agentListRefreshPending = false;
+	private agentListForceRefreshPending = false;
 	private agentListRefreshPromise: Promise<void> | null = null;
 	private agentConfigurationFocusPending = false;
 	private agentConfigurationFocusFrame: number | null = null;
@@ -64,6 +72,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		this.agentListHostEl = null;
 		this.agentListFingerprint = '';
 		this.agentListRefreshPending = false;
+		this.agentListForceRefreshPending = false;
 		this.agentConfigurationFocusPending = false;
 		super.hide();
 	}
@@ -77,9 +86,10 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		this.applyAgentConfigurationFocus();
 	}
 
-	async refreshAgentList(): Promise<void> {
+	async refreshAgentList(force = false): Promise<void> {
 		if (!this.visible || !this.agentListHostEl?.isConnected) return;
 		this.agentListRefreshPending = true;
+		this.agentListForceRefreshPending ||= force;
 		if (this.agentListRefreshPromise) return this.agentListRefreshPromise;
 		const refreshPromise = this.drainAgentListRefreshes();
 		this.agentListRefreshPromise = refreshPromise;
@@ -87,6 +97,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			await refreshPromise;
 		} catch (error) {
 			console.error('tracekeeper failed to refresh Agent settings list', error);
+			throw error;
 		} finally {
 			if (this.agentListRefreshPromise === refreshPromise) {
 				this.agentListRefreshPromise = null;
@@ -100,13 +111,16 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	private async drainAgentListRefreshes(): Promise<void> {
 		while (this.agentListRefreshPending) {
 			this.agentListRefreshPending = false;
+			const force = this.agentListForceRefreshPending;
+			this.agentListForceRefreshPending = false;
 			const host = this.agentListHostEl;
 			if (!this.visible || !host?.isConnected) return;
 			const snapshot = await this.plugin.loadAgentConnectionsSnapshot();
 			if (!this.visible || host !== this.agentListHostEl || !host.isConnected) continue;
 			const fingerprint = this.buildAgentListFingerprint(snapshot);
-			if (fingerprint === this.agentListFingerprint) continue;
-			const stagingEl = host.ownerDocument.createElement('div');
+			if (!shouldReplaceAgentConfiguration(this.agentListFingerprint, fingerprint, force)) continue;
+			const stagingEl = host.createDiv();
+			stagingEl.remove();
 			const replacement = this.renderAgentClientConfigSection(stagingEl, snapshot);
 			host.replaceWith(replacement);
 			this.agentListHostEl = replacement;
@@ -172,7 +186,13 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	}
 
 	private renderAgentClientConfigSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): HTMLElement {
-		const { visibleAgents, candidateConfigs } = buildAgentConfigurationViewModel(
+		const {
+			visibleAgents,
+			candidateConfigs,
+			unboundOAuthRequests,
+			conflictingOAuthRequests,
+			oauthClientOwnershipConflicts,
+		} = buildAgentConfigurationViewModel(
 			snapshot.clientConfigs,
 			snapshot.recentAgents,
 			snapshot.integrations,
@@ -181,7 +201,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		const group = this.createGroup(container, ui('Agent 配置', 'Agent configuration'))
 			.addClass('tracekeeper-settings-agent-list-host');
 		const groupEl = container.lastElementChild;
-		if (!(groupEl instanceof HTMLElement)) {
+		if (!isSettingGroupHTMLElement(groupEl)) {
 			throw new Error('Tracekeeper failed to create the Agent settings group.');
 		}
 		groupEl.setAttribute('data-tracekeeper-section', 'agent-configuration');
@@ -206,7 +226,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 										this.plugin,
 										config,
 										'add',
-										() => this.refreshAgentList(),
+										() => this.refreshAgentList(true),
 										() => this.renderSettings()
 									).open();
 								});
@@ -221,8 +241,100 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						width: rect.width,
 						overlap: false,
 					}, addAgent.ownerDocument);
-				});
+			});
 		});
+		for (const conflict of oauthClientOwnershipConflicts) {
+			const ownerNames = conflict.integrationIds.map((integrationId) =>
+				visibleAgents.find(({ integration }) => integration.integrationId === integrationId)?.config.displayName
+					?? integrationId
+			);
+			group.addSetting((setting) => {
+				setting.setName(ui('OAuth 客户端归属冲突', 'OAuth client ownership conflict'))
+					.setDesc(ui(
+						`客户端 ID “${conflict.clientId}” 同时保存在多个 OAuth Agent（${ownerNames.join('、')}）。Tracekeeper 未改写这些记录；在撤销重复归属、只保留一个 Agent 前，该客户端不会作为已绑定客户端导出，其请求也不能授权。`,
+						`Client ID “${conflict.clientId}” is stored on multiple OAuth Agents (${ownerNames.join(', ')}). Tracekeeper has not rewritten these records. Until you revoke duplicate ownership and leave exactly one Agent, the client is not exported as bound and its requests cannot be allowed.`
+					));
+			});
+		}
+		for (const request of conflictingOAuthRequests) {
+			group.addSetting((setting) => {
+				setting.setName(ui('已阻止的 OAuth 请求', 'Blocked OAuth request'))
+					.setDesc(ui(
+						`客户端 ID “${request.clientId}” 存在重复 Agent 归属，因此此请求不会显示在任何 Agent 卡片上，也不能授权。请先撤销重复归属。请求有效至 ${new Date(request.expiresAt).toLocaleString()}。`,
+						`Client ID “${request.clientId}” has duplicate Agent owners, so this request is not shown on any Agent card and cannot be allowed. Revoke the duplicate ownership first. Expires ${new Date(request.expiresAt).toLocaleString()}.`
+					))
+					.addButton((button) => button
+						.setButtonText(ui('拒绝', 'Deny'))
+						.onClick(() => {
+							button.setDisabled(true);
+							void this.denyPendingOAuthRequest(request.requestId, () => {
+								button.setDisabled(false);
+							});
+						}));
+			});
+		}
+		for (const request of unboundOAuthRequests) {
+			const bindingCandidates = visibleAgents.filter(({ integration }) =>
+				canBindPendingOAuthRequest(integration, request)
+			);
+			group.addSetting((setting) => {
+				setting
+					.setName(ui('未绑定的 OAuth 请求', 'Unbound OAuth request'))
+					.setDesc(ui(
+						`客户端自报“${request.clientNameClaim || '未知'}”。该名称不可信，因此不会自动归属；选择 OAuth Agent 并在弹窗中授权后，客户端 ID 才会绑定到该 Agent。请求有效至 ${new Date(request.expiresAt).toLocaleString()}。`,
+						`The client self-reports “${request.clientNameClaim || 'Unknown'}”. This claim is untrusted, so Tracekeeper does not assign it automatically. Select an OAuth Agent and allow it in the dialog to bind the client ID to that Agent. Expires ${new Date(request.expiresAt).toLocaleString()}.`
+					))
+					.addButton((button) => {
+						const review = button.buttonEl;
+						review.setAttribute('aria-haspopup', 'menu');
+						review.setAttribute('aria-expanded', 'false');
+						button
+							.setButtonText(ui('选择 Agent', 'Select Agent'))
+							.setCta()
+							.setDisabled(bindingCandidates.length === 0)
+							.onClick(() => {
+								const menu = new Menu().setNoIcon();
+								for (const candidate of bindingCandidates) {
+									menu.addItem((item) => item
+										.setTitle(candidate.config.displayName)
+										.onClick(() => {
+											new ConnectAiToolModal(
+												this.app,
+												this.plugin,
+												candidate.config,
+												'manage',
+												() => this.refreshAgentList(true),
+												() => this.renderSettings(),
+												request.requestId
+											).open();
+										}));
+								}
+								const rect = review.getBoundingClientRect();
+								review.setAttribute('aria-expanded', 'true');
+								menu.onHide(() => review.setAttribute('aria-expanded', 'false'));
+								menu.showAtPosition({
+									x: rect.left,
+									y: rect.bottom,
+									width: rect.width,
+									overlap: false,
+								}, review.ownerDocument);
+							});
+					})
+					.addButton((button) => button
+						.setButtonText(ui('拒绝', 'Deny'))
+						.onClick(() => {
+							button.setDisabled(true);
+							void this.denyPendingOAuthRequest(request.requestId, () => {
+								button.setDisabled(false);
+							});
+						}));
+				if (bindingCandidates.length === 0) {
+					setting.descEl.createEl('small', {
+						text: ui('请先创建一个尚未绑定客户端的 OAuth Agent。', 'Create an OAuth Agent without a bound client first.'),
+					});
+				}
+			});
+		}
 		if (visibleAgents.length === 0) {
 			group.addSetting((setting) => {
 				setting
@@ -242,6 +354,27 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			});
 		}
 		return groupEl;
+	}
+
+	private async denyPendingOAuthRequest(requestId: string, onCommitFailure: () => void): Promise<void> {
+		let refreshError: unknown;
+		try {
+			({ refreshError } = await commitOAuthDecisionWithBestEffortRefresh(
+				() => this.plugin.decideOAuthRequest(requestId, { decision: 'deny' }),
+				() => this.refreshAgentList(true)
+			));
+		} catch (error) {
+			onCommitFailure();
+			new Notice(error instanceof Error ? error.message : ui('无法拒绝 OAuth 请求。', 'Unable to deny the OAuth request.'));
+			return;
+		}
+		if (refreshError) {
+			console.error('tracekeeper denied an OAuth request but failed to refresh the Agent list', refreshError);
+			new Notice(ui(
+				'请求已拒绝，但 Agent 列表暂未刷新；Tracekeeper 已安排常规状态刷新。',
+				'The request was denied, but the Agent list is stale. Tracekeeper has scheduled its normal state refresh.'
+			));
+		}
 	}
 
 	private renderConnectionInfoSection(container: HTMLElement, snapshot: AgentConnectionsSnapshot): void {
@@ -275,7 +408,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						})
 				);
 			setting.nameEl.addClass('tracekeeper-settings-runtime-name');
-			setting.nameEl.createEl('span', {
+			setting.nameEl.createSpan({
 				text: runtime.label,
 				cls: `tracekeeper-badge ${runtimeToneBadgeClass(runtime.tone)}`,
 			});
@@ -487,11 +620,16 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		const group = this.createGroup(container, ui('记忆规则', 'Memory rules'));
 		group.addSetting((setting) => {
 			setting
-				.setName(ui('全局记忆', 'Global memory'))
+				.setName(ui('Wiki 变更', 'Wiki changes'))
 				.setDesc(ui(
-					'用于跨项目复用的偏好、决策和经验。',
-					'Preferences, decisions, and lessons intended for reuse across projects.'
-				))
+					'Wiki 提案始终进入知识变更审核，不受全局或项目记忆规则影响。MemoryRecord 的 Wiki 与 Source 关系均为可选，不会因为缺少 Wiki 而阻止保存。',
+					'Wiki proposals always enter Knowledge Change Review and are not governed by global or project memory rules. Wiki and Source relations on a MemoryRecord are optional; missing Wiki context does not block persistence.'
+				));
+		});
+		group.addSetting((setting) => {
+			setting
+				.setName(ui('全局记忆', 'Global memory'))
+				.setDesc(this.globalMemoryRuleDescription())
 				.addDropdown((dropdown) => {
 					for (const rule of MEMORY_PROPOSAL_RULES) {
 						dropdown.addOption(rule, memoryProposalRuleLabel(rule));
@@ -507,13 +645,31 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						});
 				});
 		});
+		const globalHub = this.plugin.getGlobalMemoryHubStatus();
+		if (globalHub.state !== 'ready') {
+			group.addSetting((setting) => {
+				setting
+					.setName(ui('全局记忆 Hub 已阻断', 'Global Memory Hub blocked'))
+					.setDesc(ui(
+						globalHub.state === 'missing'
+							? `缺少 ${globalHub.path}。全局记忆建议可以进入审核，但在修复前不会被描述为已持久化，Auto 写入也会被阻止。`
+							: `${globalHub.path} 不是有效的 Markdown 文件。全局记忆持久化已阻止；Tracekeeper 不会覆盖该路径。`,
+						globalHub.state === 'missing'
+							? `${globalHub.path} is missing. Global memory suggestions may enter review, but are not persisted before repair, and Auto writes are blocked.`
+							: `${globalHub.path} is not a valid Markdown file. Global memory persistence is blocked, and Tracekeeper will not overwrite that path.`
+					))
+					.addButton((button) => button
+						.setButtonText(ui('检查并修复结构', 'Check and repair structure'))
+						.setCta()
+						.onClick(() => {
+							void this.plugin.openInitializeMemoryStructureModal();
+						}));
+			});
+		}
 		group.addSetting((setting) => {
 			setting
 				.setName(ui('项目记忆', 'Project memory'))
-				.setDesc(ui(
-					'用于延续当前项目、仓库或工作区的决策、经验和上下文。',
-					'Decisions, lessons, and context that carry forward within the current project, repository, or workspace.'
-				))
+				.setDesc(this.projectMemoryRuleDescription())
 				.addDropdown((dropdown) => {
 					for (const rule of MEMORY_PROPOSAL_RULES) {
 						dropdown.addOption(rule, memoryProposalRuleLabel(rule));
@@ -549,6 +705,39 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						});
 				});
 		});
+	}
+
+	private globalMemoryRuleDescription(): string {
+		switch (this.plugin.settings.globalMemoryRule) {
+			case 'auto_write':
+				return ui(
+					'自动创建符合条件的不可变 Global MemoryRecord v2；用户权威、冲突和生命周期变更仍需审核。',
+					'Automatically create eligible immutable Global MemoryRecord v2 records; user authority, conflicts, and lifecycle changes still require review.'
+				);
+			case 'disabled':
+				return ui('不接收新的全局 MemoryRecord。', 'Do not accept new global MemoryRecords.');
+			case 'review_queue':
+			default:
+				return ui(
+					'全局 MemoryRecord 保存前进入知识变更审核；这是新安装的默认设置。',
+					'Review Global MemoryRecords before persistence. This is the default for new installations.'
+				);
+		}
+	}
+
+	private projectMemoryRuleDescription(): string {
+		switch (this.plugin.settings.projectMemoryRule) {
+			case 'review_queue':
+				return ui('项目记忆保存前进入知识变更审核。', 'Review project memory before saving.');
+			case 'disabled':
+				return ui('不接收新的项目记忆。', 'Do not accept new project memory.');
+			case 'auto_write':
+			default:
+				return ui(
+					'自动创建符合条件的不可变 Project MemoryRecord v2；不要求 Wiki，用户权威、冲突和生命周期变更仍需审核。',
+					'Automatically create eligible immutable Project MemoryRecord v2 records without requiring Wiki context; user authority, conflicts, and lifecycle changes still require review.'
+				);
+		}
 	}
 
 	private renderAdvancedMaintenanceSection(
@@ -695,13 +884,13 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		const info = row.createDiv({ cls: 'tracekeeper-settings-client-row__info' });
 		const title = info.createDiv({ cls: 'tracekeeper-config-row__title' });
 		title.createEl('strong', { text: config.displayName });
-		title.createEl('span', {
+		title.createSpan({
 			text: this.connectionStateLabel(presentation.state),
 			cls: `tracekeeper-badge ${presentation.state === 'connected' || presentation.state === 'used' || presentation.state === 'authorized' ? 'tracekeeper-badge--success' : presentation.state === 'revoked' || presentation.state === 'needs_update' ? 'tracekeeper-badge--warning' : 'tracekeeper-badge--muted'}`,
 		});
 		const meta = info.createDiv({ cls: 'tracekeeper-settings-client-row__meta' });
 		const latestActivityAt = agent?.sortTimestamp ?? 0;
-		meta.createEl('span', {
+		meta.createSpan({
 			text: ui(
 				`最近活动时间：${latestActivityAt > 0 ? this.plugin.formatDisplayTime(latestActivityAt) : '暂无活动'}`,
 				`Latest activity: ${latestActivityAt > 0 ? this.plugin.formatDisplayTime(latestActivityAt) : 'No activity'}`
@@ -720,7 +909,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				this.plugin,
 				config,
 				'manage',
-				() => this.refreshAgentList(),
+				() => this.refreshAgentList(true),
 				() => this.renderSettings()
 			).open();
 		});
@@ -729,7 +918,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			plugin: this.plugin,
 			container: row,
 			config,
-			onChanged: () => this.refreshAgentList(),
+			onChanged: () => this.refreshAgentList(true),
 		});
 	}
 
@@ -740,7 +929,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			case 'pending_approval': return ui('待审批', 'Approval pending');
 			case 'authorized': return ui('已授权', 'Authorized');
 			case 'connected': return ui('已连接', 'Connected');
-			case 'used': return ui('已连接', 'Connected');
+			case 'used': return ui('已使用', 'Used');
 			case 'revoked': return ui('已撤销', 'Revoked');
 			case 'needs_update': return ui('需要更新配置', 'Setup update needed');
 			case 'manual': return ui('手动访问令牌', 'Manual access token');
@@ -754,7 +943,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		item.createEl('strong', { text: value || ui('未知', 'Unknown') });
 	}
 

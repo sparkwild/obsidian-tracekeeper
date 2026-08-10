@@ -32,6 +32,7 @@ export interface ProposalTransitionSnapshot {
     status: ProposalTransitionStatus;
     targetPath: string;
     writebackContent: string;
+    writebackEffect?: 'append' | 'create_wiki_note' | 'create_memory_record';
     revisionComment: string;
     revisionRequestedAt: string;
     revisionRequestedBy: string;
@@ -65,6 +66,7 @@ export interface ProposalTransitionEnvironment {
     actor?: string;
     targetExists?: (relativePath: string) => boolean;
     targetAllowed?: (relativePath: string) => boolean;
+    targetCreationAllowed?: (relativePath: string) => boolean;
 }
 export type ProposalFrontmatterMutationValue = string | string[] | null;
 export interface ProposalTransitionDecision {

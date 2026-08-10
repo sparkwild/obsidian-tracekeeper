@@ -2,6 +2,9 @@ import {
 	KNOWLEDGE_GLOBAL_MEMORY_DIR,
 	KNOWLEDGE_PROJECTS_MEMORY_DIR,
 	KNOWLEDGE_SOURCES_DIR,
+	KNOWLEDGE_SOURCES_FILES_DIR,
+	KNOWLEDGE_SOURCES_TRANSCRIPTS_DIR,
+	KNOWLEDGE_SOURCES_WEB_DIR,
 	parseMemoryRecord,
 	resolveMemoryLifecycle,
 	normalizeKnowledgePath,
@@ -111,7 +114,23 @@ export interface SourceStatusQuery {
 	taskId?: string;
 }
 
-export type SourceEvidenceState = 'captured' | 'missing';
+export type SourceEvidenceState = 'captured' | 'incomplete' | 'missing';
+export type SourceCaptureEvidenceIssue =
+	| 'type'
+	| 'source'
+	| 'source_kind'
+	| 'source_id'
+	| 'content_hash'
+	| 'route'
+	| 'mode'
+	| 'part_count'
+	| 'part_manifest'
+	| 'source_part'
+	| 'source_part.parent_source'
+	| 'source_part.source_id'
+	| 'source_part.content_hash'
+	| 'source_part.part_count'
+	| 'source_part.part_number';
 
 export interface SourceStatusRecord {
 	id: string;
@@ -128,6 +147,7 @@ export interface SourceStatusRecord {
 	partManifest: string[];
 	mode: string;
 	state: SourceEvidenceState;
+	evidenceIssues: SourceCaptureEvidenceIssue[];
 	taskIds: string[];
 	taskPaths: string[];
 	proposalPaths: string[];
@@ -630,9 +650,6 @@ export const buildMemoryInspectorSnapshot = (
 const sourceTitle = (note: IndexedKnowledgeNote): string =>
 	note.title || note.path.split('/').pop()?.replace(/\.md$/i, '') || note.path;
 
-const sourceRecordType = (note: IndexedKnowledgeNote): string =>
-	(frontmatterString(note, ['type']) || asString(note.type)).toLowerCase();
-
 const sourcePartCount = (note: IndexedKnowledgeNote): number => {
 	const value = Number(frontmatterString(note, ['part_count', 'partCount']));
 	return Number.isSafeInteger(value) && value > 0 ? value : 0;
@@ -667,6 +684,266 @@ const sourceTaskIds = (
 const uniquePaths = (paths: readonly string[]): string[] =>
 	[...new Set(paths.map(normalizeRecordPath).filter(Boolean))];
 
+const SOURCE_ID_PATTERN = /^source-[a-f0-9]{32}$/;
+const SOURCE_CONTENT_HASH_PATTERN = /^sha256:[a-f0-9]{64}$/;
+const SOURCE_CAPTURE_MODES = new Set([
+	'external_reference',
+	'extracted_snapshot',
+	'local_copy',
+]);
+const SOURCE_ROUTES = new Map([
+	['web', KNOWLEDGE_SOURCES_WEB_DIR],
+	['file', KNOWLEDGE_SOURCES_FILES_DIR],
+	['transcript', KNOWLEDGE_SOURCES_TRANSCRIPTS_DIR],
+]);
+
+interface StrictFrontmatterField<T> {
+	valid: boolean;
+	value: T;
+}
+
+const frontmatterAliasValues = (
+	note: IndexedKnowledgeNote,
+	keys: readonly string[]
+): unknown[] => keys
+	.filter((key) => Object.prototype.hasOwnProperty.call(note.frontmatter, key))
+	.map((key) => note.frontmatter[key]);
+
+const strictStringField = (
+	note: IndexedKnowledgeNote,
+	keys: readonly string[],
+	normalize: (value: string) => string = (value) => value.trim()
+): StrictFrontmatterField<string> => {
+	const rawValues = frontmatterAliasValues(note, keys);
+	if (rawValues.length === 0 || rawValues.some((value) => typeof value !== 'string')) {
+		return { valid: false, value: '' };
+	}
+	const values = (rawValues as string[]).map(normalize);
+	if (!values[0] || values.some((value) => value !== values[0])) {
+		return { valid: false, value: values[0] || '' };
+	}
+	return { valid: true, value: values[0] };
+};
+
+const isSourcePartRecord = (note: IndexedKnowledgeNote): boolean => {
+	const typeField = strictStringField(
+		note,
+		['type'],
+		(value) => value.trim().toLowerCase()
+	);
+	return typeField.valid && typeField.value === 'source_part';
+};
+
+const strictIntegerField = (
+	note: IndexedKnowledgeNote,
+	keys: readonly string[]
+): StrictFrontmatterField<number> => {
+	const rawValues = frontmatterAliasValues(note, keys);
+	if (rawValues.length === 0) {
+		return { valid: false, value: 0 };
+	}
+	const values: number[] = [];
+	for (const rawValue of rawValues) {
+		if (typeof rawValue === 'number' && Number.isSafeInteger(rawValue) && rawValue >= 0) {
+			values.push(rawValue);
+			continue;
+		}
+		if (typeof rawValue === 'string' && /^(0|[1-9]\d*)$/.test(rawValue.trim())) {
+			const value = Number(rawValue.trim());
+			if (Number.isSafeInteger(value)) {
+				values.push(value);
+				continue;
+			}
+		}
+		return { valid: false, value: values[0] || 0 };
+	}
+	if (values.some((value) => value !== values[0])) {
+		return { valid: false, value: values[0] || 0 };
+	}
+	return { valid: true, value: values[0] };
+};
+
+const strictPathListField = (
+	note: IndexedKnowledgeNote,
+	keys: readonly string[]
+): StrictFrontmatterField<string[]> => {
+	const rawValues = frontmatterAliasValues(note, keys);
+	if (
+		rawValues.length === 0
+		|| rawValues.some((value) =>
+			!Array.isArray(value)
+			|| value.some((entry) => typeof entry !== 'string' || !normalizeRecordPath(entry))
+		)
+	) {
+		return { valid: false, value: [] };
+	}
+	const values = (rawValues as string[][])
+		.map((value) => value.map(normalizeRecordPath));
+	const canonical = values[0];
+	if (values.some((value) =>
+		value.length !== canonical.length
+		|| value.some((entry, index) => entry !== canonical[index])
+	)) {
+		return { valid: false, value: canonical };
+	}
+	return { valid: true, value: canonical };
+};
+
+const sourceCaptureEvidenceIssues = (
+	note: IndexedKnowledgeNote,
+	path: string,
+	notesByPath: ReadonlyMap<string, IndexedKnowledgeNote>,
+	partPathsByParent: ReadonlyMap<string, readonly string[]>
+): SourceCaptureEvidenceIssue[] => {
+	const issues: SourceCaptureEvidenceIssue[] = [];
+	const typeField = strictStringField(note, ['type'], (value) => value.trim().toLowerCase());
+	if (!typeField.valid || typeField.value !== 'source_capture') {
+		issues.push('type');
+	}
+	const sourceField = strictStringField(note, ['source', 'source_url', 'sourceUrl']);
+	if (!sourceField.valid) {
+		issues.push('source');
+	}
+	const sourceKindField = strictStringField(
+		note,
+		['source_kind', 'sourceKind'],
+		(value) => value.trim().toLowerCase()
+	);
+	const expectedRoute = sourceKindField.valid
+		? SOURCE_ROUTES.get(sourceKindField.value)
+		: undefined;
+	if (!sourceKindField.valid || !expectedRoute) {
+		issues.push('source_kind');
+	}
+	const sourceIdField = strictStringField(note, ['source_id', 'sourceId']);
+	if (!sourceIdField.valid || !SOURCE_ID_PATTERN.test(sourceIdField.value)) {
+		issues.push('source_id');
+	}
+	const contentHashField = strictStringField(note, ['content_hash', 'contentHash']);
+	if (!contentHashField.valid || !SOURCE_CONTENT_HASH_PATTERN.test(contentHashField.value)) {
+		issues.push('content_hash');
+	}
+	const routeField = strictStringField(
+		note,
+		['route', 'source_route', 'sourceRoute'],
+		normalizeRecordPath
+	);
+	if (
+		!routeField.valid
+		|| !expectedRoute
+		|| routeField.value !== expectedRoute
+		|| !path.startsWith(`${routeField.value}/`)
+	) {
+		issues.push('route');
+	}
+	const modeField = strictStringField(
+		note,
+		['mode', 'source_mode', 'sourceMode'],
+		(value) => value.trim().toLowerCase()
+	);
+	if (!modeField.valid || !SOURCE_CAPTURE_MODES.has(modeField.value)) {
+		issues.push('mode');
+	}
+
+	const partCountField = strictIntegerField(note, ['part_count', 'partCount']);
+	const partCount = partCountField.value;
+	const validPartCount = partCountField.valid;
+	const partManifestField = strictPathListField(note, ['part_manifest', 'partManifest']);
+	const validPartManifest = partManifestField.valid
+		&& partManifestField.value.every((entry) =>
+			!expectedRoute || entry.startsWith(`${expectedRoute}/`)
+		);
+	const normalizedPartManifest = partManifestField.value;
+	const uniquePartManifest = [...new Set(normalizedPartManifest)];
+
+	if (!validPartCount) {
+		issues.push('part_count');
+	}
+	if (!validPartManifest) {
+		issues.push('part_manifest');
+	}
+	if (
+		validPartCount
+		&& validPartManifest
+		&& (partCount !== normalizedPartManifest.length
+			|| uniquePartManifest.length !== normalizedPartManifest.length)
+	) {
+		issues.push('part_count', 'part_manifest');
+	}
+	const indexedChildren = partPathsByParent.get(path) || [];
+	if (
+		validPartCount
+		&& validPartManifest
+		&& (
+			indexedChildren.length !== uniquePartManifest.length
+			|| indexedChildren.some((partPath) =>
+				!uniquePartManifest.some((manifestPath) => manifestPath.toLowerCase() === partPath)
+			)
+		)
+	) {
+		issues.push('part_manifest');
+	}
+
+	if (validPartCount && validPartManifest && partCount > 0) {
+		const partNumbers: number[] = [];
+		for (const partPath of uniquePartManifest) {
+			const part = notesByPath.get(partPath.toLowerCase());
+			const childTypeField = part
+				? strictStringField(part, ['type'], (value) => value.trim().toLowerCase())
+				: { valid: false, value: '' };
+			if (!part || !childTypeField.valid || childTypeField.value !== 'source_part') {
+				issues.push('source_part');
+				continue;
+			}
+			const parentSourceField = strictStringField(
+				part,
+				['parent_source', 'parentSource'],
+				normalizeRecordPath
+			);
+			if (!parentSourceField.valid || parentSourceField.value !== path) {
+				issues.push('source_part.parent_source');
+			}
+			const childSourceIdField = strictStringField(part, ['source_id', 'sourceId']);
+			if (
+				!childSourceIdField.valid
+				|| childSourceIdField.value !== sourceIdField.value
+				|| !SOURCE_ID_PATTERN.test(childSourceIdField.value)
+			) {
+				issues.push('source_part.source_id');
+			}
+			const childContentHashField = strictStringField(part, ['content_hash', 'contentHash']);
+			if (
+				!childContentHashField.valid
+				|| !SOURCE_CONTENT_HASH_PATTERN.test(childContentHashField.value)
+			) {
+				issues.push('source_part.content_hash');
+			}
+
+			const childPartCountField = strictIntegerField(part, ['part_count', 'partCount']);
+			if (!childPartCountField.valid || childPartCountField.value !== partCount) {
+				issues.push('source_part.part_count');
+			}
+			const partNumberField = strictIntegerField(part, ['part_number', 'partNumber']);
+			if (!partNumberField.valid || partNumberField.value < 1 || partNumberField.value > partCount) {
+				issues.push('source_part.part_number');
+			} else {
+				partNumbers.push(partNumberField.value);
+			}
+		}
+
+		const contiguousPartNumbers = partNumbers.length === partCount
+			&& new Set(partNumbers).size === partCount
+			&& [...partNumbers].sort((left, right) => left - right)
+				.every((partNumber, index) => partNumber === index + 1);
+		if (!contiguousPartNumbers) {
+			issues.push('source_part.part_number');
+		}
+
+	}
+
+	return [...new Set(issues)];
+};
+
 const matchesSourceFocus = (
 	record: SourceStatusRecord,
 	focusPaths: ReadonlySet<string>,
@@ -685,16 +962,36 @@ const matchesSourceFocus = (
 export const buildSourceStatusSnapshot = (
 	input: BuildSourceStatusInput
 ): SourceStatusSnapshot => {
-	const capturedPaths = new Set<string>();
+	const indexedSourcePaths = new Set<string>();
 	const records: SourceStatusRecord[] = [];
+	const notesByPath = new Map(
+		input.index.notes.map((note) => [normalizeRecordPath(note.path).toLowerCase(), note])
+	);
+	const partPathsByParent = new Map<string, string[]>();
+	for (const note of input.index.notes) {
+		if (!isSourcePartRecord(note)) {
+			continue;
+		}
+		const parentSourceField = strictStringField(
+			note,
+			['parent_source', 'parentSource'],
+			normalizeRecordPath
+		);
+		if (!parentSourceField.valid) {
+			continue;
+		}
+		const partPaths = partPathsByParent.get(parentSourceField.value) || [];
+		partPaths.push(normalizeRecordPath(note.path).toLowerCase());
+		partPathsByParent.set(parentSourceField.value, partPaths);
+	}
 
 	for (const note of input.index.notes) {
 		const path = normalizeRecordPath(note.path);
 		if (!isSourcePath(path)) {
 			continue;
 		}
-		capturedPaths.add(path);
-		if (sourceRecordType(note) === 'source_part') {
+		indexedSourcePaths.add(path);
+		if (isSourcePartRecord(note)) {
 			continue;
 		}
 		const taskIds = sourceTaskIds(path, note, input.tasks);
@@ -703,8 +1000,17 @@ export const buildSourceStatusSnapshot = (
 			sourceReferencePaths(proposal).includes(path)
 			|| Boolean(proposal.taskId && taskIds.includes(proposal.taskId))
 		);
+		const evidenceIssues = sourceCaptureEvidenceIssues(
+			note,
+			path,
+			notesByPath,
+			partPathsByParent
+		);
+		const state: SourceEvidenceState = evidenceIssues.length === 0
+			? 'captured'
+			: 'incomplete';
 		records.push({
-			id: `captured:${path}`,
+			id: `${state}:${path}`,
 			path,
 			evidencePath: path,
 			indexPath: normalizeRecordPath(
@@ -721,7 +1027,8 @@ export const buildSourceStatusSnapshot = (
 				frontmatterStringList(note, ['part_manifest', 'partManifest'])
 			),
 			mode: frontmatterString(note, ['mode', 'source_mode', 'sourceMode']),
-			state: 'captured',
+			state,
+			evidenceIssues,
 			taskIds,
 			taskPaths: uniquePaths(relatedTasks.map((task) => task.path)),
 			proposalPaths: uniquePaths(relatedProposals.map((proposal) => proposal.path)),
@@ -737,7 +1044,7 @@ export const buildSourceStatusSnapshot = (
 	const missingByPath = new Map<string, SourceStatusRecord>();
 	for (const task of input.tasks) {
 		for (const sourcePath of task.sourceCaptures.map(normalizeRecordPath).filter(isSourcePath)) {
-			if (capturedPaths.has(sourcePath) || missingByPath.has(sourcePath)) {
+			if (indexedSourcePaths.has(sourcePath) || missingByPath.has(sourcePath)) {
 				continue;
 			}
 			missingByPath.set(sourcePath, {
@@ -755,6 +1062,7 @@ export const buildSourceStatusSnapshot = (
 				partManifest: [],
 				mode: '',
 				state: 'missing',
+				evidenceIssues: [],
 				taskIds: [task.taskId],
 				taskPaths: [normalizeRecordPath(task.path)],
 				proposalPaths: uniquePaths(task.proposals),
@@ -766,7 +1074,7 @@ export const buildSourceStatusSnapshot = (
 	}
 	for (const proposal of input.proposals) {
 		for (const sourcePath of sourceReferencePaths(proposal)) {
-			if (capturedPaths.has(sourcePath) || missingByPath.has(sourcePath)) {
+			if (indexedSourcePaths.has(sourcePath) || missingByPath.has(sourcePath)) {
 				continue;
 			}
 			const relatedTask = input.tasks.find((task) => task.taskId === proposal.taskId);
@@ -785,6 +1093,7 @@ export const buildSourceStatusSnapshot = (
 				partManifest: [],
 				mode: '',
 				state: 'missing',
+				evidenceIssues: [],
 				taskIds: proposal.taskId ? [proposal.taskId] : [],
 				taskPaths: uniquePaths(relatedTask ? [relatedTask.path] : []),
 				proposalPaths: [normalizeRecordPath(proposal.path)],

@@ -35,6 +35,7 @@ const proposal = {
 	revisionRequestedBy: '',
 	writebackContent: '- Keep approval and apply separate.',
 };
+const existingWikiCreateConflictPath = '01_knowledge/wiki/guide-for-existing-target.md';
 
 const knowledgeNotes = [
 	{
@@ -176,6 +177,230 @@ try {
 	assert.match(context.diffPreview, /after explicit apply/);
 	assert.match(context.diffPreview, /\+## Approved Writeback: proposal-42/);
 
+	const wikiCreateProposal = {
+		...proposal,
+		path: 'review_queue/wiki-create-preview.md',
+		proposalId: 'wiki-create-preview',
+		targetNote: '01_knowledge/wiki/create-preview.md',
+		writebackContent: '- create new wiki note',
+		writebackEffect: undefined,
+	};
+	const wikiCreateContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [wikiCreateProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set(),
+	});
+	assert.equal(wikiCreateContexts[wikiCreateProposal.path].validity.isComplete, true);
+	assert.equal(wikiCreateContexts[wikiCreateProposal.path].target.exists, false);
+	assert.match(wikiCreateContexts[wikiCreateProposal.path].diffPreview, /--- \/dev\/null/);
+	assert.match(wikiCreateContexts[wikiCreateProposal.path].diffPreview, /\+\+\+ 01_knowledge\/wiki\/create-preview\.md/);
+	assert.match(wikiCreateContexts[wikiCreateProposal.path].diffPreview, /\^writeback-wiki-create-preview/);
+	assert.match(wikiCreateContexts[wikiCreateProposal.path].diffPreview, /\+\- create new wiki note/);
+	assert.doesNotMatch(wikiCreateContexts[wikiCreateProposal.path].diffPreview, /\+## Approved Writeback:/);
+
+	const wikiCreateMultilineProposal = {
+		...proposal,
+		path: 'review_queue/wiki-create-multiline.md',
+		proposalId: 'wiki-create-multiline',
+		targetNote: '01_knowledge/wiki/create-multiline.md',
+		writebackContent: '- line 1\n- line 2\nline 3',
+		writebackEffect: undefined,
+	};
+	const wikiCreateMultilineContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [wikiCreateMultilineProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set(),
+	});
+	const multilineDiff = wikiCreateMultilineContexts[wikiCreateMultilineProposal.path].diffPreview;
+	assert.match(multilineDiff, /--- \/dev\/null/);
+	assert.match(multilineDiff, /\+\+\+ 01_knowledge\/wiki\/create-multiline\.md/);
+	const expectedMultilineDiffLines = [
+		'--- /dev/null',
+		'+++ 01_knowledge/wiki/create-multiline.md',
+		'+- line 1',
+		'+- line 2',
+		'+line 3',
+		'+',
+		'+^writeback-wiki-create-multiline',
+	];
+	assert.deepStrictEqual(multilineDiff.split('\n'), expectedMultilineDiffLines);
+
+	const wikiCreateConflictProposal = {
+		...proposal,
+		path: 'review_queue/wiki-create-conflict.md',
+		proposalId: 'wiki-create-conflict',
+		targetNote: existingWikiCreateConflictPath,
+		writebackContent: '- conflicting create',
+		writebackEffect: 'create_wiki_note',
+	};
+	const occupiedCreateContext = reviewModule.buildReviewProposalContexts({
+		proposals: [wikiCreateConflictProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set([existingWikiCreateConflictPath]),
+	});
+	const conflictDiff = occupiedCreateContext[wikiCreateConflictProposal.path].diffPreview;
+	assert.equal(occupiedCreateContext[wikiCreateConflictProposal.path].validity.isComplete, false);
+	assert.equal(occupiedCreateContext[wikiCreateConflictProposal.path].validity.missingTargetEvidence, false);
+	assert.match(conflictDiff, /\[Blocked\] target already exists for create_wiki_note/);
+	assert.doesNotMatch(conflictDiff, /\+\+\+ [\s\S]*create-preview\.md/);
+	assert.doesNotMatch(conflictDiff, /\+conflicting create/);
+
+	const appliedCreateReceipt = {
+		schemaVersion: 1,
+		operationId: 'apply-create-wiki',
+		payloadHash: 'payload-hash',
+		kind: 'apply',
+		proposalPath: 'review_queue/applied-create-wiki.md',
+		proposalId: 'applied-create-wiki',
+		taskId: 'task-42',
+		previousStatus: 'approved',
+		nextStatus: 'applied',
+		expectedRevision: 'expected-revision',
+		expectedContentHash: 'expected-content-hash',
+		previousRevision: 'previous-revision',
+		committedRevision: 'committed-revision',
+		previousContentHash: 'previous-content-hash',
+		committedContentHash: 'applied-create-content-hash',
+		committedAt: '2026-08-10T01:02:03.000Z',
+	};
+	const appliedCreateProposal = {
+		...wikiCreateConflictProposal,
+		path: appliedCreateReceipt.proposalPath,
+		proposalId: appliedCreateReceipt.proposalId,
+		approvalStatus: 'applied',
+		writebackOperationId: appliedCreateReceipt.operationId,
+		writebackAppliedAt: appliedCreateReceipt.committedAt,
+		writebackTarget: existingWikiCreateConflictPath,
+		contentHash: appliedCreateReceipt.committedContentHash,
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: appliedCreateReceipt,
+	};
+	const appliedCreateContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [appliedCreateProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set([existingWikiCreateConflictPath]),
+	});
+	const appliedCreateDiff = appliedCreateContexts[appliedCreateProposal.path].diffPreview;
+	assert.match(appliedCreateDiff, /\[Applied\] Wiki note created/);
+	assert.match(appliedCreateDiff, /Historical writeback effect: create_wiki_note/);
+	assert.match(appliedCreateDiff, /Operation ID: apply-create-wiki/);
+	assert.doesNotMatch(appliedCreateDiff, /\[Blocked\]/);
+	const driftedAppliedTargetProposal = {
+		...appliedCreateProposal,
+		path: 'review_queue/drifted-applied-target.md',
+		proposalId: 'drifted-applied-target',
+		targetNote: '01_knowledge/wiki/target-not-matching-historical-target.md',
+		contentHash: appliedCreateReceipt.committedContentHash,
+	};
+	const driftedAppliedTargetContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [driftedAppliedTargetProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set([existingWikiCreateConflictPath]),
+	});
+	const driftedAppliedTargetDiff = driftedAppliedTargetContexts[driftedAppliedTargetProposal.path].diffPreview;
+	assert.match(driftedAppliedTargetDiff, /Target path: 01_knowledge\/wiki\/guide-for-existing-target\.md/);
+	assert.doesNotMatch(driftedAppliedTargetDiff, /Target path: 01_knowledge\/wiki\/target-not-matching-historical-target\.md/);
+	const missingWritebackTargetProposal = {
+		...appliedCreateProposal,
+		path: 'review_queue/missing-writeback-target.md',
+		proposalId: 'missing-writeback-target',
+		targetNote: '01_knowledge/wiki/missing-writeback-target.md',
+		writebackTarget: '',
+		contentHash: appliedCreateReceipt.committedContentHash,
+	};
+	const missingWritebackTargetContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [missingWritebackTargetProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set([existingWikiCreateConflictPath]),
+	});
+	const missingWritebackTargetDiff = missingWritebackTargetContexts[missingWritebackTargetProposal.path].diffPreview;
+	assert.match(missingWritebackTargetDiff, /Target path: \(not recorded\)/);
+	const invalidWritebackTargetProposal = {
+		...appliedCreateProposal,
+		path: 'review_queue/invalid-writeback-target.md',
+		proposalId: 'invalid-writeback-target',
+		targetNote: '01_knowledge/wiki/invalid-writeback-target.md',
+		writebackTarget: 'unknown',
+		invalidWritebackTarget: true,
+		contentHash: appliedCreateReceipt.committedContentHash,
+	};
+	const invalidWritebackTargetContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [invalidWritebackTargetProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set([existingWikiCreateConflictPath]),
+	});
+	const invalidWritebackTargetDiff = invalidWritebackTargetContexts[invalidWritebackTargetProposal.path].diffPreview;
+	assert.match(invalidWritebackTargetDiff, /Target path: \(not recorded\)/);
+
+	const driftedAppliedProposal = {
+		...appliedCreateProposal,
+		contentHash: 'drifted-after-apply',
+	};
+	const driftedAppliedContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [driftedAppliedProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set([existingWikiCreateConflictPath]),
+	});
+	const driftedAppliedDiff = driftedAppliedContexts[driftedAppliedProposal.path].diffPreview;
+	assert.match(driftedAppliedDiff, /Historical writeback effect: unknown/);
+	assert.match(driftedAppliedDiff, /receipt: unavailable or no longer matches/);
+	assert.doesNotMatch(driftedAppliedDiff, /Wiki note created|create_wiki_note/);
+	assert.doesNotMatch(driftedAppliedDiff, /\[Blocked\]/);
+
+	const legacyAppliedProposal = {
+		...appliedCreateProposal,
+		path: 'review_queue/legacy-applied.md',
+		proposalId: 'legacy-applied',
+		writebackEffect: undefined,
+		writebackOperationId: 'apply-legacy',
+		contentHash: 'legacy-applied-content-hash',
+		revision: appliedCreateReceipt.committedRevision,
+		lastTransition: {
+			...appliedCreateReceipt,
+			operationId: 'apply-legacy',
+			proposalPath: 'review_queue/legacy-applied.md',
+			proposalId: 'legacy-applied',
+			committedContentHash: 'legacy-applied-content-hash',
+		},
+	};
+	const legacyAppliedContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [legacyAppliedProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set([existingWikiCreateConflictPath]),
+	});
+	const legacyAppliedDiff = legacyAppliedContexts[legacyAppliedProposal.path].diffPreview;
+	assert.match(legacyAppliedDiff, /\[Applied\] Writeback completed/);
+	assert.match(legacyAppliedDiff, /Historical writeback effect: unknown/);
+	assert.match(legacyAppliedDiff, /No append or create effect is inferred/);
+	assert.doesNotMatch(legacyAppliedDiff, /Expected append diff|\[Blocked\]/);
+
+	const readyCreateProposal = {
+		...wikiCreateProposal,
+		path: 'review_queue/wiki-create-preview-ready.md',
+		approvalStatus: 'approved',
+	};
+	const activeCreateContexts = reviewModule.buildReviewProposalContexts({
+		proposals: [wikiCreateProposal, readyCreateProposal],
+		knowledge: { state: 'ready', notes: knowledgeNotes },
+		tasks,
+		existingTargetPaths: new Set(),
+	});
+	for (const activeProposal of [wikiCreateProposal, readyCreateProposal]) {
+		const activeDiff = activeCreateContexts[activeProposal.path].diffPreview;
+		assert.match(activeDiff, /--- \/dev\/null/);
+		assert.match(activeDiff, /\+\+\+ 01_knowledge\/wiki\/create-preview\.md/);
+		assert.doesNotMatch(activeDiff, /\[Applied\]/);
+	}
+
 	const completedProposal = {
 		...proposal,
 		targetNote: '01_knowledge/memory/projects/tracekeeper/memory.md',
@@ -210,7 +435,7 @@ try {
 	assert.equal(reviewModule.isReviewRemediationTargetPath('01_knowledge/sources/a.md'), false);
 	assert.equal(reviewModule.isReviewRemediationTargetPath('01_knowledge/wiki/../sources/a.md'), false);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 20 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 40 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

@@ -35,6 +35,7 @@ export class TracekeeperGraphHealthView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
+		this.containerEl.addClass('tracekeeper-item-view');
 		await this.refresh();
 	}
 
@@ -50,7 +51,6 @@ export class TracekeeperGraphHealthView extends ItemView {
 
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
 		const heading = header.createDiv();
-		heading.createEl('h2', { text: ui('知识图谱健康', 'Graph Health'), cls: 'tracekeeper-view__title' });
 		heading.createEl('p', {
 			text: `${ui('检查策略', 'Profile')}: ${graphProfileLabel(snapshot.profile)} • ${ui('最后刷新', 'Last refreshed')}: ${this.plugin.formatDisplayTime(Date.parse(snapshot.updatedAt))}`,
 			cls: 'tracekeeper-view__description',
@@ -147,7 +147,7 @@ export class TracekeeperGraphHealthView extends ItemView {
 
 	private renderStatusItem(container: HTMLElement, label: string, value: string, title?: string): void {
 		const item = container.createDiv({ cls: 'tracekeeper-status-pill' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		const strong = item.createEl('strong', { text: value || ui('未知', 'Unknown') });
 		if (title) {
 			strong.setAttr('title', title);
@@ -156,7 +156,7 @@ export class TracekeeperGraphHealthView extends ItemView {
 
 	private renderMetricCard(container: HTMLElement, label: string, value: string, detail: string, tone: 'ok' | 'warning' = 'ok'): void {
 		const card = container.createDiv({ cls: `tracekeeper-metric-card tracekeeper-metric-card--${tone}` });
-		card.createEl('span', { text: label, cls: 'tracekeeper-metric-card__label' });
+		card.createSpan({ text: label, cls: 'tracekeeper-metric-card__label' });
 		card.createEl('strong', { text: value, cls: 'tracekeeper-metric-card__value' });
 		card.createEl('small', { text: detail });
 	}
@@ -165,7 +165,7 @@ export class TracekeeperGraphHealthView extends ItemView {
 		const card = container.createDiv({ cls: 'tracekeeper-card' });
 		const header = card.createDiv({ cls: 'tracekeeper-card__header' });
 		header.createEl('h3', { text: ui('Profile Issues', 'Profile Issues') });
-		header.createEl('span', { text: graphProfileLabel(snapshot.profile), cls: 'tracekeeper-badge' });
+		header.createSpan({ text: graphProfileLabel(snapshot.profile), cls: 'tracekeeper-badge' });
 		if (snapshot.profile === 'off') {
 			card.createEl('p', {
 				text: ui(
@@ -187,10 +187,10 @@ export class TracekeeperGraphHealthView extends ItemView {
 		const list = card.createDiv({ cls: 'tracekeeper-issue-list' });
 		for (const issue of snapshot.profileIssues) {
 			const row = list.createDiv({ cls: `tracekeeper-issue-row tracekeeper-issue-row--${issue.severity}` });
-			row.createEl('span', { text: issue.severity, cls: `tracekeeper-badge tracekeeper-badge--${issue.severity}` });
+			row.createSpan({ text: issue.severity, cls: `tracekeeper-badge tracekeeper-badge--${issue.severity}` });
 			const body = row.createDiv();
 			body.createEl('strong', { text: `${issue.kind} (${issue.count})` });
-			body.createEl('div', { text: issue.message, cls: 'tracekeeper-view__description' });
+			body.createDiv({ text: issue.message, cls: 'tracekeeper-view__description' });
 			if (issue.paths.length > 0) {
 				body.createEl('small', { text: issue.paths.slice(0, 6).join(', ') });
 			}
@@ -229,9 +229,9 @@ export class TracekeeperGraphHealthView extends ItemView {
 		for (const candidate of snapshot.hubCandidates) {
 			const row = list.createDiv({ cls: 'tracekeeper-graph-candidate-row' });
 			row.createEl('strong', { text: candidate.path });
-			row.createEl('span', { text: `${ui('度数', 'Degree')}: ${candidate.degree}` });
-			row.createEl('span', { text: `${ui('入链', 'Inbound')}: ${candidate.inbound}` });
-			row.createEl('span', { text: `${ui('出链', 'Outbound')}: ${candidate.outbound}` });
+			row.createSpan({ text: `${ui('度数', 'Degree')}: ${candidate.degree}` });
+			row.createSpan({ text: `${ui('入链', 'Inbound')}: ${candidate.inbound}` });
+			row.createSpan({ text: `${ui('出链', 'Outbound')}: ${candidate.outbound}` });
 		}
 	}
 
@@ -248,7 +248,7 @@ export class TracekeeperGraphHealthView extends ItemView {
 
 	private renderNodeList(container: HTMLElement, label: string, values: string[]): void {
 		const item = container.createDiv({ cls: 'tracekeeper-detail tracekeeper-detail--description' });
-		item.createEl('span', { text: label });
+		item.createSpan({ text: label });
 		if (values.length === 0) {
 			item.createEl('strong', { text: ui('无', 'None') });
 			return;
