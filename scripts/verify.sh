@@ -9,6 +9,12 @@ run_root_script() {
   (cd "$ROOT" && npm run "$script")
 }
 
+verify_plugin_build_mirror() {
+  printf '\n>>> root: verify plugin build mirror\n'
+  test -f "$ROOT/main.js"
+  cmp -s "$ROOT/main.js" "$ROOT/apps/obsidian-plugin/main.js"
+}
+
 run_root_script community:check
 run_root_script agent:ecosystem
 run_root_script agent:ecosystem:test
@@ -19,6 +25,7 @@ run_root_script architecture:check
 run_root_script release:upgrade-fixture:test
 run_root_script typecheck
 run_root_script build
+verify_plugin_build_mirror
 run_root_script test
 run_root_script package
 

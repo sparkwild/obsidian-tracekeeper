@@ -115,7 +115,7 @@ export class NodeFsVaultRepository implements VaultRepository {
 			}
 		}
 
-		return normalizedPath as VaultPath;
+		return normalizedPath;
 	}
 
 	private resolveRelativePath(relativePath: VaultPath): string {
@@ -343,7 +343,7 @@ export class NodeFsVaultRepository implements VaultRepository {
 			}
 
 			const absoluteChild = path.join(absoluteDir, entry.name);
-			const relativeChild = (relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name).replace(/\\/g, '/') as VaultPath;
+			const relativeChild = (relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name).replace(/\\/g, '/');
 
 			if (entry.isDirectory()) {
 				await this.walkMarkdownNotes(absoluteChild, relativeChild, result);

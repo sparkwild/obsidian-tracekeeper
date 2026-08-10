@@ -29,6 +29,75 @@ import {
 
 const AGENT_CONFIGURATION_FOCUS_SETTLE_DELAY_MS = 200;
 
+interface SettingRenderDefinitionCompat {
+	name: string;
+	aliases: string[];
+	render: (setting: Setting, group: SettingGroup) => void | (() => void);
+}
+
+interface DeclarativeSettingTabCompat {
+	update?: () => void;
+}
+
+const SETTING_SEARCH_ALIASES = [
+	'Tracekeeper',
+	'MCP 服务',
+	'MCP service',
+	'服务状态',
+	'Service status',
+	'恢复服务',
+	'Recover service',
+	'服务功能',
+	'Capabilities',
+	'MCP 端点',
+	'MCP endpoint',
+	'端口号',
+	'Port',
+	'Agent 配置',
+	'Agent configuration',
+	'OAuth',
+	'OAuth 客户端归属冲突',
+	'OAuth client ownership conflict',
+	'已阻止的 OAuth 请求',
+	'Blocked OAuth request',
+	'未绑定的 OAuth 请求',
+	'Unbound OAuth request',
+	'尚无 Agent 卡片',
+	'No Agent cards yet',
+	'视图刷新',
+	'View refresh',
+	'自动刷新',
+	'Auto refresh',
+	'刷新间隔',
+	'Refresh interval',
+	'笔记内容',
+	'Note content',
+	'笔记内容语言',
+	'Note content language',
+	'记忆规则',
+	'Memory rules',
+	'Wiki 变更',
+	'Wiki changes',
+	'全局记忆',
+	'Global memory',
+	'全局记忆 Hub 已阻断',
+	'Global Memory Hub blocked',
+	'项目记忆',
+	'Project memory',
+	'任务追踪',
+	'Task tracking',
+	'启用任务追踪',
+	'Enable task tracking',
+	'高级维护',
+	'Advanced maintenance',
+	'服务诊断',
+	'Service diagnostics',
+	'全部 Agent 访问',
+	'All Agent access',
+	'知识图谱检查',
+	'Graph health profile',
+];
+
 export class TracekeeperSettingTab extends PluginSettingTab {
 	private visible = false;
 	private renderVersion = 0;
@@ -40,6 +109,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	private agentConfigurationFocusPending = false;
 	private agentConfigurationFocusFrame: number | null = null;
 	private agentConfigurationFocusTimer: number | null = null;
+	private settingsHostEl: HTMLElement | null = null;
 
 	constructor(
 		app: App,
@@ -49,8 +119,26 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
+		this.mountSettings(this.containerEl);
+	}
+
+	getSettingDefinitions(): SettingRenderDefinitionCompat[] {
+		return [{
+			name: ui('Tracekeeper 设置', 'Tracekeeper settings'),
+			aliases: [...SETTING_SEARCH_ALIASES],
+			render: (setting) => {
+				setting.settingEl.removeClass('setting-item');
+				this.mountSettings(setting.settingEl);
+				return () => {
+					this.unmountSettings(setting.settingEl);
+				};
+			},
+		}];
+	}
+
+	private mountSettings(containerEl: HTMLElement): void {
 		this.visible = true;
-		const { containerEl } = this;
+		this.settingsHostEl = containerEl;
 		containerEl.empty();
 		containerEl.addClass('tracekeeper-settings-root');
 		const loading = containerEl.createDiv({ cls: 'tracekeeper-view__description' });
@@ -59,6 +147,12 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	}
 
 	hide(): void {
+		this.unmountSettings(this.settingsHostEl);
+		super.hide();
+	}
+
+	private unmountSettings(containerEl: HTMLElement | null): void {
+		if (containerEl !== this.settingsHostEl) return;
 		this.visible = false;
 		this.renderVersion += 1;
 		if (this.agentConfigurationFocusFrame !== null) {
@@ -74,7 +168,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		this.agentListRefreshPending = false;
 		this.agentListForceRefreshPending = false;
 		this.agentConfigurationFocusPending = false;
-		super.hide();
+		this.settingsHostEl = null;
 	}
 
 	isAgentListVisible(): boolean {
@@ -120,7 +214,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			const fingerprint = this.buildAgentListFingerprint(snapshot);
 			if (!shouldReplaceAgentConfiguration(this.agentListFingerprint, fingerprint, force)) continue;
 			const stagingEl = host.createDiv();
-			stagingEl.remove();
+			stagingEl.detach();
 			const replacement = this.renderAgentClientConfigSection(stagingEl, snapshot);
 			host.replaceWith(replacement);
 			this.agentListHostEl = replacement;
@@ -129,10 +223,15 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 	}
 
 	private async renderSettings(): Promise<void> {
+		const containerEl = this.settingsHostEl;
+		if (!containerEl) return;
 		const renderVersion = ++this.renderVersion;
 		const snapshot = await this.plugin.loadAgentConnectionsSnapshot();
-		if (!this.visible || renderVersion !== this.renderVersion) return;
-		const { containerEl } = this;
+		if (
+			!this.visible
+			|| renderVersion !== this.renderVersion
+			|| containerEl !== this.settingsHostEl
+		) return;
 		const previousScrollTop = containerEl.scrollTop;
 		containerEl.empty();
 		containerEl.addClass('tracekeeper-settings-root');
@@ -145,6 +244,15 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		this.renderAdvancedMaintenanceSection(containerEl, snapshot);
 		containerEl.scrollTop = previousScrollTop;
 		this.applyAgentConfigurationFocus();
+	}
+
+	private refreshSettings(): void {
+		const declarativeTab = this as DeclarativeSettingTabCompat;
+		if (declarativeTab.update) {
+			declarativeTab.update();
+			return;
+		}
+		void this.renderSettings();
 	}
 
 	private buildAgentListFingerprint(snapshot: AgentConnectionsSnapshot): string {
@@ -227,7 +335,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 										config,
 										'add',
 										() => this.refreshAgentList(true),
-										() => this.renderSettings()
+										() => this.refreshSettings()
 									).open();
 								});
 						});
@@ -249,7 +357,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 					?? integrationId
 			);
 			group.addSetting((setting) => {
-				setting.setName(ui('OAuth 客户端归属冲突', 'OAuth client ownership conflict'))
+				setting
+					.setName(ui('OAuth 客户端归属冲突', 'OAuth client ownership conflict'))
 					.setDesc(ui(
 						`客户端 ID “${conflict.clientId}” 同时保存在多个 OAuth Agent（${ownerNames.join('、')}）。Tracekeeper 未改写这些记录；在撤销重复归属、只保留一个 Agent 前，该客户端不会作为已绑定客户端导出，其请求也不能授权。`,
 						`Client ID “${conflict.clientId}” is stored on multiple OAuth Agents (${ownerNames.join(', ')}). Tracekeeper has not rewritten these records. Until you revoke duplicate ownership and leave exactly one Agent, the client is not exported as bound and its requests cannot be allowed.`
@@ -258,7 +367,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		}
 		for (const request of conflictingOAuthRequests) {
 			group.addSetting((setting) => {
-				setting.setName(ui('已阻止的 OAuth 请求', 'Blocked OAuth request'))
+				setting
+					.setName(ui('已阻止的 OAuth 请求', 'Blocked OAuth request'))
 					.setDesc(ui(
 						`客户端 ID “${request.clientId}” 存在重复 Agent 归属，因此此请求不会显示在任何 Agent 卡片上，也不能授权。请先撤销重复归属。请求有效至 ${new Date(request.expiresAt).toLocaleString()}。`,
 						`Client ID “${request.clientId}” has duplicate Agent owners, so this request is not shown on any Agent card and cannot be allowed. Revoke the duplicate ownership first. Expires ${new Date(request.expiresAt).toLocaleString()}.`
@@ -304,7 +414,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 												candidate.config,
 												'manage',
 												() => this.refreshAgentList(true),
-												() => this.renderSettings(),
+												() => this.refreshSettings(),
 												request.requestId
 											).open();
 										}));
@@ -401,7 +511,9 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.setDisabled(runtime.busy)
 						.onChange((value: boolean) => {
 							void this.plugin.setMcpRuntimeEnabled(value)
-								.then(() => this.renderSettings())
+								.then(() => {
+									this.refreshSettings();
+								})
 								.catch((error) => {
 									console.error('tracekeeper failed to toggle MCP service', error);
 								});
@@ -427,7 +539,9 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.onClick(() => {
 							button.setDisabled(true);
 							void this.plugin.ensureMcpRuntimeRunning()
-								.then(() => this.renderSettings())
+								.then(() => {
+									this.refreshSettings();
+								})
 								.catch((error) => {
 									console.error('tracekeeper failed to recover MCP service', error);
 									button.setDisabled(false);
@@ -553,7 +667,9 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.setValue(this.plugin.settings.autoRefreshEnabled)
 						.onChange((value: boolean) => {
 							void this.plugin.setAutoRefreshEnabled(value)
-								.then(() => this.renderSettings())
+								.then(() => {
+									this.refreshSettings();
+								})
 								.catch((error) => {
 									console.error('tracekeeper failed to update auto refresh setting', error);
 								});
@@ -580,7 +696,9 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.onChange((value: string) => {
 							const parsed = Number.parseInt(value, 10);
 							void this.plugin.setAutoRefreshIntervalSeconds(parsed)
-								.then(() => this.renderSettings())
+								.then(() => {
+									this.refreshSettings();
+								})
 								.catch((error) => {
 									console.error('tracekeeper failed to update auto refresh interval', error);
 								});
@@ -607,7 +725,9 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.setValue(this.plugin.settings.noteContentLanguage)
 						.onChange((value: string) => {
 							void this.plugin.setNoteContentLanguage(value)
-								.then(() => this.renderSettings())
+								.then(() => {
+									this.refreshSettings();
+								})
 								.catch((error) => {
 									console.error('tracekeeper failed to update note content language', error);
 								});
@@ -638,7 +758,9 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.setValue(this.plugin.settings.globalMemoryRule)
 						.onChange((value: string) => {
 							void this.plugin.setGlobalMemoryRule(value)
-								.then(() => this.renderSettings())
+								.then(() => {
+									this.refreshSettings();
+								})
 								.catch((error) => {
 									console.error('tracekeeper failed to update global memory rule', error);
 								});
@@ -678,7 +800,9 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.setValue(this.plugin.settings.projectMemoryRule)
 						.onChange((value: string) => {
 							void this.plugin.setProjectMemoryRule(value)
-								.then(() => this.renderSettings())
+								.then(() => {
+									this.refreshSettings();
+								})
 								.catch((error) => {
 									console.error('tracekeeper failed to update project memory rule', error);
 								});
@@ -698,7 +822,9 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.setValue(this.plugin.settings.taskTrackingEnabled)
 						.onChange((value: boolean) => {
 							void this.plugin.setTaskTrackingEnabled(value)
-								.then(() => this.renderSettings())
+								.then(() => {
+									this.refreshSettings();
+								})
 								.catch((error) => {
 									console.error('tracekeeper failed to update task tracking', error);
 								});
@@ -760,7 +886,9 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.onClick(() => {
 							button.setDisabled(true);
 							void this.plugin.restartMcpRuntime()
-								.then(() => this.renderSettings())
+								.then(() => {
+									this.refreshSettings();
+								})
 								.catch((error) => {
 									console.error('tracekeeper failed to restart MCP service', error);
 									button.setDisabled(false);
@@ -780,7 +908,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 					button
 						.setButtonText(ui('撤销全部 Agent 访问', 'Revoke all Agent access'))
 						.onClick(() => {
-							new RuntimeAccessResetModal(this.app, this.plugin, () => this.renderSettings()).open();
+							new RuntimeAccessResetModal(this.app, this.plugin, () => this.refreshSettings()).open();
 						});
 					button.buttonEl.addClass('mod-warning');
 				});
@@ -849,7 +977,9 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						this.plugin.settings.mcpPort = parsed;
 						void this.plugin.saveSettings()
 							.then(() => this.plugin.restartMcpRuntime())
-							.then(() => this.renderSettings())
+							.then(() => {
+								this.refreshSettings();
+							})
 							.catch((error) => {
 								console.error('tracekeeper failed to update MCP port', error);
 								applyButton!.disabled = false;
@@ -910,7 +1040,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				config,
 				'manage',
 				() => this.refreshAgentList(true),
-				() => this.renderSettings()
+				() => this.refreshSettings()
 			).open();
 		});
 		renderClientSkillPrompt({

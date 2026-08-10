@@ -84,7 +84,6 @@ export declare function buildProjectMemoryCatalog(snapshot: ProjectMemorySnapsho
 export declare class ProjectMemoryApplicationService {
     private readonly repository;
     private readonly loadScan;
-    private readonly now;
     constructor(dependencies: ProjectMemoryApplicationDependencies);
     snapshot(): Promise<ProjectMemorySnapshotProjection>;
     listCatalog(input: ProjectMemoryCatalogInput): Promise<ProjectMemoryCatalogPage>;

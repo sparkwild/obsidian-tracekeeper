@@ -91,6 +91,24 @@ test('OAuth uses explicit approval, PKCE/resource binding, and per-integration c
     scope: 'mcp',
   }, { 'Content-Type': 'application/json' });
   assert.equal(unsupportedGrantRegistration.status, 400);
+  for (const controlCharacter of ['\u0000', '\u001f', '\u007f']) {
+    const rejected = await request(port, 'POST', '/oauth/register', {
+      client_name: `Rejected${controlCharacter}client`,
+      redirect_uris: [redirectUri],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+      scope: 'mcp',
+    }, { 'Content-Type': 'application/json' });
+    assert.equal(rejected.status, 400);
+  }
+  const acceptedNonAsciiControl = await request(port, 'POST', '/oauth/register', {
+    client_name: 'Accepted\u0080client',
+    redirect_uris: [redirectUri],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+    scope: 'mcp',
+  }, { 'Content-Type': 'application/json' });
+  assert.equal(acceptedNonAsciiControl.status, 201);
   const registration = await request(port, 'POST', '/oauth/register', {
     client_name: 'Untrusted Codex claim',
     redirect_uris: [redirectUri],

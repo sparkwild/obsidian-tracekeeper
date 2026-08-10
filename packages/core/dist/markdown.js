@@ -195,13 +195,13 @@ function sanitizeYamlValue(value, depth) {
         typeof value === 'boolean') {
         return value;
     }
-    return String(value);
+    throw new TypeError('Frontmatter contains an unsupported value.');
 }
 function isPlainRecord(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return false;
     }
-    const prototype = Object.getPrototypeOf(value);
+    const prototype = Reflect.getPrototypeOf(value);
     return prototype === Object.prototype || prototype === null;
 }
 function buildSemanticBody(content) {

@@ -22,6 +22,7 @@ import {
 	callTool,
 	recoverPendingOperations,
 } from '../dist/index.js';
+import { ProjectMemoryApplicationService } from '../dist/application/project-memory.js';
 
 const MEMORY_TOOL = 'tracekeeper.memory';
 const PROJECT_ROOT = '01_knowledge/memory/projects';
@@ -400,6 +401,20 @@ function findGlobalAgentEntries(fixture) {
 	visit(root);
 	return entries.sort();
 }
+
+test('project-memory snapshot preserves the loadScan dependency receiver', async (t) => {
+	const fixture = createFixture(t);
+	const dependencies = {
+		repository: fixture.baseRepository,
+		scan: scanVault(fixture.vaultRoot),
+		loadScan() {
+			return this.scan;
+		},
+	};
+	const service = new ProjectMemoryApplicationService(dependencies);
+	const snapshot = await service.snapshot();
+	assert.equal(snapshot.index_state, 'filesystem_scan');
+});
 
 function addEntry(fixture, project, {
 	agentType = 'codex',

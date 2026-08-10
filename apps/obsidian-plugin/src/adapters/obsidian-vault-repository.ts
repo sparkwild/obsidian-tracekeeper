@@ -121,10 +121,8 @@ export class ObsidianVaultRepository implements VaultRepository {
 
 	async listMarkdown(scope?: VaultPath): Promise<readonly VaultTextMetadata[]> {
 		const safeScope = scope ? this.normalizeRelativePath(scope) : '';
-		const prefix = safeScope ? `${safeScope}/` : '';
-		const files = this.vault.getFiles()
+		const files = (safeScope ? this.collectMarkdownFiles(safeScope) : this.vault.getFiles())
 			.filter((file) => MARKDOWN_EXTENSIONS.has(file.extension.toLowerCase()))
-			.filter((file) => !safeScope || file.path === safeScope || file.path.startsWith(prefix))
 			.filter((file) => this.isSafeExistingPath(file.path));
 		const metadata = await Promise.all(files.map(async (file) => {
 			const content = await this.vault.read(file);
@@ -136,6 +134,16 @@ export class ObsidianVaultRepository implements VaultRepository {
 			};
 		}));
 		return metadata.sort((left, right) => left.path.localeCompare(right.path));
+	}
+
+	private collectMarkdownFiles(scope: VaultPath): TFile[] {
+		const root = this.vault.getFolderByPath(scope);
+		if (!root) return [];
+		const files: TFile[] = [];
+		Vault.recurseChildren(root, (child) => {
+			if (child instanceof TFile) files.push(child);
+		});
+		return files;
 	}
 
 	private normalizeRelativePath(input: VaultPath): VaultPath {

@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
 	createCipheriv,
 	createDecipheriv,
@@ -93,7 +94,7 @@ export interface RecoverableOperationStep<TPayload> {
 	execute: (
 		payload: TPayload,
 		context: RecoverableOperationStepContext
-	) => Promise<unknown> | unknown;
+	) => unknown;
 	persistResult?: boolean;
 	failureStatus?: OperationFailureStatus | ((error: unknown) => OperationFailureStatus);
 }
@@ -209,7 +210,10 @@ export class NodeFileOperationJournal implements OperationJournal {
 		}
 		const normalizedStatus = normalizePersistedOperationStatus(record.status);
 		if (!isValidOperationStatus(normalizedStatus)) {
-			throw new CorruptedOperationJournalError(filePath, `invalid status: ${record.status}`);
+			throw new CorruptedOperationJournalError(
+				filePath,
+				`invalid status: ${formatUnknownValue(record.status)}`
+			);
 		}
 		if (typeof record.created_at !== 'string' || !record.created_at) {
 			throw new CorruptedOperationJournalError(filePath, 'created_at missing');
@@ -305,7 +309,7 @@ export class NodeFileOperationJournal implements OperationJournal {
 				await fs.chmod(keyPath, 0o600).catch(() => undefined);
 				return key;
 			}
-			await new Promise<void>((resolve) => setTimeout(resolve, 10));
+			await delay(10);
 		}
 		throw new CorruptedOperationJournalError(keyPath, 'payload encryption key is invalid');
 	}
@@ -555,7 +559,7 @@ export class NodeFileOperationJournal implements OperationJournal {
 				if (Date.now() >= deadline) {
 					throw new OperationConflictError(`Timed out waiting for the operation lock for idempotency key "${idempotencyKey}"`);
 				}
-				await new Promise<void>((resolve) => setTimeout(resolve, 25));
+				await delay(25);
 			}
 		}
 	}
@@ -1116,7 +1120,7 @@ export class RecoverableOperationRunner<TPayload, TResult> {
 			if (byKey) {
 				return byKey;
 			}
-			await new Promise<void>((resolve) => setTimeout(resolve, 10));
+			await delay(10);
 		}
 		return null;
 	}
@@ -1145,7 +1149,7 @@ function acquireOperationLock(operationId: string): OperationLock {
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return Boolean(value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype);
+	return Boolean(value && typeof value === 'object' && Reflect.getPrototypeOf(value) === Object.prototype);
 }
 
 function isEncryptedOperationPayload(value: unknown): value is EncryptedOperationPayload {
@@ -1386,7 +1390,7 @@ function assertPersistedStepResultBound(value: unknown): void {
 }
 
 function sanitizeJournalError(error: unknown): string {
-	const raw = error instanceof Error ? error.message : String(error);
+	const raw = error instanceof Error ? error.message : formatUnknownValue(error);
 	const rawBytes = Buffer.byteLength(raw, 'utf8');
 	if (rawBytes > MAX_PERSISTED_ERROR_BYTES) {
 		const errorName = error instanceof Error && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(error.name)
@@ -1415,6 +1419,28 @@ function sanitizeJournalError(error: unknown): string {
 	return sanitized || 'Operation failed.';
 }
 
+function formatUnknownValue(value: unknown): string {
+	if (typeof value === 'string') {
+		return value;
+	}
+	if (
+		value === null
+		|| typeof value === 'number'
+		|| typeof value === 'boolean'
+		|| typeof value === 'bigint'
+		|| typeof value === 'undefined'
+	) {
+		return String(value);
+	}
+	if (typeof value === 'symbol') {
+		return value.description === undefined ? 'Symbol()' : `Symbol(${value.description})`;
+	}
+	if (typeof value === 'function') {
+		return value.name ? `[Function ${value.name}]` : '[Function]';
+	}
+	return 'non-scalar value';
+}
+
 function isNodeErrorCode(error: unknown, code: string): boolean {
 	return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
 }
@@ -1435,8 +1461,13 @@ function normalizePayload(value: unknown): unknown {
 	if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
 		return value;
 	}
-	if (typeof value === 'bigint' || typeof value === 'undefined' || typeof value === 'function' || typeof value === 'symbol') {
-		return String(value);
+	if (
+		typeof value === 'bigint'
+		|| typeof value === 'undefined'
+		|| typeof value === 'function'
+		|| typeof value === 'symbol'
+	) {
+		return formatUnknownValue(value);
 	}
 	if (value instanceof Date) {
 		return value.toISOString();
@@ -1448,7 +1479,7 @@ function normalizePayload(value: unknown): unknown {
 		const keys = Object.keys(value).sort();
 		const normalized: Record<string, unknown> = {};
 		for (const key of keys) {
-			normalized[key] = normalizePayload((value as Record<string, unknown>)[key]);
+			normalized[key] = normalizePayload(value[key]);
 		}
 		return normalized;
 	}
@@ -1460,5 +1491,5 @@ function normalizePayload(value: unknown): unknown {
 		return Array.from(new Uint8Array(value));
 	}
 
-	return String(value);
+	throw new TypeError('Operation payload contains an unsupported object value.');
 }

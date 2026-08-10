@@ -473,10 +473,7 @@ export class ObsidianKnowledgeIndexAdapter {
 
 	private findMarkdownFile(filePath: string): TFile | null {
 		const direct = this.app.vault.getAbstractFileByPath?.(filePath);
-		if (direct && isMarkdownFile(direct)) {
-			return direct;
-		}
-		return this.app.vault.getMarkdownFiles().find((file) => file.path === filePath) ?? null;
+		return direct && isMarkdownFile(direct) ? direct : null;
 	}
 
 	private async enqueueEvent(apply: () => Promise<void>): Promise<void> {

@@ -33,8 +33,7 @@ export interface RenameVaultIndexEvent {
     contentHash?: string;
 }
 export type VaultIndexEvent = CreateVaultIndexEvent | ModifyVaultIndexEvent | DeleteVaultIndexEvent | RenameVaultIndexEvent;
-export interface IndexedWikilink extends NormalizedVaultEdge {
-}
+export type IndexedWikilink = NormalizedVaultEdge;
 export interface IndexedKnowledgeNote extends NormalizedVaultNote {
     path: VaultPath;
     fileVersion: FileVersion;

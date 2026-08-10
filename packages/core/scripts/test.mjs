@@ -4122,6 +4122,26 @@ async function runMemoryRecordV2Tests() {
 		frontmatter: renderedFrontmatter,
 	});
 	assert.deepEqual(reparsed, built.record);
+	for (const codePoint of [...Array.from({ length: 0x20 }, (_, index) => index), 0x7f]) {
+		assert.throws(
+			() => memoryRecordModule.parseMemoryRecord({
+				path: built.record.path,
+				frontmatter: {
+					...renderedFrontmatter,
+					claim_key: `control${String.fromCharCode(codePoint)}character`,
+				},
+			}),
+			/control characters/i
+		);
+	}
+	const nonControlClaimKey = memoryRecordModule.parseMemoryRecord({
+		path: built.record.path,
+		frontmatter: {
+			...renderedFrontmatter,
+			claim_key: `extended${String.fromCharCode(0x80)}character`,
+		},
+	});
+	assert.equal(nonControlClaimKey.claim_key, `extended${String.fromCharCode(0x80)}character`);
 
 	const v1Projection = memoryRecordModule.projectMemoryEntryToReadProjection({
 		schema_version: 1,
@@ -4183,6 +4203,7 @@ async function runMemoryRecordV2Tests() {
 		rows: [
 			'canonical-global-entry-path',
 			'normalized-round-trip',
+			'claim-key-control-boundaries',
 			'verified-evidence-bound',
 			'temporal-range-validation',
 			'vault-path-safety',
