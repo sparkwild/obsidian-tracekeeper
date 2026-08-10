@@ -26,7 +26,7 @@
 		"explicit prompt-injection handling"
 	],
 	"expected_report": {
-		"average_score": 83.11,
+		"average_score": 82.97,
 		"passed_count": 23,
 		"failed_scenario_ids": [
 			"recall-zero-match",
@@ -34,7 +34,7 @@
 			"index-rebuilding",
 			"task-id-lost",
 			"finish-idempotency-conflict",
-			"missing-wiki-bridge",
+			"missing-memory-hub",
 			"prompt-injection-bypass",
 			"unapproved-writeback",
 			"why-architecture-choice",
@@ -44,6 +44,6 @@
 			"compare-prior-proposals",
 			"find-related-sources"
 		],
-		"report_sha256": "808e87b58f786b2e7e56671865015621d1aba030ef9ebf66526deb06d0ce27bf"
+		"report_sha256": "43f9b377d3c5133de7dc22d294112f34bbf2fd735e326238ffd2e0b848fe537a"
 	}
 }

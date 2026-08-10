@@ -10,8 +10,11 @@ import {
 	NodeFileOperationJournal,
 	buildMemoryRecord,
 	computePayloadHash,
+	computeProposalContentHash,
+	computeProposalRevision,
 	parseMarkdown,
 	scanVault,
+	transitionProposal,
 } from '@tracekeeper/core';
 import {
 	LOCAL_TRUST_CAPABILITIES,
@@ -22,7 +25,10 @@ import {
 
 const MEMORY_TOOL = 'tracekeeper.memory';
 const PROJECT_ROOT = '01_knowledge/memory/projects';
+const GLOBAL_ROOT = '01_knowledge/memory/global';
+const GLOBAL_HUB = `${GLOBAL_ROOT}/index.md`;
 const WIKI_PATH = '01_knowledge/wiki/project-memory-fixture.md';
+const SOURCE_PATH = '01_knowledge/sources/web/project-memory-fixture.md';
 const SORT_ORDER = 'observed_at_desc_memory_id_path_asc';
 const FIXED_TIME = '2026-07-30T12:00:00.000Z';
 
@@ -35,6 +41,77 @@ function markdown(frontmatter, body) {
 		body,
 		'',
 	].join('\n');
+}
+
+function renderFrontmatterMutationValue(value) {
+	if (Array.isArray(value)) return JSON.stringify(value);
+	if (/^[A-Za-z0-9._/-]+$/.test(String(value))) return String(value);
+	return JSON.stringify(value);
+}
+
+function applyFrontmatterMutation(text, mutation) {
+	const lines = text.replace(/\r\n/g, '\n').split('\n');
+	assert.equal(lines[0], '---');
+	const end = lines.indexOf('---', 1);
+	assert.ok(end > 0);
+	const pending = new Map(Object.entries(mutation));
+	const frontmatter = lines.slice(1, end).flatMap((line) => {
+		const match = line.match(/^(\s*)([^:#]+):\s*(.*)$/);
+		if (!match) return [line];
+		const key = match[2].trim();
+		if (!pending.has(key)) return [line];
+		const value = pending.get(key);
+		pending.delete(key);
+		return value === null || value === undefined
+			? []
+			: [`${match[1]}${key}: ${renderFrontmatterMutationValue(value)}`];
+	});
+	for (const [key, value] of pending) {
+		if (value !== null && value !== undefined) {
+			frontmatter.push(`${key}: ${renderFrontmatterMutationValue(value)}`);
+		}
+	}
+	return ['---', ...frontmatter, '---', ...lines.slice(end + 1)].join('\n');
+}
+
+function approveGeneratedMemoryProposal(fixture, proposal, writebackContent) {
+	const text = fixture.read(proposal.proposal_path);
+	const parsed = parseMarkdown(text);
+	const fields = parsed.frontmatter.fields;
+	const scalar = (key) => typeof fields[key] === 'string' ? fields[key] : '';
+	const pending = {
+		path: proposal.proposal_path,
+		classification: 'memory_proposal',
+		proposalId: scalar('proposal_id'),
+		proposalKind: scalar('proposal_kind'),
+		taskId: scalar('task_id'),
+		status: 'pending',
+		targetPath: scalar('target_note'),
+		writebackContent,
+		writebackEffect: scalar('writeback_effect') || undefined,
+		revisionComment: '',
+		revisionRequestedAt: '',
+		revisionRequestedBy: '',
+		archived: false,
+	};
+	const decision = transitionProposal(
+		pending,
+		{
+			expectedRevision: computeProposalRevision(pending),
+			expectedContentHash: computeProposalContentHash(pending),
+			operationId: `human-approve-${pending.proposalId}`,
+			action: { kind: 'status', nextStatus: 'approved' },
+		},
+		{
+			now: '2026-08-10T00:00:00.000Z',
+			actor: 'human-reviewer',
+			targetAllowed: () => true,
+			targetExists: () => false,
+			targetCreationAllowed: () => true,
+		}
+	);
+	fixture.write(proposal.proposal_path, applyFrontmatterMutation(text, decision.frontmatter));
+	return decision;
 }
 
 function createRendezvous(expected, name) {
@@ -182,6 +259,16 @@ function createFixture(t, { generation = 41 } = {}) {
 			'# Project memory fixture\n\nStable Wiki bridge for project-memory tests.'
 		)
 	);
+	write(
+		SOURCE_PATH,
+		markdown(
+			[
+				'type: source',
+				'title: Project memory source fixture',
+			],
+			'# Project memory source fixture\n\nVerified source relation for authority tests.'
+		)
+	);
 
 	function context({
 		repository = baseRepository,
@@ -290,6 +377,28 @@ function addProject(fixture, {
 		projectHint,
 		repoPath,
 	};
+}
+
+function addGlobalHub(fixture, content = '# Global memory\n') {
+	fixture.write(GLOBAL_HUB, content);
+	return GLOBAL_HUB;
+}
+
+function findGlobalAgentEntries(fixture) {
+	const root = path.join(fixture.vaultRoot, GLOBAL_ROOT, 'agents');
+	if (!fs.existsSync(root)) return [];
+	const entries = [];
+	const visit = (directory) => {
+		for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+			const absolutePath = path.join(directory, item.name);
+			if (item.isDirectory()) visit(absolutePath);
+			else if (item.isFile() && item.name.endsWith('.md')) {
+				entries.push(path.relative(fixture.vaultRoot, absolutePath).replace(/\\/g, '/'));
+			}
+		}
+	};
+	visit(root);
+	return entries.sort();
 }
 
 function addEntry(fixture, project, {
@@ -1036,7 +1145,7 @@ test('finish_task keeps ordinary task fields out of durable Memory', async (t) =
 	assert.equal(fixture.read(project.legacyPath), legacyBefore);
 });
 
-test('finish_task caps Agent verified confidence, writes one governed v2 record, and reuses it', async (t) => {
+test('finish_task caps Wiki-backed Agent verified confidence at supported, writes one governed v2 record, and reuses it', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture, { legacy: true });
 	const context = fixture.context();
@@ -1101,6 +1210,188 @@ test('finish_task caps Agent verified confidence, writes one governed v2 record,
 	}, context);
 	assert.equal(changed.isError, true);
 	assert.deepEqual(findAgentEntries(fixture), entries);
+});
+
+test('finish_task Global Auto writes one canonical MemoryRecord v2 with exact replay', async (t) => {
+	const fixture = createFixture(t);
+	addGlobalHub(fixture, '');
+	const context = fixture.context();
+	context.memoryRules.globalMemoryRule = 'auto_write';
+	const started = expectSuccess(
+		await callTool('tracekeeper.start_task', {
+			goal: 'Write one explicit Global MemoryRecord candidate.',
+			idempotency_key: 'finish-global-v2-start',
+		}, context),
+		'start Global v2 finish task'
+	);
+	const args = {
+		task_id: started.task_id,
+		status: 'completed',
+		summary: 'Global closeout uses the shared v2 writer.',
+		decisions: ['This task fact remains in task history only.'],
+		memory_candidate_records: [{
+			proposal_kind: 'agent_preference',
+			content: 'Use an explicit Global v2 record for durable preferences.',
+			scope: 'global',
+			claim_key: 'preference:finish-global-v2',
+		}],
+		idempotency_key: 'finish-global-v2-complete',
+	};
+	const finished = expectSuccess(
+		await callTool('tracekeeper.finish_task', args, context),
+		'finish Global v2 task'
+	);
+	assert.equal(finished.memory_status, 'auto_saved');
+	assert.equal(finished.memory_changes.length, 1);
+	assert.equal(finished.memory_changes[0].change_kind, 'record_written');
+	assert.equal(finished.auto_applied_memory_updates.length, 1);
+	const update = finished.auto_applied_memory_updates[0];
+	assert.equal(
+		update.path,
+		`${GLOBAL_ROOT}/agents/codex/propose_memory-${update.operation_id}.md`
+	);
+	assert.deepEqual(findGlobalAgentEntries(fixture), [update.path]);
+	const parsed = parseMarkdown(fixture.read(update.path));
+	assert.equal(parsed.frontmatter.fields.schema_version, 2);
+	assert.equal(parsed.frontmatter.fields.type, 'memory_record');
+	assert.equal(parsed.frontmatter.fields.scope, 'global');
+	assert.equal(parsed.frontmatter.fields.project_id, undefined);
+	assert.equal(parsed.frontmatter.fields.global_hub, `[[${GLOBAL_HUB.replace(/\.md$/, '')}]]`);
+	assert.equal(parsed.frontmatter.fields.claim_key, 'preference:finish-global-v2');
+	assert.doesNotMatch(parsed.body, /This task fact remains in task history only\./);
+	const operation = await finishTaskOperationRecord(fixture);
+	assert.equal(operation.payload.memoryRecordWriteVersion, 2);
+	assert.deepEqual(operation.payload.closeoutGroups, []);
+	assert.equal(operation.payload.projectMemoryEntryVersion, undefined);
+
+	const replay = expectSuccess(
+		await callTool('tracekeeper.finish_task', args, context),
+		'replay Global v2 finish task'
+	);
+	assert.equal(replay.operation_id, finished.operation_id);
+	assert.deepEqual(findGlobalAgentEntries(fixture), [update.path]);
+	const changed = await callTool('tracekeeper.finish_task', {
+		...args,
+		memory_candidate_records: [{
+			...args.memory_candidate_records[0],
+			content: 'Changed Global closeout content must conflict.',
+		}],
+	}, context);
+	assert.equal(changed.isError, true);
+	assert.deepEqual(findGlobalAgentEntries(fixture), [update.path]);
+});
+
+test('unfinished legacy finish_task recovery fails closed before any Memory append', async (t) => {
+	const fixture = createFixture(t);
+	addGlobalHub(fixture);
+	const context = fixture.context();
+	context.memoryRules.globalMemoryRule = 'auto_write';
+	const started = expectSuccess(
+		await callTool('tracekeeper.start_task', {
+			goal: 'Exercise unfinished legacy finish recovery.',
+			idempotency_key: 'finish-legacy-recovery-start',
+		}, context),
+		'start unfinished legacy recovery task'
+	);
+	let interrupted = false;
+	const finishArgs = {
+		task_id: started.task_id,
+		status: 'completed',
+		summary: 'This interrupted closeout must not recover through legacy append semantics.',
+		memory_candidate_records: [{
+			proposal_kind: 'agent_preference',
+			content: 'Never recover this candidate through an unkeyed append.',
+			scope: 'global',
+			claim_key: 'preference:unfinished-legacy-finish',
+		}],
+		idempotency_key: 'finish-legacy-recovery-complete',
+	};
+	const result = await callTool('tracekeeper.finish_task', finishArgs, {
+		...context,
+		operationFailureInjection(injection) {
+			if (
+				!interrupted
+				&& injection.phase === 'before_step'
+				&& injection.stepName === 'finish-task:session-note'
+			) {
+				interrupted = true;
+				throw new Error('interrupt before v2 finish execution');
+			}
+		},
+	});
+	assert.equal(result.isError, true);
+	assert.equal(interrupted, true);
+	const operationPath = finishTaskOperationPath(fixture);
+	const operationId = path.basename(operationPath, '.json');
+	const operationRoot = path.dirname(operationPath);
+	const journal = new NodeFileOperationJournal({ directory: operationRoot });
+	const legacyRecord = await journal.loadById(operationId);
+	assert.ok(legacyRecord);
+	assert.equal(legacyRecord.status, 'failed');
+	delete legacyRecord.payload.memoryRecordWriteVersion;
+	legacyRecord.payload_hash = computePayloadHash(legacyRecord.payload);
+	fs.writeFileSync(operationPath, `${JSON.stringify(legacyRecord, null, 2)}\n`, 'utf8');
+	fs.rmSync(path.join(operationRoot, `.progress-${operationId}.anchor`), { force: true });
+
+	const recovery = await recoverPendingOperations(fixture.vaultRoot, context);
+	assert.deepEqual(recovery.recovered, []);
+	assert.equal(recovery.failed.length, 1);
+	assert.equal(recovery.failed[0].operation_id, operationId);
+	assert.match(recovery.failed[0].error, /fresh MemoryRecord v2 closeout/i);
+	const conflicted = await journal.loadById(operationId);
+	assert.equal(conflicted.status, 'conflicted');
+	assert.match(conflicted.error, /fresh MemoryRecord v2 closeout/i);
+	assert.deepEqual(findGlobalAgentEntries(fixture), []);
+	assert.equal(fixture.exists(`${GLOBAL_ROOT}/memory.md`), false);
+	const taskAfterRecovery = parseMarkdown(fixture.read(started.path));
+	assert.equal(taskAfterRecovery.frontmatter.fields.status, 'active');
+	assert.equal(taskAfterRecovery.frontmatter.fields.finish_operation_id, undefined);
+	const fresh = expectSuccess(
+		await callTool('tracekeeper.finish_task', {
+			...finishArgs,
+			idempotency_key: 'finish-legacy-recovery-fresh-v2',
+		}, context),
+		'fresh v2 closeout after legacy quarantine'
+	);
+	assert.equal(fresh.memory_changes[0].change_kind, 'record_written');
+	assert.equal(findGlobalAgentEntries(fixture).length, 1);
+});
+
+test('finish_task Project Auto accepts a candidate without Wiki or Source relations', async (t) => {
+	const fixture = createFixture(t);
+	const project = addProject(fixture);
+	const context = fixture.context();
+	const started = expectSuccess(
+		await callTool('tracekeeper.start_task', {
+			goal: 'Finish without a forced Wiki relation.',
+			...projectArgs(project),
+			idempotency_key: 'finish-no-wiki-start',
+		}, context),
+		'start no-Wiki finish task'
+	);
+	const finished = expectSuccess(
+		await callTool('tracekeeper.finish_task', {
+			task_id: started.task_id,
+			summary: 'A relation-free project candidate is valid.',
+			memory_candidate_records: [{
+				proposal_kind: 'task_decision',
+				content: 'Do not require a Wiki bridge for project MemoryRecord v2.',
+				scope: 'project',
+				claim_key: 'project:no-wiki-finish',
+			}],
+			review_proposal_mode: 'auto_propose',
+			...projectArgs(project),
+			idempotency_key: 'finish-no-wiki-complete',
+		}, context),
+		'finish no-Wiki project candidate'
+	);
+	assert.equal(finished.memory_changes.length, 1);
+	assert.equal(finished.memory_changes[0].change_kind, 'record_written');
+	assert.equal(finished.memory_changes[0].reason, undefined);
+	assert.equal(finished.memory_status, 'auto_saved');
+	assert.equal(finished.missing_wiki_bridge, false);
+	assert.deepEqual(finished.related_wiki, []);
+	assert.equal(findAgentEntries(fixture).length, 1);
 });
 
 test('finish_task routes mixed explicit candidates independently of task project context', async (t) => {
@@ -1573,6 +1864,7 @@ test('propose_memory writes a governed v2 record and derives effective authority
 				claim_key: 'architecture:memory-writer',
 				proposed_authority: 'source',
 				proposed_confidence: 'supported',
+				related_sources: [SOURCE_PATH],
 				observed_at: FIXED_TIME,
 			},
 			fixture.context()
@@ -1594,7 +1886,7 @@ test('propose_memory writes a governed v2 record and derives effective authority
 	assert.equal(parsed.frontmatter.fields.confidence_level, 'supported');
 });
 
-test('propose_memory caps Agent verified confidence and keeps project auto-save automatic', async (t) => {
+test('propose_memory accepts verified Wiki evidence for Agent confidence without source authority', async (t) => {
 	const fixture = createFixture(t);
 	const project = addProject(fixture);
 	const result = expectSuccess(
@@ -1608,7 +1900,8 @@ test('propose_memory caps Agent verified confidence and keeps project auto-save 
 				claim_key: 'architecture:agent-confidence-cap',
 				proposed_authority: 'agent',
 				proposed_confidence: 'verified',
-				evidence: [WIKI_PATH],
+				evidence: ['unverified-summary-only'],
+				related_wiki: [WIKI_PATH],
 			},
 			fixture.context()
 		),
@@ -1622,6 +1915,554 @@ test('propose_memory caps Agent verified confidence and keeps project auto-save 
 	const parsed = parseMarkdown(fixture.read(result.path));
 	assert.equal(parsed.frontmatter.fields.authority, 'agent');
 	assert.equal(parsed.frontmatter.fields.confidence_level, 'supported');
+	assert.deepEqual(parsed.frontmatter.fields.evidence, [`[[${WIKI_PATH.replace(/\.md$/, '')}]]`]);
+	assert.deepEqual(result.predicted_record.evidence, [WIKI_PATH]);
+});
+
+test('Global and Project Auto separate fabricated, Wiki, and Source authority evidence', async (t) => {
+	const fixture = createFixture(t);
+	addGlobalHub(fixture);
+	const project = addProject(fixture);
+	const cases = [
+		{
+			label: 'global',
+			args: {
+				memory_scope: 'global',
+			},
+			context: fixture.context({
+				agentId: 'global-source-downgrade-agent',
+				sessionId: 'global-source-downgrade-session',
+			}),
+		},
+		{
+			label: 'project',
+			args: {
+				memory_scope: 'project',
+				...projectArgs(project),
+			},
+			context: fixture.context({
+				agentId: 'project-source-downgrade-agent',
+				sessionId: 'project-source-downgrade-session',
+			}),
+		},
+	];
+	for (const item of cases) {
+		item.context.memoryRules.globalMemoryRule = 'auto_write';
+		const fabricated = expectSuccess(
+			await callTool('tracekeeper.propose_memory', {
+				proposal_kind: 'task_decision',
+				content: `${item.label} fabricated evidence must not elevate authority.`,
+				...item.args,
+				claim_key: `authority:${item.label}-fabricated-source`,
+				proposed_authority: 'source',
+				proposed_confidence: 'supported',
+				evidence: ['invented-source-assertion'],
+				idempotency_key: `${item.label}-fabricated-source-authority`,
+			}, item.context),
+			`${item.label} fabricated source authority downgrade`
+		);
+		assert.equal(fabricated.auto_applied, true);
+		assert.equal(fabricated.predicted_record.authority, 'agent');
+		assert.equal(fabricated.predicted_record.confidence_level, 'inferred');
+		assert.deepEqual(fabricated.predicted_record.evidence, []);
+		const fabricatedRecord = parseMarkdown(fixture.read(fabricated.path));
+		assert.equal(fabricatedRecord.frontmatter.fields.authority, 'agent');
+		assert.equal(fabricatedRecord.frontmatter.fields.confidence_level, 'inferred');
+		assert.deepEqual(fabricatedRecord.frontmatter.fields.evidence, []);
+
+		const wikiBacked = expectSuccess(
+			await callTool('tracekeeper.propose_memory', {
+				proposal_kind: 'task_decision',
+				content: `${item.label} Wiki evidence supports confidence but not source authority.`,
+				...item.args,
+				claim_key: `authority:${item.label}-wiki-source`,
+				proposed_authority: 'source',
+				proposed_confidence: 'supported',
+				related_wiki: [WIKI_PATH],
+				idempotency_key: `${item.label}-wiki-source-authority`,
+			}, item.context),
+			`${item.label} Wiki-backed source authority downgrade`
+		);
+		assert.equal(wikiBacked.auto_applied, true);
+		assert.equal(wikiBacked.predicted_record.authority, 'agent');
+		assert.equal(wikiBacked.predicted_record.confidence_level, 'supported');
+		assert.deepEqual(wikiBacked.predicted_record.evidence, [WIKI_PATH]);
+		const wikiRecord = parseMarkdown(fixture.read(wikiBacked.path));
+		assert.equal(wikiRecord.frontmatter.fields.authority, 'agent');
+		assert.equal(wikiRecord.frontmatter.fields.confidence_level, 'supported');
+		assert.deepEqual(
+			wikiRecord.frontmatter.fields.evidence,
+			[`[[${WIKI_PATH.replace(/\.md$/, '')}]]`]
+		);
+	}
+});
+
+test('Global and Project Auto do not verify directory collisions as Source relations', async (t) => {
+	const fixture = createFixture(t);
+	addGlobalHub(fixture);
+	const project = addProject(fixture);
+	for (const item of [
+		{ label: 'global', args: { memory_scope: 'global' } },
+		{ label: 'project', args: { memory_scope: 'project', ...projectArgs(project) } },
+	]) {
+		const invalidSource = `01_knowledge/sources/web/${item.label}-directory.md`;
+		fs.mkdirSync(path.join(fixture.vaultRoot, invalidSource), { recursive: true });
+		const context = fixture.context({
+			agentId: `${item.label}-invalid-source-agent`,
+			sessionId: `${item.label}-invalid-source-session`,
+		});
+		context.memoryRules.globalMemoryRule = 'auto_write';
+		const result = expectSuccess(
+			await callTool('tracekeeper.propose_memory', {
+				proposal_kind: 'task_decision',
+				content: `${item.label} directory collision is not verified Source evidence.`,
+				...item.args,
+				claim_key: `authority:${item.label}-directory-source`,
+				proposed_authority: 'source',
+				proposed_confidence: 'supported',
+				related_sources: [invalidSource],
+				idempotency_key: `${item.label}-directory-source-authority`,
+			}, context),
+			`${item.label} invalid Source relation review`
+		);
+		assert.equal(result.auto_applied, false);
+		assert.equal(result.review_reason, 'unresolved_relation_evidence');
+		assert.deepEqual(result.missing_related_sources, [invalidSource]);
+	}
+	assert.equal(findGlobalAgentEntries(fixture).length, 0);
+	assert.equal(findAgentEntries(fixture).length, 0);
+});
+
+test('global Auto writes canonical MemoryRecord v2 and accepts an empty existing Hub', async (t) => {
+	const fixture = createFixture(t);
+	addGlobalHub(fixture, '');
+	const context = fixture.context();
+	context.memoryRules.globalMemoryRule = 'auto_write';
+	const result = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'agent_preference',
+			content: 'Keep the global v2 writer canonical.',
+			memory_scope: 'global',
+			claim_key: 'preference:global-v2',
+			idempotency_key: 'global-memory-v2-empty-hub',
+		}, context),
+		'global v2 auto write with empty Hub'
+	);
+	assert.equal(result.auto_applied, true);
+	assert.equal(result.memory_scope, 'global');
+	assert.equal(result.project_id, null);
+	assert.equal(result.project_hub, null);
+	assert.equal(result.global_hub, GLOBAL_HUB);
+	assert.equal(result.record_identity.claim_key, 'preference:global-v2');
+	assert.equal(result.predicted_state, 'current');
+	assert.match(result.path, /^01_knowledge\/memory\/global\/agents\/codex\/propose_memory-/);
+	assert.equal(result.path, `${GLOBAL_ROOT}/agents/codex/propose_memory-${result.operation_id}.md`);
+	const parsed = parseMarkdown(fixture.read(result.path));
+	assert.equal(parsed.frontmatter.fields.schema_version, 2);
+	assert.equal(parsed.frontmatter.fields.type, 'memory_record');
+	assert.equal(parsed.frontmatter.fields.scope, 'global');
+	assert.equal(parsed.frontmatter.fields.project_id, undefined);
+	assert.equal(parsed.frontmatter.fields.global_hub, `[[${GLOBAL_HUB.replace(/\.md$/, '')}]]`);
+});
+
+test('missing Global Hub routes Auto to review with structure repair action and no MemoryRecord', async (t) => {
+	const fixture = createFixture(t);
+	const context = fixture.context();
+	context.memoryRules.globalMemoryRule = 'auto_write';
+	const result = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'agent_preference',
+			content: 'Do not create a missing global Hub silently.',
+			memory_scope: 'global',
+			claim_key: 'preference:missing-global-hub',
+			idempotency_key: 'global-memory-v2-missing-hub',
+		}, context),
+		'missing global Hub review fallback'
+	);
+	assert.equal(result.auto_applied, false);
+	assert.equal(result.review_reason, 'missing_memory_hub');
+	assert.equal(result.proposal_destination, 'memory');
+	assert.equal(findGlobalAgentEntries(fixture).length, 0);
+	assert.equal(fixture.exists(GLOBAL_HUB), false);
+	assert.equal(result.next_actions.length, 1);
+	assert.match(result.next_actions[0].action_id, /structure_repair_required/);
+	assert.equal(result.next_actions[0].reason_code, 'MEMORY_NOT_PERSISTED');
+	assert.equal(result.next_actions[0].kind, 'user_review');
+	assert.match(result.next_actions[0].reason, /returned queued proposal/i);
+	assert.match(result.next_actions[0].reason, /only if the result has no proposal_id or proposal_path/i);
+});
+
+test('a directory occupying the Global Hub path routes Auto to structure repair', async (t) => {
+	const fixture = createFixture(t);
+	fs.mkdirSync(path.join(fixture.vaultRoot, GLOBAL_HUB), { recursive: true });
+	const context = fixture.context();
+	context.memoryRules.globalMemoryRule = 'auto_write';
+	const result = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'agent_preference',
+			content: 'A non-file Hub collision must not become a generic tool failure.',
+			memory_scope: 'global',
+			claim_key: 'preference:invalid-global-hub',
+			idempotency_key: 'global-memory-v2-invalid-hub',
+		}, context),
+		'invalid global Hub review fallback'
+	);
+	assert.equal(result.auto_applied, false);
+	assert.equal(result.review_reason, 'missing_memory_hub');
+	assert.equal(findGlobalAgentEntries(fixture).length, 0);
+	assert.match(result.next_actions[0].action_id, /structure_repair_required/);
+});
+
+test('project Auto does not require a Wiki relation and preserves explicit unresolved relations for review', async (t) => {
+	const fixture = createFixture(t);
+	const project = addProject(fixture);
+	const withoutWiki = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'task_decision',
+			content: 'Project memory is valid without a Wiki relation.',
+			memory_scope: 'project',
+			...projectArgs(project),
+			claim_key: 'architecture:no-wiki-required',
+			idempotency_key: 'project-memory-no-wiki-required',
+		}, fixture.context()),
+		'project Auto without Wiki'
+	);
+	assert.equal(withoutWiki.auto_applied, true);
+	assert.deepEqual(withoutWiki.related_wiki, []);
+	assert.equal(withoutWiki.missing_wiki_bridge, false);
+
+	const unresolved = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'task_decision',
+			content: 'An explicit unresolved relation must be reviewed.',
+			memory_scope: 'project',
+			...projectArgs(project),
+			claim_key: 'architecture:unresolved-relation',
+			related_wiki: ['01_knowledge/wiki/does-not-exist.md'],
+			idempotency_key: 'project-memory-unresolved-relation',
+		}, fixture.context()),
+		'explicit unresolved relation review'
+	);
+	assert.equal(unresolved.auto_applied, false);
+	assert.equal(unresolved.review_reason, 'unresolved_relation_evidence');
+	assert.equal(findAgentEntries(fixture).length, 1);
+});
+
+test('non-Wiki propose_memory without memory_scope fails closed before persistence', async (t) => {
+	const fixture = createFixture(t);
+	const result = await callTool('tracekeeper.propose_memory', {
+		proposal_kind: 'task_decision',
+		content: 'A MemoryRecord candidate must declare its scope.',
+		claim_key: 'architecture:missing-explicit-scope',
+		idempotency_key: 'project-memory-missing-explicit-scope',
+	}, fixture.context());
+	assert.equal(result.isError, true);
+	assert.match(String(result.structuredContent?.error || ''), /memory_scope/i);
+	assert.equal(findGlobalAgentEntries(fixture).length, 0);
+	assert.equal(findAgentEntries(fixture).length, 0);
+	assert.equal(fixture.exists('00_tracekeeper/inbox/review_queue'), false);
+});
+
+test('explicit Wiki target is review-gated without memory_scope even when Memory is disabled', async (t) => {
+	const fixture = createFixture(t);
+	const before = fixture.read(WIKI_PATH);
+	const context = fixture.context();
+	context.memoryRules.globalMemoryRule = 'disabled';
+	context.memoryRules.projectMemoryRule = 'disabled';
+	const result = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'wiki_update',
+			content: 'A reviewed Wiki update.',
+			target_note: WIKI_PATH,
+			idempotency_key: 'wiki-review-independent-memory-policy',
+		}, context),
+		'Wiki review independent from Memory policy'
+	);
+	assert.equal(result.auto_applied, false);
+	assert.equal(result.proposal_destination, 'wiki');
+	assert.equal(result.memory_scope, null);
+	assert.equal(result.memory_rule, null);
+	assert.equal(result.review_reason, 'wiki_change_requires_human_review');
+	assert.equal(result.target_note, undefined);
+	assert.equal(fixture.read(WIKI_PATH), before);
+});
+
+test('disabled Memory scope ignores a candidate without proposal or durable record', async (t) => {
+	const fixture = createFixture(t);
+	addGlobalHub(fixture);
+	const context = fixture.context();
+	context.memoryRules.globalMemoryRule = 'disabled';
+	const result = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'agent_preference',
+			content: 'This disabled candidate must not persist.',
+			memory_scope: 'global',
+			claim_key: 'preference:disabled',
+			idempotency_key: 'global-memory-disabled-ignore',
+		}, context),
+		'disabled Memory candidate'
+	);
+	assert.equal(result.status, 'ignored');
+	assert.equal(result.persisted, false);
+	assert.equal(result.memory_rule, 'disabled');
+	assert.equal(result.proposal_id, null);
+	assert.equal(result.proposal_path, null);
+	assert.equal(findGlobalAgentEntries(fixture).length, 0);
+	assert.equal(result.next_actions[0].reason_code, 'MEMORY_NOT_PERSISTED');
+});
+
+test('finish_task aggregates disabled Memory candidates as no-op instead of queued proposals', async (t) => {
+	const fixture = createFixture(t);
+	addGlobalHub(fixture);
+	const context = fixture.context();
+	context.memoryRules.globalMemoryRule = 'disabled';
+	const started = expectSuccess(
+		await callTool('tracekeeper.start_task', {
+			goal: 'Verify disabled closeout Memory semantics.',
+			idempotency_key: 'finish-disabled-start',
+		}, context),
+		'start disabled closeout task'
+	);
+	const finished = expectSuccess(
+		await callTool('tracekeeper.finish_task', {
+			task_id: started.task_id,
+			status: 'completed',
+			summary: 'Disabled Memory candidate remains unpersisted.',
+			memory_candidate_records: [{
+				proposal_kind: 'agent_preference',
+				content: 'Do not persist this disabled closeout candidate.',
+				scope: 'global',
+				claim_key: 'preference:finish-disabled',
+			}],
+			idempotency_key: 'finish-disabled-complete',
+		}, context),
+		'finish disabled closeout task'
+	);
+	assert.equal(finished.memory_status, 'disabled');
+	assert.equal(finished.auto_applied_count, 0);
+	assert.equal(finished.proposal_count, 0);
+	assert.equal(finished.memory_changes.length, 1);
+	assert.equal(finished.memory_changes[0].change_kind, 'disabled');
+	assert.equal(finished.memory_changes[0].reason, 'memory_rule_disabled');
+	assert.equal(findGlobalAgentEntries(fixture).length, 0);
+});
+
+test('finish_task reports explicit structure repair for Global and Project candidates with missing Hubs', async (t) => {
+	const fixture = createFixture(t);
+	const context = fixture.context();
+	context.memoryRules.globalMemoryRule = 'auto_write';
+	const started = expectSuccess(
+		await callTool('tracekeeper.start_task', {
+			goal: 'Verify missing-Hub closeout guidance.',
+			idempotency_key: 'finish-missing-hubs-start',
+		}, context),
+		'start missing-Hub closeout task'
+	);
+	const finished = expectSuccess(
+		await callTool('tracekeeper.finish_task', {
+			task_id: started.task_id,
+			status: 'completed',
+			summary: 'Both candidate scopes need structure repair.',
+			memory_candidate_records: [
+				{
+					proposal_kind: 'agent_preference',
+					content: 'Global candidate with missing Hub.',
+					scope: 'global',
+					claim_key: 'preference:finish-missing-global-hub',
+				},
+				{
+					proposal_kind: 'task_decision',
+					content: 'Project candidate with missing Hub.',
+					scope: 'project',
+					project_hint: 'missing',
+					repo_path: '/work/missing',
+					claim_key: 'architecture:finish-missing-project-hub',
+				},
+			],
+			idempotency_key: 'finish-missing-hubs-complete',
+		}, context),
+		'finish missing-Hub closeout task'
+	);
+	assert.equal(finished.memory_changes.length, 2);
+	assert.ok(finished.memory_changes.every((change) => change.reason === 'missing_memory_hub'));
+	assert.equal(finished.next_actions.length, 1);
+	assert.match(finished.next_actions[0].action_id, /structure_repair_required/);
+	assert.equal(finished.next_actions[0].reason_code, 'MEMORY_NOT_PERSISTED');
+	assert.equal(finished.next_actions[0].kind, 'user_review');
+	assert.match(finished.next_actions[0].reason, /do not call finish_task again/i);
+	assert.equal(findGlobalAgentEntries(fixture).length, 0);
+	assert.equal(findAgentEntries(fixture).length, 0);
+});
+
+test('project Auto does not create a missing Hub and keeps an explicit existing Memory target', async (t) => {
+	const fixture = createFixture(t);
+	const missing = {
+		projectId: 'missing-id',
+		projectKey: 'missing-unused',
+		projectHint: 'missing',
+		repoPath: '/work/missing',
+	};
+	const missingResult = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'task_decision',
+			content: 'Do not materialize a missing project Hub.',
+			memory_scope: 'project',
+			project_hint: missing.projectHint,
+			repo_path: missing.repoPath,
+			claim_key: 'architecture:missing-project-hub',
+			idempotency_key: 'project-memory-missing-hub',
+		}, fixture.context()),
+		'missing project Hub review fallback'
+	);
+	assert.equal(missingResult.review_reason, 'missing_memory_hub');
+	assert.equal(findAgentEntries(fixture).length, 0);
+
+	const project = addProject(fixture);
+	const first = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			...autoWriteArgs(project, {
+				content: 'Existing governed record.',
+				idempotencyKey: 'project-memory-explicit-target-first',
+			}),
+			claim_key: 'architecture:explicit-target',
+		}, fixture.context()),
+		'create existing project record'
+	);
+	const reviewed = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			...autoWriteArgs(project, {
+				content: 'Reviewed update for exact existing target.',
+				idempotencyKey: 'project-memory-explicit-target-review',
+			}),
+			target_note: first.path,
+			claim_key: 'architecture:explicit-target',
+		}, fixture.context()),
+		'explicit project Memory target review'
+	);
+	assert.equal(reviewed.auto_applied, false);
+	assert.equal(reviewed.review_reason, 'explicit_memory_target_requires_human_review');
+	const proposal = parseMarkdown(fixture.read(reviewed.proposal_path));
+	assert.equal(proposal.frontmatter.fields.target_note, first.path);
+	assert.equal(proposal.frontmatter.fields.writeback_effect, 'append');
+});
+
+test('generated Global and Project review proposals complete the Human approval and v2 apply chain', async (t) => {
+	for (const scope of ['global', 'project']) {
+		await t.test(scope, async (t) => {
+			const fixture = createFixture(t);
+			const project = scope === 'project' ? addProject(fixture) : null;
+			if (scope === 'global') addGlobalHub(fixture, '');
+			const context = fixture.context({
+				agentId: `${scope}-review-apply-agent`,
+				sessionId: `${scope}-review-apply-session`,
+			});
+			context.credentialCapabilities = ['*'];
+			context.writebackConfirmationSecret = `${scope}-review-apply-confirmation-secret`;
+			context.memoryRules.globalMemoryRule = 'review_queue';
+			context.memoryRules.projectMemoryRule = 'review_queue';
+			const content = `${scope} generated proposal becomes one approved v2 MemoryRecord.`;
+			const proposed = expectSuccess(
+				await callTool('tracekeeper.propose_memory', {
+					proposal_kind: 'task_decision',
+					content,
+					memory_scope: scope,
+					...(project ? projectArgs(project) : {}),
+					claim_key: `review-apply:${scope}`,
+					idempotency_key: `${scope}-generated-review-proposal`,
+				}, context),
+				`${scope} generated review proposal`
+			);
+			assert.equal(proposed.auto_applied, false);
+			assert.equal(proposed.proposal_destination, 'memory');
+			assert.equal(proposed.memory_scope, scope);
+			approveGeneratedMemoryProposal(fixture, proposed, content);
+			const approvedQueue = expectSuccess(
+				await callTool('tracekeeper.review_queue', {
+					action: 'list_approved',
+				}, context),
+				`${scope} approved review queue`
+			);
+			assert.ok(approvedQueue.entries.some((entry) => entry.proposal_id === proposed.proposal_id));
+			const preview = expectSuccess(
+				await callTool('tracekeeper.apply_approved_writeback', {
+					proposal_id: proposed.proposal_id,
+					dry_run: true,
+				}, context),
+				`${scope} approved MemoryRecord preview`
+			);
+			assert.equal(preview.writeback_effect, 'create_memory_record');
+			const applied = expectSuccess(
+				await callTool('tracekeeper.apply_approved_writeback', {
+					proposal_id: proposed.proposal_id,
+					confirmation_token: preview.confirmation_token,
+				}, context),
+				`${scope} approved MemoryRecord apply`
+			);
+			assert.equal(applied.target_note, preview.target_note);
+			const record = parseMarkdown(fixture.read(preview.target_note)).frontmatter.fields;
+			assert.equal(record.schema_version, 2);
+			assert.equal(record.type, 'memory_record');
+			assert.equal(record.scope, scope);
+			assert.equal(record.claim_key, `review-apply:${scope}`);
+			assert.equal(record.agent_type, 'codex');
+			if (scope === 'project') {
+				assert.equal(record.project_id, project.projectId);
+				assert.equal(record.project_hub, `[[${project.hubPath.replace(/\.md$/, '')}]]`);
+			} else {
+				assert.equal(record.project_id, undefined);
+				assert.equal(record.global_hub, `[[${GLOBAL_HUB.replace(/\.md$/, '')}]]`);
+			}
+		});
+	}
+});
+
+test('canonical project claim lock serializes different raw identities and unrelated invalid records do not block Auto', async (t) => {
+	const fixture = createFixture(t);
+	const project = addProject(fixture);
+	fixture.write(
+		`${PROJECT_ROOT}/${project.projectKey}/agents/codex/invalid-unrelated.md`,
+		markdown([
+			'schema_version: 2',
+			'type: memory_record',
+			'scope: project',
+			`project_id: ${project.projectId}`,
+			'claim_key: unrelated:invalid',
+		], '# Invalid unrelated record')
+	);
+	const eligible = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			...autoWriteArgs(project, {
+				content: 'Unrelated malformed claims must not block this claim.',
+				idempotencyKey: 'project-memory-unrelated-invalid',
+			}),
+			claim_key: 'architecture:eligible-with-unrelated-invalid',
+		}, fixture.context()),
+		'eligible claim beside unrelated invalid record'
+	);
+	assert.equal(eligible.auto_applied, true);
+
+	const claimKey = 'architecture:canonical-lock-race';
+	const [left, right] = await Promise.all([
+		callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'task_decision',
+			content: 'First concurrent claim value.',
+			memory_scope: 'project',
+			project_id: project.projectId,
+			claim_key: claimKey,
+			idempotency_key: 'project-memory-canonical-lock-left',
+		}, fixture.context()),
+		callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'task_decision',
+			content: 'Second concurrent claim value.',
+			memory_scope: 'project',
+			repo_path: project.repoPath,
+			claim_key: claimKey,
+			idempotency_key: 'project-memory-canonical-lock-right',
+		}, fixture.context()),
+	]);
+	const results = [expectSuccess(left, 'canonical lock left'), expectSuccess(right, 'canonical lock right')];
+	assert.equal(results.filter((result) => result.auto_applied).length, 1);
+	assert.equal(results.filter((result) => result.review_reason === 'unresolved_claim_conflict').length, 1);
 });
 
 test('propose_memory review-gates self-promotion and unresolved claim conflicts', async (t) => {
@@ -1820,7 +2661,7 @@ test('hint-only uncertain identity is review-bound and does not auto-write a nam
 	assert.equal(findAgentEntries(fixture).length, 0);
 });
 
-test('conflicting explicit identity is review-bound and does not auto-write a namespace', async (t) => {
+test('conflicting explicit identity is review-bound, preserves its explicit target, and does not auto-write', async (t) => {
 	const fixture = createFixture(t);
 	const alpha = addProject(fixture, {
 		projectId: 'alpha-id',
@@ -1855,8 +2696,8 @@ test('conflicting explicit identity is review-bound and does not auto-write a na
 	assert.equal(result.auto_applied, false);
 	assert.equal(typeof result.proposal_path, 'string');
 	const proposal = parseMarkdown(fixture.read(result.proposal_path));
-	assert.equal(proposal.frontmatter.fields.target_note ?? null, null);
-	assert.doesNotMatch(proposal.body, /\/memory\.md\b/);
+	assert.equal(proposal.frontmatter.fields.target_note, alpha.legacyPath);
+	assert.match(proposal.body, /\/memory\.md\b/);
 	assert.equal(findAgentEntries(fixture).length, 0);
 });
 

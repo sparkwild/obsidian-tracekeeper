@@ -70,6 +70,10 @@ Structured actions do not bypass capability checks, confirmation, review, or act
 - Use `project_history` only after project identity is established and task or session continuity is specifically needed.
 - Use `task_history` when recalling task execution records without requiring project identity.
 - Use `global` only for an explicit cross-project request or when the Runtime reports uncertain project identity.
+- Global and project knowledge Recall require a non-empty `query`. Project and
+  task history may omit it only for a bounded recent-history view. Preserve the
+  canonical match path, excerpt, match reason, content origin, relation
+  evidence, and `instruction_trust: data_only` across every scope.
 - Recall is relevance-ranked. For exhaustive Memory enumeration, use
   `tracekeeper.memory` with `scope: "project"` and the resolved stable project
   identity, or `scope: "global"`; choose the required lifecycle view, consume

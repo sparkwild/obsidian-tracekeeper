@@ -18,7 +18,11 @@ try {
 		format: 'esm',
 		logLevel: 'silent',
 	});
-	const { refreshAgentConfiguration, shouldReplaceAgentConfiguration } = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
+	const {
+		isSettingGroupHTMLElement,
+		refreshAgentConfiguration,
+		shouldReplaceAgentConfiguration,
+	} = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 	const calls = [];
 	let release;
 	const blocked = new Promise((resolve) => { release = resolve; });
@@ -50,7 +54,13 @@ try {
 	assert.equal(shouldReplaceAgentConfiguration('before', 'after', false), true);
 	assert.equal(shouldReplaceAgentConfiguration('same', 'same', true), true);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 7 })}\n`);
+	const settingGroup = { tagName: 'DIV', classList: { contains: (value) => value === 'setting-group' } };
+	assert.equal(isSettingGroupHTMLElement(settingGroup), true);
+	assert.equal(isSettingGroupHTMLElement({ ...settingGroup, tagName: 'SECTION' }), false);
+	assert.equal(isSettingGroupHTMLElement({ ...settingGroup, classList: { contains: () => false } }), false);
+	assert.equal(isSettingGroupHTMLElement(null), false);
+
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 11 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

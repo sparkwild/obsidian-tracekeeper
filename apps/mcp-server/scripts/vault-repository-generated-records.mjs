@@ -288,6 +288,7 @@ async function main() {
 			filename: 'repository-memory-proposal',
 			proposal_kind: 'project_update',
 			content: 'Repository-backed memory proposal.',
+			memory_scope: 'global',
 			task_id: taskId,
 		}, context);
 		calls = vaultRepository.takeCalls();

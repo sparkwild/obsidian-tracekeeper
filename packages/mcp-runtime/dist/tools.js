@@ -649,6 +649,19 @@ function buildFinishTaskActions(payload) {
     const baseId = actionBaseId(payload, 'finish-task');
     const durableOutput = durableOutputSummaryFromPayload(payload);
     const actions = [];
+    const hasMissingMemoryHub = Array.isArray(payload.memory_changes)
+        && payload.memory_changes.some((change) => (0, protocol_1.isRecord)(change) && change.reason === 'missing_memory_hub');
+    if (hasMissingMemoryHub) {
+        return [{
+                action_id: `${baseId}:structure_repair_required`,
+                kind: 'user_review',
+                priority: 100,
+                required: true,
+                timing: 'immediate',
+                reason_code: 'MEMORY_NOT_PERSISTED',
+                reason: 'Report that one or more MemoryRecords were not persisted because a canonical Hub needs Tracekeeper structure check/repair in Obsidian. Do not call finish_task again; after repair, handle the queued proposal or submit a new proposal according to the review contract.',
+            }];
+    }
     if (durableOutputNeedsReview(durableOutput)) {
         actions.push({
             action_id: `${baseId}:report-review`,
@@ -689,6 +702,51 @@ function buildFinishTaskActions(payload) {
                 ? 'MEMORY_RECORDED'
                 : 'MEMORY_NOT_PERSISTED',
             reason,
+        }];
+}
+function buildProposeMemoryActions(payload) {
+    const baseId = actionBaseId(payload, 'propose-memory');
+    if (payload.review_reason === 'missing_memory_hub') {
+        return [{
+                action_id: `${baseId}:structure_repair_required`,
+                kind: 'user_review',
+                priority: 100,
+                required: true,
+                timing: 'immediate',
+                reason_code: 'MEMORY_NOT_PERSISTED',
+                reason: 'The MemoryRecord was not persisted because its canonical Hub is missing or invalid. Ask the human to run Tracekeeper\'s explicit structure check/repair in Obsidian, then continue with the returned queued proposal under the human review/apply contract; submit a new candidate only if the result has no proposal_id or proposal_path.',
+            }];
+    }
+    if (payload.auto_applied === true) {
+        return [{
+                action_id: `${baseId}:report-recorded`,
+                kind: 'report_status',
+                priority: 100,
+                required: true,
+                timing: 'immediate',
+                reason_code: 'MEMORY_RECORDED',
+                reason: 'Report that the governed MemoryRecord was persisted at the returned path.',
+            }];
+    }
+    if (payload.memory_rule === 'disabled' || payload.persisted === false) {
+        return [{
+                action_id: `${baseId}:report-not-persisted`,
+                kind: 'report_status',
+                priority: 100,
+                required: true,
+                timing: 'immediate',
+                reason_code: 'MEMORY_NOT_PERSISTED',
+                reason: 'Report that the Memory candidate was ignored by the active scope policy and was not persisted or queued.',
+            }];
+    }
+    return [{
+            action_id: `${baseId}:report-review`,
+            kind: 'user_review',
+            priority: 100,
+            required: true,
+            timing: 'immediate',
+            reason_code: 'MEMORY_REVIEW_REQUIRED',
+            reason: 'Report that the Wiki or Memory proposal was queued and requires human review in Obsidian before it becomes persisted knowledge.',
         }];
 }
 function classifyToolError(message) {
@@ -832,6 +890,9 @@ function decorateToolResult(toolName, result, context) {
         };
         decorated.next_actions = buildFinishTaskActions(decorated);
     }
+    if (toolName === 'tracekeeper.propose_memory') {
+        decorated.next_actions = buildProposeMemoryActions(decorated);
+    }
     return toolResult(decorated);
 }
 function validateToolResult(toolName, result) {
@@ -960,6 +1021,10 @@ async function knowledgeReadViewForContext(vaultRoot, context) {
         })();
     }
     return context.knowledgeReadViewPromise;
+}
+async function freshKnowledgeReadViewForContext(vaultRoot, context) {
+    const { knowledgeReadViewPromise: _cachedReadView, ...freshContext } = context;
+    return knowledgeReadViewForContext(vaultRoot, freshContext);
 }
 function projectMemoryRepository(vaultRoot, context) {
     if (context.vaultRepository) {
@@ -1152,7 +1217,7 @@ function buildArchitectureStatus(vaultRoot, context) {
 function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint, relatedWikiRaw, relatedSourcesRaw, context) {
     const options = pathSafetyOptions(context);
     const scan = scanVaultForContext(vaultRoot, context);
-    const pathSet = new Set(scan.notes.map((note) => note.relativePath.toLowerCase()));
+    const scannedPathByLowercase = new Map(scan.notes.map((note) => [note.relativePath.toLowerCase(), note.relativePath]));
     if (projectHint && !projectHint.trim()) {
         projectHint = '';
     }
@@ -1184,12 +1249,9 @@ function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint,
                 continue;
             }
             const lowerPath = notePath.toLowerCase();
-            if (pathSet.has(lowerPath)) {
-                return notePath;
-            }
-            const absolutePath = path.join(vaultRoot, notePath);
-            if (fs.existsSync(absolutePath)) {
-                return notePath;
+            const scannedPath = scannedPathByLowercase.get(lowerPath);
+            if (scannedPath && isValid(scannedPath)) {
+                return scannedPath;
             }
         }
         const title = rawReference.toLowerCase().replace(/\.md$/i, '');
@@ -1223,29 +1285,11 @@ function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint,
             missing_related_sources.push(reference);
         }
     }
-    if (memoryScope !== 'project') {
-        return {
-            missing_wiki_bridge: false,
-            related_wiki: dedupeAndNormalizeList(resolved),
-            missing_related_wiki: dedupeAndNormalizeList(missing_related_wiki),
-            related_sources: dedupeAndNormalizeList(resolvedSources),
-            missing_related_sources: dedupeAndNormalizeList(missing_related_sources),
-        };
-    }
-    const relatedWikiMissing = relatedWiki.length === 0 || missing_related_wiki.length > 0 || dedupeAndNormalizeList(resolved).length === 0;
-    if (relatedWikiMissing) {
-        return {
-            missing_wiki_bridge: true,
-            related_wiki: dedupeAndNormalizeList(resolved),
-            missing_related_wiki: dedupeAndNormalizeList(missing_related_wiki),
-            related_sources: dedupeAndNormalizeList(resolvedSources),
-            missing_related_sources: dedupeAndNormalizeList(missing_related_sources),
-        };
-    }
+    void memoryScope;
     return {
         missing_wiki_bridge: false,
         related_wiki: dedupeAndNormalizeList(resolved),
-        missing_related_wiki: [],
+        missing_related_wiki: dedupeAndNormalizeList(missing_related_wiki),
         related_sources: dedupeAndNormalizeList(resolvedSources),
         missing_related_sources: dedupeAndNormalizeList(missing_related_sources),
     };
@@ -2113,16 +2157,10 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
             continue;
         }
         if (proposalMode === 'auto_propose' && memoryRule === 'auto_write') {
-            const canAutoWrite = !(memoryScope === 'project' &&
-                bridgeMetadata.missing_wiki_bridge);
-            if (memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge) {
-                hasMissingWikiBridge = true;
-            }
             if (memoryScope === 'project' && bridgeMetadata.missing_related_sources.length > 0) {
                 hasMissingRelatedSources = true;
             }
-            if (canAutoWrite
-                && memoryScope === 'project'
+            if (memoryScope === 'project'
                 && projectMemoryReceipt !== null) {
                 if (projectMemoryReceipt?.outcome === 'immutable'
                     && !projectMemoryReceipt.memory_kinds.includes(group.kind)) {
@@ -2145,8 +2183,7 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
                     continue;
                 }
             }
-            if (canAutoWrite
-                && !(memoryScope === 'project' && projectMemoryReceipt !== null)) {
+            if (!(memoryScope === 'project' && projectMemoryReceipt !== null)) {
                 const autoTarget = resolveAutoMemoryTarget(vaultRoot, group.kind, '', projectHint, context, memoryScope);
                 if (autoTarget) {
                     const signature = buildFinishTaskProposalSignature(taskId, group.kind, group.values);
@@ -2238,6 +2275,18 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
             confidence_level: typeof predictedRecord.confidence_level === 'string' ? predictedRecord.confidence_level : null,
             effective_state: typeof resultRecord.predicted_state === 'string' ? resultRecord.predicted_state : null,
         };
+        if (resultRecord.memory_rule === 'disabled' && resultRecord.persisted === false) {
+            memoryChanges.push({
+                source,
+                change_kind: 'disabled',
+                candidate_index: index,
+                scope: candidate.scope,
+                reason: 'memory_rule_disabled',
+                previous_effective_state: null,
+                next_effective_state: null,
+            });
+            continue;
+        }
         const recordIdentity = (0, protocol_1.isRecord)(resultRecord.record_identity) ? resultRecord.record_identity : undefined;
         const transition = (0, protocol_1.isRecord)(resultRecord.proposal_transition_preview)
             ? resultRecord.proposal_transition_preview
@@ -3226,15 +3275,10 @@ function validateApprovedWritebackTransition(snapshot, operationId, targetPath, 
     });
 }
 async function resolveApprovedMemoryRecordTargetPath(vaultRoot, proposal, context) {
-    if (proposal.targetNote) {
-        const explicit = (0, safety_1.normalizeNotePath)(proposal.targetNote, pathSafetyOptions(context));
-        if (explicit.startsWith(`${core_1.KNOWLEDGE_GLOBAL_MEMORY_DIR}/`)
-            || explicit.startsWith(`${core_1.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)) {
-            return explicit;
-        }
-        throw new safety_1.ToolInputError('Governed memory record target must stay inside a memory root.');
+    const scope = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['memory_scope'])).toLowerCase();
+    if (!scope) {
+        throw new safety_1.ToolInputError('Approved memory proposal requires an explicit memory_scope.');
     }
-    const scope = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['memory_scope'])).toLowerCase() || 'global';
     const agentType = (0, core_1.normalizeProjectAgentType)(context.observedClientType ?? context.clientName ?? 'custom');
     const safeProposalId = proposal.proposalId
         .replace(/[^A-Za-z0-9._-]+/g, '-')
@@ -3245,6 +3289,13 @@ async function resolveApprovedMemoryRecordTargetPath(vaultRoot, proposal, contex
         throw new safety_1.ToolInputError('Approved memory proposal id cannot form a record path.');
     }
     if (scope === 'global') {
+        if (proposal.targetNote) {
+            const explicit = (0, safety_1.normalizeNotePath)(proposal.targetNote, pathSafetyOptions(context));
+            if (!isCanonicalMemoryAgentTarget(explicit, `${core_1.KNOWLEDGE_GLOBAL_MEMORY_DIR}/agents/`)) {
+                throw new safety_1.ToolInputError('Approved Global MemoryRecord target must use the canonical Global agent namespace.');
+            }
+            return explicit;
+        }
         return `${core_1.KNOWLEDGE_GLOBAL_MEMORY_DIR}/agents/${agentType}/approved-${safeProposalId}.md`;
     }
     if (scope !== 'project') {
@@ -3254,16 +3305,52 @@ async function resolveApprovedMemoryRecordTargetPath(vaultRoot, proposal, contex
     if (!projectId) {
         throw new safety_1.ToolInputError('Approved project memory proposal requires project_id.');
     }
-    const view = await knowledgeReadViewForContext(vaultRoot, context);
-    const hub = [...view.catalog.values()].find((entry) => entry.frontmatter.type === 'project_memory_index'
-        && entry.frontmatter.project_id === projectId);
-    if (!hub) {
+    const snapshot = await projectMemoryApplication(vaultRoot, context).snapshot();
+    const route = (0, project_memory_1.resolveProjectMemoryWritableRoute)(snapshot, { projectId });
+    if (route.status !== 'existing') {
         throw new safety_1.ToolInputError('Approved project memory proposal has no exact project Hub.');
     }
-    return `${path.posix.dirname(hub.path)}/agents/${agentType}/approved-${safeProposalId}.md`;
+    const projectAgentsRoot = `${path.posix.dirname(route.binding.project_hub)}/agents/`;
+    if (proposal.targetNote) {
+        const explicit = (0, safety_1.normalizeNotePath)(proposal.targetNote, pathSafetyOptions(context));
+        if (!isCanonicalMemoryAgentTarget(explicit, projectAgentsRoot)) {
+            throw new safety_1.ToolInputError('Approved Project MemoryRecord target must use the exact project Hub agent namespace.');
+        }
+        return explicit;
+    }
+    return `${projectAgentsRoot}${agentType}/approved-${safeProposalId}.md`;
+}
+function isCanonicalMemoryAgentTarget(targetPath, agentsRoot) {
+    if (!targetPath.startsWith(agentsRoot))
+        return false;
+    const segments = targetPath.slice(agentsRoot.length).split('/');
+    if (segments.length !== 2)
+        return false;
+    const [agentType, filename] = segments;
+    return Boolean(agentType)
+        && agentType === (0, core_1.normalizeProjectAgentType)(agentType)
+        && /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(filename);
+}
+function memoryAgentTypeFromTarget(targetPath) {
+    const segments = targetPath.split('/');
+    const agentsIndex = segments.lastIndexOf('agents');
+    const agentType = agentsIndex >= 0 ? segments[agentsIndex + 1] : '';
+    if (!agentType || agentType !== (0, core_1.normalizeProjectAgentType)(agentType)) {
+        throw new safety_1.ToolInputError('Approved MemoryRecord target has an invalid Agent namespace.');
+    }
+    return agentType;
+}
+function memoryRecordReferencePath(reference) {
+    if (!reference)
+        return null;
+    const candidate = normalizeWikilinkOrSourceValue(reference).replace(/#.*$/, '');
+    return candidate.toLowerCase().endsWith('.md') ? candidate : `${candidate}.md`;
 }
 function buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, targetPath, operationId, context) {
-    const scopeValue = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['memory_scope'])).toLowerCase() || 'global';
+    const scopeValue = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['memory_scope'])).toLowerCase();
+    if (!scopeValue) {
+        throw new safety_1.ToolInputError('Approved memory proposal requires an explicit memory_scope.');
+    }
     if (scopeValue !== 'global' && scopeValue !== 'project') {
         throw new safety_1.ToolInputError('Approved memory proposal scope is invalid.');
     }
@@ -3277,24 +3364,21 @@ function buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, targetPath, oper
     }
     const relatedWiki = readFrontmatterStringList(proposal.frontmatter, 'related_wiki');
     const relatedSources = readFrontmatterStringList(proposal.frontmatter, 'related_sources');
-    const proposedEvidence = Array.isArray(proposal.frontmatter.evidence)
-        ? proposal.frontmatter.evidence.filter((value) => typeof value === 'string')
-        : [];
-    const evidence = [...new Set([...proposedEvidence, ...relatedSources, ...relatedWiki])];
+    const evidence = [...new Set([...relatedSources, ...relatedWiki])];
     const proposedAuthority = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['proposed_authority'])).toLowerCase();
-    const authority = proposedAuthority === 'user'
-        ? 'user'
-        : proposedAuthority === 'source' && evidence.length > 0
-            ? 'source'
-            : 'agent';
     const proposedConfidence = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['proposed_confidence'])).toLowerCase();
-    const confidence = proposedConfidence === 'verified' && evidence.length > 0
-        ? 'verified'
-        : proposedConfidence === 'supported' && evidence.length > 0
-            ? 'supported'
-            : proposedConfidence === 'uncertain'
-                ? 'uncertain'
-                : evidence.length > 0 ? 'inferred' : 'uncertain';
+    const governance = (0, core_1.deriveMemoryGovernance)({
+        proposed_authority: proposedAuthority === 'user' || proposedAuthority === 'source'
+            ? proposedAuthority
+            : 'agent',
+        proposed_confidence: (proposedConfidence === 'verified'
+            || proposedConfidence === 'supported'
+            || proposedConfidence === 'inferred'
+            || proposedConfidence === 'uncertain') ? proposedConfidence : 'uncertain',
+        evidence_count: evidence.length,
+        human_approved: proposedAuthority === 'user',
+        source_backed: relatedSources.length > 0,
+    });
     const declaredValue = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['declared_state'])).toLowerCase();
     const declaredState = ['active', 'disputed', 'retracted', 'review'].includes(declaredValue)
         ? declaredValue
@@ -3321,12 +3405,12 @@ function buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, targetPath, oper
         memory_id: memoryId,
         scope,
         project_id: scope === 'project' ? projectId : null,
-        agent_type: (0, core_1.normalizeProjectAgentType)(context.observedClientType ?? context.clientName ?? 'custom'),
+        agent_type: memoryAgentTypeFromTarget(targetPath),
         operation_id: operationId,
         memory_kind: proposal.proposalKind.replace(/[^a-z0-9_-]+/gi, '_').toLowerCase().slice(0, 64),
         claim_key: claimKey,
-        authority,
-        confidence_level: confidence,
+        authority: governance.authority,
+        confidence_level: governance.confidence_level,
         declared_state: declaredState,
         observed_at: readFrontmatterString(proposal.frontmatter, ['observed_at']) || new Date().toISOString(),
         valid_from: readFrontmatterString(proposal.frontmatter, ['valid_from']) || null,
@@ -4292,15 +4376,7 @@ async function appendAutoMemoryWriteAsync(vaultRoot, input) {
         duplicate: false,
     };
 }
-async function writeImmutableProjectMemory(vaultRoot, input) {
-    const project = await projectMemoryApplication(vaultRoot, input.context).ensureWritableProject({
-        projectId: input.projectId,
-        projectHint: input.projectHint,
-        repoPath: input.repoPath,
-    });
-    if (project.status === 'review_required') {
-        return project;
-    }
+async function writeImmutableMemoryRecord(vaultRoot, input) {
     if (input.proposedAuthority === 'user') {
         return {
             status: 'review_required',
@@ -4315,6 +4391,13 @@ async function writeImmutableProjectMemory(vaultRoot, input) {
             warnings: ['Dispute, retraction, and review-state transitions require human review.'],
         };
     }
+    if ((input.supersedes?.length ?? 0) > 0 || (input.contradicts?.length ?? 0) > 0) {
+        return {
+            status: 'review_required',
+            reason: 'lifecycle_transition_requires_human_review',
+            warnings: ['Supersession and contradiction transitions require human review.'],
+        };
+    }
     const agentType = (0, core_1.normalizeProjectAgentType)(input.agentType);
     const memoryKind = input.memoryKinds.length === 1 ? input.memoryKinds[0] : 'task_closeout';
     const contentIdentity = crypto.createHash('sha256')
@@ -4326,126 +4409,257 @@ async function writeImmutableProjectMemory(vaultRoot, input) {
         .update(`${input.operationId}\0${claimKey}\0${memoryKind}`, 'utf8')
         .digest('hex')
         .slice(0, 32)}`;
-    const evidence = [...new Set([
-            ...(input.evidence ?? []),
-            ...input.relatedSources,
-            ...input.relatedWiki,
-        ])];
-    const authority = input.proposedAuthority === 'source' && evidence.length > 0 ? 'source' : 'agent';
-    const confidenceLevel = (input.proposedConfidence === 'supported' || input.proposedConfidence === 'verified')
-        && evidence.length > 0
-        ? 'supported'
-        : input.proposedConfidence === 'uncertain'
-            ? 'uncertain'
-            : evidence.length > 0 ? 'inferred' : 'uncertain';
-    const currentView = await knowledgeReadViewForContext(vaultRoot, input.context);
-    const currentClaimRecords = currentView.memory.lifecycle.current.filter((row) => row.record.scope === 'project'
-        && row.record.project_id === project.binding.project_id
-        && row.record.claim_key === claimKey
-        && row.record.memory_id !== memoryId);
-    const declaredRelations = new Set([...(input.supersedes ?? []), ...(input.contradicts ?? [])]);
-    if (currentClaimRecords.length > 0
-        && currentClaimRecords.some((row) => !declaredRelations.has(row.record.memory_id))) {
-        return {
-            status: 'review_required',
-            reason: 'unresolved_claim_conflict',
-            warnings: ['An accepted current record already exists for this claim; declare a reviewed lifecycle relation.'],
-        };
-    }
-    const entryPath = (0, core_1.buildProjectMemoryEntryPath)({
-        projectKey: project.binding.project_key,
-        agentType,
-        operationKind: input.operationKind,
-        operationId: input.operationId,
+    const evidence = [...new Set([...input.relatedSources, ...input.relatedWiki])];
+    const hasVerifiedSourceEvidence = input.relatedSources.length > 0;
+    const governance = (0, core_1.deriveMemoryGovernance)({
+        proposed_authority: input.proposedAuthority,
+        proposed_confidence: input.proposedConfidence,
+        evidence_count: new Set([...input.relatedSources, ...input.relatedWiki]).size,
+        source_backed: hasVerifiedSourceEvidence,
     });
+    if (governance.authority === 'user' || governance.confidence_level === 'verified') {
+        throw new Error('Automatic MemoryRecord governance returned a human-only elevation.');
+    }
+    const authority = governance.authority;
+    const confidenceLevel = governance.confidence_level;
     const repository = projectMemoryRepository(vaultRoot, input.context);
-    const memoryLink = (target) => repository.generateMarkdownLink
-        ? repository.generateMarkdownLink(target, entryPath)
-        : `[[${target.replace(/\.md$/i, '')}]]`;
-    const relationLines = [
-        `- Project hub: ${memoryLink(project.binding.project_hub)}`,
-        ...input.relatedWiki.map((target) => `- Wiki: ${memoryLink(target)}`),
-        ...input.relatedSources.map((target) => `- Source: ${memoryLink(target)}`),
-    ];
-    const built = (0, core_1.buildMemoryRecord)({
-        path: entryPath,
-        memory_id: memoryId,
-        scope: 'project',
-        project_id: project.binding.project_id,
-        agent_type: agentType,
-        operation_id: input.operationId,
-        memory_kind: memoryKind,
-        claim_key: claimKey,
-        authority,
-        confidence_level: confidenceLevel,
-        declared_state: 'active',
-        observed_at: input.observedAt ?? input.createdAt,
-        valid_from: input.validFrom ?? null,
-        valid_to: input.validTo ?? null,
-        last_verified_at: input.lastVerifiedAt ?? null,
-        evidence,
-        supersedes: input.supersedes ?? [],
-        contradicts: input.contradicts ?? [],
-        project_hub: project.binding.project_hub,
-        global_hub: null,
-        related_wiki: input.relatedWiki,
-        related_sources: input.relatedSources,
-        body: ['# Project memory record', '', '## Relations', '', ...relationLines, '', '## Memory', '', input.body].join('\n'),
-    });
-    let status = 'created';
+    let canonicalProjectId = null;
+    if (input.scope === 'project') {
+        const preLockSnapshot = await projectMemoryApplication(vaultRoot, input.context).snapshot();
+        const preLockRoute = (0, project_memory_1.resolveProjectMemoryWritableRoute)(preLockSnapshot, {
+            projectId: input.projectId,
+            projectHint: input.projectHint,
+            repoPath: input.repoPath,
+        });
+        if (preLockRoute.status === 'review_required')
+            return preLockRoute;
+        canonicalProjectId = preLockRoute.binding.project_id;
+    }
+    const claimLockKey = memoryClaimLockKey(input.scope, canonicalProjectId, claimKey);
+    const release = await operationJournalForVault(vaultRoot).acquireLock(claimLockKey);
     try {
-        await repository.createText(entryPath, built.markdown);
-    }
-    catch (error) {
-        if (!(error instanceof core_1.OperationConflictError))
-            throw error;
-        const existing = await repository.readText(entryPath);
-        if (existing?.content !== built.markdown)
-            throw error;
-        status = 'exact_retry';
-    }
-    const duplicate = status === 'exact_retry';
-    const operationHash = `sha256:${crypto.createHash('sha256').update(built.markdown, 'utf8').digest('hex')}`;
-    const audit = await (0, audit_persistence_1.appendAuditEventAsync)(vaultRoot, {
-        tool: input.toolName,
-        targetPath: entryPath,
-        status: duplicate ? 'skipped' : 'written',
-        operationId: input.operationId,
-        taskId: input.taskId,
-        metadata: {
-            action: duplicate
-                ? 'project_memory.immutable_write.exact_retry'
-                : 'project_memory.immutable_write.created',
-            project_id: project.binding.project_id,
-            project_hub: project.binding.project_hub,
+        let projectId = null;
+        let projectHub = null;
+        let globalHub = null;
+        let projectKey = '';
+        if (input.scope === 'global') {
+            const hub = await readCanonicalMemoryHub(repository, core_1.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH);
+            if (!hub) {
+                return missingMemoryHubReview(core_1.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH);
+            }
+            globalHub = core_1.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH;
+        }
+        else {
+            const snapshot = await projectMemoryApplication(vaultRoot, input.context).snapshot();
+            const route = (0, project_memory_1.resolveProjectMemoryWritableRoute)(snapshot, {
+                projectId: input.projectId,
+                projectHint: input.projectHint,
+                repoPath: input.repoPath,
+            });
+            if (route.status === 'review_required')
+                return route;
+            if (route.status === 'materialize') {
+                return missingMemoryHubReview(route.binding.project_hub);
+            }
+            if (route.binding.project_id !== canonicalProjectId) {
+                return {
+                    status: 'review_required',
+                    reason: 'conflicting_project_identity',
+                    warnings: ['Project identity changed while acquiring the MemoryRecord claim lock.'],
+                };
+            }
+            projectId = route.binding.project_id;
+            projectHub = route.binding.project_hub;
+            projectKey = route.binding.project_key;
+        }
+        const entryPath = input.scope === 'global'
+            ? (0, core_1.buildGlobalMemoryEntryPath)({
+                agentType,
+                operationKind: input.operationKind,
+                operationId: input.operationId,
+            })
+            : (0, core_1.buildProjectMemoryEntryPath)({
+                projectKey,
+                agentType,
+                operationKind: input.operationKind,
+                operationId: input.operationId,
+            });
+        const currentView = await freshKnowledgeReadViewForContext(vaultRoot, input.context);
+        const relevantInvalidRecord = currentView.memory.invalidPaths.some((invalidPath) => {
+            if (invalidPath === entryPath)
+                return true;
+            const frontmatter = currentView.catalog.get(invalidPath)?.frontmatter;
+            if (!frontmatter)
+                return false;
+            return frontmatter.type === 'memory_record'
+                && frontmatter.scope === input.scope
+                && (frontmatter.project_id ?? null) === projectId
+                && frontmatter.claim_key === claimKey;
+        });
+        if (relevantInvalidRecord) {
+            return {
+                status: 'review_required',
+                reason: 'memory_snapshot_incomplete',
+                warnings: ['MemoryRecord lifecycle data is invalid or incomplete; repair the structure before automatic writeback.'],
+            };
+        }
+        const sameClaim = (row) => row.record.scope === input.scope
+            && row.record.project_id === projectId
+            && row.record.claim_key === claimKey
+            && row.record.memory_id !== memoryId;
+        if (currentView.memory.lifecycle.current.some(sameClaim)
+            || currentView.memory.lifecycle.conflicts.some(sameClaim)) {
+            return {
+                status: 'review_required',
+                reason: 'unresolved_claim_conflict',
+                warnings: ['A current or conflicted MemoryRecord already exists for this claim; a reviewed lifecycle transition is required.'],
+            };
+        }
+        const memoryLink = (target) => repository.generateMarkdownLink
+            ? repository.generateMarkdownLink(target, entryPath)
+            : `[[${target.replace(/\.md$/i, '')}]]`;
+        const relationLines = [
+            ...(projectHub ? [`- Project hub: ${memoryLink(projectHub)}`] : []),
+            ...(globalHub ? [`- Global hub: ${memoryLink(globalHub)}`] : []),
+            ...input.relatedWiki.map((target) => `- Wiki: ${memoryLink(target)}`),
+            ...input.relatedSources.map((target) => `- Source: ${memoryLink(target)}`),
+        ];
+        const built = (0, core_1.buildMemoryRecord)({
+            path: entryPath,
+            memory_id: memoryId,
+            scope: input.scope,
+            project_id: projectId,
             agent_type: agentType,
+            operation_id: input.operationId,
+            memory_kind: memoryKind,
+            claim_key: claimKey,
+            authority,
+            confidence_level: confidenceLevel,
+            declared_state: 'active',
+            observed_at: input.observedAt ?? input.createdAt,
+            valid_from: input.validFrom ?? null,
+            valid_to: input.validTo ?? null,
+            last_verified_at: input.lastVerifiedAt ?? null,
+            evidence,
+            supersedes: [],
+            contradicts: [],
+            project_hub: projectHub,
+            global_hub: globalHub,
+            related_wiki: input.relatedWiki,
+            related_sources: input.relatedSources,
+            body: [
+                `# ${input.scope === 'global' ? 'Global' : 'Project'} memory record`,
+                '',
+                '## Relations',
+                '',
+                ...relationLines,
+                '',
+                '## Memory',
+                '',
+                input.body,
+            ].join('\n'),
+        });
+        let status = 'created';
+        try {
+            await repository.createText(entryPath, built.markdown);
+        }
+        catch (error) {
+            if (!(error instanceof core_1.OperationConflictError))
+                throw error;
+            const existing = await repository.readText(entryPath);
+            if (existing?.content !== built.markdown)
+                throw error;
+            status = 'exact_retry';
+        }
+        const duplicate = status === 'exact_retry';
+        const operationHash = `sha256:${crypto.createHash('sha256').update(built.markdown, 'utf8').digest('hex')}`;
+        const audit = await (0, audit_persistence_1.appendAuditEventAsync)(vaultRoot, {
+            tool: input.toolName,
+            targetPath: entryPath,
+            status: duplicate ? 'skipped' : 'written',
+            operationId: input.operationId,
+            taskId: input.taskId,
+            metadata: {
+                action: duplicate
+                    ? 'memory_record.immutable_write.exact_retry'
+                    : 'memory_record.immutable_write.created',
+                memory_scope: input.scope,
+                project_id: projectId,
+                project_hub: projectHub,
+                global_hub: globalHub,
+                agent_type: agentType,
+                operation_kind: input.operationKind,
+                memory_kinds: input.memoryKinds,
+                memory_id: memoryId,
+                claim_key: claimKey,
+                operation_hash: operationHash,
+                hub_status: 'existing',
+            },
+        }, input.context);
+        return {
+            status,
+            path: entryPath,
+            project_id: projectId,
+            project_hub: projectHub,
+            global_hub: globalHub,
+            agent_type: agentType,
+            operation_id: input.operationId,
             operation_kind: input.operationKind,
             memory_kinds: input.memoryKinds,
+            operation_hash: operationHash,
+            hub_status: 'existing',
             memory_id: memoryId,
             claim_key: claimKey,
-            operation_hash: operationHash,
-            hub_status: project.hub_status,
-        },
-    }, input.context);
+            authority,
+            confidence_level: confidenceLevel,
+            effective_state: 'current',
+            activity_path: audit.path,
+            write_status: duplicate ? 'skipped' : 'written',
+            duplicate,
+        };
+    }
+    finally {
+        await release();
+    }
+}
+function missingMemoryHubReview(hubPath) {
     return {
-        status,
-        path: entryPath,
-        project_id: project.binding.project_id,
-        project_hub: project.binding.project_hub,
-        agent_type: agentType,
-        operation_id: input.operationId,
-        operation_kind: input.operationKind,
-        memory_kinds: input.memoryKinds,
-        operation_hash: operationHash,
-        hub_status: project.hub_status,
-        memory_id: memoryId,
-        claim_key: claimKey,
-        authority,
-        confidence_level: confidenceLevel,
-        effective_state: 'current',
-        activity_path: audit.path,
-        write_status: duplicate ? 'skipped' : 'written',
-        duplicate,
+        status: 'review_required',
+        reason: 'missing_memory_hub',
+        warnings: [
+            `structure_repair_required: canonical Memory Hub is missing or invalid at ${hubPath}.`,
+        ],
+    };
+}
+async function readCanonicalMemoryHub(repository, hubPath) {
+    try {
+        return await repository.readText(hubPath);
+    }
+    catch (error) {
+        if (error instanceof core_1.VaultPathError
+            && error.message.startsWith('Vault path is not a file:')) {
+            return null;
+        }
+        throw error;
+    }
+}
+function memoryClaimLockKey(scope, projectId, claimKey) {
+    return `memory-claim-v2:${scope}:${crypto.createHash('sha256')
+        .update(`${projectId ?? ''}\0${claimKey}`, 'utf8')
+        .digest('hex')}`;
+}
+async function writeImmutableProjectMemory(vaultRoot, input) {
+    const result = await writeImmutableMemoryRecord(vaultRoot, { ...input, scope: 'project' });
+    if (result.status === 'review_required')
+        return result;
+    if (!result.project_id || !result.project_hub || result.global_hub !== null) {
+        throw new Error('Project MemoryRecord writer returned an invalid scope binding.');
+    }
+    return {
+        ...result,
+        project_id: result.project_id,
+        project_hub: result.project_hub,
+        global_hub: null,
     };
 }
 async function findOperationOwnedNoteAsync(vaultRoot, allowedDir, filename, operationField, operationId, context) {
@@ -5403,17 +5617,15 @@ function toolDefinitions(capabilities) {
             !capabilities.includes(contract.capability)) {
             continue;
         }
+        const { required: inputRequired, ...inputSchemaKeywords } = contract.inputSchema;
         definitions.push({
             name: contract.name,
             title: contract.name,
             description: contract.description || '',
             inputSchema: {
-                type: 'object',
+                ...inputSchemaKeywords,
                 properties: { ...contract.inputSchema.properties },
-                ...(contract.inputSchema.required ? { required: [...contract.inputSchema.required] } : {}),
-                ...(contract.inputSchema.additionalProperties !== undefined
-                    ? { additionalProperties: contract.inputSchema.additionalProperties }
-                    : {}),
+                ...(inputRequired ? { required: [...inputRequired] } : {}),
             },
             outputSchema: contract.outputSchema,
             annotations: {
@@ -5595,6 +5807,9 @@ async function recoverPendingOperations(vaultRoot, context = {}) {
     const controller = new recovery_1.RuntimeRecoveryController(operationJournalForVault(vaultRoot), {
         isApplyApprovedWritebackPayload,
         isProposeMemoryOperationPayload,
+        isFinishTaskV2Payload: (payload) => isFinishTaskOperationPayload(payload)
+            && payload.memoryRecordWriteVersion === 2,
+        releaseIncompatibleFinishTaskBinding: (record) => releaseIncompatibleFinishTaskBinding(vaultRoot, record, context),
         invoke: async (request, record, requestedVaultRoot) => {
             const result = await callTool(request.tool, request.args, {
                 ...context,
@@ -6390,6 +6605,107 @@ function assertMatchingWritebackBinding(expected, current) {
         throw new core_1.OperationConflictError('Writeback confirmation is stale because the approved proposal, target, task, or touched-note plan changed.');
     }
 }
+async function resolveApprovedMemoryClaimIdentity(vaultRoot, payload, context) {
+    const proposal = await resolveMemoryProposalFromArgs(vaultRoot, { proposal_path: payload.proposalPath, task_id: payload.taskId }, context);
+    const explicitScope = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['memory_scope'])).toLowerCase();
+    const explicitClaimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
+    if (payload.effectKind !== 'create_memory_record'
+        && (!explicitScope || !explicitClaimKey)) {
+        return null;
+    }
+    if (!explicitScope) {
+        throw new core_1.OperationConflictError('Approved MemoryRecord is missing memory_scope.');
+    }
+    const scopeValue = explicitScope;
+    if (scopeValue !== 'global' && scopeValue !== 'project') {
+        throw new core_1.OperationConflictError('Approved MemoryRecord has an invalid memory_scope.');
+    }
+    const claimKey = explicitClaimKey;
+    if (!claimKey) {
+        throw new core_1.OperationConflictError('Approved MemoryRecord is missing claim_key.');
+    }
+    if (scopeValue === 'global') {
+        return { scope: 'global', projectId: null, claimKey, projectHub: null };
+    }
+    const requestedProjectId = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['project_id']));
+    if (!requestedProjectId) {
+        throw new core_1.OperationConflictError('Approved project MemoryRecord is missing project_id.');
+    }
+    const snapshot = await projectMemoryApplication(vaultRoot, context).snapshot();
+    const route = (0, project_memory_1.resolveProjectMemoryWritableRoute)(snapshot, { projectId: requestedProjectId });
+    if (route.status !== 'existing') {
+        throw new core_1.OperationConflictError(`missing_memory_hub: structure_repair_required for approved project MemoryRecord (${requestedProjectId}).`);
+    }
+    return {
+        scope: 'project',
+        projectId: route.binding.project_id,
+        claimKey,
+        projectHub: route.binding.project_hub,
+    };
+}
+async function validateApprovedMemoryHub(vaultRoot, identity, context) {
+    const repository = projectMemoryRepository(vaultRoot, context);
+    if (identity.scope === 'global') {
+        if (!await readCanonicalMemoryHub(repository, core_1.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH)) {
+            throw new core_1.OperationConflictError('missing_memory_hub: structure_repair_required for approved global MemoryRecord.');
+        }
+        return;
+    }
+    const snapshot = await projectMemoryApplication(vaultRoot, context).snapshot();
+    const route = (0, project_memory_1.resolveProjectMemoryWritableRoute)(snapshot, { projectId: identity.projectId });
+    if (route.status !== 'existing'
+        || route.binding.project_id !== identity.projectId
+        || route.binding.project_hub !== identity.projectHub) {
+        throw new core_1.OperationConflictError('missing_memory_hub: structure_repair_required for approved project MemoryRecord.');
+    }
+}
+async function validateApprovedMemoryLifecycle(vaultRoot, identity, targetPath, markdown, context) {
+    const parsed = (0, core_1.parseMarkdown)(markdown);
+    const proposed = (0, core_1.parseMemoryRecord)({
+        path: targetPath,
+        frontmatter: parsed.frontmatter.fields,
+        body: parsed.body,
+    });
+    if (proposed.scope !== identity.scope
+        || proposed.project_id !== identity.projectId
+        || proposed.claim_key !== identity.claimKey
+        || memoryRecordReferencePath(proposed.project_hub) !== identity.projectHub
+        || memoryRecordReferencePath(proposed.global_hub) !== (identity.scope === 'global' ? core_1.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH : null)) {
+        throw new core_1.OperationConflictError('Approved MemoryRecord identity changed outside its claim lock.');
+    }
+    const view = await freshKnowledgeReadViewForContext(vaultRoot, context);
+    const invalidRelations = [
+        ...proposed.related_wiki.map(memoryRecordReferencePath).filter((relationPath) => !relationPath || !(0, core_1.isKnowledgeWikiPath)(relationPath) || !view.catalog.has(relationPath)),
+        ...proposed.related_sources.map(memoryRecordReferencePath).filter((relationPath) => !relationPath || !(0, core_1.isKnowledgeSourcePath)(relationPath) || !view.catalog.has(relationPath)),
+    ];
+    if (invalidRelations.length > 0) {
+        throw new core_1.OperationConflictError(`Approved MemoryRecord relation evidence is stale or invalid: ${invalidRelations.join(', ')}.`);
+    }
+    const relevantInvalidRecord = view.memory.invalidPaths.some((invalidPath) => {
+        if (invalidPath === targetPath)
+            return true;
+        const frontmatter = view.catalog.get(invalidPath)?.frontmatter;
+        return Boolean(frontmatter)
+            && frontmatter?.type === 'memory_record'
+            && frontmatter?.scope === identity.scope
+            && (frontmatter?.project_id ?? null) === identity.projectId
+            && frontmatter?.claim_key === identity.claimKey;
+    });
+    if (relevantInvalidRecord) {
+        throw new core_1.OperationConflictError('Approved MemoryRecord lifecycle cannot be validated because the relevant claim is invalid.');
+    }
+    const records = [...view.memory.byId.values()]
+        .filter((record) => record.memory_id !== proposed.memory_id);
+    const lifecycle = (0, core_1.resolveMemoryLifecycle)({
+        generation: view.generation,
+        records: [...records, proposed],
+        now: new Date().toISOString(),
+    });
+    const proposedIssues = lifecycle.issues.filter((issue) => issue.memory_ids.includes(proposed.memory_id) || issue.reference === proposed.memory_id);
+    if (proposedIssues.length > 0) {
+        throw new core_1.OperationConflictError(`Approved MemoryRecord prospective lifecycle is invalid: ${proposedIssues.map((issue) => issue.code).join(', ')}.`);
+    }
+}
 async function currentWritebackEffect(vaultRoot, payload, operationId, context) {
     const proposal = await resolveMemoryProposalFromArgs(vaultRoot, {
         proposal_path: payload.proposalPath,
@@ -6767,71 +7083,92 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
         failureInjection: context.operationFailureInjection,
         port: {
             async applyTarget(currentPayload) {
-                const effect = await currentWritebackEffect(vaultRoot, currentPayload, identity.operationId, context);
-                if (effect.alreadyApplied) {
-                    return;
-                }
-                if (currentPayload.effectKind === 'create_memory_record') {
-                    const repository = projectMemoryRepository(vaultRoot, context);
-                    try {
-                        await repository.createText(currentPayload.targetPath, effect.writebackBlock);
+                const claimIdentity = await resolveApprovedMemoryClaimIdentity(vaultRoot, currentPayload, context);
+                const apply = async () => {
+                    if (claimIdentity) {
+                        await validateApprovedMemoryHub(vaultRoot, claimIdentity, context);
                     }
-                    catch (error) {
-                        if (!isWritebackCreationConflict(error))
-                            throw error;
-                        const existingTarget = await repository.readText(currentPayload.targetPath);
-                        if (existingTarget?.content !== effect.writebackBlock)
-                            throw error;
+                    const effect = await currentWritebackEffect(vaultRoot, currentPayload, identity.operationId, context);
+                    if (effect.alreadyApplied) {
+                        return;
                     }
-                    return;
-                }
-                if (currentPayload.effectKind === CREATE_WIKI_NOTE_EFFECT) {
-                    if (context.vaultRepository) {
+                    if (currentPayload.effectKind === 'create_memory_record') {
+                        if (!claimIdentity) {
+                            throw new core_1.OperationConflictError('Approved MemoryRecord claim identity is unavailable.');
+                        }
+                        await validateApprovedMemoryLifecycle(vaultRoot, claimIdentity, currentPayload.targetPath, effect.writebackBlock, context);
+                        const repository = projectMemoryRepository(vaultRoot, context);
                         try {
-                            await context.vaultRepository.createText(currentPayload.targetPath, effect.writebackBlock);
-                            return;
+                            await repository.createText(currentPayload.targetPath, effect.writebackBlock);
                         }
                         catch (error) {
                             if (!isWritebackCreationConflict(error))
                                 throw error;
-                            const existing = await context.vaultRepository.readText(currentPayload.targetPath);
-                            if (existing?.content !== effect.writebackBlock) {
+                            const existingTarget = await repository.readText(currentPayload.targetPath);
+                            if (existingTarget?.content !== effect.writebackBlock)
                                 throw error;
+                        }
+                        return;
+                    }
+                    if (currentPayload.effectKind === CREATE_WIKI_NOTE_EFFECT) {
+                        if (context.vaultRepository) {
+                            try {
+                                await context.vaultRepository.createText(currentPayload.targetPath, effect.writebackBlock);
+                                return;
+                            }
+                            catch (error) {
+                                if (!isWritebackCreationConflict(error))
+                                    throw error;
+                                const existing = await context.vaultRepository.readText(currentPayload.targetPath);
+                                if (existing?.content !== effect.writebackBlock) {
+                                    throw error;
+                                }
+                            }
+                            return;
+                        }
+                        const writable = (0, safety_1.resolveSafeWritableNotePath)(vaultRoot, currentPayload.targetPath, core_1.KNOWLEDGE_WIKI_DIR, pathSafetyOptions(context));
+                        try {
+                            (0, safety_1.assertNoSymlinkSegments)(vaultRoot, writable.absolutePath);
+                            fs.mkdirSync(path.dirname(writable.absolutePath), { recursive: true });
+                            fs.writeFileSync(writable.absolutePath, effect.writebackBlock, { encoding: 'utf8', flag: 'wx' });
+                            return;
+                        }
+                        catch (error) {
+                            if (!(error instanceof Error) || error.code !== 'EEXIST') {
+                                throw error;
+                            }
+                            const existing = await readCurrentVaultTextState(vaultRoot, currentPayload.targetPath, context);
+                            if (!existing || existing.content !== effect.writebackBlock) {
+                                throw new core_1.OperationConflictError('Approved wiki note was not created exactly.');
                             }
                         }
                         return;
                     }
-                    const writable = (0, safety_1.resolveSafeWritableNotePath)(vaultRoot, currentPayload.targetPath, core_1.KNOWLEDGE_WIKI_DIR, pathSafetyOptions(context));
-                    try {
-                        (0, safety_1.assertNoSymlinkSegments)(vaultRoot, writable.absolutePath);
-                        fs.mkdirSync(path.dirname(writable.absolutePath), { recursive: true });
-                        fs.writeFileSync(writable.absolutePath, effect.writebackBlock, { encoding: 'utf8', flag: 'wx' });
+                    if (!effect.target) {
+                        throw new core_1.OperationConflictError('Writeback target is unavailable.');
+                    }
+                    const targetWithWriteback = `${effect.target.content}${writebackTargetFrame(effect.writebackBlock)}`;
+                    if (context.vaultRepository) {
+                        if (!effect.target.version) {
+                            throw new core_1.OperationConflictError('Writeback target version is unavailable.');
+                        }
+                        await context.vaultRepository.replaceText(currentPayload.targetPath, effect.target.version, targetWithWriteback);
                         return;
                     }
-                    catch (error) {
-                        if (!(error instanceof Error) || error.code !== 'EEXIST') {
-                            throw error;
-                        }
-                        const existing = await readCurrentVaultTextState(vaultRoot, currentPayload.targetPath, context);
-                        if (!existing || existing.content !== effect.writebackBlock) {
-                            throw new core_1.OperationConflictError('Approved wiki note was not created exactly.');
-                        }
-                    }
+                    const targetAbsolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, currentPayload.targetPath, pathSafetyOptions(context));
+                    replaceTextFileAtomically(targetAbsolute, targetWithWriteback, effect.target.content);
+                };
+                if (!claimIdentity) {
+                    await apply();
                     return;
                 }
-                if (!effect.target) {
-                    throw new core_1.OperationConflictError('Writeback target is unavailable.');
+                const releaseClaimLock = await journal.acquireLock(memoryClaimLockKey(claimIdentity.scope, claimIdentity.projectId, claimIdentity.claimKey));
+                try {
+                    await apply();
                 }
-                const targetWithWriteback = `${effect.target.content}${writebackTargetFrame(effect.writebackBlock)}`;
-                if (context.vaultRepository) {
-                    if (!effect.target.version) {
-                        throw new core_1.OperationConflictError('Writeback target version is unavailable.');
-                    }
-                    await context.vaultRepository.replaceText(currentPayload.targetPath, effect.target.version, targetWithWriteback);
-                    return;
+                finally {
+                    await releaseClaimLock();
                 }
-                const targetAbsolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, currentPayload.targetPath, pathSafetyOptions(context));
-                replaceTextFileAtomically(targetAbsolute, targetWithWriteback, effect.target.content);
             },
             async rollbackTarget(currentPayload) {
                 await rollbackRuntimeWritebackTarget(vaultRoot, currentPayload, context);
@@ -6986,6 +7323,7 @@ async function handleProposeMemory(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
     const invocationContext = { ...context };
     const readView = await knowledgeReadViewForContext(vaultRoot, invocationContext);
+    const { knowledgeReadViewPromise: _cachedReadView, ...memoryWriteContext } = invocationContext;
     const preflightScan = lightweightScanFromReadView(vaultRoot, readView);
     context = {
         ...invocationContext,
@@ -7017,17 +7355,35 @@ async function handleProposeMemory(rawArgs, context) {
         },
         assertAllowed: (proposalKind, targetNote, projectHint, memoryScope) => assertMemoryProposalAllowed(proposalKind, targetNote, projectHint, context, memoryScope),
         memoryRule: (proposalKind, targetNote, projectHint, memoryScope) => memoryProposalRuleFor(proposalKind, targetNote, projectHint, context, memoryScope),
-        writeImmutableProjectMemory: (input) => writeImmutableProjectMemory(vaultRoot, {
+        writeImmutableMemoryRecord: (input) => writeImmutableMemoryRecord(vaultRoot, {
             ...input,
             toolName: 'tracekeeper.propose_memory',
-            context,
+            context: memoryWriteContext,
         }),
-        resolveAutoMemoryTarget: (proposalKind, targetNote, projectHint, memoryScope) => resolveAutoMemoryTarget(vaultRoot, proposalKind, targetNote, projectHint, context, memoryScope),
-        appendAutoMemoryWrite: (input) => appendAutoMemoryWriteAsync(vaultRoot, {
-            ...input,
-            toolName: 'tracekeeper.propose_memory',
-            context,
-        }),
+        resolveMemoryRecordTarget: async (input) => {
+            const agentType = (0, core_1.normalizeProjectAgentType)(input.agentType);
+            if (input.scope === 'global') {
+                return (0, core_1.buildGlobalMemoryEntryPath)({
+                    agentType,
+                    operationKind: 'propose_memory',
+                    operationId: input.operationId,
+                });
+            }
+            const snapshot = await projectMemoryApplication(vaultRoot, context).snapshot();
+            const route = (0, project_memory_1.resolveProjectMemoryWritableRoute)(snapshot, {
+                projectId: input.projectId,
+                projectHint: input.projectHint,
+                repoPath: input.repoPath,
+            });
+            if (route.status === 'review_required')
+                return null;
+            return (0, core_1.buildProjectMemoryEntryPath)({
+                projectKey: route.binding.project_key,
+                agentType,
+                operationKind: 'propose_memory',
+                operationId: input.operationId,
+            });
+        },
         findOwnedProposalNote: async (filename, operationId) => findOperationOwnedNoteAsync(vaultRoot, MEMORY_PROPOSAL_DIR, filename, 'proposal_operation_id', operationId, context),
         isTargetNoteMissing: async (targetNote) => {
             const state = await readCurrentVaultTextState(vaultRoot, targetNote, context);
@@ -7376,8 +7732,9 @@ function resolveCanonicalMemoryCloseoutStatus(reviewProposalMode, proposalResult
     if (reviewProposalMode === 'suggest') {
         return 'suggested';
     }
-    if (proposalResult.hasMissingWikiBridge && proposalResult.proposals.length > 0) {
-        return 'requires_wiki_bridge';
+    if (proposalResult.memoryChanges.length > 0
+        && proposalResult.memoryChanges.every((change) => change.change_kind === 'disabled')) {
+        return 'disabled';
     }
     switch (legacyStatus) {
         case 'auto_saved':
@@ -7495,6 +7852,9 @@ function isFinishTaskOperationPayload(payload) {
     if (!Array.isArray(payload.preferences) || !payload.preferences.every((item) => typeof item === 'string')) {
         return false;
     }
+    if (!Array.isArray(payload.closeoutGroups)) {
+        return false;
+    }
     if (payload.memoryCandidateRecords !== undefined && (!Array.isArray(payload.memoryCandidateRecords) || !payload.memoryCandidateRecords.every((item) => {
         return (0, protocol_1.isRecord)(item)
             && typeof item.proposal_kind === 'string'
@@ -7515,8 +7875,15 @@ function isFinishTaskOperationPayload(payload) {
     if (!(0, protocol_1.isRecord)(payload.requestSnapshot) || typeof payload.requestSnapshot.task_id !== 'string') {
         return false;
     }
+    if (payload.memoryRecordWriteVersion !== undefined
+        && payload.memoryRecordWriteVersion !== 2) {
+        return false;
+    }
     if (payload.projectMemoryEntryVersion !== undefined
         && payload.projectMemoryEntryVersion !== 1) {
+        return false;
+    }
+    if (payload.memoryRecordWriteVersion === 2 && payload.closeoutGroups.length > 0) {
         return false;
     }
     if (payload.projectMemoryEntryVersion === 1
@@ -7925,7 +8292,7 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
     return {
         requestHash,
         requestSnapshot,
-        projectMemoryEntryVersion: 1,
+        memoryRecordWriteVersion: 2,
         projectMemoryCreatedAt: new Date().toISOString(),
         projectMemoryAgentType: (() => {
             const observed = context.observedClientType ?? (0, observed_client_1.normalizeObservedClientType)(client);
@@ -8054,9 +8421,6 @@ function buildFinishTaskProjectMemoryPlan(input, context) {
         return null;
     }
     const bridgeMetadata = resolveProjectMemoryBridgeMetadata(input.vaultRoot, 'project', input.projectHint, input.rawRelatedWiki ?? input.relatedWiki, input.rawRelatedSources ?? input.relatedSources, context);
-    if (bridgeMetadata.missing_wiki_bridge) {
-        return null;
-    }
     return { groups, bridgeMetadata };
 }
 function buildFinishTaskProjectMemoryBody(groups) {
@@ -8126,42 +8490,37 @@ async function writeFinishTaskCloseoutArtifacts(input, group, context, operation
         return;
     }
     if (input.reviewProposalMode === 'auto_propose' && memoryRule === 'auto_write') {
-        const canAutoWrite = !(memoryScope === 'project' &&
-            bridgeMetadata.missing_wiki_bridge);
-        if (canAutoWrite
-            && memoryScope === 'project') {
+        if (memoryScope === 'project') {
             return writeFinishTaskProjectMemoryArtifacts(input, context, operationId);
         }
-        if (canAutoWrite) {
-            const autoTarget = resolveAutoMemoryTarget(input.vaultRoot, group.kind, '', input.projectHint, context, memoryScope);
-            if (autoTarget) {
-                await appendAutoMemoryWriteAsync(input.vaultRoot, {
-                    toolName: 'tracekeeper.finish_task',
-                    proposalKind: group.kind,
-                    targetNote: autoTarget.targetNote,
-                    allowedDir: autoTarget.allowedDir,
-                    title: group.label,
-                    content: group.values.map((item) => `- ${item}`).join('\n'),
-                    taskId: input.taskId,
-                    context,
-                    operationId,
-                    projectHint: input.projectHint,
-                    sourceNote: sessionNotePath,
-                    memoryScope,
-                    relatedWiki: bridgeMetadata.related_wiki,
-                    relatedSources: bridgeMetadata.related_sources,
-                    architectureStatus: input.architectureStatus,
-                    missingGraphBridges: input.architectureStatus.missing_graph_bridges,
-                    missingWikiBridge: false,
-                    missingRelatedWiki: bridgeMetadata.missing_related_wiki,
-                    missingRelatedSources: bridgeMetadata.missing_related_sources,
-                    signature: buildFinishTaskProposalSignature(input.taskId, group.kind, group.values),
-                });
-                return;
-            }
+        const autoTarget = resolveAutoMemoryTarget(input.vaultRoot, group.kind, '', input.projectHint, context, memoryScope);
+        if (autoTarget) {
+            await appendAutoMemoryWriteAsync(input.vaultRoot, {
+                toolName: 'tracekeeper.finish_task',
+                proposalKind: group.kind,
+                targetNote: autoTarget.targetNote,
+                allowedDir: autoTarget.allowedDir,
+                title: group.label,
+                content: group.values.map((item) => `- ${item}`).join('\n'),
+                taskId: input.taskId,
+                context,
+                operationId,
+                projectHint: input.projectHint,
+                sourceNote: sessionNotePath,
+                memoryScope,
+                relatedWiki: bridgeMetadata.related_wiki,
+                relatedSources: bridgeMetadata.related_sources,
+                architectureStatus: input.architectureStatus,
+                missingGraphBridges: input.architectureStatus.missing_graph_bridges,
+                missingWikiBridge: false,
+                missingRelatedWiki: bridgeMetadata.missing_related_wiki,
+                missingRelatedSources: bridgeMetadata.missing_related_sources,
+                signature: buildFinishTaskProposalSignature(input.taskId, group.kind, group.values),
+            });
+            return;
         }
     }
-    await createFinishTaskProposal(input.vaultRoot, input.taskId, sessionNotePath, operationId, group.kind, group.label, group.values, input.projectHint, input.reviewProposalMode, memoryScope, bridgeMetadata.related_wiki, bridgeMetadata.related_sources, input.architectureStatus, input.architectureStatus.missing_graph_bridges, bridgeMetadata.missing_wiki_bridge, bridgeMetadata.missing_related_wiki, bridgeMetadata.missing_related_sources, context);
+    await createFinishTaskProposal(input.vaultRoot, input.taskId, sessionNotePath, operationId, group.kind, group.label, group.values, input.projectHint, input.reviewProposalMode, memoryScope, bridgeMetadata.related_wiki, bridgeMetadata.related_sources, input.architectureStatus, input.architectureStatus.missing_graph_bridges, false, bridgeMetadata.missing_related_wiki, bridgeMetadata.missing_related_sources, context);
 }
 async function updateFinishTaskRecord(input, context, operationId) {
     const projectIdentity = projectIdentityFromFinishPayload(input);
@@ -8374,6 +8733,41 @@ async function readTaskLifecycleStateAsync(vaultRoot, taskId, context) {
         throw error;
     }
 }
+async function releaseIncompatibleFinishTaskBinding(vaultRoot, record, context) {
+    const payload = (0, protocol_1.isRecord)(record.payload) ? record.payload : null;
+    const requestSnapshot = payload && (0, protocol_1.isRecord)(payload.requestSnapshot)
+        ? payload.requestSnapshot
+        : null;
+    const taskId = payload && typeof payload.taskId === 'string'
+        ? payload.taskId
+        : requestSnapshot && typeof requestSnapshot.task_id === 'string'
+            ? requestSnapshot.task_id
+            : '';
+    if (!taskId)
+        return;
+    const taskPath = buildTaskNotePath(taskId);
+    const current = await readCurrentVaultTextState(vaultRoot, taskPath, context);
+    if (!current)
+        return;
+    const frontmatter = (0, core_1.parseMarkdown)(current.content).frontmatter.fields;
+    const status = stripYamlQuotes(readFrontmatterString(frontmatter, ['status'])).toLowerCase();
+    const finishOperationId = stripYamlQuotes(readFrontmatterString(frontmatter, ['finish_operation_id']));
+    if (status !== 'closing' || finishOperationId !== record.operation_id)
+        return;
+    const next = updateFrontmatterFields(current.content, {
+        status: 'active',
+        finish_operation_id: null,
+    });
+    if (context.vaultRepository) {
+        if (!current.version) {
+            throw new core_1.OperationConflictError('Cannot release the unfinished finish_task binding without a task version.');
+        }
+        await context.vaultRepository.replaceText(current.path, current.version, next);
+        return;
+    }
+    const absolutePath = (0, safety_1.resolveSafeNotePath)(vaultRoot, current.path, pathSafetyOptions(context));
+    replaceTextFileAtomically(absolutePath, next, current.content);
+}
 async function handleFinishTask(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
     const invocationContext = { ...context };
@@ -8394,6 +8788,12 @@ async function handleFinishTask(rawArgs, context) {
         storedRequestHash: (payload) => (0, protocol_1.isRecord)(payload) && typeof payload.requestHash === 'string'
             ? payload.requestHash
             : '',
+        validateExistingOperation: (record, payload) => {
+            if (record.status !== 'completed'
+                && payload.memoryRecordWriteVersion !== 2) {
+                throw new core_1.OperationConflictError(`Cannot recover unfinished legacy finish_task operation "${record.operation_id}" without MemoryRecord v2 write semantics.`);
+            }
+        },
         buildPayload: (args, operationId, requestHash, requestSnapshot) => buildFinishTaskOperationPayload(args, context, operationId, requestHash, requestSnapshot),
         getTaskId: (payload) => payload.taskId,
         readLifecycle: (taskId) => readTaskLifecycleStateAsync(vaultRoot, taskId, context),

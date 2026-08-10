@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url);
 const { callTool, recoverPendingOperations } = require('../dist/index.js');
 const { ApplyApprovedWritebackService } = require('../dist/application/apply-approved-writeback.js');
 const {
+	buildMemoryRecord,
 	computePayloadHash,
 	computeProposalContentHash,
 	computeProposalRevision,
@@ -269,7 +270,7 @@ function lifecycleProposalText(writeback = 'Approved governed memory content.') 
 }
 
 function createLifecycleFixture(t, options = {}) {
-	return createFixture(t, {
+	const fixture = createFixture(t, {
 		...options,
 		skipTarget: true,
 		proposalFields: {
@@ -278,6 +279,65 @@ function createLifecycleFixture(t, options = {}) {
 		},
 		writeback: options.writeback ?? 'Approved governed memory content.',
 	});
+	if (options.globalHubDirectory) {
+		fs.mkdirSync(fixture.absolute('01_knowledge/memory/global/index.md'), { recursive: true });
+	} else {
+		fixture.write('01_knowledge/memory/global/index.md', options.globalHubText ?? '');
+	}
+	fixture.write('01_knowledge/wiki/approved-memory.md', '# Approved memory evidence\n');
+	return fixture;
+}
+
+function writeCurrentLifecycleRecord(fixture, {
+	memoryId = 'approved-memory-prior',
+	supersedes = [],
+} = {}) {
+	const recordPath = `01_knowledge/memory/global/agents/custom/prior-${memoryId}.md`;
+	const built = buildMemoryRecord({
+		path: recordPath,
+		memory_id: memoryId,
+		scope: 'global',
+		project_id: null,
+		agent_type: 'custom',
+		operation_id: `prior-${memoryId}`,
+		memory_kind: 'project_update',
+		claim_key: LIFECYCLE_PROPOSAL_FIELDS.claim_key,
+		authority: 'user',
+		confidence_level: 'supported',
+		declared_state: 'active',
+		observed_at: '2026-07-29T00:00:00.000Z',
+		valid_from: null,
+		valid_to: null,
+		last_verified_at: '2026-07-29T00:00:00.000Z',
+		evidence: [],
+		supersedes,
+		contradicts: [],
+		project_hub: null,
+		global_hub: '01_knowledge/memory/global/index.md',
+		related_wiki: [],
+		related_sources: [],
+		body: '# Prior approved memory\n\nPrior current claim.',
+	});
+	fixture.write(recordPath, built.markdown);
+	return { path: recordPath, memoryId };
+}
+
+function writeProjectLifecycleHub(fixture, projectKey, projectId) {
+	const hubPath = `01_knowledge/memory/projects/${projectKey}/index.md`;
+	fixture.write(hubPath, [
+		'---',
+		'schema_version: 1',
+		'type: project_memory_index',
+		`project_id: ${projectId}`,
+		`project_key: ${projectKey}`,
+		`project_hint: ${projectKey}`,
+		`repo_path: /work/${projectKey}`,
+		'---',
+		'',
+		`# ${projectKey}`,
+		'',
+	].join('\n'));
+	return hubPath;
 }
 
 test('approved lifecycle proposal creates one immutable v2 memory record after preview', async (t) => {
@@ -299,6 +359,230 @@ test('approved lifecycle proposal creates one immutable v2 memory record after p
 	const replayed = await apply(fixture, tokenFrom(dryRun));
 	assert.equal(replayed.isError, false, JSON.stringify(replayed.structuredContent));
 	assert.equal(fixture.read(targetPath), contentBeforeReplay);
+});
+
+test('approved MemoryRecord creation fails closed without explicit memory_scope', async (t) => {
+	const fixture = createLifecycleFixture(t, {
+		proposalFields: { memory_scope: null },
+	});
+	const result = await preview(fixture);
+	assert.equal(result.isError, true);
+	assert.match(String(result.structuredContent?.error || ''), /memory_scope/i);
+	assert.equal(fs.existsSync(fixture.absolute(LIFECYCLE_PROPOSAL_FIELDS.target_note)), false);
+});
+
+test('approved MemoryRecord rejects explicit targets bound to another scope or project Hub', async (t) => {
+	for (const item of [
+		{
+			label: 'Global scope into Project root',
+			fields: {
+				memory_scope: 'global',
+				target_note: '01_knowledge/memory/projects/atlas/agents/custom/cross-scope.md',
+			},
+		},
+		{
+			label: 'Project scope into Global root',
+			fields: {
+				memory_scope: 'project',
+				project_id: 'atlas-id',
+				target_note: '01_knowledge/memory/global/agents/custom/cross-scope.md',
+			},
+		},
+		{
+			label: 'Project scope into another Project root',
+			fields: {
+				memory_scope: 'project',
+				project_id: 'atlas-id',
+				target_note: '01_knowledge/memory/projects/orion-key/agents/custom/cross-project.md',
+			},
+		},
+		{
+			label: 'Global target without an Agent namespace',
+			fields: {
+				memory_scope: 'global',
+				target_note: '01_knowledge/memory/global/agents/non-namespaced.md',
+			},
+		},
+		{
+			label: 'Global target with a nested Agent namespace',
+			fields: {
+				memory_scope: 'global',
+				target_note: '01_knowledge/memory/global/agents/custom/nested/record.md',
+			},
+		},
+		{
+			label: 'Project target with a nested Agent namespace',
+			fields: {
+				memory_scope: 'project',
+				project_id: 'atlas-id',
+				target_note: '01_knowledge/memory/projects/atlas-key/agents/custom/nested/record.md',
+			},
+		},
+	]) {
+		await t.test(item.label, async (t) => {
+			const fixture = createLifecycleFixture(t, { proposalFields: item.fields });
+			writeProjectLifecycleHub(fixture, 'atlas-key', 'atlas-id');
+			writeProjectLifecycleHub(fixture, 'orion-key', 'orion-id');
+			const result = await preview(fixture);
+			assert.equal(result.isError, true);
+			assert.match(String(result.structuredContent?.error || ''), /Global agent namespace|project Hub agent namespace/i);
+			assert.equal(fs.existsSync(fixture.absolute(item.fields.target_note)), false);
+		});
+	}
+});
+
+test('approved Project MemoryRecord binds the exact project Hub and canonical Agent namespace', async (t) => {
+	const targetPath = '01_knowledge/memory/projects/atlas-key/agents/codex/approved-atlas.md';
+	const fixture = createLifecycleFixture(t, {
+		proposalFields: {
+			memory_scope: 'project',
+			project_id: 'atlas-id',
+			target_note: targetPath,
+		},
+	});
+	writeProjectLifecycleHub(fixture, 'atlas-key', 'atlas-id');
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assert.equal(dryRun.structuredContent.target_note, targetPath);
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+	const parsed = parseMarkdown(fixture.read(targetPath));
+	assert.equal(parsed.frontmatter.fields.scope, 'project');
+	assert.equal(parsed.frontmatter.fields.project_id, 'atlas-id');
+	assert.equal(parsed.frontmatter.fields.agent_type, 'codex');
+	assert.equal(
+		parsed.frontmatter.fields.project_hub,
+		'[[01_knowledge/memory/projects/atlas-key/index]]'
+	);
+});
+
+test('approved MemoryRecord derives authority only from fresh verified relations', async (t) => {
+	await t.test('Wiki evidence supports confidence but cannot grant Source authority', async (t) => {
+		const fixture = createLifecycleFixture(t, {
+			proposalFields: {
+				proposed_authority: 'source',
+				proposed_confidence: 'supported',
+				evidence: ['invented-source-assertion'],
+				related_sources: [],
+			},
+		});
+		const dryRun = await preview(fixture);
+		const result = await apply(fixture, tokenFrom(dryRun));
+		assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+		const record = parseMarkdown(fixture.read(dryRun.structuredContent.target_note)).frontmatter.fields;
+		assert.equal(record.authority, 'agent');
+		assert.equal(record.confidence_level, 'supported');
+		assert.deepEqual(record.evidence, ['[[01_knowledge/wiki/approved-memory]]']);
+		assert.equal(JSON.stringify(record).includes('invented-source-assertion'), false);
+	});
+
+	await t.test('raw evidence alone cannot grant Source authority or supported confidence', async (t) => {
+		const fixture = createLifecycleFixture(t, {
+			proposalFields: {
+				proposed_authority: 'source',
+				proposed_confidence: 'supported',
+				evidence: ['invented-source-assertion'],
+				related_wiki: [],
+				related_sources: [],
+			},
+		});
+		const dryRun = await preview(fixture);
+		const result = await apply(fixture, tokenFrom(dryRun));
+		assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+		const record = parseMarkdown(fixture.read(dryRun.structuredContent.target_note)).frontmatter.fields;
+		assert.equal(record.authority, 'agent');
+		assert.equal(record.confidence_level, 'inferred');
+		assert.deepEqual(record.evidence, []);
+	});
+
+	await t.test('fresh Source evidence may grant Source authority', async (t) => {
+		const sourcePath = '01_knowledge/sources/web/approved-source.md';
+		const fixture = createLifecycleFixture(t, {
+			proposalFields: {
+				proposed_authority: 'source',
+				proposed_confidence: 'supported',
+				related_wiki: [],
+				related_sources: [sourcePath],
+			},
+		});
+		fixture.write(sourcePath, '# Approved source\n');
+		const dryRun = await preview(fixture);
+		const result = await apply(fixture, tokenFrom(dryRun));
+		assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+		const record = parseMarkdown(fixture.read(dryRun.structuredContent.target_note)).frontmatter.fields;
+		assert.equal(record.authority, 'source');
+		assert.equal(record.confidence_level, 'supported');
+		assert.deepEqual(record.evidence, [`[[${sourcePath.replace(/\.md$/, '')}]]`]);
+	});
+});
+
+test('approved MemoryRecord rejects relation evidence removed after preview', async (t) => {
+	const sourcePath = '01_knowledge/sources/web/stale-approved-source.md';
+	const fixture = createLifecycleFixture(t, {
+		proposalFields: {
+			proposed_authority: 'source',
+			proposed_confidence: 'supported',
+			related_wiki: [],
+			related_sources: [sourcePath],
+		},
+	});
+	fixture.write(sourcePath, '# Stale source\n');
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	fs.unlinkSync(fixture.absolute(sourcePath));
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(String(result.structuredContent?.error || ''), /relation evidence is stale or invalid/i);
+	assert.equal(fs.existsSync(fixture.absolute(dryRun.structuredContent.target_note)), false);
+});
+
+test('approved Global MemoryRecord maps a non-file Hub collision to structure repair', async (t) => {
+	const fixture = createLifecycleFixture(t, { globalHubDirectory: true });
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(
+		String(result.structuredContent?.error || ''),
+		/missing_memory_hub.*structure_repair_required/i
+	);
+	assert.equal(fs.existsSync(fixture.absolute(dryRun.structuredContent.target_note)), false);
+});
+
+test('approved MemoryRecord applies a valid reviewed supersession transition', async (t) => {
+	const fixture = createLifecycleFixture(t);
+	const prior = writeCurrentLifecycleRecord(fixture);
+	fixture.write(PROPOSAL_PATH, proposalText({
+		fields: {
+			...LIFECYCLE_PROPOSAL_FIELDS,
+			supersedes: [prior.memoryId],
+		},
+		writeback: 'Approved successor content.',
+	}));
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+	const created = parseMarkdown(fixture.read(dryRun.structuredContent.target_note));
+	assert.deepEqual(created.frontmatter.fields.supersedes, [prior.memoryId]);
+	assert.equal(fixture.read(prior.path).includes('Prior current claim.'), true);
+});
+
+test('approved MemoryRecord rejects a dangling lifecycle transition prospectively', async (t) => {
+	const fixture = createLifecycleFixture(t);
+	fixture.write(PROPOSAL_PATH, proposalText({
+		fields: {
+			...LIFECYCLE_PROPOSAL_FIELDS,
+			supersedes: ['missing-memory-id'],
+		},
+		writeback: 'Invalid successor content.',
+	}));
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	const result = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(result.isError, true);
+	assert.match(String(result.structuredContent?.error || ''), /dangling_supersedes/i);
+	assert.equal(fs.existsSync(fixture.absolute(dryRun.structuredContent.target_note)), false);
 });
 
 test('lifecycle proposal conflict compensates the exact created MemoryRecord before applied state', async (t) => {

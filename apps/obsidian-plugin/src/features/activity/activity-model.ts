@@ -6,7 +6,7 @@ import type { TracekeeperStructureStatus } from '../structure/legacy-migration-c
 import type { AgentAuthMode, AgentIntegrationSnapshot } from '../settings/agent-integrations';
 import type { PendingOAuthRequest } from '@tracekeeper/mcp-runtime';
 
-export type PendingOAuthApproval = Pick<PendingOAuthRequest, 'requestId' | 'clientNameClaim' | 'redirectUri' | 'resource' | 'scope' | 'issuedAt' | 'expiresAt'>;
+export type PendingOAuthApproval = Pick<PendingOAuthRequest, 'requestId' | 'clientId' | 'clientNameClaim' | 'redirectUri' | 'resource' | 'scope' | 'issuedAt' | 'expiresAt'>;
 
 export const AGENT_TASKS_PATH = TRACEKEEPER_TASKS_DIR;
 

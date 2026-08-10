@@ -5,6 +5,14 @@ export interface AgentConfigurationRefreshCallbacks {
 	structure?: () => void | Promise<void>;
 }
 
+export function isSettingGroupHTMLElement(element: Element | null): element is HTMLElement {
+	return Boolean(
+		element
+		&& element.tagName === 'DIV'
+		&& element.classList.contains('setting-group')
+	);
+}
+
 export function shouldReplaceAgentConfiguration(
 	currentFingerprint: string,
 	nextFingerprint: string,

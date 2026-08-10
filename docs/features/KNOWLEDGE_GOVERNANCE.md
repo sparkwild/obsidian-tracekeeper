@@ -15,8 +15,9 @@ and next steps. It is separate from Durable Memory. Durable Memory is created
 only from explicit candidate records, each declaring global or project scope;
 ordinary task fields are never promoted automatically. Wiki notes capture
 reusable subjects such as hubs, concepts, claims, guides, and references.
-Durable Memory should link to relevant Wiki or Source notes so Recall and the
-Obsidian graph use the same relationships.
+Durable Memory may link to relevant Wiki or Source notes so Recall and the
+Obsidian graph use the same relationships. Either relation may be absent; a
+MemoryRecord does not require a Wiki.
 
 A finished task therefore has two independent outcome dimensions. Task status
 describes whether the Agent finished its execution; the finish result's
@@ -55,10 +56,18 @@ reviewable claims rather than hidden ranking signals: verified memory requires
 evidence, conflicting current claims remain visible as conflicts, and history
 is preserved instead of being overwritten.
 
-Global durable-memory changes enter Knowledge Change Review by default. A user
-may edit an unapproved proposal, approve it, return it for revision, or not
-accept it. Approval confirms the content; applying it remains a separate,
-previewed, explicitly confirmed action.
+Global durable-memory changes enter Knowledge Change Review by default. The
+user may select Global Auto as a fully supported policy, while Review remains
+the fresh-install default. A user may edit an unapproved proposal, approve it,
+return it for revision, or not accept it. Approval confirms the content;
+applying it remains a separate, previewed, explicitly confirmed action.
+
+Memory and Wiki proposals have independent routing. Every MemoryRecord
+candidate declares global or project scope; for direct `propose_memory` calls,
+`memory_scope` is mandatory and `project_hint` supplies identity rather than
+scope authority. An explicit target under `01_knowledge/wiki/**` is a Wiki
+change, does not require `memory_scope`, and always enters Knowledge Change
+Review regardless of either Memory policy.
 
 An incomplete proposal is a remediation item, not a review-ready change. An
 append proposal must resolve an existing Vault-local Memory/Wiki target before
@@ -94,14 +103,17 @@ and returns focus to the relevant input. Apply failures retain an actionable
 status and keyboard focus so the user can retry an interrupted operation or
 close the modal and generate a fresh preview after a conflict.
 
-Project memory uses a lighter default rule:
+Global and project Memory use independent policy rules:
 
-- fresh installations start with automatic project persistence, while global
-  memory remains review-gated;
+- fresh installations start with Global Review and Project Auto;
 - Settings exposes review and ignore alternatives, and records an explicit
   policy confirmation whenever the user changes the selected rule;
 - an upgrade preserves every stored memory rule exactly and asks for that
   confirmation without rewriting the selected policy;
+- Global Auto and Project Auto use the same immutable MemoryRecord v2 writer,
+  authority constraints, conflict detection, recovery, and audit semantics;
+- global entries link to the canonical Global Memory Hub and have
+  `project_id: null`;
 - a stable project id owns one project hub, while the display name remains
   non-authoritative;
 - every eligible operation creates one immutable entry under a normalized
@@ -110,10 +122,15 @@ Project memory uses a lighter default rule:
   closed;
 - existing project `memory.md` notes remain readable and catalogued but receive
   no new automatic writes;
-- the project must have a valid Wiki bridge;
-- a missing bridge or conflict falls back to review.
+- Wiki and Source relations are optional; a missing relation does not change an
+  otherwise eligible Auto decision;
+- an explicitly supplied relation that cannot be verified, a claim conflict,
+  or a lifecycle relation change falls back to review;
+- a missing or invalid canonical Global or project Hub blocks persistence and
+  directs the user to the explicit structure-repair flow. A memory write never
+  creates a Hub as a side effect.
 
-A pending proposal is not durable memory. Only an eligible project auto-save or
+A pending proposal is not durable memory. Only an eligible scope Auto-save or
 a completed approved writeback may be described as persisted.
 
 At `finish_task`, direct proposals already linked to the task are included in
@@ -132,6 +149,12 @@ stable project identity. Full entry bodies remain behind
 every project record links to its stable project hub, while global records link
 to the global Memory hub. Hubs are not rewritten for every operation, and
 Bases are not required.
+
+Global and project knowledge Recall require a non-empty query. Project-history
+and task-history Recall may omit it for bounded recent history. Every scope
+returns canonical matches with path, excerpt, match reason, content origin,
+relation evidence, and `instruction_trust: data_only`; result scope and project
+identity remain consistent with the Runtime-resolved request.
 
 An archiveable proposal remains addressable by its explicit proposal id after
 it leaves the active review queue. Archiving first shows the exact source and

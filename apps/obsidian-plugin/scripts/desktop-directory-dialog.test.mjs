@@ -64,11 +64,13 @@ try {
 			< confirmSkillWriteSource.indexOf('recordSkillInstallReceipt'),
 		'Direct Skill writes must be verified before the install receipt is recorded'
 	);
+	assert.match(confirmSkillWriteSource, /请重启 \$\{profile\.displayName\} 后使用新版本/);
+	assert.match(confirmSkillWriteSource, /action === 'update' \? 8000 : undefined/);
 	assert.match(confirmSkillWriteSource, /this\.scheduleAgentStateViewRefresh\(\);[\s\S]*return result;/);
 	assert.match(stylesSource, /\.tracekeeper-skill-directory-row \{[\s\S]*?flex/);
 	assert.match(stylesSource, /\.tracekeeper-skill-directory-row input \{[\s\S]*?text-overflow: ellipsis/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 29 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 31 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

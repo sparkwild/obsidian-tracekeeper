@@ -65,6 +65,7 @@ export class TracekeeperActivityView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
+		this.containerEl.addClass('tracekeeper-item-view');
 		this.containerEl.addClass('tracekeeper-activity-view');
 		await this.refresh();
 	}

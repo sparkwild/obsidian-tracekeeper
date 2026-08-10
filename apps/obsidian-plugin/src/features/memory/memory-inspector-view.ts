@@ -58,6 +58,7 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
+		this.containerEl.addClass('tracekeeper-item-view');
 		await this.refresh();
 	}
 
@@ -77,9 +78,7 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		contentEl.addClass('tracekeeper-view-root');
 
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
-		const heading = header.createDiv();
-		heading.createEl('h2', { text: ui('记忆查看', 'Memory view'), cls: 'tracekeeper-view__title' });
-		heading.createEl('p', {
+		header.createEl('p', {
 			text: ui(
 				'查看全局与项目记忆的 Markdown 证据，以及仍在审核或已经失效的引用。',
 				'Inspect Markdown evidence for global and project memory, including queued changes and stale references.'

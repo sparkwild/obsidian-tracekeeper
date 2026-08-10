@@ -242,7 +242,7 @@ exports.toolContracts = [
     },
     {
         name: 'tracekeeper.recall',
-        version: 3,
+        version: 4,
         visibility: 'public',
         capability: 'vault.read',
         risk: 'read-only',
@@ -252,21 +252,31 @@ exports.toolContracts = [
         workflowRole: 'recall',
         useCase: 'recall',
         description: '[read-only] Find relevant memory, Wiki, source, or task-tracking notes in the active local Obsidian Vault before read_note. Supports global, project, project_history, and task_history scopes.',
-        inputSchema: withToolInput({
-            query: { type: 'string', description: 'Recall query text. Required unless scope is project_history or task_history.' },
-            task_id: { type: 'string', description: 'Optional exact task id for task_history recall.' },
-            scope: {
-                type: 'string',
-                enum: ['global', 'project', 'project_history', 'task_history'],
-                description: 'Recall scope. Defaults to global.',
-            },
-            project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
-            project_id: { type: 'string', description: 'Project id for scoped matching.' },
-            repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
-            repo: { type: 'string', description: 'Alias of repo_path for repository-scoped matching.' },
-            project_path: { type: 'string', description: 'Alias of repo_path for workspace/project path matching.' },
-            max_items: { type: 'integer', description: 'Maximum number of matches to return.' },
-        }),
+        inputSchema: {
+            ...withToolInput({
+                query: { type: 'string', minLength: 1, description: 'Recall query text. Required unless scope is project_history or task_history.' },
+                task_id: { type: 'string', description: 'Optional exact task id for task_history recall.' },
+                scope: {
+                    type: 'string',
+                    enum: ['global', 'project', 'project_history', 'task_history'],
+                    description: 'Recall scope. Defaults to global.',
+                },
+                project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
+                project_id: { type: 'string', description: 'Project id for scoped matching.' },
+                repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
+                repo: { type: 'string', description: 'Alias of repo_path for repository-scoped matching.' },
+                project_path: { type: 'string', description: 'Alias of repo_path for workspace/project path matching.' },
+                max_items: { type: 'integer', minimum: 1, maximum: 20, description: 'Maximum number of matches to return.' },
+            }),
+            allOf: [{
+                    if: {
+                        required: ['scope'],
+                        properties: { scope: { enum: ['project_history', 'task_history'] } },
+                    },
+                    then: {},
+                    else: { required: ['query'] },
+                }],
+        },
         ...withResultSchema(result_schemas_1.RECALL_OUTPUT_SCHEMA),
     },
     {
@@ -830,7 +840,7 @@ exports.toolContracts = [
     },
     {
         name: 'tracekeeper.propose_memory',
-        version: 3,
+        version: 4,
         visibility: 'public',
         capability: 'memory.propose',
         risk: 'low-risk-write',
@@ -840,91 +850,107 @@ exports.toolContracts = [
         workflowRole: 'memory',
         useCase: 'propose_memory',
         description: '[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. When auto_applied is false, the proposal is not persisted knowledge until governed apply completes.',
-        inputSchema: withToolInput({
-            proposal_kind: { type: 'string', description: 'Proposal kind.' },
-            content: { type: 'string', description: 'Proposal markdown/text content.' },
-            evidence: {
-                oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-                description: 'Optional evidence summary or Vault-relative evidence refs.',
-            },
-            target_note: {
-                type: 'string',
-                description: 'Optional Vault-relative target note. Use 01_knowledge/wiki/** for a local project Wiki target.',
-            },
-            risk_level: { type: 'string', description: 'Risk level label.' },
-            claim_key: {
-                type: 'string',
-                minLength: 1,
-                description: 'Optional normalized claim key for a MemoryRecord v2 proposal.',
-            },
-            proposed_authority: {
-                type: 'string',
-                enum: ['agent', 'source', 'user'],
-                description: 'Optional requested authority; runtime derives effective authority for execution.',
-            },
-            proposed_confidence: {
-                type: 'string',
-                enum: ['uncertain', 'inferred', 'supported', 'verified'],
-                description: 'Optional requested confidence level.',
-            },
-            declared_state: {
-                type: 'string',
-                enum: ['active', 'disputed', 'retracted', 'review'],
-                description: 'Optional requested declared state.',
-            },
-            observed_at: {
-                type: 'string',
-                minLength: 1,
-                description: 'Optional observed timestamp for the candidate record.',
-            },
-            valid_from: {
-                type: 'string',
-                minLength: 1,
-                description: 'Optional validity window start for the candidate record.',
-            },
-            valid_to: {
-                type: 'string',
-                minLength: 1,
-                description: 'Optional validity window end for the candidate record.',
-            },
-            last_verified_at: {
-                type: 'string',
-                minLength: 1,
-                description: 'Optional last verification timestamp for the candidate record.',
-            },
-            supersedes: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Optional superseded record identifiers.',
-            },
-            contradicts: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Optional contradictory record identifiers.',
-            },
-            task_id: { type: 'string', description: 'Optional task id for traceability.' },
-            project_hint: { type: 'string', description: 'Optional project hint for project memory routing.' },
-            project_id: { type: 'string', description: 'Optional stable project id for project memory routing.' },
-            repo_path: {
-                type: 'string',
-                description: 'Optional repository/workspace path used to resolve and corroborate local project identity.',
-            },
-            memory_scope: { type: 'string', enum: ['global', 'project'], description: 'Optional memory scope override.' },
-            related_wiki: {
-                oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-                description: 'Optional verified local Vault Wiki note paths, conventionally under 01_knowledge/wiki/**.',
-            },
-            related_sources: {
-                oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-                description: 'Optional related sources.',
-            },
-            filename: { type: 'string', description: 'Optional file stem. If omitted, auto-generates one.' },
-            title: { type: 'string', description: 'Optional proposal title.' },
-            idempotency_key: {
-                type: 'string',
-                description: 'Optional stable retry key. Reusing it with different proposal content is rejected.',
-            },
-        }, ['proposal_kind', 'content']),
+        inputSchema: {
+            ...withToolInput({
+                proposal_kind: { type: 'string', description: 'Proposal kind.' },
+                content: { type: 'string', description: 'Proposal markdown/text content.' },
+                evidence: {
+                    oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    description: 'Optional evidence summary or Vault-relative evidence refs.',
+                },
+                target_note: {
+                    type: 'string',
+                    description: 'Optional Vault-relative target note. Use 01_knowledge/wiki/** for a local project Wiki target.',
+                },
+                risk_level: { type: 'string', description: 'Risk level label.' },
+                claim_key: {
+                    type: 'string',
+                    minLength: 1,
+                    description: 'Optional normalized claim key for a MemoryRecord v2 proposal.',
+                },
+                proposed_authority: {
+                    type: 'string',
+                    enum: ['agent', 'source', 'user'],
+                    description: 'Optional requested authority; runtime derives effective authority for execution.',
+                },
+                proposed_confidence: {
+                    type: 'string',
+                    enum: ['uncertain', 'inferred', 'supported', 'verified'],
+                    description: 'Optional requested confidence level.',
+                },
+                declared_state: {
+                    type: 'string',
+                    enum: ['active', 'disputed', 'retracted', 'review'],
+                    description: 'Optional requested declared state.',
+                },
+                observed_at: {
+                    type: 'string',
+                    minLength: 1,
+                    description: 'Optional observed timestamp for the candidate record.',
+                },
+                valid_from: {
+                    type: 'string',
+                    minLength: 1,
+                    description: 'Optional validity window start for the candidate record.',
+                },
+                valid_to: {
+                    type: 'string',
+                    minLength: 1,
+                    description: 'Optional validity window end for the candidate record.',
+                },
+                last_verified_at: {
+                    type: 'string',
+                    minLength: 1,
+                    description: 'Optional last verification timestamp for the candidate record.',
+                },
+                supersedes: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Optional superseded record identifiers.',
+                },
+                contradicts: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Optional contradictory record identifiers.',
+                },
+                task_id: { type: 'string', description: 'Optional task id for traceability.' },
+                project_hint: { type: 'string', description: 'Optional project hint for project memory routing.' },
+                project_id: { type: 'string', description: 'Optional stable project id for project memory routing.' },
+                repo_path: {
+                    type: 'string',
+                    description: 'Optional repository/workspace path used to resolve and corroborate local project identity.',
+                },
+                memory_scope: {
+                    type: 'string',
+                    enum: ['global', 'project'],
+                    description: 'Required for a MemoryRecord candidate. Omit for an explicit 01_knowledge/wiki/** target.',
+                },
+                related_wiki: {
+                    oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    description: 'Optional verified local Vault Wiki note paths, conventionally under 01_knowledge/wiki/**.',
+                },
+                related_sources: {
+                    oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    description: 'Optional related sources.',
+                },
+                filename: { type: 'string', description: 'Optional file stem. If omitted, auto-generates one.' },
+                title: { type: 'string', description: 'Optional proposal title.' },
+                idempotency_key: {
+                    type: 'string',
+                    description: 'Optional stable retry key. Reusing it with different proposal content is rejected.',
+                },
+            }, ['proposal_kind', 'content']),
+            allOf: [{
+                    if: {
+                        required: ['target_note'],
+                        properties: {
+                            target_note: { type: 'string', pattern: '^01_knowledge/wiki(?:/|$)' },
+                        },
+                    },
+                    then: {},
+                    else: { required: ['memory_scope'] },
+                }],
+        },
         ...withResultSchema(result_schemas_1.PROPOSE_MEMORY_OUTPUT_SCHEMA),
     },
 ];

@@ -189,6 +189,7 @@ export interface ProjectHistoryRecallApplicationResult extends RecallScanProvena
 	max_items: number;
 	matched_count: number;
 	total_matches: number;
+	scope_mode: 'project_history';
 	candidates: string[];
 	candidate_notes: ProjectCandidate[];
 	entries: ProjectHistoryEntry[];
@@ -1337,6 +1338,7 @@ export class RecallApplicationService {
 			max_items: request.maxItems,
 			matched_count: matches.length,
 			total_matches: historyEntries.length,
+			scope_mode: 'project_history',
 			...readViewProvenance(view),
 			candidates: candidateNotes.map((candidate) => candidate.path),
 			candidate_notes: candidateNotes,
@@ -1488,6 +1490,7 @@ export class RecallApplicationService {
 			max_items: request.maxItems,
 			matched_count: matches.length,
 			total_matches: sortedMatches.length,
+			scope_mode: 'project_history',
 			...scanProvenance(scan),
 			candidates: candidateNotes.map((candidate) => candidate.path),
 			candidate_notes: candidateNotes,

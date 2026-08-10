@@ -84,6 +84,7 @@ export interface ProposeMemoryNote {
     duplicate?: boolean;
 }
 export interface ProposeMemoryImmutableWriteInput {
+    scope: ProposeMemoryScope;
     projectId?: unknown;
     projectHint?: unknown;
     repoPath?: unknown;
@@ -116,8 +117,9 @@ export type ProposeMemoryImmutableWriteResult = {
     status: 'created' | 'exact_retry';
     path: string;
     activity_path: string;
-    project_id: string;
-    project_hub: string;
+    project_id: string | null;
+    project_hub: string | null;
+    global_hub: string | null;
     agent_type: string;
     operation_hash: string;
     hub_status: string;
@@ -173,12 +175,15 @@ export interface ProposeMemoryApplicationDependencies {
     resolveProjectIdentity(snapshot: ProposeMemoryRequestSnapshot): ProposeMemoryProjectIdentity | null;
     assertAllowed(proposalKind: string, targetNote: string, projectHint: string, memoryScope: ProposeMemoryScope): void;
     memoryRule(proposalKind: string, targetNote: string, projectHint: string, memoryScope: ProposeMemoryScope): ProposeMemoryRule;
-    writeImmutableProjectMemory(input: ProposeMemoryImmutableWriteInput): Promise<ProposeMemoryImmutableWriteResult>;
-    resolveAutoMemoryTarget(proposalKind: string, targetNote: string, projectHint: string, memoryScope: ProposeMemoryScope): {
-        targetNote: string;
-        allowedDir: string;
-    } | null;
-    appendAutoMemoryWrite(input: ProposeMemoryAutoWriteInput): Promise<ProposeMemoryNote>;
+    writeImmutableMemoryRecord(input: ProposeMemoryImmutableWriteInput): Promise<ProposeMemoryImmutableWriteResult>;
+    resolveMemoryRecordTarget?(input: {
+        scope: ProposeMemoryScope;
+        projectId?: unknown;
+        projectHint?: unknown;
+        repoPath?: unknown;
+        agentType: ProposeMemoryAgentType;
+        operationId: string;
+    }): Promise<string | null>;
     findOwnedProposalNote(filename: string, operationId: string): Promise<ProposeMemoryNote | null>;
     writeProposalNote(input: ProposeMemoryWriteInput): Promise<ProposeMemoryNote>;
     ensureOwnedProposalIdentity(path: string, proposalId: string, operationId: string): Promise<void>;
@@ -203,34 +208,36 @@ export declare class ProposeMemoryApplicationService {
     constructor(dependencies: ProposeMemoryApplicationDependencies);
     execute(request: ProposeMemoryApplicationRequest): Promise<{
         ok: boolean;
-        tool: string;
+        tool: "tracekeeper.propose_memory";
         operation_id: string;
         idempotency_key: string;
-        status: string;
-        path: string;
-        activity_path: string;
-        warnings: string[];
-        auto_applied: boolean;
+        status: "ignored";
+        persisted: false;
+        auto_applied: false;
         duplicate: boolean;
-        proposal_id: string;
-        proposal_path: string;
-        proposal_link_target: string;
-        memory_rule: ProposeMemoryRule;
+        proposal_destination: "memory";
+        memory_rule: "disabled";
         memory_scope: ProposeMemoryScope;
         project_hint: string | null;
-        related_wiki: string[];
-        related_sources: string[];
-        missing_related_sources: string[];
-        architecture_status: "healthy" | "needs_attention";
-        missing_graph_bridges: string[];
-        missing_wiki_bridge: boolean;
-        record_identity: {
-            scope: ProposeMemoryScope;
-            project_id: string | null;
-            claim_key: string | null;
-            memory_id: null;
+        warnings: string[];
+        proposal_id: null;
+        proposal_path: null;
+        review_reason: null;
+        review_warnings: never[];
+    } | {
+        proposal_transition_preview: {
+            operation_id: string;
+            kind: string;
+            previous_status: string;
+            next_status: string;
+            expected_revision: string;
+            committed_revision: string;
+            proposal_id: string;
+            proposal_path: string;
         };
-        predicted_record: {
+        review_reason: string | null;
+        review_warnings: string[];
+        predicted_record?: {
             scope: ProposeMemoryScope;
             project_id: string | null;
             memory_id: null;
@@ -249,20 +256,37 @@ export declare class ProposeMemoryApplicationService {
             related_wiki: string[];
             related_sources: string[];
             effective_state: null;
-        };
-        predicted_state: string;
-        proposal_transition_preview: {
-            operation_id: string;
-            kind: string;
-            previous_status: string;
-            next_status: string;
-            expected_revision: string;
-            committed_revision: string;
-            proposal_id: string;
-            proposal_path: string;
-        };
-        review_reason: string | null;
-        review_warnings: string[];
+        } | undefined;
+        predicted_state?: "review" | undefined;
+        record_identity?: {
+            scope: ProposeMemoryScope;
+            project_id: string | null;
+            claim_key: string | null;
+            memory_id: null;
+        } | undefined;
+        ok: boolean;
+        tool: string;
+        operation_id: string;
+        idempotency_key: string;
+        status: string;
+        path: string;
+        activity_path: string;
+        warnings: string[];
+        auto_applied: boolean;
+        duplicate: boolean;
+        proposal_id: string;
+        proposal_path: string;
+        proposal_link_target: string;
+        proposal_destination: "wiki" | "memory";
+        memory_rule: ProposeMemoryRule | null;
+        memory_scope: ProposeMemoryScope | null;
+        project_hint: string | null;
+        related_wiki: string[];
+        related_sources: string[];
+        missing_related_sources: string[];
+        architecture_status: "healthy" | "needs_attention";
+        missing_graph_bridges: string[];
+        missing_wiki_bridge: boolean;
     } | {
         ok: boolean;
         tool: string;
@@ -275,22 +299,24 @@ export declare class ProposeMemoryApplicationService {
         warnings: never[];
         auto_applied: boolean;
         duplicate: boolean;
+        proposal_destination: "memory";
         memory_rule: string;
-        memory_scope: "project";
-        project_id: string;
-        project_hub: string;
+        memory_scope: ProposeMemoryScope;
+        project_id: string | null;
+        project_hub: string | null;
+        global_hub: string | null;
         project_hint: string | null;
         agent_type: string;
         operation_hash: string;
         record_identity: {
-            scope: "project";
-            project_id: string;
+            scope: ProposeMemoryScope;
+            project_id: string | null;
             claim_key: string;
             memory_id: string;
         };
         predicted_record: {
-            scope: "project";
-            project_id: string;
+            scope: ProposeMemoryScope;
+            project_id: string | null;
             memory_id: string;
             memory_kind: string;
             claim_key: string;
@@ -327,70 +353,6 @@ export declare class ProposeMemoryApplicationService {
         missing_wiki_bridge: boolean;
         proposal_id: null;
         proposal_path: null;
-    } | {
-        ok: boolean;
-        tool: string;
-        operation_id: string;
-        idempotency_key: string;
-        status: string;
-        path: string;
-        target_note: string;
-        activity_path: string;
-        warnings: string[];
-        auto_applied: boolean;
-        duplicate: boolean;
-        memory_rule: string;
-        memory_scope: ProposeMemoryScope;
-        project_hint: string | null;
-        record_identity: {
-            scope: ProposeMemoryScope;
-            project_id: null;
-            claim_key: string | null;
-            memory_id: null;
-        };
-        predicted_record: {
-            scope: ProposeMemoryScope;
-            project_id: null;
-            memory_id: null;
-            memory_kind: string;
-            claim_key: string | null;
-            authority: string | null;
-            confidence_level: "uncertain" | "inferred" | "supported" | "verified" | null;
-            declared_state: "active" | "disputed" | "retracted" | "review" | null;
-            observed_at: string | null;
-            valid_from: string | null;
-            valid_to: string | null;
-            last_verified_at: string | null;
-            evidence: string[];
-            supersedes: string[];
-            contradicts: string[];
-            related_wiki: string[];
-            related_sources: string[];
-            effective_state: null;
-        };
-        predicted_state: string;
-        proposal_transition_preview: {
-            operation_id: string;
-            kind: string;
-            previous_status: string;
-            next_status: string;
-            expected_revision: string;
-            committed_revision: string;
-            proposal_id: string;
-            proposal_path: string;
-        };
-        related_wiki: string[];
-        related_sources: string[];
-        missing_related_sources: string[];
-        architecture_status: "healthy" | "needs_attention";
-        missing_graph_bridges: string[];
-        missing_wiki_bridge: boolean;
-        proposal_id: null;
-        proposal_path: null;
-        project_id?: undefined;
-        project_hub?: undefined;
-        agent_type?: undefined;
-        operation_hash?: undefined;
     }>;
     private finalize;
 }

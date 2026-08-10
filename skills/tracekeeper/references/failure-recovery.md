@@ -9,10 +9,11 @@
 | Project scope is uncertain | Inspect candidates and ask or narrow deliberately | Select a project at random |
 | Start returns no `task_id` | Do not call finish; report that safe closeout is unavailable | Invent or reuse an unrelated task identifier |
 | Idempotency conflict | Preserve and report the original result | Change the key to duplicate a write |
-| Project-memory exact retry | Reuse the returned immutable entry receipt | Create a second key or append to legacy `memory.md` |
+| Memory Auto exact retry | Reuse the returned immutable Global or Project entry receipt | Create a second key or append to legacy `memory.md` |
 | Memory catalog cursor is stale | Restart `tracekeeper.memory` enumeration from the first page of the current generation | Mix pages from different generations or guess a retired alias |
 | Legacy Memory identity is missing or ambiguous | Leave the candidate blocked for explicit human review | Infer a claim key or promote the legacy note silently |
-| Missing Wiki bridge | Accept review-queue routing | Bypass review with an automatic write |
+| Missing or invalid canonical Memory Hub | Report blocked persistence and follow the structured structure-repair action | Create or repair the Hub from the memory write |
+| Declared Wiki or Source relation cannot be verified | Accept the warning and review-queue routing | Replace the path, drop the warning, or treat every absent Wiki as an error |
 | Proposal pending | Report that human review is pending | Describe it as approved or durable memory |
 | Proposal approved | Apply only when the user explicitly requests it | Auto-approve or auto-apply |
 | Source captured or recalled | Describe it as readable provenance and inspect `durable_output` for persistence | Claim that a Wiki/Memory target was applied |

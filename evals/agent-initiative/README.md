@@ -7,7 +7,10 @@ This directory provides the Phase 0 local static characterization for Tracekeepe
 The two baselines reuse the same 37 scenarios:
 
 - `current-skill-v1.json` points only to `fixtures/skills/tracekeeper-v1/SKILL.md`. The fixture is an exact byte snapshot of Git blob `fd78ad6d8e9c36ba7ecca78f688b4858db6bd779` from commit `5114bfe37216816f45de5b575e8aada5b0897ca9`; `source.json` records the extraction command and SHA-256. It never reads the live Skill.
-- `current-skill-v2.json` fingerprints the live Skill v2 entrypoint and all four referenced workflow documents. Its deterministic adapter derives a capability profile from those texts, then classifies prompts and recovery states by semantic patterns rather than scenario ids.
+- `current-skill-v2.json` fingerprints the live Skill v2 entrypoint and all
+  referenced workflow documents. Its deterministic adapter derives a capability
+  profile from those texts, then classifies prompts and recovery states by
+  semantic patterns rather than scenario ids.
 
 These are static characterizations, not observed model success rates. A passing v2 result means that the fingerprinted Skill text can be mapped deterministically to the expected policy trace; it does not prove that a particular Agent will select or follow the Skill.
 

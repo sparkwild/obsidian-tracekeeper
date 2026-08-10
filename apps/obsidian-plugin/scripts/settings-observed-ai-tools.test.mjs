@@ -126,6 +126,9 @@ assert.ok(mainSource.includes('Boolean(this.settingTab?.isAgentListVisible())'))
 assert.ok(mainSource.includes('tasks.push(this.settingTab.refreshAgentList())'));
 assert.ok(mainSource.includes("openSettingsTab(focus?: 'agent-configuration')"));
 assert.ok(mainSource.includes('private scheduleAgentStateViewRefresh(): void'));
+assert.ok(source.includes('isSettingGroupHTMLElement(groupEl)'));
+assert.equal(source.includes('groupEl instanceof HTMLElement'), false);
+assert.match(source, /failed to refresh Agent settings list'[\s\S]*throw error;/);
 
 for (const forbidden of [
 	'observedClientNameRaw',
@@ -149,4 +152,4 @@ assert.equal(styles.includes('.tracekeeper-settings-section'), false);
 assert.equal(styles.includes('.tracekeeper-settings-observed-tools'), false);
 assert.equal(styles.includes('.tracekeeper-settings-observed-tool'), false);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 92 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 95 })}\n`);

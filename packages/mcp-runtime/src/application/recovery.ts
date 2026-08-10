@@ -19,6 +19,11 @@ export interface RecoveryInvocationResult {
 export interface RuntimeRecoveryControllerDependencies {
 	isApplyApprovedWritebackPayload(payload: unknown): boolean;
 	isProposeMemoryOperationPayload(payload: unknown): boolean;
+	isFinishTaskV2Payload?(payload: unknown): boolean;
+	releaseIncompatibleFinishTaskBinding?(
+		record: OperationRecord,
+		vaultRoot: string
+	): Promise<void>;
 	invoke(
 		request: RecoveryToolRequest,
 		record: OperationRecord,
@@ -121,10 +126,28 @@ export class RuntimeRecoveryController {
 		const report: OperationRecoveryReport = { recovered: [], failed: [], skipped: [] };
 
 		for (const record of records) {
-			if (
+			const incompatibleWriteback =
 				record.operation_id.startsWith('writeback-')
-				&& !this.dependencies.isApplyApprovedWritebackPayload(record.payload)
-			) {
+				&& !this.dependencies.isApplyApprovedWritebackPayload(record.payload);
+			const incompatibleFinishTask =
+				record.operation_id.startsWith('finish-task-')
+				&& this.dependencies.isFinishTaskV2Payload !== undefined
+				&& !this.dependencies.isFinishTaskV2Payload(record.payload);
+			if (incompatibleWriteback || incompatibleFinishTask) {
+				if (incompatibleFinishTask && this.dependencies.releaseIncompatibleFinishTaskBinding) {
+					try {
+						await this.dependencies.releaseIncompatibleFinishTaskBinding(record, vaultRoot);
+					} catch (error: unknown) {
+						report.failed.push({
+							operation_id: record.operation_id,
+							error: error instanceof Error ? error.message : String(error),
+						});
+						continue;
+					}
+				}
+				const recoveryError = incompatibleFinishTask
+					? 'Unfinished legacy finish_task recovery requires a fresh MemoryRecord v2 closeout.'
+					: 'Incompatible writeback recovery record requires a fresh preview.';
 				const failedAt = new Date().toISOString();
 				await this.journal.save({
 					operation_id: record.operation_id,
@@ -134,7 +157,7 @@ export class RuntimeRecoveryController {
 					created_at: record.created_at,
 					updated_at: failedAt,
 					failed_at: failedAt,
-					error: 'Incompatible writeback recovery record requires a fresh preview.',
+					error: recoveryError,
 					completed_steps: record.completed_steps.map((step) => ({
 						name: step.name,
 						completed_at: step.completed_at,
@@ -142,7 +165,7 @@ export class RuntimeRecoveryController {
 				});
 				report.failed.push({
 					operation_id: record.operation_id,
-					error: 'Incompatible writeback recovery record requires a fresh preview.',
+					error: recoveryError,
 				});
 				continue;
 			}

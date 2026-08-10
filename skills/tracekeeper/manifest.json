@@ -1,31 +1,31 @@
 {
   "format_version": 1,
   "name": "tracekeeper",
-  "skill_version": "2.1.2",
-  "workflow_contract_version": 3,
+  "skill_version": "2.2.0",
+  "workflow_contract_version": 4,
   "minimum_tracekeeper_version": "0.3.0",
   "hash_algorithm": "sha256",
-  "bundle_hash": "sha256:8a706c1ccd84e3e0613fb045725d878760fb1e68258314c8a24333b9272cb37b",
+  "bundle_hash": "sha256:ca77e0ddaa115ecde0e428c9f4798112b0da3723a6f461dac56a49c1a6bb10b1",
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "sha256:bd6a63c63d50c70178a89588eb7230230404f408060a2089fe081056ef032b47"
+      "sha256": "sha256:e4f7801b5f11c06c34cdd486401bbc59253c8c72e3ec7a5e57f045ba80a798e8"
     },
     {
       "path": "references/workflow-state-machine.md",
-      "sha256": "sha256:b18b97e80bf3f6dd9e4ff1bf1c19f0f98ffb0a1d4c25cc4cb33d663f7ad1a8d6"
+      "sha256": "sha256:d95511278c2599597f8c11ee5a1f049d4a9c5cb021373857fb58647a6395d2f6"
     },
     {
       "path": "references/ingestion-workflow.md",
-      "sha256": "sha256:65517aceea2aaff762d2c721859674d47b4e0fdebc061bca0a37e19970db8771"
+      "sha256": "sha256:0c350c75f29309d84be4506b5146964383c8b593217f76be378ef61b99ef16e5"
     },
     {
       "path": "references/failure-recovery.md",
-      "sha256": "sha256:e428e26c5c4080a79f7f1173dac1ea6347ba3f268577cfc3bf1b176c537d4cf9"
+      "sha256": "sha256:8335015fb6f8acf49dcf7433efe85a320132df22e5befea752e26a96f5f01c15"
     },
     {
       "path": "references/closeout-fields.md",
-      "sha256": "sha256:ceebe92245fd05aa3062391bcc16d62b559b9e12b048dcbbd32118fc4ee52354"
+      "sha256": "sha256:ef3668f0c1caf68134cb808ec9b25d00e2f6577943c271d9dbb4663187dcd72c"
     },
     {
       "path": "references/instruction-isolation.md",
@@ -35,7 +35,7 @@
   "artifacts": {
     "flattened": {
       "path": "dist/tracekeeper.flattened.md",
-      "sha256": "sha256:fe90535a3ce55b0ced19ce45d92e0f0a3eae2aa4332f460e8c2511efdbd064a6"
+      "sha256": "sha256:ac0e198c5e1943485c9f00a2fa8fa038199fdd0f50077544087a7fd819f499f5"
     }
   }
 }

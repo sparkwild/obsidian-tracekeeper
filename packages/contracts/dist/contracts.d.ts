@@ -92,7 +92,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.recall";
-    readonly version: 3;
+    readonly version: 4;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -102,7 +102,26 @@ export declare const toolContracts: readonly [{
     readonly workflowRole: "recall";
     readonly useCase: "recall";
     readonly description: "[read-only] Find relevant memory, Wiki, source, or task-tracking notes in the active local Obsidian Vault before read_note. Supports global, project, project_history, and task_history scopes.";
-    readonly inputSchema: ToolInputSchema;
+    readonly inputSchema: {
+        readonly allOf: readonly [{
+            readonly if: {
+                readonly required: readonly ["scope"];
+                readonly properties: {
+                    readonly scope: {
+                        readonly enum: readonly ["project_history", "task_history"];
+                    };
+                };
+            };
+            readonly then: {};
+            readonly else: {
+                readonly required: readonly ["query"];
+            };
+        }];
+        readonly type: "object";
+        readonly properties: Record<string, unknown>;
+        readonly required?: readonly string[];
+        readonly additionalProperties?: boolean;
+    };
 }, {
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
@@ -419,7 +438,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.propose_memory";
-    readonly version: 3;
+    readonly version: 4;
     readonly visibility: "public";
     readonly capability: "memory.propose";
     readonly risk: "low-risk-write";
@@ -429,7 +448,27 @@ export declare const toolContracts: readonly [{
     readonly workflowRole: "memory";
     readonly useCase: "propose_memory";
     readonly description: "[low-risk write] Submit a reviewable Memory or Wiki update to the active local Obsidian Vault through Tracekeeper rules. This does not write to an external Wiki service. When auto_applied is false, the proposal is not persisted knowledge until governed apply completes.";
-    readonly inputSchema: ToolInputSchema;
+    readonly inputSchema: {
+        readonly allOf: readonly [{
+            readonly if: {
+                readonly required: readonly ["target_note"];
+                readonly properties: {
+                    readonly target_note: {
+                        readonly type: "string";
+                        readonly pattern: "^01_knowledge/wiki(?:/|$)";
+                    };
+                };
+            };
+            readonly then: {};
+            readonly else: {
+                readonly required: readonly ["memory_scope"];
+            };
+        }];
+        readonly type: "object";
+        readonly properties: Record<string, unknown>;
+        readonly required?: readonly string[];
+        readonly additionalProperties?: boolean;
+    };
 }];
 type ContractByName = {
     readonly [K in TracekeeperToolName]: ToolContract<K>;

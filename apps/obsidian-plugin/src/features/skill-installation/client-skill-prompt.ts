@@ -56,27 +56,82 @@ export function renderClientSkillPrompt({
 	body.createEl('div', { text: prompt.detail, cls: 'tracekeeper-settings-client-skill__detail' });
 	const actions = skill.createDiv({ cls: 'tracekeeper-settings-client-skill__actions' });
 	if (prompt.action) {
+		const operationStatus = prompt.action === 'update'
+			? body.createEl('div', {
+				cls: 'tracekeeper-settings-client-skill__operation-status',
+				attr: {
+					role: 'status',
+					'aria-live': 'polite',
+					'aria-atomic': 'true',
+				},
+			})
+			: null;
 		const actionButton = actions.createEl('button', { text: prompt.actionLabel, cls: 'mod-cta' });
 		actionButton.addEventListener('click', () => {
-			actionButton.disabled = true;
-			void plugin.setOnboardingClientId(config.clientId)
-				.then(async () => {
-					if (prompt.action === 'update') {
+			if (prompt.action === 'update' && operationStatus) {
+				actionButton.disabled = true;
+				actionButton.setAttribute('aria-busy', 'true');
+				actionButton.setText(ui('更新中…', 'Updating…'));
+				operationStatus.classList.remove('is-error', 'is-success');
+				operationStatus.setText(ui(
+					'正在重新校验并更新原安装目录…',
+					'Revalidating and updating the existing installation directory…'
+				));
+				void (async () => {
+					try {
+						await plugin.setOnboardingClientId(config.clientId);
 						await plugin.updateSkillAtInstalledDirectory(config.clientId);
-						await onChanged?.();
+					} catch (error) {
+						console.error('tracekeeper failed to update Skill in its installed directory', error);
+						actionButton.disabled = false;
+						actionButton.removeAttribute('aria-busy');
+						actionButton.setText(prompt.actionLabel);
+						operationStatus.classList.add('is-error');
+						operationStatus.setText(ui(
+							'更新未完成。请根据提示处理后重试。',
+							'The update did not complete. Follow the notice, then try again.'
+						));
+						new Notice(error instanceof Error ? error.message : ui('无法更新 Skill。', 'Unable to update the Skill.'));
 						return;
 					}
-					new SkillInstallPreviewModal(app, plugin, config.clientId, onChanged).open();
-				})
+
+					actionButton.removeAttribute('aria-busy');
+					actionButton.setText(ui('已更新', 'Updated'));
+					operationStatus.classList.add('is-success');
+					operationStatus.setText(ui('更新成功，正在刷新状态…', 'Update complete. Refreshing status…'));
+					try {
+						await onChanged?.();
+					} catch (error) {
+						console.error('tracekeeper updated Skill but failed to refresh its visible state', error);
+						operationStatus.classList.remove('is-success');
+						operationStatus.classList.add('is-error');
+						operationStatus.setText(ui(
+							'Skill 已更新，但页面状态刷新失败。请重新打开设置页。',
+							'The Skill was updated, but the page did not refresh. Reopen Settings.'
+						));
+						new Notice(ui(
+							'Skill 已更新，但设置页刷新失败。请重新打开设置页。',
+							'The Skill was updated, but Settings did not refresh. Reopen Settings.'
+						), 8000);
+						return;
+					}
+					if (actionButton.isConnected) {
+						operationStatus.setText(ui(
+							'更新成功。请按提示重启客户端。',
+							'Update complete. Restart the client when prompted.'
+						));
+					}
+				})();
+				return;
+			}
+			actionButton.disabled = true;
+			void plugin.setOnboardingClientId(config.clientId)
+				.then(() => new SkillInstallPreviewModal(app, plugin, config.clientId, onChanged).open())
 				.catch((error) => {
-					console.error(prompt.action === 'update'
-						? 'tracekeeper failed to update Skill in its installed directory'
-						: 'tracekeeper failed to open Skill directory selection', error);
+					console.error('tracekeeper failed to open Skill directory selection', error);
 					new Notice(error instanceof Error
 						? error.message
-						: prompt.action === 'update'
-							? ui('无法更新 Skill。', 'Unable to update the Skill.')
-							: ui('无法打开目录选择。', 'Unable to open directory selection.'));
+						: ui('无法打开目录选择。', 'Unable to open directory selection.'));
 				})
 				.finally(() => { actionButton.disabled = false; });
 		});

@@ -25,6 +25,7 @@ class FinishTaskApplicationService {
                 throw new Error(`Idempotency key conflict for "${identity.idempotencyKey}" with different finish_task request hash`);
             }
             operationPayload = existing.payload;
+            dependencies.validateExistingOperation?.(existing, operationPayload);
         }
         else {
             operationPayload = await dependencies.buildPayload(rawArgs, identity.operationId, requestHash, requestSnapshot);

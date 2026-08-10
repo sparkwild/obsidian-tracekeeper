@@ -99,9 +99,6 @@ export function buildCurrentSkillV1Trace(scenario, profile) {
 	if (signals.proposalPending) {
 		return trackedTrace(scenario, { closeoutStatus: 'queued', codes: ['proposal_not_applied'] });
 	}
-	if (signals.missingWikiBridge) {
-		return trackedTrace(scenario, { closeoutStatus: 'queued' });
-	}
 	if (signals.proposalReview) {
 		return noTrackTrace(scenario, ['proposal_not_applied']);
 	}

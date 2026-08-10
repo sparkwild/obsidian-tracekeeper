@@ -65,6 +65,17 @@ the user-facing data statement remains in [PRIVACY.md](../../PRIVACY.md).
   and global revoke invalidate them. Invalid, expired, replayed, mismatched,
   and capacity-exhausted requests fail closed without revealing which check
   failed.
+- A pending OAuth request belongs to an existing integration only when its
+  trusted `clientId` binding matches that integration. An unbound first-time
+  request remains a single global pending item until the user selects the Agent
+  to bind; an untrusted client-name claim cannot place it on an Agent card.
+  Expired requests are pruned before presentation and capacity checks.
+- One OAuth `clientId` has at most one effective integration owner. Approval
+  reserves that owner through the authorization-code lifetime, and token
+  persistence serially rechecks it. Persisted duplicate owners fail closed and
+  remain visible as one settings-level conflict until the human resolves them;
+  Tracekeeper never chooses an owner by array order or rewrites the settings
+  silently.
 - The token endpoint atomically persists the selected integration's digest and
   returns one opaque access token. It does not issue refresh tokens; revoke and
   replacement close only the bound integration's Sessions.
@@ -110,15 +121,22 @@ permissions.
 | Class | Allowed behavior | Examples |
 | --- | --- | --- |
 | Read-only | Inspect Vault-local state without changing notes | status, lint, Recall, note reads, review inspection |
-| Bounded write | Create work records or proposals in allowlisted Tracekeeper paths | tasks, sessions, context packs, sources, proposals |
+| Bounded write | Create governed records or proposals in allowlisted Tracekeeper paths | tasks, sessions, context packs, sources, immutable policy-authorized MemoryRecord v2 entries, proposals |
 | Review-gated write | Append to an existing durable target or create one explicitly approved Wiki/MemoryRecord target | approved writeback |
 
-Generated records never overwrite existing notes. Project auto-memory is a
-user-controlled exception to global review and remains project-scoped,
-append-only, duplicate-protected, and dependent on a verified Wiki bridge.
-Agent-originated evidence is bounded to `supported` confidence even when the
-caller requests `verified`. User authority, lifecycle transitions, unresolved
-claim conflicts, and uncertain project identity remain human-review boundaries.
+Generated records never overwrite existing notes. Global and Project Auto are
+independently user-controlled and create immutable, duplicate-protected
+MemoryRecord v2 entries under the canonical Hub for the declared scope. Global
+Review remains the fresh-install default. Wiki and Source relations are
+optional and do not grant write authority. Agent-originated evidence is bounded
+to `supported` confidence even when the caller requests `verified`. User
+authority, lifecycle transitions, unresolved claim conflicts, uncertain
+project identity, and explicitly supplied but unverifiable relations remain
+human-review boundaries.
+
+An explicit Wiki target remains review-gated regardless of Memory policy. A
+missing or invalid Memory Hub blocks persistence and returns a structure-repair
+action; the memory-write path never creates or repairs the Hub silently.
 
 Recall and captured material are untrusted knowledge data. Content origin and
 `instruction_trust: data_only` make explicit that note text cannot change the

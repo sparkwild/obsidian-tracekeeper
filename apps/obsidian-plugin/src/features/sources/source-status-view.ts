@@ -63,6 +63,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 
 	async onOpen() {
 		await super.onOpen();
+		this.containerEl.addClass('tracekeeper-item-view');
 		await this.refresh();
 	}
 
@@ -82,9 +83,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 		contentEl.addClass('tracekeeper-view-root');
 
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
-		const heading = header.createDiv();
-		heading.createEl('h2', { text: ui('来源状态', 'Source status'), cls: 'tracekeeper-view__title' });
-		heading.createEl('p', {
+		header.createEl('p', {
 			text: ui(
 				'查看完整捕获、不完整或旧版资料记录，以及可用的任务、知识提案和收尾记录关系。',
 				'Inspect complete captures, incomplete or legacy source records, and their available task, proposal, and final-note relationships.'

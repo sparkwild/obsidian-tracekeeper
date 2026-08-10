@@ -60,7 +60,7 @@ test('ProposeMemoryApplicationService owns normalization, journaling, and propos
 		resolveProjectIdentity: () => null,
 		assertAllowed: () => undefined,
 		memoryRule: () => 'review_queue',
-		writeImmutableProjectMemory: async () => ({
+		writeImmutableMemoryRecord: async () => ({
 			status: 'review_required',
 			reason: 'test_review_required',
 			warnings: ['Test review requirement.'],
@@ -90,8 +90,9 @@ test('ProposeMemoryApplicationService owns normalization, journaling, and propos
 
 	const request = {
 		rawArgs: {
-		proposal_kind: 'task_decision',
-		content: 'Keep the bounded decision.',
+			proposal_kind: 'task_decision',
+			memory_scope: 'global',
+			content: 'Keep the bounded decision.',
 		evidence: 'direct test',
 		task_id: 'direct-task',
 		filename: 'direct-proposal',
@@ -151,7 +152,7 @@ test('ProposeMemoryApplicationService marks missing wiki target as create_wiki_n
 		resolveProjectIdentity: () => null,
 		assertAllowed: () => undefined,
 		memoryRule: () => 'review_queue',
-		writeImmutableProjectMemory: async () => ({
+		writeImmutableMemoryRecord: async () => ({
 			status: 'review_required',
 			reason: 'test_review_required',
 			warnings: ['Test review requirement.'],
@@ -226,7 +227,7 @@ test('ProposeMemoryApplicationService keeps append effect for existing Wiki and 
 		resolveProjectIdentity: () => null,
 		assertAllowed: () => undefined,
 		memoryRule: () => 'review_queue',
-		writeImmutableProjectMemory: async () => ({
+		writeImmutableMemoryRecord: async () => ({
 			status: 'review_required',
 			reason: 'test_review_required',
 			warnings: ['Test review requirement.'],
@@ -275,6 +276,7 @@ test('ProposeMemoryApplicationService keeps append effect for existing Wiki and 
 	const memoryResult = await service.execute({
 		rawArgs: {
 			proposal_kind: 'task_decision',
+			memory_scope: 'global',
 			content: 'Append to an existing governed Memory note.',
 			evidence: 'direct test',
 			task_id: 'direct-task',
@@ -318,7 +320,7 @@ test('ProposeMemoryApplicationService keeps legacy wiki behavior when claim_key 
 		resolveProjectIdentity: () => null,
 		assertAllowed: () => undefined,
 		memoryRule: () => 'review_queue',
-		writeImmutableProjectMemory: async () => ({
+		writeImmutableMemoryRecord: async () => ({
 			status: 'review_required',
 			reason: 'test_review_required',
 			warnings: ['Test review requirement.'],
@@ -393,7 +395,7 @@ test('ProposeMemoryApplicationService with claim_key but no target_note defaults
 		resolveProjectIdentity: () => null,
 		assertAllowed: () => undefined,
 		memoryRule: () => 'review_queue',
-		writeImmutableProjectMemory: async () => ({
+		writeImmutableMemoryRecord: async () => ({
 			status: 'review_required',
 			reason: 'test_review_required',
 			warnings: ['Test review requirement.'],
@@ -422,6 +424,7 @@ test('ProposeMemoryApplicationService with claim_key but no target_note defaults
 	const request = {
 		rawArgs: {
 			proposal_kind: 'task_decision',
+			memory_scope: 'global',
 			content: 'Controlled review queue proposal without explicit target.',
 			evidence: 'direct test',
 			task_id: 'direct-task',
@@ -468,7 +471,7 @@ test('ProposeMemoryApplicationService persists writeback effect after first jour
 		resolveProjectIdentity: () => null,
 		assertAllowed: () => undefined,
 		memoryRule: () => 'review_queue',
-		writeImmutableProjectMemory: async () => ({
+		writeImmutableMemoryRecord: async () => ({
 			status: 'review_required',
 			reason: 'test_review_required',
 			warnings: ['Test review requirement.'],
@@ -554,7 +557,7 @@ test('ProposeMemoryApplicationService does not synthesize a live effect for a le
 		resolveProjectIdentity: () => null,
 		assertAllowed: () => undefined,
 		memoryRule: () => 'review_queue',
-		writeImmutableProjectMemory: async () => ({
+		writeImmutableMemoryRecord: async () => ({
 			status: 'review_required',
 			reason: 'test_review_required',
 			warnings: ['Test review requirement.'],
@@ -617,6 +620,71 @@ test('ProposeMemoryApplicationService does not synthesize a live effect for a le
 	assert.doesNotMatch(writes[0].body, /^- writeback_effect:/m);
 });
 
+test('ProposeMemoryApplicationService fails closed for unfinished legacy Memory writes', async () => {
+	let interruptBeforeFinalize = true;
+	let durableWrites = 0;
+	const journal = createInMemoryJournal();
+	const operationId = 'propose-memory-unfinished-legacy-global';
+	const service = new ProposeMemoryApplicationService({
+		journal,
+		createIdentity: (_requestHash, idempotencyKey) => ({ operationId, idempotencyKey }),
+		observedAgentType: 'custom',
+		now: () => '2026-08-03T00:00:00.000Z',
+		buildFilename: (rawFilename, fallbackPrefix) => rawFilename || fallbackPrefix,
+		resolveMemoryScope: () => 'global',
+		buildArchitectureStatus: () => ({ architecture_status: 'healthy', missing_graph_bridges: [] }),
+		resolveBridgeMetadata: () => ({
+			missing_wiki_bridge: false,
+			related_wiki: [],
+			missing_related_wiki: [],
+			related_sources: [],
+			missing_related_sources: [],
+		}),
+		resolveProjectIdentity: () => null,
+		assertAllowed: () => undefined,
+		memoryRule: () => 'auto_write',
+		writeImmutableMemoryRecord: async () => {
+			durableWrites += 1;
+			throw new Error('legacy recovery must not invoke the v2 writer');
+		},
+		findOwnedProposalNote: async () => null,
+		writeProposalNote: async () => {
+			durableWrites += 1;
+			throw new Error('legacy recovery must not create a proposal');
+		},
+		ensureOwnedProposalIdentity: async () => undefined,
+		updateTaskMemoryWrite: async () => undefined,
+		updateTaskProposalReference: async () => undefined,
+		assertSafeText: () => undefined,
+		renderText: (_zh, en) => en,
+		failureInjection: ({ phase }) => {
+			if (interruptBeforeFinalize && phase === 'before_finalize') {
+				throw new Error('simulate unfinished v2 global operation');
+			}
+		},
+	});
+	const request = {
+		rawArgs: {
+			proposal_kind: 'agent_preference',
+			content: 'An unfinished legacy Global append cannot be promoted during recovery.',
+			memory_scope: 'global',
+			claim_key: 'preference:legacy-global-recovery',
+			idempotency_key: 'unfinished-legacy-global-key',
+		},
+	};
+	await assert.rejects(() => service.execute(request), /unfinished v2 global operation/i);
+	const legacyRecord = await journal.loadById(operationId);
+	delete legacyRecord.payload.memoryRecordWriteVersion;
+	legacyRecord.payload_hash = computePayloadHash(legacyRecord.payload);
+	await journal.save(legacyRecord);
+	interruptBeforeFinalize = false;
+	await assert.rejects(
+		() => service.execute(request),
+		/Cannot recover unfinished legacy propose_memory operation/i
+	);
+	assert.equal(durableWrites, 0);
+});
+
 test('ProposeMemoryApplicationService validates allowed target before missing-target probe', async () => {
 	const writes = [];
 	let order = '';
@@ -647,7 +715,7 @@ test('ProposeMemoryApplicationService validates allowed target before missing-ta
 			throw new Error('policy denied');
 		},
 		memoryRule: () => 'review_queue',
-		writeImmutableProjectMemory: async () => ({
+		writeImmutableMemoryRecord: async () => ({
 			status: 'review_required',
 			reason: 'test_review_required',
 			warnings: ['Test review requirement.'],
@@ -675,6 +743,7 @@ test('ProposeMemoryApplicationService validates allowed target before missing-ta
 	const request = {
 		rawArgs: {
 			proposal_kind: 'task_decision',
+			memory_scope: 'global',
 			content: 'Policy check should happen before target probe.',
 			evidence: 'direct test',
 			task_id: 'direct-task',
@@ -693,4 +762,76 @@ test('ProposeMemoryApplicationService validates allowed target before missing-ta
 	);
 	assert.equal(order, 'a');
 	assert.equal(writes.length, 0);
+});
+
+test('disabled Memory result is a journaled completed no-op with exact replay and conflict semantics', async () => {
+	const journal = createInMemoryJournal();
+	let activeRule = 'disabled';
+	let durableWrites = 0;
+	const service = new ProposeMemoryApplicationService({
+		journal,
+		createIdentity: (_requestHash, idempotencyKey) => ({
+			operationId: 'propose-memory-disabled-noop',
+			idempotencyKey,
+		}),
+		observedAgentType: 'custom',
+		now: () => '2026-08-03T00:00:00.000Z',
+		buildFilename: (rawFilename, fallbackPrefix) => rawFilename || fallbackPrefix,
+		resolveMemoryScope: () => 'global',
+		buildArchitectureStatus: () => ({ architecture_status: 'healthy', missing_graph_bridges: [] }),
+		resolveBridgeMetadata: () => ({
+			missing_wiki_bridge: false,
+			related_wiki: [],
+			missing_related_wiki: [],
+			related_sources: [],
+			missing_related_sources: [],
+		}),
+		resolveProjectIdentity: () => null,
+		assertAllowed: () => undefined,
+		memoryRule: () => activeRule,
+		writeImmutableMemoryRecord: async () => {
+			durableWrites += 1;
+			throw new Error('disabled result must not invoke the writer');
+		},
+		findOwnedProposalNote: async () => null,
+		writeProposalNote: async () => {
+			durableWrites += 1;
+			throw new Error('disabled result must not create a proposal');
+		},
+		ensureOwnedProposalIdentity: async () => undefined,
+		updateTaskMemoryWrite: async () => undefined,
+		updateTaskProposalReference: async () => undefined,
+		assertSafeText: () => undefined,
+		renderText: (_zh, en) => en,
+	});
+	const request = {
+		rawArgs: {
+			proposal_kind: 'agent_preference',
+			content: 'Disabled result must remain a durable no-op.',
+			memory_scope: 'global',
+			idempotency_key: 'disabled-noop-key',
+		},
+	};
+	const first = await service.execute(request);
+	assert.equal(first.status, 'ignored');
+	assert.equal(first.persisted, false);
+	const record = await journal.loadById('propose-memory-disabled-noop');
+	assert.equal(record.status, 'completed');
+	assert.equal(record.payload.policyOutcome, 'disabled');
+	assert.equal(record.payload.memoryRule, 'disabled');
+
+	activeRule = 'auto_write';
+	const replay = await service.execute(request);
+	assert.deepEqual(replay, first);
+	assert.equal(durableWrites, 0);
+	await assert.rejects(
+		() => service.execute({
+			rawArgs: {
+				...request.rawArgs,
+				content: 'Changed payload must conflict.',
+			},
+		}),
+		/different propose_memory request hash/i
+	);
+	assert.equal(durableWrites, 0);
 });

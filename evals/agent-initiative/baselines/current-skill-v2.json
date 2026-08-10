@@ -3,14 +3,14 @@
 	"kind": "static_skill_characterization",
 	"tracekeeper_version": "0.3.0",
 	"skill_path": "skills/tracekeeper/SKILL.md",
-	"skill_sha256": "bd6a63c63d50c70178a89588eb7230230404f408060a2089fe081056ef032b47",
+	"skill_sha256": "e4f7801b5f11c06c34cdd486401bbc59253c8c72e3ec7a5e57f045ba80a798e8",
 	"skill_sources": [
-		{ "path": "skills/tracekeeper/SKILL.md", "sha256": "bd6a63c63d50c70178a89588eb7230230404f408060a2089fe081056ef032b47" },
-		{ "path": "skills/tracekeeper/references/closeout-fields.md", "sha256": "ceebe92245fd05aa3062391bcc16d62b559b9e12b048dcbbd32118fc4ee52354" },
-		{ "path": "skills/tracekeeper/references/failure-recovery.md", "sha256": "e428e26c5c4080a79f7f1173dac1ea6347ba3f268577cfc3bf1b176c537d4cf9" },
-		{ "path": "skills/tracekeeper/references/ingestion-workflow.md", "sha256": "65517aceea2aaff762d2c721859674d47b4e0fdebc061bca0a37e19970db8771" },
+		{ "path": "skills/tracekeeper/SKILL.md", "sha256": "e4f7801b5f11c06c34cdd486401bbc59253c8c72e3ec7a5e57f045ba80a798e8" },
+		{ "path": "skills/tracekeeper/references/closeout-fields.md", "sha256": "ef3668f0c1caf68134cb808ec9b25d00e2f6577943c271d9dbb4663187dcd72c" },
+		{ "path": "skills/tracekeeper/references/failure-recovery.md", "sha256": "8335015fb6f8acf49dcf7433efe85a320132df22e5befea752e26a96f5f01c15" },
+		{ "path": "skills/tracekeeper/references/ingestion-workflow.md", "sha256": "0c350c75f29309d84be4506b5146964383c8b593217f76be378ef61b99ef16e5" },
 		{ "path": "skills/tracekeeper/references/instruction-isolation.md", "sha256": "2bf2f2f047bba9a968d2ca841029f130c12a9829e2e294e3b8d56659fd8c9357" },
-		{ "path": "skills/tracekeeper/references/workflow-state-machine.md", "sha256": "b18b97e80bf3f6dd9e4ff1bf1c19f0f98ffb0a1d4c25cc4cb33d663f7ad1a8d6" }
+		{ "path": "skills/tracekeeper/references/workflow-state-machine.md", "sha256": "d95511278c2599597f8c11ee5a1f049d4a9c5cb021373857fb58647a6395d2f6" }
 	],
 	"scenario_count": 37,
 	"trace_generator": "evals/agent-initiative/evaluator/current-skill-v2.mjs",
@@ -23,6 +23,6 @@
 		"average_score": 100,
 		"passed_count": 37,
 		"failed_scenario_ids": [],
-		"report_sha256": "6b410eb46108e14bd5774290cc63eff53b1771527656e007c59268d3ce85019f"
+		"report_sha256": "3af231ada4213683199248ce7cb88289d7f2cc9af53588b9c1f06252b8175b32"
 	}
 }

@@ -8,6 +8,7 @@ import type {
 import type { MemoryProposalRecord } from './review-view-model';
 import type { ReviewProposalContext, ReviewTargetCandidate } from './review-context-model';
 import { ui } from '../../ui/localization';
+import { trimText } from '../shared/markdown-record-parser';
 
 const isProposalTransitionConflict = (error: unknown): boolean =>
 	error instanceof Error && error.name === 'ProposalTransitionConflictError';
@@ -17,6 +18,39 @@ const configureLiveStatus = (element: HTMLElement): void => {
 	element.setAttr('aria-live', 'polite');
 	element.setAttr('aria-atomic', 'true');
 };
+
+const noteNameFromPath = (path: string): string =>
+	path.split('/').pop()?.replace(/\.md$/i, '') || path;
+
+const targetKindLabel = (candidate: ReviewTargetCandidate): string => {
+	switch (candidate.kind) {
+		case 'project_memory':
+			return ui('项目记忆', 'Project memory');
+		case 'global_memory':
+			return ui('全局记忆', 'Global memory');
+		case 'wiki':
+		default:
+			return ui('知识笔记', 'Knowledge note');
+	}
+};
+
+const targetReasonLabel = (candidate: ReviewTargetCandidate): string => {
+	switch (candidate.reason) {
+		case 'current':
+			return ui('当前目标', 'Current target');
+		case 'project_match':
+			return ui('项目匹配', 'Project match');
+		case 'scope_match':
+			return ui('范围匹配', 'Scope match');
+		case 'related_match':
+			return ui('内容相关', 'Related content');
+		default:
+			return ui('可用目标', 'Available target');
+	}
+};
+
+const targetDisplayName = (candidate: ReviewTargetCandidate): string =>
+	candidate.title || noteNameFromPath(candidate.path);
 
 type ProposalWritebackEffect = 'append' | 'create_memory_record' | 'create_wiki_note';
 
@@ -39,32 +73,32 @@ const normalizeWritebackEffect = (value: unknown): ProposalWritebackEffect | und
 
 const writebackEffectLabel = (effect: ProposalWritebackEffect): string => ({
 	append: ui('追加写入', 'Append'),
-	create_memory_record: ui('新建 MemoryRecord', 'Create MemoryRecord'),
-	create_wiki_note: ui('新建 Wiki', 'Create Wiki'),
+	create_memory_record: ui('新增记忆', 'Add memory'),
+	create_wiki_note: ui('新建知识笔记', 'Create knowledge note'),
 }[effect]);
 
 const writebackActionLabel = (effect: ProposalWritebackEffect): string => ({
 	append: ui('确认追加写入', 'Confirm append'),
-	create_memory_record: ui('确认创建 MemoryRecord', 'Confirm MemoryRecord create'),
-	create_wiki_note: ui('确认新建 Wiki', 'Confirm Wiki create'),
+	create_memory_record: ui('确认新增记忆', 'Confirm memory addition'),
+	create_wiki_note: ui('确认新建知识笔记', 'Confirm knowledge note creation'),
 }[effect]);
 
 const writebackIntroLabel = (effect: ProposalWritebackEffect): string => ({
 	append: ui('请确认以下内容将写入目标笔记。', 'Confirm the content that will be written to the target note.'),
-	create_memory_record: ui('请确认以下内容将创建新的 MemoryRecord。', 'Confirm the content that will create a new MemoryRecord.'),
-	create_wiki_note: ui('请确认以下内容将新建 Wiki 笔记。', 'Confirm the new Wiki note content to be created.'),
+	create_memory_record: ui('请确认以下内容将新增为记忆。', 'Confirm the content that will be added as memory.'),
+	create_wiki_note: ui('请确认以下内容将新建为知识笔记。', 'Confirm the knowledge note content to be created.'),
 }[effect]);
 
 const writebackProgressLabel = (effect: ProposalWritebackEffect): string => ({
 	append: ui('正在写入目标笔记。', 'Applying change to the target note.'),
-	create_memory_record: ui('正在创建 MemoryRecord。', 'Creating a MemoryRecord.'),
-	create_wiki_note: ui('正在新建 Wiki 笔记。', 'Creating a new Wiki note.'),
+	create_memory_record: ui('正在新增记忆。', 'Adding memory.'),
+	create_wiki_note: ui('正在新建知识笔记。', 'Creating a knowledge note.'),
 }[effect]);
 
 const writebackSuccessLabel = (effect: ProposalWritebackEffect): string => ({
 	append: ui('已写入目标笔记。', 'Change applied to the target note.'),
-	create_memory_record: ui('MemoryRecord 已创建。', 'MemoryRecord created.'),
-	create_wiki_note: ui('Wiki 已新建。', 'Wiki note created.'),
+	create_memory_record: ui('记忆已新增。', 'Memory added.'),
+	create_wiki_note: ui('知识笔记已新建。', 'Knowledge note created.'),
 }[effect]);
 
 export class ReviewQueueRequestRevisionModal extends Modal {
@@ -102,12 +136,12 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 		contentEl.createEl('p', {
 			text: this.editingExistingRevision
 				? ui(
-					'补充或修改需要调整的内容，供后续 Agent 理解问题并重新生成提案。',
-					'Add or edit what should change so the next Agent can understand the issue and revise the proposal.'
+					'补充或修改需要调整的内容，供后续 Agent 理解问题并重新生成变更。',
+					'Add or edit what should change so the next Agent can understand the issue and revise the change.'
 				)
 				: ui(
-					'请说明需要修改的内容或发现的问题。提交后该提案将标记为“已退回修改”。',
-					'Describe what should be changed. Submitting will mark this proposal as returned for revision.'
+					'请说明需要修改的内容或发现的问题。提交后当前变更将标记为“已退回修改”。',
+					'Describe what should be changed. Submitting will mark this change as returned for revision.'
 				),
 			cls: 'tracekeeper-view__description',
 		});
@@ -177,8 +211,8 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 
 	private getReadyStatusText(): string {
 		return this.editingExistingRevision
-			? ui('保存后会更新该提案的修改说明。', "Save to update this proposal's revision note.")
-			: ui('确认后会将该提案标记为“已退回修改”。', 'Confirm to mark this proposal as returned for revision.');
+				? ui('保存后会更新当前变更的修改说明。', "Save to update this change's revision note.")
+				: ui('确认后会将当前变更标记为“已退回修改”。', 'Confirm to mark this change as returned for revision.');
 	}
 
 	private async submit(): Promise<void> {
@@ -199,7 +233,7 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 			await this.plugin.updateMemoryProposalStatus(this.proposal, 'revision_requested', {
 				revisionComment: normalizedComment,
 			});
-			new Notice(ui('已退回修改。', 'Proposal returned for revision.'));
+			new Notice(ui('已退回修改。', 'Change returned for revision.'));
 			await this.onUpdated();
 			this.close();
 		} catch (error) {
@@ -208,10 +242,10 @@ export class ReviewQueueRequestRevisionModal extends Modal {
 			const conflict = isProposalTransitionConflict(error);
 			const failureMessage = conflict
 				? ui(
-					'提案已发生变化；修改说明仍保留。请重新加载后再审核。',
-					'The proposal changed; your revision note is preserved. Reload before reviewing again.'
+					'知识变更已发生变化；修改说明仍保留。请重新加载后再审核。',
+					'The knowledge change was updated; your revision note is preserved. Reload before reviewing again.'
 				)
-				: ui('退回修改失败。', 'Failed to return proposal for revision.');
+				: ui('退回修改失败。', 'Failed to return change for revision.');
 			new Notice(failureMessage);
 			if (conflict) {
 				try {
@@ -251,14 +285,14 @@ export class ReviewQueueEditProposalModal extends Modal {
 
 	onOpen(): void {
 		void super.onOpen();
-		this.titleEl.setText(ui('编辑变更提案', 'Edit change proposal'));
+		this.titleEl.setText(ui('编辑知识变更', 'Edit knowledge change'));
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass('tracekeeper-review-edit-modal');
 		contentEl.createEl('p', {
 			text: ui(
-				'编辑只会更新变更提案，不会写入目标笔记。保存后仍需通过审核、预览并再次确认写入。',
-				'Editing only updates the change proposal. Saving does not write to the target note; approval, preview, and a second confirmation are still required.'
+				'编辑只会更新当前审核记录，不会写入目标笔记。保存后仍需通过审核、预览并再次确认写入。',
+				'Editing updates only the current review record. Saving does not write to the target note; approval, preview, and a second confirmation are still required.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
@@ -268,7 +302,7 @@ export class ReviewQueueEditProposalModal extends Modal {
 		const writebackLabel = contentEl.createDiv({ cls: 'tracekeeper-review-edit-modal__label' });
 		writebackLabel.createEl('strong', { text: ui('拟写入内容', 'Proposed writeback') });
 		writebackLabel.createEl('small', {
-			text: ui('可直接编辑 Markdown。留空保存后，该提案会显示为“信息不完整”。', 'Edit Markdown directly. Saving an empty value marks this proposal as incomplete.'),
+			text: ui('可直接编辑 Markdown。留空保存后，当前变更会显示为“信息不完整”。', 'Edit Markdown directly. Saving an empty value marks this change as incomplete.'),
 		});
 		const textarea = contentEl.createEl('textarea', {
 			text: this.writebackContent,
@@ -289,7 +323,7 @@ export class ReviewQueueEditProposalModal extends Modal {
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		actions.createEl('button', { text: ui('取消', 'Cancel') }).addEventListener('click', () => this.close());
 		this.saveButton = actions.createEl('button', {
-			text: ui('保存提案草稿', 'Save proposal draft'),
+			text: ui('保存修改', 'Save changes'),
 			cls: 'mod-cta',
 		});
 		this.saveButton.addEventListener('click', () => {
@@ -302,8 +336,8 @@ export class ReviewQueueEditProposalModal extends Modal {
 		section.createEl('strong', { text: ui('目标笔记', 'Target note') });
 		section.createEl('small', {
 			text: ui(
-				'只能选择当前 Vault 中已存在的 Memory/Wiki 候选，不接受手写任意路径。',
-				'Choose only an existing Memory/Wiki candidate from this Vault. Arbitrary paths are not accepted.'
+				'只能选择当前 Vault 中已存在的记忆或知识笔记，不接受手写任意路径。',
+				'Choose only an existing memory or knowledge note from this Vault. Arbitrary paths are not accepted.'
 			),
 		});
 
@@ -312,12 +346,17 @@ export class ReviewQueueEditProposalModal extends Modal {
 			section.createEl('p', {
 				text: ui(
 					'没有可用的受限目标候选。你仍可补全拟写入内容，然后退回修改，让 Agent 提供已验证目标。',
-					'No constrained target candidate is available. You may complete the writeback content, then return the proposal for revision so the Agent can provide a verified target.'
+					'No constrained target candidate is available. You may complete the writeback content, then return the change for revision so the Agent can provide a verified target.'
 				),
 				cls: 'tracekeeper-review-inbox__candidate-warning',
 			});
 			if (this.targetNote) {
-				section.createEl('code', { text: this.targetNote });
+				section.createEl('small', {
+					text: ui(
+						'当前目标不在可验证候选中，因此不显示其内部位置。',
+						'The current target is not a verified candidate, so its internal location is hidden.'
+					),
+				});
 			}
 			return;
 		}
@@ -327,13 +366,13 @@ export class ReviewQueueEditProposalModal extends Modal {
 		}) as HTMLSelectElement;
 		select.setAttr('aria-label', ui('选择受限目标笔记', 'Select constrained target note'));
 		const empty = select.createEl('option', {
-			text: ui('请选择 Memory/Wiki 目标', 'Select a Memory/Wiki target'),
+			text: ui('请选择记忆或知识笔记', 'Select a memory or knowledge note'),
 			value: '',
 		});
 		empty.value = '';
 		for (const candidate of candidates) {
 			const option = select.createEl('option', {
-				text: `${candidate.title || candidate.path} — ${candidate.path}`,
+				text: `${targetDisplayName(candidate)} · ${targetKindLabel(candidate)} · ${targetReasonLabel(candidate)}`,
 				value: candidate.path,
 			});
 			option.value = candidate.path;
@@ -360,7 +399,7 @@ export class ReviewQueueEditProposalModal extends Modal {
 		) {
 			candidates.unshift({
 				path: this.context.target.path,
-				title: this.context.target.title || this.context.target.path,
+				title: this.context.target.title || noteNameFromPath(this.context.target.path),
 				kind: this.context.target.path.includes('/wiki/')
 					? 'wiki'
 					: this.context.target.path.includes('/memory/projects/')
@@ -381,12 +420,15 @@ export class ReviewQueueEditProposalModal extends Modal {
 		const selected = this.availableCandidates().find((candidate) => candidate.path === this.targetNote);
 		if (!selected) {
 			this.targetContextEl.createEl('p', {
-				text: ui('尚未选择目标。保存后提案仍会保持“待补全”。', 'No target selected. The proposal will remain in Needs completion after saving.'),
+				text: ui('尚未选择目标。保存后当前变更仍会保持“待补全”。', 'No target selected. The change will remain in Needs completion after saving.'),
 				cls: 'tracekeeper-view__description',
 			});
 			return;
 		}
-		this.targetContextEl.createEl('code', { text: selected.path });
+		this.targetContextEl.createEl('strong', { text: targetDisplayName(selected) });
+		this.targetContextEl.createEl('small', {
+			text: `${targetKindLabel(selected)} · ${targetReasonLabel(selected)}`,
+		});
 		if (selected.excerpt) {
 			this.targetContextEl.createEl('p', { text: selected.excerpt });
 		}
@@ -399,27 +441,27 @@ export class ReviewQueueEditProposalModal extends Modal {
 		this.saving = true;
 		this.saveButton.disabled = true;
 		this.saveButton.setText(ui('保存中...', 'Saving...'));
-		this.statusText?.setText(ui('正在保存提案草稿。', 'Saving proposal draft.'));
+		this.statusText?.setText(ui('正在保存修改。', 'Saving changes.'));
 		try {
 			await this.plugin.updateMemoryProposalDraft(this.proposal, {
 				targetNote: this.targetNote,
 				writebackContent: this.writebackContent,
 			});
-			new Notice(ui('提案草稿已保存；尚未写入目标笔记。', 'Proposal draft saved; the target note was not written.'));
+			new Notice(ui('修改已保存；尚未写入目标笔记。', 'Changes saved; the target note was not written.'));
 			await this.onUpdated();
 			this.close();
 		} catch (error) {
 			console.error('tracekeeper failed to update review proposal draft', error);
 			this.saving = false;
 			this.saveButton.disabled = false;
-			this.saveButton.setText(ui('保存提案草稿', 'Save proposal draft'));
+			this.saveButton.setText(ui('保存修改', 'Save changes'));
 			const conflict = isProposalTransitionConflict(error);
 			const failureMessage = conflict
 				? ui(
-					'提案已发生变化；你的草稿仍保留。请重新加载后再审核。',
-					'The proposal changed; your draft is preserved. Reload before reviewing again.'
+					'知识变更已发生变化；你的修改仍保留。请重新加载后再审核。',
+					'The knowledge change was updated; your changes are preserved. Reload before reviewing again.'
 				)
-				: ui('保存提案草稿失败。', 'Failed to save proposal draft.');
+				: ui('保存修改失败。', 'Failed to save changes.');
 			new Notice(failureMessage);
 			if (conflict) {
 				try {
@@ -545,14 +587,46 @@ export class ReviewQueueArchiveModal extends Modal {
 		});
 		for (const item of preview.items) {
 			const row = list.createEl('li');
+			row.createEl('strong', {
+				text: this.archiveItemLabel(item),
+			});
+			row.createEl('small', {
+				text: ui(
+					`将保留 ${item.managedReferences.length} 个关联引用`,
+					`${item.managedReferences.length} linked reference(s) will be preserved`
+				),
+			});
+		}
+		if (preview.conflicts.length > 0) {
+			const conflicts = contentEl.createDiv({
+				cls: 'tracekeeper-review-archive-modal__conflicts',
+			});
+			conflicts.createEl('strong', {
+				text: ui('必须先解决的冲突', 'Conflicts to resolve first'),
+			});
+			conflicts.createEl('p', {
+				text: ui(
+					`发现 ${preview.conflicts.length} 个冲突。展开技术信息可查看精确位置。`,
+					`${preview.conflicts.length} conflict(s) found. Expand Technical details for exact locations.`
+				),
+			});
+		}
+
+		const technical = contentEl.createEl('details', {
+			cls: 'tracekeeper-advanced-details tracekeeper-review-archive-modal__technical-details',
+		});
+		technical.createEl('summary', {
+			text: ui('技术信息', 'Technical details'),
+			cls: 'tracekeeper-advanced-summary',
+		});
+		const technicalList = technical.createEl('ul');
+		for (const item of preview.items) {
+			const row = technicalList.createEl('li');
 			row.createEl('code', {
 				text: `${item.sourcePath} → ${item.destinationPath}`,
 			});
 			row.createEl('small', {
-				text: ui(
-					`提案 ${item.proposalId}；${item.managedReferences.length} 个受管引用`,
-					`Proposal ${item.proposalId}; ${item.managedReferences.length} managed reference(s)`
-				),
+				text: ui(`记录 ${item.proposalId}`, `Record ${item.proposalId}`),
 			});
 			if (item.managedReferences.length > 0) {
 				const references = row.createEl('ul');
@@ -562,13 +636,7 @@ export class ReviewQueueArchiveModal extends Modal {
 			}
 		}
 		if (preview.conflicts.length > 0) {
-			const conflicts = contentEl.createDiv({
-				cls: 'tracekeeper-review-archive-modal__conflicts',
-			});
-			conflicts.createEl('strong', {
-				text: ui('必须先解决的冲突', 'Conflicts to resolve first'),
-			});
-			const conflictList = conflicts.createEl('ul');
+			const conflictList = technical.createEl('ul');
 			for (const conflict of preview.conflicts) {
 				conflictList.createEl('li', {
 					text: `${conflict.kind}: ${conflict.path}`,
@@ -582,8 +650,8 @@ export class ReviewQueueArchiveModal extends Modal {
 					'Archive is disabled while conflicts remain. Close this dialog, resolve them, and prepare a new preview.'
 				)
 				: ui(
-					'预览已就绪。归档会保留稳定提案标识和历史关联；用户归档操作不写入 Agent 活动。',
-					'Preview ready. Archive preserves stable proposal identity and history associations; human archive actions do not create Agent activity.'
+					'预览已就绪。归档会保留稳定记录标识和历史关联；用户归档操作不写入 Agent 活动。',
+					'Preview ready. Archive preserves stable record identity and history associations; human archive actions do not create Agent activity.'
 				),
 			cls: 'tracekeeper-view__description',
 		});
@@ -600,6 +668,28 @@ export class ReviewQueueArchiveModal extends Modal {
 			void this.commit(preview, confirm, status);
 		});
 		cancel.focus();
+	}
+
+	private archiveItemLabel(item: ArchiveMemoryProposalPreview['items'][number]): string {
+		const proposal = this.proposals.find((candidate) =>
+			candidate.proposalId === item.proposalId || candidate.path === item.sourcePath
+		);
+		const rationale = trimText(proposal?.rationale || '', 90);
+		if (rationale) {
+			return rationale;
+		}
+		switch (proposal?.proposalKind) {
+			case 'task_decision':
+				return ui('任务决策', 'Task decision');
+			case 'task_conclusion':
+				return ui('任务结论', 'Task conclusion');
+			case 'knowledge_change':
+				return ui('知识变更', 'Knowledge change');
+			case 'project_next_action':
+				return ui('项目下一步', 'Project next action');
+			default:
+				return ui('已处理的知识变更', 'Processed knowledge change');
+		}
 	}
 
 	private async commit(
@@ -668,7 +758,7 @@ export class ApprovedWritebackApplyModal extends Modal {
 			console.error('tracekeeper failed to preview approved writeback', error);
 			contentEl.empty();
 			const failure = contentEl.createEl('p', {
-				text: ui('生成写入预览失败，请检查该提案是否仍处于审核通过状态。', 'Failed to generate writeback preview. Check whether this proposal is still approved.'),
+					text: ui('生成写入预览失败，请检查当前变更是否仍处于审核通过状态。', 'Failed to generate writeback preview. Check whether this change is still approved.'),
 			});
 			configureLiveStatus(failure);
 			const actions = contentEl.createDiv({ cls: 'modal-button-container' });
@@ -694,11 +784,27 @@ export class ApprovedWritebackApplyModal extends Modal {
 		if (writebackEffect) {
 			this.renderDetail(facts, ui('写回方式', 'Writeback mode'), writebackEffectLabel(writebackEffect));
 		}
-		this.renderDetail(facts, ui('提案', 'Proposal'), preview.proposal_id || this.proposal.proposalId);
-		this.renderDetail(facts, ui('目标笔记', 'Target note'), preview.target_note || this.proposal.targetNote);
-		this.renderDetail(facts, ui('涉及文件', 'Touched notes'), (preview.touched_notes || []).join(', '));
+		const targetPath = preview.target_note || this.proposal.targetNote;
+		this.renderDetail(facts, ui('目标笔记', 'Target note'), noteNameFromPath(targetPath));
+		this.renderDetail(
+			facts,
+			ui('涉及笔记', 'Affected notes'),
+			ui(`${preview.touched_notes?.length || 0} 条`, `${preview.touched_notes?.length || 0} note(s)`)
+		);
 		const previewBox = contentEl.createEl('pre');
 		previewBox.setText(preview.writeback_preview || '');
+
+		const technical = contentEl.createEl('details', {
+			cls: 'tracekeeper-advanced-details tracekeeper-review-apply-modal__technical-details',
+		});
+		technical.createEl('summary', {
+			text: ui('技术信息', 'Technical details'),
+			cls: 'tracekeeper-advanced-summary',
+		});
+		const technicalFacts = technical.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderDetail(technicalFacts, ui('记录 ID', 'Record ID'), preview.proposal_id || this.proposal.proposalId);
+		this.renderDetail(technicalFacts, ui('目标路径', 'Target path'), targetPath);
+		this.renderDetail(technicalFacts, ui('涉及文件', 'Touched notes'), (preview.touched_notes || []).join(', '));
 
 		const status = contentEl.createEl('p', {
 			cls: 'tracekeeper-view__description',

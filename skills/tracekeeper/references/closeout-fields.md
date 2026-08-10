@@ -18,7 +18,11 @@ Provide accurate values for the fields exposed by the current `tracekeeper.finis
 - `related_wiki`: reuse only `relation_evidence.related_wiki[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
 - `related_sources`: reuse only `relation_evidence.related_sources[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
 
-Preserve known project graph context in the finish payload, but never invent, guess, or rewrite a Wiki or source path. If no verified relationship is available, omit the field and allow the MCP review policy to report the missing bridge or route the candidate to review.
+Preserve known project graph context in the finish payload, but never invent,
+guess, or rewrite a Wiki or source path. Wiki and Source relations are optional;
+omit either field when verified relationship evidence is unavailable. If a
+supplied relation cannot be verified, preserve the Runtime's warning or review
+outcome.
 
 Review semantics:
 
@@ -31,8 +35,17 @@ Review semantics:
   `durable_output` summary instead of accepting `no_candidates` as persistence
   success.
 - Apply an approved proposal only when the user explicitly requests the apply action.
-- Missing Wiki context routes the proposal to review rather than weakening the boundary.
-- Project auto-save caps an Agent `verified` request to `supported`; user authority, lifecycle transitions, unresolved claim conflicts, and uncertain project identity still require review.
+- Direct `propose_memory` MemoryRecord candidates declare `memory_scope`;
+  `project_hint` is identity evidence, not scope authority. Explicit Wiki
+  targets do not require `memory_scope` and always enter review.
+- Global and Project Auto use the same immutable MemoryRecord v2 semantics.
+  Global defaults to Review; its fully supported Auto mode writes under the
+  canonical Global Memory Hub with `project_id: null`.
+- A missing or invalid canonical Hub blocks persistence and returns an explicit
+  structure-repair action. Never create a Hub from closeout or proposal writes.
+- Auto caps an Agent `verified` request to `supported`; user authority,
+  lifecycle or relation transitions, unresolved claim conflicts, and uncertain
+  project identity still require review.
 
 Task tracking and durable Memory are independent. A task without project identity
 can still submit a project candidate when that candidate supplies its own project

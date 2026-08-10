@@ -595,7 +595,7 @@ test('application owner: injected clock exclusively controls the existing recenc
 test('contract: Recall retains public order, schema, capability, risk, effect, idempotency, and compatibility replacements', async (t) => {
 	const contract = getContractByName('tracekeeper.recall');
 	assert.ok(contract);
-	assert.equal(contract.version, 3);
+	assert.equal(contract.version, 4);
 	assert.equal(contract.visibility, 'public');
 	assert.equal(contract.capability, 'vault.read');
 	assert.equal(contract.risk, 'read-only');
@@ -608,6 +608,21 @@ test('contract: Recall retains public order, schema, capability, risk, effect, i
 	const definition = toolDefinitions(['vault.read']).find((entry) => entry.name === 'tracekeeper.recall');
 	assert.ok(definition);
 	assert.strictEqual(definition.outputSchema, contract.outputSchema);
+	assert.deepEqual(
+		Object.keys(definition.inputSchema).sort(),
+		Object.keys(contract.inputSchema).sort()
+	);
+	assert.deepEqual(definition.inputSchema.allOf, contract.inputSchema.allOf);
+	const proposeContract = getContractByName('tracekeeper.propose_memory');
+	const proposeDefinition = toolDefinitions(['memory.propose'])
+		.find((entry) => entry.name === 'tracekeeper.propose_memory');
+	assert.ok(proposeContract);
+	assert.ok(proposeDefinition);
+	assert.deepEqual(
+		Object.keys(proposeDefinition.inputSchema).sort(),
+		Object.keys(proposeContract.inputSchema).sort()
+	);
+	assert.deepEqual(proposeDefinition.inputSchema.allOf, proposeContract.inputSchema.allOf);
 	assert.deepEqual(definition.annotations, {
 		readOnlyHint: true,
 		destructiveHint: false,
@@ -674,6 +689,26 @@ test('scope and query: default/global/project/history routing, required queries,
 	assert.equal(taskHistoryResult.payload.recall.scope, 'task_history');
 	assert.equal(taskHistoryResult.payload.entries.length, 1);
 	assert.equal(taskHistoryResult.payload.entries[0].session_path, '00_tracekeeper/work/sessions/atlas-session.md');
+	for (const payload of [
+		defaultResult.payload,
+		projectResult.payload,
+		historyResult.payload,
+		taskHistoryResult.payload,
+	]) {
+		for (const key of [
+			'query', 'max_items', 'matched_count', 'scope_mode',
+			'index_state', 'snapshot_generation', 'snapshot_warning',
+		]) {
+			assert.equal(Object.prototype.hasOwnProperty.call(payload, key), true, `Recall must expose ${key}`);
+		}
+		assert.equal(payload.matches.length, payload.matched_count);
+		for (const match of payload.matches) {
+			assert.equal(typeof match.path, 'string');
+			assert.equal(typeof match.excerpt, 'string');
+			assert.equal(typeof match.why_matched, 'string');
+			assert.ok(match.relation_evidence && typeof match.relation_evidence === 'object');
+		}
+	}
 
 	for (const args of [
 		{ scope: 'global', query: '' },
@@ -1115,6 +1150,9 @@ test('workflow and output: zero-result behavior, stable recall correlation, boun
 		query: 'zzqnovaultmatch7b6065',
 	}, context);
 	assert.equal(zero.payload.recall.matched_count, 0);
+	assert.equal(zero.payload.matched_count, 0);
+	assert.equal(zero.payload.scope_mode, 'global');
+	assert.equal(zero.payload.query, 'zzqnovaultmatch7b6065');
 	assert.deepEqual(zero.payload.matches, []);
 	assert.equal(zero.payload.next_actions.length, 1);
 	assert.equal(zero.payload.next_actions[0].reason_code, 'RECALL_ZERO_MATCH');

@@ -284,6 +284,13 @@ exports.RECALL_SUCCESS_OUTPUT_SCHEMA = {
         'tool',
         'read_only',
         'vault_root',
+        'query',
+        'max_items',
+        'matched_count',
+        'scope_mode',
+        'index_state',
+        'snapshot_generation',
+        'snapshot_warning',
         'recall',
         'matches',
         'next_actions',
@@ -295,7 +302,7 @@ exports.RECALL_SUCCESS_OUTPUT_SCHEMA = {
         read_only: { const: true, type: 'boolean' },
         vault_root: { type: 'string', minLength: 1 },
         query: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-        max_items: { type: 'integer', minimum: 0 },
+        max_items: { type: 'integer', minimum: 1, maximum: 20 },
         matched_count: { type: 'integer', minimum: 0 },
         total_matches: { type: 'integer', minimum: 0 },
         task_id: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
@@ -343,9 +350,11 @@ exports.RECALL_SUCCESS_OUTPUT_SCHEMA = {
                     type: 'array',
                     items: {
                         type: 'object',
-                        required: ['path', 'content_origin', 'instruction_trust'],
+                        required: ['path', 'excerpt', 'why_matched', 'content_origin', 'instruction_trust', 'relation_evidence'],
                         properties: {
                             path: { type: 'string', minLength: 1 },
+                            excerpt: { type: 'string' },
+                            why_matched: { type: 'string', minLength: 1 },
                             content_origin: {
                                 type: 'string',
                                 enum: ['captured_source', 'tracekeeper_generated', 'vault_note'],
@@ -353,6 +362,7 @@ exports.RECALL_SUCCESS_OUTPUT_SCHEMA = {
                             instruction_trust: { const: 'data_only', type: 'string' },
                             relation_evidence: {
                                 type: 'object',
+                                required: ['related_wiki', 'related_sources'],
                                 properties: {
                                     related_wiki: {
                                         type: 'array',
@@ -1292,10 +1302,22 @@ const PROPOSE_MEMORY_COMMON_PROPERTIES = {
     path: { type: 'string', minLength: 1 },
     activity_path: { type: 'string', minLength: 1 },
     warnings: STRING_ARRAY_SCHEMA,
+    persisted: { type: 'boolean' },
     auto_applied: { type: 'boolean' },
     duplicate: { type: 'boolean' },
-    memory_rule: { type: 'string', enum: ['review_queue', 'auto_write', 'disabled'] },
-    memory_scope: { type: 'string', enum: ['global', 'project'] },
+    proposal_destination: { type: 'string', enum: ['memory', 'wiki'] },
+    memory_rule: {
+        oneOf: [
+            { type: 'string', enum: ['review_queue', 'auto_write', 'disabled'] },
+            { type: 'null' },
+        ],
+    },
+    memory_scope: {
+        oneOf: [
+            { type: 'string', enum: ['global', 'project'] },
+            { type: 'null' },
+        ],
+    },
     project_hint: NULLABLE_STRING_SCHEMA,
     related_wiki: STRING_ARRAY_SCHEMA,
     related_sources: STRING_ARRAY_SCHEMA,
@@ -1305,6 +1327,7 @@ const PROPOSE_MEMORY_COMMON_PROPERTIES = {
     missing_wiki_bridge: { type: 'boolean' },
     project_id: NULLABLE_STRING_SCHEMA,
     project_hub: NULLABLE_STRING_SCHEMA,
+    global_hub: NULLABLE_STRING_SCHEMA,
     agent_type: { type: 'string', minLength: 1 },
     operation_hash: { type: 'string', minLength: 1 },
     target_note: { type: 'string', minLength: 1 },
@@ -1317,6 +1340,7 @@ const PROPOSE_MEMORY_COMMON_PROPERTIES = {
     proposal_link_target: { type: 'string', minLength: 1 },
     review_reason: NULLABLE_STRING_SCHEMA,
     review_warnings: STRING_ARRAY_SCHEMA,
+    next_actions: { type: 'array', items: action_envelope_1.AGENT_ACTION_SCHEMA },
 };
 exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = {
     type: 'object',
@@ -1328,6 +1352,7 @@ exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = {
                 'activity_path', 'warnings', 'auto_applied', 'duplicate', 'memory_rule', 'memory_scope',
                 'project_hint', 'related_wiki', 'related_sources', 'missing_related_sources',
                 'architecture_status', 'missing_graph_bridges', 'missing_wiki_bridge', 'proposal_id', 'proposal_path',
+                'next_actions',
             ],
             properties: { ...PROPOSE_MEMORY_COMMON_PROPERTIES, auto_applied: { const: true, type: 'boolean' }, proposal_id: { const: null, type: 'null' }, proposal_path: { const: null, type: 'null' } },
             additionalProperties: false,
@@ -1339,9 +1364,29 @@ exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = {
                 'activity_path', 'warnings', 'auto_applied', 'duplicate', 'proposal_id', 'proposal_path',
                 'proposal_link_target', 'memory_rule', 'memory_scope', 'project_hint', 'related_wiki',
                 'related_sources', 'missing_related_sources', 'architecture_status', 'missing_graph_bridges',
-                'missing_wiki_bridge', 'review_reason', 'review_warnings',
+                'missing_wiki_bridge', 'review_reason', 'review_warnings', 'next_actions',
             ],
             properties: { ...PROPOSE_MEMORY_COMMON_PROPERTIES, auto_applied: { const: false, type: 'boolean' }, proposal_id: { type: 'string', minLength: 1 }, proposal_path: { type: 'string', minLength: 1 } },
+            additionalProperties: false,
+        },
+        {
+            type: 'object',
+            required: [
+                'schema_version', 'ok', 'tool', 'operation_id', 'idempotency_key', 'status',
+                'persisted', 'warnings', 'auto_applied', 'duplicate', 'proposal_destination',
+                'memory_rule', 'memory_scope', 'project_hint', 'proposal_id', 'proposal_path',
+                'review_reason', 'review_warnings', 'next_actions',
+            ],
+            properties: {
+                ...PROPOSE_MEMORY_COMMON_PROPERTIES,
+                status: { const: 'ignored', type: 'string' },
+                persisted: { const: false, type: 'boolean' },
+                auto_applied: { const: false, type: 'boolean' },
+                proposal_destination: { const: 'memory', type: 'string' },
+                memory_rule: { const: 'disabled', type: 'string' },
+                proposal_id: { const: null, type: 'null' },
+                proposal_path: { const: null, type: 'null' },
+            },
             additionalProperties: false,
         },
         exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,

@@ -347,11 +347,11 @@ test('finish_task aggregates direct and finish-generated proposals exactly once'
 	assert.equal(finished.next_actions[0].reason_code, 'MEMORY_REVIEW_REQUIRED');
 });
 
-test('finish_task keeps a missing-Wiki-bridge proposal pending for review', async (t) => {
+test('finish_task keeps an explicitly unresolved Wiki relation pending for review', async (t) => {
 	const fixture = createFixture(t);
 	fixture.context.memoryRules.projectMemoryRule = 'auto_write';
 	const task = await invoke('tracekeeper.start_task', {
-		goal: 'Finish candidate requires a Wiki bridge',
+		goal: 'Finish candidate declares a Wiki relation that must resolve',
 		project_hint: 'demo',
 		project_id: 'demo-project-id',
 		idempotency_key: 'finish-durable-output-start-missing-wiki-bridge',
@@ -363,7 +363,7 @@ test('finish_task keeps a missing-Wiki-bridge proposal pending for review', asyn
 		related_wiki: ['missing-wiki-demo-note'],
 		memory_candidate_records: [{
 			proposal_kind: 'project_update',
-			content: 'Missing Wiki bridge must keep this candidate review-gated.',
+			content: 'An explicitly unresolved Wiki relation must keep this candidate review-gated.',
 			scope: 'project',
 			project_hint: 'demo',
 			project_id: 'demo-project-id',
@@ -371,8 +371,9 @@ test('finish_task keeps a missing-Wiki-bridge proposal pending for review', asyn
 		}],
 	}, fixture.context);
 
-	assert.equal(finished.missing_wiki_bridge, true);
-	assert.equal(finished.memory_status, 'requires_wiki_bridge');
+	assert.equal(finished.missing_wiki_bridge, false);
+	assert.equal(finished.memory_status, 'queued_for_review');
+	assert.equal(finished.memory_changes[0].reason, 'unresolved_relation_evidence');
 	assert.equal(finished.durable_output.status, 'pending_review');
 	assert.equal(finished.durable_output.proposal_count, 1);
 	assert.equal(finished.durable_output.pending_review_count, 1);

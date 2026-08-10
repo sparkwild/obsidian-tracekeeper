@@ -4068,6 +4068,24 @@ async function run() {
 }
 
 async function runMemoryRecordV2Tests() {
+	assert.equal(
+		memoryRecordModule.buildGlobalMemoryEntryPath({
+			agentType: 'codex',
+			operationKind: 'propose_memory',
+			operationId: 'propose-memory-123',
+		}),
+		'01_knowledge/memory/global/agents/codex/propose_memory-propose-memory-123.md'
+	);
+	for (const input of [
+		{ agentType: '../codex', operationKind: 'propose_memory', operationId: 'op-1' },
+		{ agentType: 'codex', operationKind: '../propose_memory', operationId: 'op-1' },
+		{ agentType: 'codex', operationKind: 'propose_memory', operationId: '../op-1' },
+	]) {
+		assert.throws(
+			() => memoryRecordModule.buildGlobalMemoryEntryPath(input),
+			/invalid/i
+		);
+	}
 	const evidence = ['01_knowledge/sources/web/example.md'];
 	const built = memoryRecordModule.buildMemoryRecord({
 		path: '01_knowledge/memory/global/global-1.md',
@@ -4163,6 +4181,7 @@ async function runMemoryRecordV2Tests() {
 		suite: 'core-memory-record-v2',
 		result: 'pass',
 		rows: [
+			'canonical-global-entry-path',
 			'normalized-round-trip',
 			'verified-evidence-bound',
 			'temporal-range-validation',

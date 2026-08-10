@@ -10,6 +10,8 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-memory-rule-
 const output = path.join(tempRoot, 'settings-model.mjs');
 const obsidianStub = path.join(tempRoot, 'obsidian-stub.mjs');
 const settingsSource = fs.readFileSync('src/features/settings/tracekeeper-setting-tab.ts', 'utf8');
+const mainSource = fs.readFileSync('src/main.ts', 'utf8');
+const structureModalSource = fs.readFileSync('src/features/structure/initialize-memory-structure-modal.ts', 'utf8');
 
 try {
 	fs.writeFileSync(obsidianStub, "export const getLanguage = () => 'en';\n", 'utf8');
@@ -60,11 +62,25 @@ try {
 		assert.equal(migrated.taskTrackingEnabled, taskTrackingEnabled);
 	}
 
-	assert.ok(settingsSource.includes('用于跨项目复用的偏好、决策和经验。'));
-	assert.ok(settingsSource.includes('自动保存符合条件的项目记忆；用户权威、冲突和生命周期变更仍需审核。'));
+	assert.ok(settingsSource.includes('Wiki 提案始终进入知识变更审核，不受全局或项目记忆规则影响。'));
+	assert.ok(settingsSource.includes('MemoryRecord 的 Wiki 与 Source 关系均为可选，不会因为缺少 Wiki 而阻止保存。'));
+	assert.ok(settingsSource.includes('自动创建符合条件的不可变 Global MemoryRecord v2'));
+	assert.ok(settingsSource.includes('这是新安装的默认设置。'));
+	assert.ok(settingsSource.includes('自动创建符合条件的不可变 Project MemoryRecord v2；不要求 Wiki'));
 	assert.ok(settingsSource.includes('项目记忆保存前进入知识变更审核。'));
 	assert.ok(settingsSource.includes('不接收新的项目记忆。'));
+	assert.ok(settingsSource.includes('setDesc(this.globalMemoryRuleDescription())'));
 	assert.ok(settingsSource.includes('setDesc(this.projectMemoryRuleDescription())'));
+	assert.ok(settingsSource.includes("globalHub.state !== 'ready'"));
+	assert.ok(settingsSource.includes('全局记忆建议可以进入审核，但在修复前不会被描述为已持久化'));
+	assert.ok(settingsSource.includes('openInitializeMemoryStructureModal'));
+	assert.ok(mainSource.includes("globalMemoryRule: 'review_queue'"));
+	assert.ok(mainSource.includes('全局 MemoryRecord 默认进入审核；全局与项目写入遵循 Obsidian 中的记忆规则。'));
+	assert.ok(mainSource.includes('Wiki 变更始终需要用户审核。'));
+	assert.ok(mainSource.includes('getGlobalMemoryHubStatus()'));
+	assert.ok(mainSource.includes("state: entry === null ? 'missing' : entry instanceof TFile ? 'ready' : 'invalid'"));
+	assert.ok(structureModalSource.includes('基础结构修复已阻断'));
+	assert.ok(structureModalSource.includes('Tracekeeper 不会删除或覆盖它们'));
 	assert.ok(settingsSource.includes("ui('任务追踪', 'Task tracking')"));
 	assert.ok(settingsSource.includes('记录任务的目标、执行过程和结果，供后续查看与继续。'));
 	assert.ok(settingsSource.includes("ui('启用任务追踪', 'Enable task tracking')"));
@@ -72,7 +88,7 @@ try {
 	assert.equal(settingsSource.includes('旧版共享记忆笔记不会被改写'), false);
 	assert.equal(settingsSource.includes("ui('任务结束记忆提案', 'Task closeout memory proposals')"), false);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 21 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 36 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

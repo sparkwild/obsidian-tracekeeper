@@ -61,7 +61,7 @@ export function promptSignals(value) {
 		idempotencyConflict: /idempotency key.*冲突/iu.test(prompt),
 		proposalPending: /提案尚未批准/u.test(prompt),
 		proposalReview: /未批准的记忆提案/u.test(prompt),
-		missingWikiBridge: /缺少\s+Wiki bridge/iu.test(prompt),
+		missingMemoryHub: /(?:Global|Project|全局|项目).*(?:Memory Hub|记忆 Hub).*(?:缺失|无效)/iu.test(prompt),
 		promptInjection: /笔记正文要求.*忽略权限.*泄露\s+token/iu.test(prompt),
 	};
 }

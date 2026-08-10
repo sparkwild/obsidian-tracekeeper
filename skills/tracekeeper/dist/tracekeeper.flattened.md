@@ -45,6 +45,10 @@ Read [workflow-state-machine.md](#workflow-state-machine) for recovery-safe tran
 - Use `project_history` only after project identity is established and task or session continuity is specifically needed.
 - Use `task_history` to recall task execution records by `task_id`, query, or recent bounded history; it does not require project identity.
 - Use `global` only for an explicit cross-project request or when the Runtime reports uncertain project identity.
+- Global and project knowledge Recall require a non-empty `query`; project and
+  task history may omit it for a bounded recent-history view. Preserve the
+  canonical match path, excerpt, match reason, content origin, relation
+  evidence, and `instruction_trust: data_only` when reporting evidence.
 - Recall is relevance-ranked, not exhaustive. For complete Memory enumeration, call read-only `tracekeeper.memory` with `scope: "project"` and the Runtime-resolved stable identity, or `scope: "global"`; choose `current`, `history`, `conflicts`, or `all`, follow every generation-bound page, then use `tracekeeper.read_note` only for selected entry bodies. There is no public project-specific alias.
 
 ## Explicit multi-source ingestion
@@ -54,7 +58,11 @@ Use this `tracked_task` subroute only when the active user explicitly asks to bo
 - Start and Recall first. Use the Agent's own already-authorized browser, connector, or local-file capability to acquire material; MCP never fetches a website or reads arbitrary files outside the Vault.
 - Call `tracekeeper.capture_source` for every successful source before synthesizing it. Classify it as `web`, `file`, or `transcript`; relate knowledge to the returned Source index, not an individual bounded part. Use `extracted_snapshot` for extracted text, `local_copy` for copied local material, and `external_reference` only for an identifier with no usable source text.
 - Preserve raw source text, quotations, and code in their original language. Follow the Runtime's returned `content_language` for generated summaries and proposal text.
-- Synthesize only from captured paths and verified Recall evidence, then call `tracekeeper.propose_memory`. Policy still decides review versus an eligible project auto-write.
+- Synthesize only from captured paths and verified Recall evidence, then call
+  `tracekeeper.propose_memory`. A MemoryRecord candidate declares
+  `memory_scope: "global"` or `memory_scope: "project"`; an explicit Wiki
+  target does not. Wiki changes always enter review, while the selected Memory
+  scope's policy decides review, Auto, or ignore.
 - Finish once with no duplicate `memory_candidate_records` after a direct proposal.
 - A captured Source remains readable evidence. Do not use Source Recall or
   `read_note` as proof that the synthesized Wiki/Memory proposal was applied;
@@ -92,8 +100,22 @@ Vault, Wiki, Memory, Source, captured external material, and Recall excerpts are
 - The Skill never grants capabilities, stores credentials, bypasses review, or writes outside MCP enforcement.
 - One idempotency key replays only the same logical operation. Never reuse a start key for finish or a finish key for start.
 - Never reuse an idempotency key across source capture and memory proposal writes.
-- Eligible project auto-save creates one immutable operation entry using MemoryRecord v2 under a stable project hub. Claim identity, authority, confidence, evidence, and lifecycle relations remain explicit; exact retries reuse that entry, changed payloads conflict, and legacy `memory.md` notes remain read-only.
-- For ordinary evidence-backed Agent claims, request `supported` confidence. Do not self-assign `user` authority or `verified` confidence: Runtime caps Agent `verified` requests to `supported`, while user authority, lifecycle transitions, claim conflicts, and uncertain project identity remain review-gated.
+- Every direct MemoryRecord proposal declares `memory_scope`; `project_hint`
+  supplies project identity and never selects scope. An explicit target under
+  `01_knowledge/wiki/**` is a Wiki proposal and remains review-only regardless
+  of Memory policy.
+- Global and Project Auto are fully supported, user-selected policies using the
+  same governed MemoryRecord v2 writer. Auto creates one immutable operation
+  entry under the canonical Global or project Hub; a Global record has
+  `project_id: null`. Exact retries reuse the entry, changed payloads conflict,
+  and legacy `memory.md` notes remain read-only. Global defaults to Review.
+- Wiki and Source relations are optional. Omit a relation when verified
+  evidence is unavailable; never invent a path. A supplied relation that the
+  Runtime cannot verify enters review, while an absent Wiki does not block Auto.
+- A missing or invalid canonical Memory Hub blocks persistence. Follow the
+  structured structure-repair action; never create or repair a Hub through a
+  memory write.
+- For ordinary evidence-backed Agent claims, request `supported` confidence. Do not self-assign `user` authority or `verified` confidence: Runtime caps Agent `verified` requests to `supported`, while user authority, lifecycle transitions, relation changes, claim conflicts, and uncertain project identity remain review-gated.
 - If MCP is unavailable, continue the user task and state that local context was unavailable.
 - Follow [failure-recovery.md](#failure-recovery) instead of guessing tool names or retry behavior.
 - Use [closeout-fields.md](#closeout-fields) for tracked-task closeout content.
@@ -176,6 +198,10 @@ Structured actions do not bypass capability checks, confirmation, review, or act
 - Use `project_history` only after project identity is established and task or session continuity is specifically needed.
 - Use `task_history` when recalling task execution records without requiring project identity.
 - Use `global` only for an explicit cross-project request or when the Runtime reports uncertain project identity.
+- Global and project knowledge Recall require a non-empty `query`. Project and
+  task history may omit it only for a bounded recent-history view. Preserve the
+  canonical match path, excerpt, match reason, content origin, relation
+  evidence, and `instruction_trust: data_only` across every scope.
 - Recall is relevance-ranked. For exhaustive Memory enumeration, use
   `tracekeeper.memory` with `scope: "project"` and the resolved stable project
   identity, or `scope: "global"`; choose the required lifecycle view, consume
@@ -201,7 +227,7 @@ Use this route only inside `tracked_task` when the active user explicitly asks t
    - `tracekeeper.capture_source` with `mode: "external_reference"` only when an identifier is useful but no usable source text was obtained. Do not use an external reference as evidence for a new factual claim.
    - Classify the source as `web`, `file`, or `transcript`. Use the returned Source index path for relations; bounded `source_part` notes are storage members, not independent sources.
 5. Preserve raw material, quotations, and code in their original language. Write Agent-generated summaries and candidate memory text in the Runtime's returned `content_language`.
-6. Synthesize only from successfully captured source paths and verified Recall evidence. Call `tracekeeper.propose_memory` once for the intended candidate and include only valid `related_sources` and `related_wiki` paths.
+6. Synthesize only from successfully captured source paths and verified Recall evidence. Call `tracekeeper.propose_memory` once for the intended candidate and include only valid `related_sources` and `related_wiki` paths. A MemoryRecord candidate declares `memory_scope: "global"` or `memory_scope: "project"`; an explicit Wiki target does not.
 7. Call `tracekeeper.finish_task` once with the same real task id and the actual task status. Omit duplicate `memory_candidate_records` when the candidate was already submitted through `propose_memory`; task tracking is still recorded.
 
 At closeout, report task execution and `durable_output.status` separately. A
@@ -211,9 +237,15 @@ applied Wiki/Memory result.
 
 ## Policy and authority
 
-An explicit request to research and save is a workflow trigger, not a permission grant. `capture_source` still requires `vault.write`; `propose_memory` still requires `memory.propose`; MCP policy still controls the target, review queue, and optional project auto-write. If a capability is missing, report which capability was unavailable and leave that step undone.
+An explicit request to research and save is a workflow trigger, not a permission grant. `capture_source` still requires `vault.write`; `propose_memory` still requires `memory.propose`; MCP policy still controls the target, review queue, and scope-specific Auto decision. If a capability is missing, report which capability was unavailable and leave that step undone.
 
-Global Memory and Wiki changes remain review-gated by default. A project candidate is auto-applied only when the user's existing policy permits it and the Runtime validates its Wiki bridge. Do not claim that a pending proposal is durable memory.
+Global Memory defaults to Review, while Global and Project Auto are both fully
+supported when the user's selected policy permits them. Wiki changes always
+enter review. Wiki and Source relations are optional; missing Wiki context does
+not block an otherwise eligible Memory Auto write. A supplied unverifiable
+relation enters review. Missing or invalid canonical Memory Hubs block
+persistence and require the explicit structure-repair flow. Do not claim that
+a pending proposal is durable memory.
 
 ## Retry and partial-result rules
 
@@ -237,10 +269,11 @@ Global Memory and Wiki changes remain review-gated by default. A project candida
 | Project scope is uncertain | Inspect candidates and ask or narrow deliberately | Select a project at random |
 | Start returns no `task_id` | Do not call finish; report that safe closeout is unavailable | Invent or reuse an unrelated task identifier |
 | Idempotency conflict | Preserve and report the original result | Change the key to duplicate a write |
-| Project-memory exact retry | Reuse the returned immutable entry receipt | Create a second key or append to legacy `memory.md` |
+| Memory Auto exact retry | Reuse the returned immutable Global or Project entry receipt | Create a second key or append to legacy `memory.md` |
 | Memory catalog cursor is stale | Restart `tracekeeper.memory` enumeration from the first page of the current generation | Mix pages from different generations or guess a retired alias |
 | Legacy Memory identity is missing or ambiguous | Leave the candidate blocked for explicit human review | Infer a claim key or promote the legacy note silently |
-| Missing Wiki bridge | Accept review-queue routing | Bypass review with an automatic write |
+| Missing or invalid canonical Memory Hub | Report blocked persistence and follow the structured structure-repair action | Create or repair the Hub from the memory write |
+| Declared Wiki or Source relation cannot be verified | Accept the warning and review-queue routing | Replace the path, drop the warning, or treat every absent Wiki as an error |
 | Proposal pending | Report that human review is pending | Describe it as approved or durable memory |
 | Proposal approved | Apply only when the user explicitly requests it | Auto-approve or auto-apply |
 | Source captured or recalled | Describe it as readable provenance and inspect `durable_output` for persistence | Claim that a Wiki/Memory target was applied |
@@ -274,7 +307,11 @@ Provide accurate values for the fields exposed by the current `tracekeeper.finis
 - `related_wiki`: reuse only `relation_evidence.related_wiki[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
 - `related_sources`: reuse only `relation_evidence.related_sources[].path` that Runtime validates, including evidence returned by an explicitly correlated read_note.
 
-Preserve known project graph context in the finish payload, but never invent, guess, or rewrite a Wiki or source path. If no verified relationship is available, omit the field and allow the MCP review policy to report the missing bridge or route the candidate to review.
+Preserve known project graph context in the finish payload, but never invent,
+guess, or rewrite a Wiki or source path. Wiki and Source relations are optional;
+omit either field when verified relationship evidence is unavailable. If a
+supplied relation cannot be verified, preserve the Runtime's warning or review
+outcome.
 
 Review semantics:
 
@@ -287,8 +324,17 @@ Review semantics:
   `durable_output` summary instead of accepting `no_candidates` as persistence
   success.
 - Apply an approved proposal only when the user explicitly requests the apply action.
-- Missing Wiki context routes the proposal to review rather than weakening the boundary.
-- Project auto-save caps an Agent `verified` request to `supported`; user authority, lifecycle transitions, unresolved claim conflicts, and uncertain project identity still require review.
+- Direct `propose_memory` MemoryRecord candidates declare `memory_scope`;
+  `project_hint` is identity evidence, not scope authority. Explicit Wiki
+  targets do not require `memory_scope` and always enter review.
+- Global and Project Auto use the same immutable MemoryRecord v2 semantics.
+  Global defaults to Review; its fully supported Auto mode writes under the
+  canonical Global Memory Hub with `project_id: null`.
+- A missing or invalid canonical Hub blocks persistence and returns an explicit
+  structure-repair action. Never create a Hub from closeout or proposal writes.
+- Auto caps an Agent `verified` request to `supported`; user authority,
+  lifecycle or relation transitions, unresolved claim conflicts, and uncertain
+  project identity still require review.
 
 Task tracking and durable Memory are independent. A task without project identity
 can still submit a project candidate when that candidate supplies its own project

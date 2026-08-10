@@ -1,9 +1,9 @@
 import {
 	computePayloadHash,
 	buildStableProposalId,
+	buildGlobalMemoryEntryPath,
 	buildProjectMemoryEntryPath,
 	deriveProjectMemoryHubBindingFromRepoPath,
-	KNOWLEDGE_GLOBAL_MEMORY_DIR,
 	isKnowledgeWikiPath,
 	normalizeProjectAgentType,
 	OperationConflictError,
@@ -79,6 +79,9 @@ interface ProposeMemoryOperationPayload {
 	requestHash: string;
 	requestSnapshot: ProposeMemoryRequestSnapshot;
 	writebackEffect?: 'append' | 'create_wiki_note' | 'create_memory_record';
+	memoryRecordWriteVersion?: 2;
+	memoryRule?: ProposeMemoryRule;
+	policyOutcome?: 'disabled';
 	projectMemoryCreatedAt: string;
 	projectMemoryAgentType: ProposeMemoryAgentType;
 }
@@ -114,6 +117,7 @@ export interface ProposeMemoryNote {
 }
 
 export interface ProposeMemoryImmutableWriteInput {
+	scope: ProposeMemoryScope;
 	projectId?: unknown;
 	projectHint?: unknown;
 	repoPath?: unknown;
@@ -149,8 +153,9 @@ export type ProposeMemoryImmutableWriteResult =
 		status: 'created' | 'exact_retry';
 		path: string;
 		activity_path: string;
-		project_id: string;
-		project_hub: string;
+		project_id: string | null;
+		project_hub: string | null;
+		global_hub: string | null;
 		agent_type: string;
 		operation_hash: string;
 		hub_status: string;
@@ -229,16 +234,17 @@ export interface ProposeMemoryApplicationDependencies {
 		projectHint: string,
 		memoryScope: ProposeMemoryScope
 	): ProposeMemoryRule;
-	writeImmutableProjectMemory(
+	writeImmutableMemoryRecord(
 		input: ProposeMemoryImmutableWriteInput
 	): Promise<ProposeMemoryImmutableWriteResult>;
-	resolveAutoMemoryTarget(
-		proposalKind: string,
-		targetNote: string,
-		projectHint: string,
-		memoryScope: ProposeMemoryScope
-	): { targetNote: string; allowedDir: string } | null;
-	appendAutoMemoryWrite(input: ProposeMemoryAutoWriteInput): Promise<ProposeMemoryNote>;
+	resolveMemoryRecordTarget?(input: {
+		scope: ProposeMemoryScope;
+		projectId?: unknown;
+		projectHint?: unknown;
+		repoPath?: unknown;
+		agentType: ProposeMemoryAgentType;
+		operationId: string;
+	}): Promise<string | null>;
 	findOwnedProposalNote(filename: string, operationId: string): Promise<ProposeMemoryNote | null>;
 	writeProposalNote(input: ProposeMemoryWriteInput): Promise<ProposeMemoryNote>;
 	ensureOwnedProposalIdentity(
@@ -376,6 +382,12 @@ function validOperationPayload(payload: unknown): payload is ProposeMemoryOperat
 	const request = snapshot as Record<string, unknown>;
 	return typeof value.requestHash === 'string'
 		&& value.requestHash.length > 0
+		&& (value.memoryRecordWriteVersion === undefined || value.memoryRecordWriteVersion === 2)
+		&& (value.memoryRule === undefined
+			|| value.memoryRule === 'review_queue'
+			|| value.memoryRule === 'auto_write'
+			|| value.memoryRule === 'disabled')
+		&& (value.policyOutcome === undefined || value.policyOutcome === 'disabled')
 		&& (value.writebackEffect === undefined
 			|| value.writebackEffect === 'append'
 			|| value.writebackEffect === 'create_wiki_note'
@@ -420,6 +432,32 @@ function deriveReviewQueueClaimKey(
 	return `${proposalKind}:${computePayloadHash(content).replace(/^sha256:/, '').slice(0, 32)}`;
 }
 
+function disabledMemoryResult(
+	snapshot: ProposeMemoryRequestSnapshot,
+	identity: { operationId: string; idempotencyKey: string },
+	memoryScope: ProposeMemoryScope
+) {
+	return {
+		ok: true,
+		tool: 'tracekeeper.propose_memory' as const,
+		operation_id: identity.operationId,
+		idempotency_key: identity.idempotencyKey,
+		status: 'ignored' as const,
+		persisted: false as const,
+		auto_applied: false as const,
+		duplicate: false,
+		proposal_destination: 'memory' as const,
+		memory_rule: 'disabled' as const,
+		memory_scope: memoryScope,
+		project_hint: snapshot.project_hint,
+		warnings: ['Memory proposal is disabled for this scope; the candidate was ignored and not persisted.'],
+		proposal_id: null,
+		proposal_path: null,
+		review_reason: null,
+		review_warnings: [],
+	};
+}
+
 export class ProposeMemoryApplicationService {
 	private readonly dependencies: ProposeMemoryApplicationDependencies;
 
@@ -451,26 +489,50 @@ export class ProposeMemoryApplicationService {
 				);
 			}
 			operationPayload = existing.payload;
+			const isWikiWrite = isKnowledgeWikiPath(operationPayload.requestSnapshot.target_note || '');
+			if (existing.status !== 'completed' && !isWikiWrite && operationPayload.memoryRecordWriteVersion !== 2) {
+				throw new OperationConflictError(
+					`Cannot recover unfinished legacy propose_memory operation "${identity.operationId}" without MemoryRecord v2 write semantics`
+				);
+			}
 		} else {
 			const proposalKind = snapshot.proposal_kind;
 			const targetNote = snapshot.target_note || '';
 			const projectHint = snapshot.project_hint || '';
 			const claimKey = snapshot.claim_key || deriveReviewQueueClaimKey(proposalKind, snapshot.content);
-			const memoryScope = this.dependencies.resolveMemoryScope(
-				proposalKind,
-				targetNote,
-				projectHint,
-				snapshot.memory_scope
-			);
-			this.dependencies.assertAllowed(
-				proposalKind,
-				targetNote,
-				projectHint,
-				memoryScope
-			);
+			const wikiTarget = isKnowledgeWikiPath(targetNote);
+			let memoryRule: ProposeMemoryRule = 'review_queue';
+			if (!wikiTarget) {
+				if (!snapshot.memory_scope) {
+					throw new Error('memory_scope is required for a MemoryRecord candidate.');
+				}
+				const memoryScope = this.dependencies.resolveMemoryScope(
+					proposalKind,
+					targetNote,
+					projectHint,
+					snapshot.memory_scope
+				);
+				memoryRule = this.dependencies.memoryRule(
+					proposalKind,
+					targetNote,
+					projectHint,
+					memoryScope
+				);
+				if (memoryRule !== 'disabled') {
+					this.dependencies.assertAllowed(
+						proposalKind,
+						targetNote,
+						projectHint,
+						memoryScope
+					);
+				}
+			}
 			operationPayload = {
 				requestHash,
 				requestSnapshot: snapshot,
+				...(!wikiTarget ? { memoryRecordWriteVersion: 2 as const } : {}),
+				memoryRule,
+				...(memoryRule === 'disabled' ? { policyOutcome: 'disabled' as const } : {}),
 				projectMemoryCreatedAt: this.dependencies.now(),
 				projectMemoryAgentType: this.dependencies.observedAgentType,
 			};
@@ -513,7 +575,6 @@ export class ProposeMemoryApplicationService {
 		const proposalKind = snapshot.proposal_kind;
 		const content = snapshot.content;
 		const evidence = snapshot.evidence;
-		const evidenceText = evidence.join('; ');
 		const targetNote = snapshot.target_note || '';
 		const riskLevel = snapshot.risk_level || '';
 		const title = snapshot.title || '';
@@ -521,13 +582,26 @@ export class ProposeMemoryApplicationService {
 		const projectHint = snapshot.project_hint || '';
 		const proposalId = buildStableProposalId(`${identity.operationId}\0${proposalKind}`);
 		const claimKey = snapshot.claim_key || deriveReviewQueueClaimKey(proposalKind, content);
-		const lifecycleClaimKey = /(^|\/)wiki(\/|$)/i.test(targetNote) ? null : claimKey;
-		const memoryScope = dependencies.resolveMemoryScope(
-			proposalKind,
-			targetNote,
-			projectHint,
-			snapshot.memory_scope
-		);
+		const wikiTarget = isKnowledgeWikiPath(targetNote);
+		if (!wikiTarget && !snapshot.memory_scope) {
+			throw new Error('memory_scope is required for a MemoryRecord candidate.');
+		}
+		const lifecycleClaimKey = wikiTarget ? null : claimKey;
+		const memoryScope = wikiTarget
+			? 'global' as const
+			: dependencies.resolveMemoryScope(
+				proposalKind,
+				targetNote,
+				projectHint,
+				snapshot.memory_scope
+			);
+		const memoryRule = wikiTarget
+			? 'review_queue' as const
+			: operationPayload.memoryRule
+				?? dependencies.memoryRule(proposalKind, targetNote, projectHint, memoryScope);
+		if (!wikiTarget && (operationPayload.policyOutcome === 'disabled' || memoryRule === 'disabled')) {
+			return disabledMemoryResult(snapshot, identity, memoryScope);
+		}
 		const architectureStatus = dependencies.buildArchitectureStatus();
 		const bridgeMetadata = dependencies.resolveBridgeMetadata(
 			memoryScope,
@@ -535,11 +609,16 @@ export class ProposeMemoryApplicationService {
 			snapshot.related_wiki,
 			snapshot.related_sources
 		);
-		const resolvedProjectIdentity = memoryScope === 'project'
+		const verifiedRecordEvidence = [
+			...new Set([
+				...bridgeMetadata.related_sources,
+				...bridgeMetadata.related_wiki,
+			]),
+		];
+		const resolvedProjectIdentity = !wikiTarget && memoryScope === 'project'
 			? dependencies.resolveProjectIdentity(snapshot)
 			: null;
 		const now = dependencies.now();
-		dependencies.assertAllowed(proposalKind, targetNote, projectHint, memoryScope);
 		const writebackEffect = operationPayload.writebackEffect;
 		dependencies.assertSafeText([
 			{ label: 'content', value: content },
@@ -554,25 +633,40 @@ export class ProposeMemoryApplicationService {
 			{ label: 'contradicts', value: snapshot.contradicts.join('\n') },
 		]);
 
-		const memoryRule = dependencies.memoryRule(proposalKind, targetNote, projectHint, memoryScope);
-		let reviewRequirement: { reason: string; warnings: readonly string[] } | null =
-			memoryRule === 'review_queue'
+		if (!wikiTarget && memoryRule !== 'disabled') {
+			dependencies.assertAllowed(proposalKind, targetNote, projectHint, memoryScope);
+		}
+		let reviewRequirement: { reason: string; warnings: readonly string[] } | null = wikiTarget
+			? {
+				reason: 'wiki_change_requires_human_review',
+				warnings: ['Explicit Wiki changes always require human review.'],
+			}
+			: memoryRule === 'review_queue'
 				? {
 					reason: 'memory_rule_requires_human_review',
 					warnings: ['The active memory rule requires human review before writeback.'],
 				}
 				: null;
-		if (memoryRule === 'auto_write') {
-			const canAutoWrite = !(memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge);
-			if (!canAutoWrite) {
+		if (!wikiTarget && memoryRule === 'auto_write') {
+			if (targetNote) {
 				reviewRequirement = {
-					reason: 'missing_wiki_bridge',
-					warnings: ['Project auto-save requires a verified Wiki bridge.'],
+					reason: 'explicit_memory_target_requires_human_review',
+					warnings: ['Explicit MemoryRecord target paths require human review.'],
 				};
 			}
-			if (canAutoWrite && memoryScope === 'project') {
+			if (
+				!reviewRequirement
+				&& (bridgeMetadata.missing_related_wiki.length > 0 || bridgeMetadata.missing_related_sources.length > 0)
+			) {
+				reviewRequirement = {
+					reason: 'unresolved_relation_evidence',
+					warnings: ['One or more explicitly declared Wiki or Source relations could not be verified in the active Vault.'],
+				};
+			}
+			if (!reviewRequirement) {
 				const useResolvedIdentity = resolvedProjectIdentity && resolvedProjectIdentity.confidence !== 'uncertain';
-				const immutable = await dependencies.writeImmutableProjectMemory({
+				const immutable = await dependencies.writeImmutableMemoryRecord({
+					scope: memoryScope,
 					projectId: useResolvedIdentity ? resolvedProjectIdentity?.projectId : snapshot.project_id || undefined,
 					projectHint: useResolvedIdentity ? resolvedProjectIdentity?.projectHint : snapshot.project_hint || undefined,
 					repoPath: useResolvedIdentity
@@ -613,7 +707,7 @@ export class ProposeMemoryApplicationService {
 						valid_from: snapshot.valid_from,
 						valid_to: snapshot.valid_to,
 						last_verified_at: snapshot.last_verified_at,
-						evidence,
+						evidence: verifiedRecordEvidence,
 						supersedes: snapshot.supersedes,
 						contradicts: snapshot.contradicts,
 						related_wiki: bridgeMetadata.related_wiki,
@@ -643,10 +737,12 @@ export class ProposeMemoryApplicationService {
 						warnings: [],
 						auto_applied: true,
 						duplicate: immutable.duplicate,
+						proposal_destination: 'memory' as const,
 						memory_rule: 'auto_write',
 						memory_scope: memoryScope,
 						project_id: immutable.project_id,
 						project_hub: immutable.project_hub,
+						global_hub: immutable.global_hub,
 						project_hint: projectHint || null,
 						agent_type: immutable.agent_type,
 						operation_hash: immutable.operation_hash,
@@ -671,102 +767,31 @@ export class ProposeMemoryApplicationService {
 				}
 				reviewRequirement = immutable;
 			}
-			const autoTarget = canAutoWrite && memoryScope === 'global'
-				? dependencies.resolveAutoMemoryTarget(proposalKind, targetNote, projectHint, memoryScope)
-				: null;
-			if (autoTarget) {
-				const note = await dependencies.appendAutoMemoryWrite({
-					proposalKind,
-					targetNote: autoTarget.targetNote,
-					allowedDir: autoTarget.allowedDir,
-					title: title || dependencies.renderText(`记忆更新：${proposalKind}`, `Memory update: ${proposalKind}`),
-					content,
-					operationId: identity.operationId,
-					taskId,
-					memoryScope,
-					projectHint,
-					relatedWiki: bridgeMetadata.related_wiki,
-					relatedSources: bridgeMetadata.related_sources,
-					architectureStatus,
-					missingGraphBridges: architectureStatus.missing_graph_bridges,
-					missingWikiBridge: false,
-					missingRelatedWiki: bridgeMetadata.missing_related_wiki,
-					missingRelatedSources: bridgeMetadata.missing_related_sources,
-					evidence: evidenceText,
-					riskLevel,
-				});
-				await dependencies.updateTaskMemoryWrite(taskId, note.path);
-				const predictedRecord = {
-					scope: memoryScope,
-					project_id: null,
-					memory_id: null,
-					memory_kind: proposalKind,
-					claim_key: snapshot.claim_key,
-					authority: snapshot.proposed_authority,
-					confidence_level: snapshot.proposed_confidence as 'uncertain' | 'inferred' | 'supported' | 'verified' | null,
-					declared_state: snapshot.declared_state as 'active' | 'disputed' | 'retracted' | 'review' | null,
-					observed_at: snapshot.observed_at,
-					valid_from: snapshot.valid_from,
-					valid_to: snapshot.valid_to,
-					last_verified_at: snapshot.last_verified_at,
-					evidence,
-					supersedes: snapshot.supersedes,
-					contradicts: snapshot.contradicts,
-					related_wiki: bridgeMetadata.related_wiki,
-					related_sources: bridgeMetadata.related_sources,
-					effective_state: null,
-				};
-				const proposalTransitionPreview = {
-					operation_id: identity.operationId,
-					kind: proposalKind,
-					previous_status: 'pending',
-					next_status: note.status,
-					expected_revision: identity.operationId,
-					committed_revision: identity.operationId,
-					proposal_id: identity.operationId,
-					proposal_path: note.path,
-				};
-				return {
-					ok: true,
-					tool: 'tracekeeper.propose_memory',
-					operation_id: identity.operationId,
-					idempotency_key: identity.idempotencyKey,
-					status: note.status,
-					path: note.path,
-					target_note: note.path,
-					activity_path: note.activity_path,
-					warnings: note.warnings,
-					auto_applied: true,
-					duplicate: note.duplicate ?? false,
-					memory_rule: 'auto_write',
-					memory_scope: memoryScope,
-					project_hint: projectHint || null,
-					record_identity: {
-						scope: memoryScope,
-						project_id: null,
-						claim_key: snapshot.claim_key,
-						memory_id: null,
-					},
-					predicted_record: predictedRecord,
-					predicted_state: 'legacy_unkeyed',
-					proposal_transition_preview: proposalTransitionPreview,
-					related_wiki: bridgeMetadata.related_wiki,
-					related_sources: bridgeMetadata.related_sources,
-					missing_related_sources: bridgeMetadata.missing_related_sources,
-					architecture_status: architectureStatus.architecture_status,
-					missing_graph_bridges: architectureStatus.missing_graph_bridges,
-					missing_wiki_bridge: false,
-					proposal_id: null,
-					proposal_path: null,
-				};
-			}
 		}
 
 		let governedRecordTarget = '';
 		if (lifecycleClaimKey && !targetNote) {
 			const agentType = normalizeProjectAgentType(projectMemoryAgentType);
-			if (memoryScope === 'global') {
-				governedRecordTarget = `${KNOWLEDGE_GLOBAL_MEMORY_DIR}/agents/${agentType}/approved-${proposalId}.md`;
+			const resolvedTarget = await dependencies.resolveMemoryRecordTarget?.({
+				scope: memoryScope,
+				projectId: resolvedProjectIdentity?.projectId || snapshot.project_id || undefined,
+				projectHint: resolvedProjectIdentity?.projectHint || snapshot.project_hint || undefined,
+				repoPath: resolvedProjectIdentity?.repoPath
+					|| snapshot.repo_path
+					|| snapshot.repo
+					|| snapshot.project_path
+					|| undefined,
+				agentType: projectMemoryAgentType,
+				operationId: identity.operationId,
+			});
+			if (resolvedTarget !== undefined) {
+				governedRecordTarget = resolvedTarget || '';
+			} else if (memoryScope === 'global') {
+				governedRecordTarget = buildGlobalMemoryEntryPath({
+					agentType,
+					operationKind: 'propose_memory',
+					operationId: identity.operationId,
+				});
 			} else if (resolvedProjectIdentity?.repoPath) {
 				const binding = deriveProjectMemoryHubBindingFromRepoPath(resolvedProjectIdentity.repoPath);
 				governedRecordTarget = buildProjectMemoryEntryPath({
@@ -777,16 +802,14 @@ export class ProposeMemoryApplicationService {
 				});
 			}
 		}
-		const proposalTargetNote = reviewRequirement && memoryScope === 'project'
-			? governedRecordTarget
-			: targetNote || governedRecordTarget;
+		const proposalTargetNote = targetNote || governedRecordTarget;
 		const body = [
 			dependencies.renderText('## 记忆提案', '## Proposal'),
 			'- status: pending',
 			`- proposal_kind: ${proposalKind}`,
 			evidence.length ? `- evidence: ${JSON.stringify(evidence)}` : '',
 			proposalTargetNote ? `- target_note: ${proposalTargetNote}` : '',
-			`- memory_scope: ${memoryScope}`,
+			!wikiTarget ? `- memory_scope: ${memoryScope}` : '',
 			projectHint ? `- project_hint: ${projectHint}` : '',
 			bridgeMetadata.related_wiki.length ? `- related_wiki: ${JSON.stringify(bridgeMetadata.related_wiki)}` : '',
 			bridgeMetadata.related_sources.length ? `- related_sources: ${JSON.stringify(bridgeMetadata.related_sources)}` : '',
@@ -831,7 +854,7 @@ export class ProposeMemoryApplicationService {
 				target_note: proposalTargetNote || null,
 				risk_level: riskLevel || null,
 				project_hint: projectHint || null,
-				memory_scope: memoryScope,
+				memory_scope: wikiTarget ? null : memoryScope,
 				related_wiki: bridgeMetadata.related_wiki,
 				related_sources: bridgeMetadata.related_sources,
 				claim_key: lifecycleClaimKey,
@@ -853,7 +876,7 @@ export class ProposeMemoryApplicationService {
 				review_warnings: reviewRequirement ? [...reviewRequirement.warnings] : [],
 				created_at: now,
 				task_id: taskId || null,
-				project_id: resolvedProjectIdentity?.projectId || snapshot.project_id || null,
+				project_id: wikiTarget ? null : resolvedProjectIdentity?.projectId || snapshot.project_id || null,
 				proposal_operation_id: identity.operationId,
 				...(writebackEffect ? { writeback_effect: writebackEffect } : {}),
 			},
@@ -877,13 +900,13 @@ export class ProposeMemoryApplicationService {
 				linkTarget: note.path,
 			});
 		}
-		const recordIdentity = {
+		const recordIdentity = !wikiTarget ? {
 			scope: memoryScope,
 			project_id: (resolvedProjectIdentity?.projectId || snapshot.project_id || null),
 			claim_key: snapshot.claim_key,
 			memory_id: null,
-		};
-		const predictedRecord = {
+		} : null;
+		const predictedRecord = !wikiTarget ? {
 			scope: memoryScope,
 			project_id: (resolvedProjectIdentity?.projectId || snapshot.project_id || null),
 			memory_id: null,
@@ -896,13 +919,13 @@ export class ProposeMemoryApplicationService {
 			valid_from: snapshot.valid_from,
 			valid_to: snapshot.valid_to,
 			last_verified_at: snapshot.last_verified_at,
-			evidence,
+			evidence: verifiedRecordEvidence,
 			supersedes: snapshot.supersedes,
 			contradicts: snapshot.contradicts,
 			related_wiki: bridgeMetadata.related_wiki,
 			related_sources: bridgeMetadata.related_sources,
 			effective_state: null,
-		};
+		} : null;
 		const proposalTransitionPreview = {
 			operation_id: identity.operationId,
 			kind: proposalKind,
@@ -928,8 +951,9 @@ export class ProposeMemoryApplicationService {
 			proposal_id: proposalId,
 			proposal_path: note.path,
 			proposal_link_target: note.path,
-			memory_rule: memoryRule,
-			memory_scope: memoryScope,
+			proposal_destination: wikiTarget ? 'wiki' as const : 'memory' as const,
+			memory_rule: wikiTarget ? null : memoryRule,
+			memory_scope: wikiTarget ? null : memoryScope,
 			project_hint: projectHint || null,
 			related_wiki: bridgeMetadata.related_wiki,
 			related_sources: bridgeMetadata.related_sources,
@@ -937,27 +961,12 @@ export class ProposeMemoryApplicationService {
 			architecture_status: architectureStatus.architecture_status,
 			missing_graph_bridges: architectureStatus.missing_graph_bridges,
 			missing_wiki_bridge: bridgeMetadata.missing_wiki_bridge,
-			record_identity: recordIdentity,
-			predicted_record: predictedRecord,
-			predicted_state: 'review',
+			...(recordIdentity ? { record_identity: recordIdentity } : {}),
+			...(predictedRecord ? { predicted_record: predictedRecord, predicted_state: 'review' as const } : {}),
 			proposal_transition_preview: proposalTransitionPreview,
 			review_reason: reviewRequirement?.reason || null,
 			review_warnings: reviewRequirement ? [...reviewRequirement.warnings] : [],
 		};
-		if (memoryScope === 'project' && bridgeMetadata.missing_wiki_bridge && memoryRule === 'auto_write') {
-			response.memory_rule = 'review_queue';
-			response.predicted_state = 'review';
-			response.proposal_transition_preview = {
-				operation_id: identity.operationId,
-				kind: proposalKind,
-				previous_status: 'pending',
-				next_status: 'queued',
-				expected_revision: proposalId,
-				committed_revision: proposalId,
-				proposal_id: proposalId,
-				proposal_path: note.path,
-			};
-		}
 		return response;
 	}
 }

@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MemoryRecordValidationError = exports.MEMORY_RECORD_TYPE = exports.MEMORY_RECORD_SCHEMA_VERSION = void 0;
+exports.buildGlobalMemoryEntryPath = buildGlobalMemoryEntryPath;
 exports.parseMemoryRecord = parseMemoryRecord;
 exports.buildMemoryRecord = buildMemoryRecord;
 exports.renderMemoryRecordMarkdown = renderMemoryRecordMarkdown;
@@ -8,6 +9,7 @@ exports.projectMemoryEntryToReadProjection = projectMemoryEntryToReadProjection;
 exports.legacyMemoryToReadProjection = legacyMemoryToReadProjection;
 const yaml_1 = require("yaml");
 const knowledge_note_1 = require("./knowledge-note");
+const knowledge_architecture_1 = require("./knowledge-architecture");
 exports.MEMORY_RECORD_SCHEMA_VERSION = 2;
 exports.MEMORY_RECORD_TYPE = 'memory_record';
 class MemoryRecordValidationError extends Error {
@@ -22,6 +24,7 @@ const STABLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const AGENT_TYPE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MEMORY_KIND_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const OPERATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const AUTHORITIES = new Set(['agent', 'source', 'user']);
 const CONFIDENCE_LEVELS = new Set([
     'uncertain',
@@ -35,6 +38,12 @@ const DECLARED_STATES = new Set([
     'retracted',
     'review',
 ]);
+function buildGlobalMemoryEntryPath(input) {
+    const agentType = requirePathIdentity(input.agentType, 'agentType', AGENT_TYPE_PATTERN);
+    const operationKind = requirePathIdentity(input.operationKind, 'operationKind', MEMORY_KIND_PATTERN);
+    const operationId = requirePathIdentity(input.operationId, 'operationId', OPERATION_ID_PATTERN);
+    return (0, knowledge_note_1.normalizeVaultRelativePath)(`${knowledge_architecture_1.KNOWLEDGE_GLOBAL_MEMORY_DIR}/agents/${agentType}/${operationKind}-${operationId}.md`);
+}
 function parseMemoryRecord(source) {
     const path = normalizePath(source.path, 'path');
     const frontmatter = requireObject(source.frontmatter, 'frontmatter');
@@ -202,6 +211,12 @@ function projectStatusToDeclaredState(status) {
     if (status === 'review')
         return 'review';
     return 'active';
+}
+function requirePathIdentity(value, field, pattern) {
+    if (typeof value !== 'string' || !pattern.test(value)) {
+        throw new MemoryRecordValidationError(`${field} is invalid.`);
+    }
+    return value;
 }
 function normalizeClaimKey(value) {
     if (typeof value !== 'string') {
