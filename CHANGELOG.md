@@ -2,6 +2,13 @@
 
 All notable changes to Tracekeeper will be documented in this file.
 
+## [0.3.2] - OAuth Approval Flow Correction
+
+### Fixed
+
+- Restored OAuth confirmation inside the currently open Agent configuration and removed the redundant Agent selection step.
+- Rejected unmatched or concurrent authorization requests instead of risking cross-Agent binding, and extended the approval window to five minutes.
+
 ## [0.3.1] - Community Plugin Review Hardening
 
 ### Fixed
