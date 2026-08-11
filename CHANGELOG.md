@@ -2,6 +2,12 @@
 
 All notable changes to Tracekeeper will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Aligned update distribution with Obsidian's GitHub Release flow: version tags now create an attested Draft Release, and explicit publication promotes those same qualified assets without rebuilding them.
+
 ## [0.3.2] - OAuth Approval Flow Correction
 
 ### Fixed

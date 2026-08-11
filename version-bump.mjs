@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 
+import { ensureVersionCompatibilityBoundary } from './scripts/version_compatibility.mjs';
+
 const targetVersion = process.env.npm_package_version;
 
 if (!targetVersion) {
@@ -98,8 +100,9 @@ replaceInFile(
 	`options.runtimeVersion?.trim() || '${targetVersion}';`
 );
 const versions = readJson('versions.json');
-versions[targetVersion] = manifest.minAppVersion;
-writeJson('versions.json', versions);
+if (ensureVersionCompatibilityBoundary(versions, targetVersion, manifest.minAppVersion)) {
+	writeJson('versions.json', versions);
+}
 
 const skillRelease = readJson('skills/tracekeeper/release.json');
 skillRelease.minimum_tracekeeper_version = targetVersion;

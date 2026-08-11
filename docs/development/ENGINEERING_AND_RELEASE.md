@@ -300,41 +300,47 @@ material in its established task location.
 ## Release Contract
 
 The release workflow is `.github/workflows/release.yml`. Its build job checks
-out the requested ref with full tag history, runs the full verification and
-package flow under read-only repository permission, generates artifact
-attestations, and uploads one immutable Actions artifact named by version and
-checked commit. Manual dispatch and tag push both stage only. Publication runs
-in a separate write-enabled job only for an explicit manual `publish` decision,
-after the strict version tag and the repository default-branch head both resolve
-to the checked commit and the rebuilt assets match all three qualified staged
-SHA-256 values. The write-enabled job resolves the tag and default branch again
-immediately before release creation, closing the build-to-publication mutation
-window. Published release assets are immutable; the workflow refuses to replace
-an existing version.
+out a pushed strict version tag with full history, runs the full verification
+and package flow under read-only repository permission, generates artifact
+attestations, and transfers one exact Actions artifact named by version and
+checked commit. A separate write-enabled job revalidates the tag and default
+branch before creating an unpublished GitHub Draft Release containing exactly
+`main.js`, `manifest.json`, and `styles.css`.
+
+The Draft Release is the qualification boundary: install and smoke checks use
+those attached files. An explicit manual workflow dispatch accepts only the
+strict version, downloads the same three draft assets, verifies their
+attestations and manifest version, confirms that the tag remains on the default
+branch and that the default-branch manifest still advertises that version, then
+publishes the existing draft without rebuilding or replacing its assets. The
+workflow refuses to create a release when that version already exists and never
+uses clobbering. This is workflow-enforced no-replacement policy, not a claim
+that repository-level GitHub Immutable Releases is enabled.
 
 For a plugin already listed in Obsidian Community Plugins, publishing a matching
 GitHub Release with the required assets is the normal update distribution path;
 it is not a new registry-submission workflow for every version. Tracekeeper's
-staging hashes, attestations, and install smoke remain stricter internal release
-policy. Community availability and the displayed Scorecard are post-publication
-distribution observations, not reasons to repeat pre-publication product or
-performance qualification.
+attestations, Draft Release qualification, and install smoke remain stricter
+internal release policy. Community availability and the displayed Scorecard are
+post-publication distribution observations, not reasons to repeat
+pre-publication product or performance qualification.
 
 Release requirements:
 
 1. Keep versions aligned across root and plugin manifests, workspace packages,
-   `versions.json`, client metadata, and MCP server metadata.
+   client metadata, and MCP server metadata. Add a `versions.json` entry only
+   when `minAppVersion` changes; an unchanged compatibility floor uses the most
+   recent earlier mapping.
 2. Run `npm run verify` from the intended release commit.
-3. Use a strict `x.y.z` version matching `manifest.json`; tag staging and
-   publication require that exact tag and the default-branch head to resolve to
-   the checked commit.
-4. Use a non-publishing workflow dispatch to stage and download the exact
-   attested `main.js`, `manifest.json`, and `styles.css` candidate for install
-   and smoke qualification; retain their three SHA-256 values.
-5. After the strict tag exists, use a separate explicit manual `publish` with
-   those qualified SHA-256 values. The workflow rebuilds the same default-branch
-   commit, rejects any byte mismatch, and passes only that run's attested staged
-   artifact to the write-enabled job.
+3. Use a strict `x.y.z` version matching `manifest.json`. Push that exact tag
+   only after the release commit is the default-branch head; the tag workflow
+   performs the full build and creates the Draft Release.
+4. Download the attested `main.js`, `manifest.json`, and `styles.css` directly
+   from the Draft Release for install and smoke qualification. Do not replace
+   or supplement the draft assets after qualification.
+5. After qualification, manually dispatch the workflow with only that version.
+   The publish job verifies the existing draft and its attached attestations,
+   then changes the draft to a public release without another build.
 6. Never overwrite or clobber an existing release. Corrective bytes require a
    new version, qualification identity, and tag.
 7. Verify release assets, attestations, Community Plugins install/update, and
@@ -353,7 +359,8 @@ Before submission or update, confirm:
 
 - the intended repository and default branch are public and reviewable;
 - root and packaged manifests match;
-- the current version maps to the correct minimum Obsidian version;
+- the effective `versions.json` compatibility boundary resolves to the current
+  minimum Obsidian version;
 - `npm run community:check` and `npm run verify` pass;
 - the matching release was built from the submitted commit;
 - release assets and attestations are present;

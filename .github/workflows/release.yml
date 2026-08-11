@@ -7,29 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version to build, for example 0.1.0.
+        description: Publish the qualified draft release for this strict x.y.z version.
         required: true
-        type: string
-      ref:
-        description: Git ref to check out before building. Defaults to the version tag.
-        required: false
-        type: string
-      publish:
-        description: Publish the verified candidate to the version tag. Leave false for staging only.
-        required: false
-        default: false
-        type: boolean
-      expected_main_sha256:
-        description: Qualified staged main.js SHA-256. Required when publish is true.
-        required: false
-        type: string
-      expected_manifest_sha256:
-        description: Qualified staged manifest.json SHA-256. Required when publish is true.
-        required: false
-        type: string
-      expected_styles_sha256:
-        description: Qualified staged styles.css SHA-256. Required when publish is true.
-        required: false
         type: string
 
 permissions:
@@ -37,6 +16,7 @@ permissions:
 
 jobs:
   build:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,7 +31,7 @@ jobs:
       - name: Validate semver tag
         id: semver
         env:
-          REF_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           if ! echo "$REF_NAME" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Tag '$REF_NAME' is not strict semver."
@@ -62,7 +42,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref || inputs.version) || github.ref }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Resolve checked out commit
@@ -70,7 +50,6 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Verify version tag binds checked out commit
-        if: github.event_name == 'push' || inputs.publish
         env:
           VERSION: ${{ steps.semver.outputs.version }}
           CHECKED_SHA: ${{ steps.checkout.outputs.sha }}
@@ -82,7 +61,6 @@ jobs:
           fi
 
       - name: Verify candidate is the default-branch head
-        if: github.event_name == 'push' || inputs.publish
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           CHECKED_SHA: ${{ steps.checkout.outputs.sha }}
@@ -119,31 +97,6 @@ jobs:
       - name: Check generated package artifacts
         run: git diff --exit-code -- apps/mcp-server/dist packages/core/dist packages/contracts/dist packages/mcp-runtime/dist
 
-      - name: Verify qualified asset hashes for publication
-        if: github.event_name == 'workflow_dispatch' && inputs.publish
-        env:
-          EXPECTED_MAIN_SHA256: ${{ inputs.expected_main_sha256 }}
-          EXPECTED_MANIFEST_SHA256: ${{ inputs.expected_manifest_sha256 }}
-          EXPECTED_STYLES_SHA256: ${{ inputs.expected_styles_sha256 }}
-        run: |
-          verify_asset() {
-            local expected="$1"
-            local asset="$2"
-            if ! [[ "$expected" =~ ^[0-9a-f]{64}$ ]]; then
-              echo "Expected SHA-256 for $asset must be 64 lowercase hexadecimal characters."
-              exit 1
-            fi
-            local actual
-            actual=$(sha256sum "$asset" | awk '{print $1}')
-            if [ "$actual" != "$expected" ]; then
-              echo "Qualified SHA-256 for $asset is $expected, but the rebuilt asset is $actual."
-              exit 1
-            fi
-          }
-          verify_asset "$EXPECTED_MAIN_SHA256" apps/obsidian-plugin/plugin/main.js
-          verify_asset "$EXPECTED_MANIFEST_SHA256" apps/obsidian-plugin/plugin/manifest.json
-          verify_asset "$EXPECTED_STYLES_SHA256" apps/obsidian-plugin/plugin/styles.css
-
       - name: Generate release asset attestations
         uses: actions/attest@v4
         with:
@@ -152,7 +105,7 @@ jobs:
             apps/obsidian-plugin/plugin/manifest.json
             apps/obsidian-plugin/plugin/styles.css
 
-      - name: Stage exact candidate assets
+      - name: Transfer exact candidate assets
         uses: actions/upload-artifact@v4
         with:
           name: tracekeeper-${{ steps.semver.outputs.version }}-${{ steps.checkout.outputs.sha }}
@@ -163,28 +116,28 @@ jobs:
             apps/obsidian-plugin/plugin/manifest.json
             apps/obsidian-plugin/plugin/styles.css
 
-  publish:
+  draft:
     needs: build
-    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Checkout publication identity
+      - name: Checkout draft identity
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.build.outputs.version }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Download staged candidate assets
+      - name: Download exact candidate assets
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.build.outputs.artifact-name }}
           path: candidate
 
-      - name: Revalidate publication identity
+      - name: Revalidate draft identity
         env:
           VERSION: ${{ needs.build.outputs.version }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -196,11 +149,11 @@ jobs:
           TAG_SHA=$(git rev-parse "refs/tags/$VERSION^{commit}")
           DEFAULT_SHA=$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")
           if [ "$TAG_SHA" != "$CHECKED_SHA" ]; then
-            echo "Version tag $VERSION moved to $TAG_SHA after the build; refusing publication of $CHECKED_SHA."
+            echo "Version tag $VERSION moved to $TAG_SHA after the build; refusing draft creation for $CHECKED_SHA."
             exit 1
           fi
           if [ "$DEFAULT_SHA" != "$CHECKED_SHA" ]; then
-            echo "Default branch $DEFAULT_BRANCH moved to $DEFAULT_SHA after the build; refusing publication of $CHECKED_SHA."
+            echo "Default branch $DEFAULT_BRANCH moved to $DEFAULT_SHA after the build; refusing draft creation for $CHECKED_SHA."
             exit 1
           fi
 
@@ -210,21 +163,120 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view "$VERSION" >/dev/null 2>&1; then
-            echo "Release $VERSION already exists; refusing to replace published assets."
+            echo "Release $VERSION already exists; refusing to replace its assets."
             exit 1
           fi
 
-      - name: Create GitHub release
+      - name: Create GitHub draft release
         env:
           VERSION: ${{ needs.build.outputs.version }}
           CHECKED_SHA: ${{ needs.build.outputs.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$VERSION" \
+            --draft \
             --verify-tag \
             --target "$CHECKED_SHA" \
             --title "$VERSION" \
-            --notes "Release $VERSION" \
+            --generate-notes \
             candidate/main.js \
             candidate/manifest.json \
             candidate/styles.css
+
+  publish:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Validate release version
+        id: semver
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Version '$VERSION' is not strict semver."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout publication identity
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.semver.outputs.version }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag and default-branch manifest
+        id: source
+        env:
+          VERSION: ${{ steps.semver.outputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch --force --no-tags origin \
+            "+refs/tags/$VERSION:refs/tags/$VERSION" \
+            "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          TAG_SHA=$(git rev-parse "refs/tags/$VERSION^{commit}")
+          DEFAULT_SHA=$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")
+          if ! git merge-base --is-ancestor "$TAG_SHA" "$DEFAULT_SHA"; then
+            echo "Version tag $VERSION is not contained in default branch $DEFAULT_BRANCH."
+            exit 1
+          fi
+          DEFAULT_MANIFEST_VERSION=$(git show "refs/remotes/origin/$DEFAULT_BRANCH:manifest.json" | jq -r '.version')
+          if [ "$DEFAULT_MANIFEST_VERSION" != "$VERSION" ]; then
+            echo "Default-branch manifest version is $DEFAULT_MANIFEST_VERSION, not $VERSION."
+            exit 1
+          fi
+          echo "sha=$TAG_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Verify qualified draft release
+        env:
+          VERSION: ${{ steps.semver.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_JSON=$(gh release view "$VERSION" --json tagName,isDraft,assets)
+          if [ "$(jq -r '.tagName' <<< "$RELEASE_JSON")" != "$VERSION" ]; then
+            echo "Draft release tag does not match $VERSION."
+            exit 1
+          fi
+          if [ "$(jq -r '.isDraft' <<< "$RELEASE_JSON")" != "true" ]; then
+            echo "Release $VERSION is not an unpublished draft."
+            exit 1
+          fi
+          ACTUAL_ASSETS=$(jq -r '.assets[].name' <<< "$RELEASE_JSON" | LC_ALL=C sort)
+          EXPECTED_ASSETS=$(printf '%s\n' main.js manifest.json styles.css | LC_ALL=C sort)
+          if [ "$ACTUAL_ASSETS" != "$EXPECTED_ASSETS" ]; then
+            echo "Draft release $VERSION must contain exactly main.js, manifest.json, and styles.css."
+            printf 'Actual assets:\n%s\n' "$ACTUAL_ASSETS"
+            exit 1
+          fi
+          mkdir candidate
+          gh release download "$VERSION" \
+            --dir candidate \
+            --pattern main.js \
+            --pattern manifest.json \
+            --pattern styles.css
+          MANIFEST_VERSION=$(jq -r '.version' candidate/manifest.json)
+          if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
+            echo "Draft manifest version is $MANIFEST_VERSION, not $VERSION."
+            exit 1
+          fi
+
+      - name: Verify draft asset attestations
+        env:
+          TAG_SHA: ${{ steps.source.outputs.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for asset in main.js manifest.json styles.css; do
+            gh attestation verify "candidate/$asset" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-digest "$TAG_SHA"
+          done
+
+      - name: Publish verified GitHub release
+        env:
+          VERSION: ${{ steps.semver.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$VERSION" --draft=false

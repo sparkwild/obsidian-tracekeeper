@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+import { resolveMinimumAppVersion } from '../../../scripts/version_compatibility.mjs';
+
 const source = fs.readFileSync('src/features/settings/tracekeeper-setting-tab.ts', 'utf8');
 const modalSource = fs.readFileSync('src/features/runtime/mcp-capabilities-modal.ts', 'utf8');
 const stylesSource = fs.readFileSync('styles.css', 'utf8');
@@ -98,6 +100,6 @@ assert.equal(advancedSection.includes("ui('召回预览', 'Recall preview')"), f
 assert.equal(advancedSection.includes('TRACEKEEPER_ACTIVITY_VIEW'), false);
 assert.equal(pluginManifest.minAppVersion, '1.11.0');
 assert.equal(rootManifest.minAppVersion, '1.11.0');
-assert.equal(versions[pluginManifest.version], '1.11.0');
+assert.equal(resolveMinimumAppVersion(versions, pluginManifest.version), '1.11.0');
 
 process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 72 })}\n`);
