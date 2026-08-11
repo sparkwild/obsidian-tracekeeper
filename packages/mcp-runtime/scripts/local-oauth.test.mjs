@@ -128,6 +128,9 @@ test('OAuth uses explicit approval, PKCE/resource binding, and per-integration c
   const waitUrl = new URL(authorization.headers.location);
   const requestId = waitUrl.searchParams.get('request_id');
   assert.ok(requestId);
+  const publishedRequest = pending.get(requestId);
+  assert.ok(publishedRequest);
+  assert.equal(publishedRequest.expiresAt - publishedRequest.issuedAt, 5 * 60 * 1000);
   const waiting = await request(port, 'GET', `${waitUrl.pathname}${waitUrl.search}`);
   assert.equal(waiting.status, 200);
   assert.match(waiting.body, /waiting|等待/u);

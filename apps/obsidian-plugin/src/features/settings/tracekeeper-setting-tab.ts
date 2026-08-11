@@ -4,7 +4,6 @@ import type { AgentConnectionsSnapshot } from '../activity/activity-model';
 import type { GeneratedClientConfig } from '../client-config/client-config';
 import { ConnectAiToolModal } from '../client-config/client-config-modals';
 import {
-	canBindPendingOAuthRequest,
 	commitOAuthDecisionWithBestEffortRefresh,
 } from '../client-config/oauth-pending';
 import { McpCapabilitiesModal } from '../runtime/mcp-capabilities-modal';
@@ -384,65 +383,22 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			});
 		}
 		for (const request of unboundOAuthRequests) {
-			const bindingCandidates = visibleAgents.filter(({ integration }) =>
-				canBindPendingOAuthRequest(integration, request)
-			);
 			group.addSetting((setting) => {
 				setting
-					.setName(ui('未绑定的 OAuth 请求', 'Unbound OAuth request'))
+					.setName(ui('未匹配的 OAuth 请求', 'Unmatched OAuth request'))
 					.setDesc(ui(
-						`客户端自报“${request.clientNameClaim || '未知'}”。该名称不可信，因此不会自动归属；选择 OAuth Agent 并在弹窗中授权后，客户端 ID 才会绑定到该 Agent。请求有效至 ${new Date(request.expiresAt).toLocaleString()}。`,
-						`The client self-reports “${request.clientNameClaim || 'Unknown'}”. This claim is untrusted, so Tracekeeper does not assign it automatically. Select an OAuth Agent and allow it in the dialog to bind the client ID to that Agent. Expires ${new Date(request.expiresAt).toLocaleString()}.`
+						`此请求没有对应的当前 Agent 配置，不会绑定到任何 Agent。请拒绝后，从目标 Agent 的配置页面重新发起。请求有效至 ${new Date(request.expiresAt).toLocaleString()}。`,
+						`This request does not match the current Agent configuration and will not be bound to any Agent. Deny it, then start again from the target Agent configuration. Expires ${new Date(request.expiresAt).toLocaleString()}.`
 					))
-					.addButton((button) => {
-						const review = button.buttonEl;
-						review.setAttribute('aria-haspopup', 'menu');
-						review.setAttribute('aria-expanded', 'false');
-						button
-							.setButtonText(ui('选择 Agent', 'Select Agent'))
-							.setCta()
-							.setDisabled(bindingCandidates.length === 0)
-							.onClick(() => {
-								const menu = new Menu().setNoIcon();
-								for (const candidate of bindingCandidates) {
-									menu.addItem((item) => item
-										.setTitle(candidate.config.displayName)
-										.onClick(() => {
-											new ConnectAiToolModal(
-												this.app,
-												this.plugin,
-												candidate.config,
-												'manage',
-												() => this.refreshAgentList(true),
-												() => this.refreshSettings(),
-												request.requestId
-											).open();
-										}));
-								}
-								const rect = review.getBoundingClientRect();
-								review.setAttribute('aria-expanded', 'true');
-								menu.onHide(() => review.setAttribute('aria-expanded', 'false'));
-								menu.showAtPosition({
-									x: rect.left,
-									y: rect.bottom,
-									width: rect.width,
-									overlap: false,
-								}, review.ownerDocument);
-							});
-					})
 					.addButton((button) => button
 						.setButtonText(ui('拒绝', 'Deny'))
+						.setWarning()
 						.onClick(() => {
 							button.setDisabled(true);
 							void this.denyPendingOAuthRequest(request.requestId, () => {
 								button.setDisabled(false);
 							});
 						}));
-				if (bindingCandidates.length === 0) {
-					setting.descEl.createEl('small', {
-						text: ui('请先创建一个尚未绑定客户端的 OAuth Agent。', 'Create an OAuth Agent without a bound client first.'),
-					});
-				}
 			});
 		}
 		if (visibleAgents.length === 0) {

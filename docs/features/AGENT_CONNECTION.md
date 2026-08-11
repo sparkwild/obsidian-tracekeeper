@@ -13,11 +13,13 @@ files and MCP credentials are separate lifecycles.
    use.
 3. Copy the client-native setup command with an explicit button. Copying only
    records `copied_unverified`; it never edits client files or proves contact.
-4. OAuth-capable clients use the default OAuth mode. The client discovers the
-   protected-resource and authorization-server metadata, uses Authorization
-   Code + PKCE S256 and RFC 8707 `resource`, and opens a browser waiting page.
-   Obsidian shows the pending request and the user explicitly chooses Allow or
-   Deny for the selected integration. The browser never approves access.
+4. OAuth-capable clients use the default OAuth mode. The user keeps the target
+   **Agent Configuration** open while the client discovers the protected-
+   resource and authorization-server metadata, uses Authorization Code + PKCE
+   S256 and RFC 8707 `resource`, and opens a browser waiting page. Obsidian
+   routes the pending request only to that active, eligible Agent configuration,
+   where the user explicitly chooses Allow or Deny. The browser never approves
+   access.
 5. Clients that cannot safely complete OAuth may use the explicit manual Bearer
    mode. Tracekeeper persists only a SHA-256 digest. After issuing the 256-bit
    plaintext once, the current modal can generate a complete `mcpServers` JSON
@@ -83,19 +85,22 @@ OAuth temporary requests, authorization codes, PKCE challenges, and unbound DCR
 records stay in memory. A pending request contains only the opaque request
 handle, OAuth client identifier, client claim, redirect origin, resource, scope,
 challenge, and bounded timestamps. A request whose client identifier already
-belongs to an Agent integration appears only on that Agent's card. A first-time
-unbound request appears once at the Agent-settings level and is never assigned
-from the untrusted client-name claim. Expired requests are removed from pending
-state and do not consume pending-request capacity.
+belongs to an Agent integration is routed only when that same Agent's OAuth
+configuration is open. A first-time unbound request is routed only while one
+eligible target Agent configuration is active; that human-selected local
+context, never the untrusted client-name claim, supplies the proposed
+`integrationId`. A request without a matching active context, or a concurrent
+request while another approval remains pending, is denied. Expired requests are
+removed from pending state and do not consume pending-request capacity.
 
-Allow explicitly binds an unbound request to the user-selected `integrationId`;
-the approval view identifies that binding action without treating the client
-name as trusted identity. The one-time authorization code is additionally bound
-to integration, credential, OAuth client, redirect URI, resource, and PKCE
-challenge. Token persistence happens before the response is returned; on
-persistence failure the old credential stays valid and the client receives
-`server_error`. RFC 7009-style revoke accepts unknown tokens without revealing
-whether they existed.
+Allow explicitly binds an unbound request to the active user-selected
+`integrationId`; the approval view identifies that binding action without
+treating the client name as trusted identity. The one-time authorization code is
+additionally bound to integration, credential, OAuth client, redirect URI,
+resource, and PKCE challenge. Token persistence happens before the response is
+returned; on persistence failure the old credential stays valid and the client
+receives `server_error`. RFC 7009-style revoke accepts unknown tokens without
+revealing whether they existed.
 
 One OAuth `clientId` has at most one effective Agent-integration owner. Approval
 reserves that owner through the authorization-code lifetime, and credential

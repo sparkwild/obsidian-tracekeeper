@@ -103,6 +103,7 @@ import {
 import {
 	PendingOAuthClientReservations,
 	assertOAuthClientOwnershipAvailable,
+	canRoutePendingOAuthRequestToIntegration,
 	enqueueSingleOwnerOAuthCredentialIssue,
 	uniqueOAuthClientOwners,
 } from './features/client-config/oauth-pending';
@@ -539,6 +540,10 @@ export default class TracekeeperPlugin extends Plugin {
 	private agentStateViewRefreshQueued = false;
 	private readonly agentStateListeners = new Set<() => void>();
 	private settingTab: TracekeeperSettingTab | null = null;
+	private oauthApprovalContext: {
+		integrationId: string;
+		onRequest: (requestId: string) => void;
+	} | null = null;
 	private runtimeStatus: StreamableHttpRuntimeStatus = {
 		state: 'stopped',
 		host: DEFAULT_MCP_HOST,
@@ -833,6 +838,7 @@ export default class TracekeeperPlugin extends Plugin {
 
 	onunload(): void {
 		this.stopAutoRefresh();
+		this.oauthApprovalContext = null;
 		this.clientSkillAdapter = null;
 		void this.closeMcpRuntime();
 	}
@@ -1173,6 +1179,36 @@ export default class TracekeeperPlugin extends Plugin {
 		return () => {
 			this.agentStateListeners.delete(listener);
 		};
+	}
+
+	registerOAuthApprovalContext(
+		integrationId: string,
+		onRequest: (requestId: string) => void
+	): () => void {
+		const context = { integrationId, onRequest };
+		this.oauthApprovalContext = context;
+		return () => {
+			if (this.oauthApprovalContext === context) this.oauthApprovalContext = null;
+		};
+	}
+
+	private routePendingOAuthRequest(request: PendingOAuthRequest): 'routed' | 'busy' | 'unmatched' {
+		const hasAnotherRequest = [...this.pendingOAuthRequests.keys()]
+			.some((requestId) => requestId !== request.requestId);
+		if (hasAnotherRequest) return 'busy';
+		const context = this.oauthApprovalContext;
+		if (!context || !canRoutePendingOAuthRequestToIntegration(
+			context.integrationId,
+			this.getAgentIntegrationsSnapshot(),
+			request
+		)) return 'unmatched';
+		try {
+			context.onRequest(request.requestId);
+			return 'routed';
+		} catch (error) {
+			console.error('tracekeeper failed to route an OAuth request to the active Agent configuration', error);
+			return 'unmatched';
+		}
 	}
 
 	private notifyAgentStateListeners(): void {
@@ -2420,8 +2456,25 @@ export default class TracekeeperPlugin extends Plugin {
 			publishPendingRequest: async (request) => {
 				this.pruneExpiredPendingOAuthRequests();
 				this.pendingOAuthRequests.set(request.requestId, request);
+				const routeStatus = this.routePendingOAuthRequest(request);
+				if (routeStatus !== 'routed') {
+					this.pendingOAuthDecisions.set(request.requestId, { decision: 'deny' });
+				}
 				this.scheduleAgentStateViewRefresh();
-				new Notice(ui('新的 MCP 连接请求正在等待授权，请打开 Agent 配置进行确认。', 'A new MCP connection request is waiting for authorization. Open Agent configuration to review it.'));
+				new Notice(routeStatus === 'routed'
+					? ui(
+						'收到 MCP 授权请求，请在当前 Agent 配置顶部确认。',
+						'An MCP authorization request arrived. Confirm it at the top of the current Agent configuration.'
+					)
+					: routeStatus === 'busy'
+						? ui(
+							'已有授权请求正在处理，新的请求已拒绝；请完成后重试。',
+							'Another authorization request is already in progress. The new request was denied; retry after it finishes.'
+						)
+					: ui(
+						'授权请求没有对应的当前 Agent 配置，已拒绝；请从目标 Agent 配置重新发起。',
+						'The authorization request did not match the current Agent configuration and was denied. Start it again from the target Agent configuration.'
+					), 8000);
 			},
 			readDecision: async (requestId) => {
 				this.pruneExpiredPendingOAuthRequests();
