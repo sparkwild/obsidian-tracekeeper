@@ -20,6 +20,9 @@ export class ConnectAiToolModal extends Modal {
 	private skillExpanded = false;
 	private closed = false;
 	private stopAgentStateSubscription: (() => void) | null = null;
+	private stopOAuthApprovalContext: (() => void) | null = null;
+	private oauthApprovalContextIntegrationId = '';
+	private selectedUnboundRequestId = '';
 
 	constructor(
 		app: App,
@@ -27,8 +30,7 @@ export class ConnectAiToolModal extends Modal {
 		private config: GeneratedClientConfig,
 		private mode: 'add' | 'manage',
 		private onChanged?: () => void | Promise<void>,
-		private onStructureChanged?: () => void | Promise<void>,
-		private selectedUnboundRequestId = ''
+		private onStructureChanged?: () => void | Promise<void>
 	) {
 		super(app);
 		this.selectedAuthMode = config.supportedAuthModes[0] ?? 'bearer';
@@ -57,6 +59,9 @@ export class ConnectAiToolModal extends Modal {
 		this.closed = true;
 		this.stopAgentStateSubscription?.();
 		this.stopAgentStateSubscription = null;
+		this.stopOAuthApprovalContext?.();
+		this.stopOAuthApprovalContext = null;
+		this.oauthApprovalContextIntegrationId = '';
 		this.integration = null;
 		this.bearerToken = null;
 		this.skillExpanded = false;
@@ -115,6 +120,7 @@ export class ConnectAiToolModal extends Modal {
 	private renderPanel(): void {
 		const container = this.panelEl;
 		if (!container || this.closed) return;
+		this.syncOAuthApprovalContext();
 		container.empty();
 		if (!this.integration) {
 			container.createEl('p', { text: ui('点击“配置 MCP”后才会创建持久 Agent 卡片。', 'Click “Configure MCP” to create a persistent Agent card.'), cls: 'tracekeeper-view__description' });
@@ -145,6 +151,30 @@ export class ConnectAiToolModal extends Modal {
 		}
 		this.renderSkill(container);
 		this.renderMaintenance(container);
+	}
+
+	private syncOAuthApprovalContext(): void {
+		const integrationId = this.selectedAuthMode === 'oauth'
+			? this.integration?.integrationId ?? ''
+			: '';
+		if (integrationId === this.oauthApprovalContextIntegrationId) return;
+		this.stopOAuthApprovalContext?.();
+		this.stopOAuthApprovalContext = null;
+		this.oauthApprovalContextIntegrationId = integrationId;
+		if (!integrationId) return;
+		this.stopOAuthApprovalContext = this.plugin.registerOAuthApprovalContext(
+			integrationId,
+			(requestId) => {
+				if (this.closed) return;
+				this.selectedUnboundRequestId = requestId;
+				this.renderPanel();
+				window.setTimeout(() => {
+					const pending = this.panelEl?.querySelector<HTMLElement>('.tracekeeper-connect-ai-tool-modal__pending');
+					pending?.scrollIntoView({ block: 'nearest' });
+					pending?.querySelector<HTMLButtonElement>('button.mod-cta')?.focus();
+				}, 0);
+			}
+		);
 	}
 
 	private renderAuthMode(container: HTMLElement): void {
