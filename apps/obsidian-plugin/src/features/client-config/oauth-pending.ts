@@ -212,6 +212,24 @@ export const canBindPendingOAuthRequest = (
 	&& !integration.credential
 	&& (!integration.oauthClient || integration.oauthClient.clientId === request.clientId);
 
+export const canRoutePendingOAuthRequestToIntegration = (
+	integrationId: string,
+	integrations: readonly AgentIntegrationSnapshot[],
+	request: PendingOAuthApproval,
+	now = Date.now()
+): boolean => {
+	if (!integrationId || !isActivePendingOAuthRequest(request, now)) return false;
+	const ownerCount = oauthClientOwnerCount(integrations, request.clientId);
+	if (ownerCount > 1) return false;
+	const integration = integrations.find((entry) => entry.integrationId === integrationId);
+	if (!integration) return false;
+	if (ownerCount === 1) {
+		return integration.authMode === 'oauth'
+			&& integration.oauthClient?.clientId === request.clientId;
+	}
+	return canBindPendingOAuthRequest(integration, request);
+};
+
 export const pendingOAuthRequestsForModal = (
 	integration: AgentIntegrationSnapshot | null,
 	integrations: readonly AgentIntegrationSnapshot[],

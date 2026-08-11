@@ -61,14 +61,18 @@ the user-facing data statement remains in [PRIVACY.md](../../PRIVACY.md).
   non-cacheable and the page uses a restrictive content-security policy with
   one hash-bound static stylesheet, no scripts, and no external resources.
 - Pending requests, unbound registrations, and authorization codes are bounded,
-  short-lived, one-use memory state. Stop, restart, port change, plugin unload,
-  and global revoke invalidate them. Invalid, expired, replayed, mismatched,
+  short-lived, one-use memory state. Pending approval expires after five
+  minutes. Stop, restart, port change, plugin unload, and global revoke
+  invalidate this state. Invalid, expired, replayed, mismatched, concurrent,
   and capacity-exhausted requests fail closed without revealing which check
   failed.
 - A pending OAuth request belongs to an existing integration only when its
-  trusted `clientId` binding matches that integration. An unbound first-time
-  request remains a single global pending item until the user selects the Agent
-  to bind; an untrusted client-name claim cannot place it on an Agent card.
+  trusted `clientId` binding matches that integration and the same Agent's OAuth
+  configuration is the active approval context. A first-time unbound request
+  can be proposed only to the eligible Agent configuration the user already has
+  open; the active local context supplies the `integrationId`, while an
+  untrusted client-name claim cannot select an Agent. A request without that
+  context, or an additional request while one remains pending, is denied.
   Expired requests are pruned before presentation and capacity checks.
 - One OAuth `clientId` has at most one effective integration owner. Approval
   reserves that owner through the authorization-code lifetime, and token
