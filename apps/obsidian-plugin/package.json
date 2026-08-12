@@ -1,6 +1,6 @@
 {
   "name": "tracekeeper-plugin",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Connect AI agents to your vault through a local MCP runtime, with scoped recall and governed memory updates.",
   "private": true,
   "main": "main.js",
