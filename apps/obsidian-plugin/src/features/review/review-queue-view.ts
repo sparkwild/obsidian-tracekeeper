@@ -513,6 +513,12 @@ export class TracekeeperReviewQueueView extends ItemView {
 			body.createEl('p', {
 				text: this.proposalListSummary(proposal),
 			});
+			const reviewReason = this.reviewReasonCodeLabel(proposal.reviewReason, proposal);
+			if (reviewReason) {
+				body.createEl('p', {
+					text: ui(`阻断原因：${reviewReason}`, `Block reason: ${reviewReason}`),
+				});
+			}
 			body.createEl('small', { text: this.rowMeta(proposal) });
 		}
 	}
@@ -993,6 +999,17 @@ export class TracekeeperReviewQueueView extends ItemView {
 			}
 			return;
 		}
+		if (this.isProjectMissingHubBlock(proposal) && status === 'ready_to_apply') {
+			this.addStatusAction(
+				container,
+				proposal,
+				'pending',
+				ui('撤回错误审核', 'Withdraw invalid approval'),
+				'',
+				'needs_review'
+			);
+			return;
+		}
 
 		if (status === 'incomplete') {
 			if (proposal.approvalStatus === 'approved') {
@@ -1015,7 +1032,9 @@ export class TracekeeperReviewQueueView extends ItemView {
 			this.addEditAction(container, proposal, context, ui('编辑变更', 'Edit change'));
 			this.addRevisionAction(container, proposal);
 			this.addStatusAction(container, proposal, 'rejected', ui('不采纳', 'Do not accept'), 'mod-warning', 'history');
-			this.addStatusAction(container, proposal, 'approved', ui('通过审核', 'Approve'), 'mod-cta', 'ready_to_apply');
+			if (!this.isProjectMissingHubBlock(proposal)) {
+				this.addStatusAction(container, proposal, 'approved', ui('通过审核', 'Approve'), 'mod-cta', 'ready_to_apply');
+			}
 			return;
 		}
 		if (status === 'awaiting_revision') {
@@ -1173,14 +1192,20 @@ export class TracekeeperReviewQueueView extends ItemView {
 			proposal,
 			context ? { exists: context.target.exists } : {}
 		);
-		const className = state === 'incomplete'
+		const projectMissingHubBlock = this.isProjectMissingHubBlock(proposal);
+		const className = projectMissingHubBlock || state === 'incomplete'
 			? 'tracekeeper-badge tracekeeper-badge--warning'
 			: state === 'ready_to_apply'
 				? 'tracekeeper-badge tracekeeper-badge--success'
 				: state === 'awaiting_revision'
 					? 'tracekeeper-badge tracekeeper-badge--warning'
 					: 'tracekeeper-badge tracekeeper-badge--muted';
-		container.createSpan({ text: this.attentionStateLabel(state), cls: className });
+		container.createSpan({
+			text: projectMissingHubBlock
+				? ui('历史阻断，需重提', 'Legacy block; resubmit')
+				: this.attentionStateLabel(state),
+			cls: className,
+		});
 	}
 
 	private attentionFilter(state: ReviewProposalAttentionState): ReviewInboxFilter {
@@ -1401,6 +1426,10 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 	private reviewRequirementMessage(proposal: MemoryProposalRecord): string {
 		const reason = proposal.reviewReason;
+		const mapped = this.reviewReasonCodeLabel(reason, proposal);
+		if (mapped) {
+			return mapped;
+		}
 		switch (reason) {
 			case 'memory_rule_requires_human_review':
 				return ui('当前记忆规则要求写入前由你确认。', 'The current memory rule requires your confirmation before writeback.');
@@ -1435,6 +1464,31 @@ export class TracekeeperReviewQueueView extends ItemView {
 				}
 				return '';
 		}
+	}
+
+	private reviewReasonCodeLabel(
+		reason: string,
+		proposal?: Pick<MemoryProposalRecord, 'memoryScope' | 'reviewReason'>
+	): string {
+		switch (reason) {
+			case 'missing_memory_hub':
+				if (proposal?.memoryScope === 'project') {
+					return ui(
+						'这是历史/不完整结构阻断，审批无法修复。若该提案是历史版本产物，请在运行版本升级后重新提交对应提案。',
+						'This is a legacy or incomplete structural block that approval cannot fix. If this proposal comes from an older version, resubmit it after upgrading.'
+					);
+				}
+				return ui(
+					'记忆候选需要项目或全局 Hub 才能持久化；当前 Hub 无效/缺失，请先在 Obsidian 执行结构修复。',
+					'This memory candidate needs a valid project or global Hub to persist; repair structure in Obsidian first.'
+				);
+			default:
+				return '';
+		}
+	}
+
+	private isProjectMissingHubBlock(proposal: MemoryProposalRecord): boolean {
+		return proposal.memoryScope === 'project' && proposal.reviewReason === 'missing_memory_hub';
 	}
 
 	private rowMeta(proposal: MemoryProposalRecord): string {

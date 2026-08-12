@@ -85,7 +85,7 @@ Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选
 
 审核通过和写入是两个独立动作。只有提案通过审核、完成预览并经你明确确认后，Tracekeeper 才会把内容写入对应目标笔记。
 
-项目记忆默认自动保存为 `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/` 下的只创建条目。稳定操作身份会让完全相同的重试复用同一条目，并拒绝使用已存在身份覆盖不同载荷。每个新条目都会连接稳定项目 Hub，并在存在关系时通过 Obsidian 原生链接连接已验证的 Wiki 或 Source 笔记；Wiki 和 Source 关系都是可选的。现有项目 `memory.md` 仍可读取并列入目录，但不会被自动改写、拆分或迁移。
+项目记忆默认自动保存为 `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/` 下的只创建条目。首次写入可精确识别的仓库时，Tracekeeper 会以排他、只创建语义安全创建缺失的 canonical 项目 Hub；身份不明确、路径被占用或现有 Hub 无效时仍会 fail-closed。稳定操作身份会让完全相同的重试复用同一条目，并拒绝使用已存在身份覆盖不同载荷。每个新条目都会连接稳定项目 Hub，并在存在关系时通过 Obsidian 原生链接连接已验证的 Wiki 或 Source 笔记；Wiki 和 Source 关系都是可选的。现有项目 `memory.md` 仍可读取并列入目录，但不会被自动改写、拆分或迁移。
 
 `tracekeeper.recall` 始终是按相关性选取的结果。当 Agent 需要完整枚举全局或项目记忆时，唯一规范的只读工具 `tracekeeper.memory` 会在同一个索引代次内分页列出当前、历史、冲突、待审核与旧版元数据，并且不返回笔记正文。
 

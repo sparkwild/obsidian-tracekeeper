@@ -1,3 +1,5 @@
+export declare const AGENT_ACTIVITY_SCHEMA_VERSION = 1;
+export declare const AGENT_ACTIVITY_HUB_TYPE = "tracekeeper_agent_activity_hub";
 export type ProposalHistoryLocation = 'active' | 'archive';
 export type AuditEventSourceKind = 'legacy' | 'shard';
 export interface StableAuditEventIdentity {
@@ -97,6 +99,8 @@ export type ProposalReferenceBackfillPlan = {
     referencePath: string;
     matches: ProposalHistoryRecord[];
 };
+export declare function renderAgentActivityHub(timestamp: string): string;
+export declare function validateAgentActivityHubMarkdown(content: string): boolean;
 export declare function auditShardPath(timestamp: string): string;
 export declare function buildStableAuditEventId(event: StableAuditEventIdentity): string;
 export declare function mergeAuditEvents<T extends MergeableAuditEvent>(events: readonly T[]): T[];

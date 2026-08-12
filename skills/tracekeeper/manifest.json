@@ -3,13 +3,13 @@
   "name": "tracekeeper",
   "skill_version": "2.2.0",
   "workflow_contract_version": 4,
-  "minimum_tracekeeper_version": "0.3.2",
+  "minimum_tracekeeper_version": "0.3.3",
   "hash_algorithm": "sha256",
-  "bundle_hash": "sha256:ca77e0ddaa115ecde0e428c9f4798112b0da3723a6f461dac56a49c1a6bb10b1",
+  "bundle_hash": "sha256:50d01c928f7cdc68a16bce4016fad0ee6014234c61c7f506b8de9a547d5227c9",
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "sha256:e4f7801b5f11c06c34cdd486401bbc59253c8c72e3ec7a5e57f045ba80a798e8"
+      "sha256": "sha256:c28b8512a344236792ab1f4bb7ee11bad83a370c87487c70200c1569fe550a79"
     },
     {
       "path": "references/workflow-state-machine.md",
@@ -17,15 +17,15 @@
     },
     {
       "path": "references/ingestion-workflow.md",
-      "sha256": "sha256:0c350c75f29309d84be4506b5146964383c8b593217f76be378ef61b99ef16e5"
+      "sha256": "sha256:268c978da0e8a17c503aaf95da236c7dd457c67ad7a9ad7f5ef750cc5653704c"
     },
     {
       "path": "references/failure-recovery.md",
-      "sha256": "sha256:8335015fb6f8acf49dcf7433efe85a320132df22e5befea752e26a96f5f01c15"
+      "sha256": "sha256:9144511a7a6f148ac1ee9f031f74e07b3fa5d5ad5d1d5d8749ad2752bce9b67f"
     },
     {
       "path": "references/closeout-fields.md",
-      "sha256": "sha256:ef3668f0c1caf68134cb808ec9b25d00e2f6577943c271d9dbb4663187dcd72c"
+      "sha256": "sha256:35d66245d4ff684d62edb45d2bd52627bb17addefb9ae8a3885286f30bd5e16f"
     },
     {
       "path": "references/instruction-isolation.md",
@@ -35,7 +35,7 @@
   "artifacts": {
     "flattened": {
       "path": "dist/tracekeeper.flattened.md",
-      "sha256": "sha256:ac0e198c5e1943485c9f00a2fa8fa038199fdd0f50077544087a7fd819f499f5"
+      "sha256": "sha256:3b5cb964b706f8784ac6446f65075ebff7f0bd89748d384d62f921beed45d004"
     }
   }
 }

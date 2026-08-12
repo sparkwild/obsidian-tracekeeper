@@ -90,6 +90,16 @@ const agent = (overrides = {}) => ({
 	...overrides,
 });
 
+const auditEvent = (overrides = {}) => ({
+	auditId: 'audit-event',
+	sortTimestamp: Date.parse('2026-08-12T13:04:19.489Z'),
+	eventType: 'mcp.authentication_rejected',
+	authMode: '',
+	diagnosticReason: 'auth_missing',
+	resultStatus: 'failed',
+	...overrides,
+});
+
 const task = (overrides = {}) => ({
 	status: 'completed',
 	sessionNote: '00_tracekeeper/work/sessions/task-one.md',
@@ -135,6 +145,7 @@ try {
 		selectTaskDurableOutputPresentationStatus,
 		selectTaskExecutionPresentationStatus,
 		projectDurableOutputTargetPaths,
+		selectRecentTimelineAuditEvents,
 		taskProposalNavigationPaths,
 		taskSnapshotProposalIdsAreFullyApplied,
 	} = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
@@ -178,6 +189,77 @@ try {
 		'none'
 	);
 	assert.equal(selectActivityPrimaryAction(actionInput()), 'none');
+
+	const recoveredChallenge = auditEvent();
+	const recoveredConnection = auditEvent({
+		auditId: 'audit-connection',
+		sortTimestamp: Date.parse('2026-08-12T13:04:19.595Z'),
+		eventType: 'mcp.connection',
+		authMode: 'oauth',
+		diagnosticReason: '',
+		resultStatus: 'success',
+	});
+	const successfulToolCall = auditEvent({
+		auditId: 'audit-tool-call',
+		sortTimestamp: Date.parse('2026-08-12T13:03:50.000Z'),
+		eventType: 'mcp.tool_call',
+		diagnosticReason: '',
+		resultStatus: 'success',
+	});
+	assert.deepEqual(
+		selectRecentTimelineAuditEvents([
+			recoveredChallenge,
+			successfulToolCall,
+			recoveredConnection,
+		], 5).map((event) => event.auditId),
+		['audit-tool-call']
+	);
+
+	const latestUnrecoveredMissing = auditEvent({
+		auditId: 'audit-missing-latest',
+		sortTimestamp: Date.parse('2026-08-12T13:05:00.000Z'),
+	});
+	const earlierUnrecoveredMissing = auditEvent({
+		auditId: 'audit-missing-earlier',
+		sortTimestamp: Date.parse('2026-08-12T13:04:00.000Z'),
+	});
+	const invalidCredential = auditEvent({
+		auditId: 'audit-invalid',
+		sortTimestamp: Date.parse('2026-08-12T13:04:30.000Z'),
+		diagnosticReason: 'auth_invalid',
+	});
+	const queryTokenRejected = auditEvent({
+		auditId: 'audit-query-token',
+		sortTimestamp: Date.parse('2026-08-12T13:04:15.000Z'),
+		diagnosticReason: 'query_token_rejected',
+	});
+	assert.deepEqual(
+		selectRecentTimelineAuditEvents([
+			earlierUnrecoveredMissing,
+			queryTokenRejected,
+			invalidCredential,
+			latestUnrecoveredMissing,
+		], 5).map((event) => event.auditId),
+		['audit-missing-latest', 'audit-invalid', 'audit-query-token']
+	);
+	const delayedOAuthConnection = {
+		...recoveredConnection,
+		auditId: 'audit-delayed-oauth-connection',
+		sortTimestamp: Date.parse('2026-08-12T13:04:22.000Z'),
+	};
+	assert.deepEqual(
+		selectRecentTimelineAuditEvents([recoveredChallenge, delayedOAuthConnection], 5)
+			.map((event) => event.auditId),
+		['audit-event']
+	);
+	assert.deepEqual(
+		selectRecentTimelineAuditEvents([
+			recoveredChallenge,
+			{ ...recoveredConnection, auditId: 'audit-bearer-connection', authMode: 'bearer' },
+		], 5).map((event) => event.auditId),
+		['audit-event']
+	);
+	assert.deepEqual(selectRecentTimelineAuditEvents([invalidCredential], 0), []);
 	assert.equal(selectLatestTaskPlacement(null), 'hidden');
 	for (const status of ['completed', 'done', 'success']) {
 		assert.equal(selectLatestTaskPlacement({ status }), 'memory_loop');
@@ -504,7 +586,7 @@ try {
 		}
 	);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 67 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 72 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

@@ -112,9 +112,12 @@ Vault, Wiki, Memory, Source, captured external material, and Recall excerpts are
 - Wiki and Source relations are optional. Omit a relation when verified
   evidence is unavailable; never invent a path. A supplied relation that the
   Runtime cannot verify enters review, while an absent Wiki does not block Auto.
-- A missing or invalid canonical Memory Hub blocks persistence. Follow the
-  structured structure-repair action; never create or repair a Hub through a
-  memory write.
+- A missing or invalid canonical Global Memory Hub blocks persistence; follow
+  the structured structure-repair action. Project Auto may exclusively create
+  a missing canonical project Hub when an exact repository identity proves the
+  complete binding. Approval does not grant that authority to a queued or legacy
+  proposal. Never guess identity, adopt an occupied path, or overwrite an invalid
+  existing Hub.
 - For ordinary evidence-backed Agent claims, request `supported` confidence. Do not self-assign `user` authority or `verified` confidence: Runtime caps Agent `verified` requests to `supported`, while user authority, lifecycle transitions, relation changes, claim conflicts, and uncertain project identity remain review-gated.
 - If MCP is unavailable, continue the user task and state that local context was unavailable.
 - Follow [failure-recovery.md](#failure-recovery) instead of guessing tool names or retry behavior.
@@ -243,9 +246,12 @@ Global Memory defaults to Review, while Global and Project Auto are both fully
 supported when the user's selected policy permits them. Wiki changes always
 enter review. Wiki and Source relations are optional; missing Wiki context does
 not block an otherwise eligible Memory Auto write. A supplied unverifiable
-relation enters review. Missing or invalid canonical Memory Hubs block
-persistence and require the explicit structure-repair flow. Do not claim that
-a pending proposal is durable memory.
+relation enters review. Missing or invalid canonical Global Memory Hubs block
+persistence and require the explicit structure-repair flow. Project Auto may
+exclusively create a missing canonical project Hub from exact repository
+identity; invalid Hubs, occupied paths, and ambiguous or conflicting identities
+remain blocked or review-gated. Do not claim that a pending proposal is durable
+memory.
 
 ## Retry and partial-result rules
 
@@ -272,7 +278,9 @@ a pending proposal is durable memory.
 | Memory Auto exact retry | Reuse the returned immutable Global or Project entry receipt | Create a second key or append to legacy `memory.md` |
 | Memory catalog cursor is stale | Restart `tracekeeper.memory` enumeration from the first page of the current generation | Mix pages from different generations or guess a retired alias |
 | Legacy Memory identity is missing or ambiguous | Leave the candidate blocked for explicit human review | Infer a claim key or promote the legacy note silently |
-| Missing or invalid canonical Memory Hub | Report blocked persistence and follow the structured structure-repair action | Create or repair the Hub from the memory write |
+| Missing or invalid canonical Global Memory Hub | Report blocked persistence and follow the structured structure-repair action | Create or repair the Global Hub from the memory write |
+| Missing canonical project Hub during Project Auto | Allow the Runtime's exclusive create only when exact repository identity proves the complete binding; otherwise preserve the blocked or review outcome | Guess project identity, adopt an occupied path, or treat approval as Hub-creation authority |
+| Invalid or occupied project Hub | Preserve the blocked or review outcome and report the structural conflict | Repair, overwrite, or adopt the existing path from a memory write |
 | Declared Wiki or Source relation cannot be verified | Accept the warning and review-queue routing | Replace the path, drop the warning, or treat every absent Wiki as an error |
 | Proposal pending | Report that human review is pending | Describe it as approved or durable memory |
 | Proposal approved | Apply only when the user explicitly requests it | Auto-approve or auto-apply |
@@ -330,8 +338,11 @@ Review semantics:
 - Global and Project Auto use the same immutable MemoryRecord v2 semantics.
   Global defaults to Review; its fully supported Auto mode writes under the
   canonical Global Memory Hub with `project_id: null`.
-- A missing or invalid canonical Hub blocks persistence and returns an explicit
-  structure-repair action. Never create a Hub from closeout or proposal writes.
+- A missing or invalid canonical Global Hub blocks persistence and returns an
+  explicit structure-repair action. Project Auto may exclusively create a
+  missing canonical project Hub from exact repository identity; ambiguous
+  identity, occupied paths, and invalid existing Hubs remain fail-closed.
+  Approval does not grant Hub-creation authority to queued or legacy proposals.
 - Auto caps an Agent `verified` request to `supported`; user authority,
   lifecycle or relation transitions, unresolved claim conflicts, and uncertain
   project identity still require review.

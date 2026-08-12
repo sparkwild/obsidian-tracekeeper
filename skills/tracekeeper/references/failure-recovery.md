@@ -12,7 +12,9 @@
 | Memory Auto exact retry | Reuse the returned immutable Global or Project entry receipt | Create a second key or append to legacy `memory.md` |
 | Memory catalog cursor is stale | Restart `tracekeeper.memory` enumeration from the first page of the current generation | Mix pages from different generations or guess a retired alias |
 | Legacy Memory identity is missing or ambiguous | Leave the candidate blocked for explicit human review | Infer a claim key or promote the legacy note silently |
-| Missing or invalid canonical Memory Hub | Report blocked persistence and follow the structured structure-repair action | Create or repair the Hub from the memory write |
+| Missing or invalid canonical Global Memory Hub | Report blocked persistence and follow the structured structure-repair action | Create or repair the Global Hub from the memory write |
+| Missing canonical project Hub during Project Auto | Allow the Runtime's exclusive create only when exact repository identity proves the complete binding; otherwise preserve the blocked or review outcome | Guess project identity, adopt an occupied path, or treat approval as Hub-creation authority |
+| Invalid or occupied project Hub | Preserve the blocked or review outcome and report the structural conflict | Repair, overwrite, or adopt the existing path from a memory write |
 | Declared Wiki or Source relation cannot be verified | Accept the warning and review-queue routing | Replace the path, drop the warning, or treat every absent Wiki as an error |
 | Proposal pending | Report that human review is pending | Describe it as approved or durable memory |
 | Proposal approved | Apply only when the user explicitly requests it | Auto-approve or auto-apply |

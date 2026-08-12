@@ -12,6 +12,7 @@ const activityControllerSource = fs.readFileSync('src/features/activity/activity
 const graphSource = fs.readFileSync('src/features/graph/graph-health-controller.ts', 'utf8');
 const permissionSource = fs.readFileSync('src/features/permissions/permission-policy-view.ts', 'utf8');
 const reviewQueueSource = fs.readFileSync('src/features/review/review-queue-view.ts', 'utf8');
+const baseStructureSource = fs.readFileSync('src/features/structure/base-structure-plan.ts', 'utf8');
 
 assert.ok(mainSource.includes("id: 'open-memory-inspector'"));
 assert.ok(mainSource.includes("id: 'open-source-status'"));
@@ -21,7 +22,8 @@ assert.ok(mainSource.includes('loadKnowledgeIndexEvidence'));
 assert.ok(mainSource.includes('knowledgeSnapshot()'));
 assert.ok(mainSource.includes('previewLegacyMemoryMigration('));
 assert.ok(mainSource.includes('applyLegacyMemoryMigration('));
-assert.ok(mainSource.includes('const KNOWLEDGE_ENTRY_FILE_PATHS = REQUIRED_KNOWLEDGE_FILES'));
+assert.ok(baseStructureSource.includes('BASE_STRUCTURE_DIRECTORIES'));
+assert.ok(baseStructureSource.includes('REQUIRED_KNOWLEDGE_FILES'));
 assert.ok(mainSource.includes('[TRACEKEEPER_ROOT, KNOWLEDGE_ROOT]'));
 assert.ok(mainSource.includes('TRACEKEEPER_MEMORY_INSPECTOR_VIEW'));
 assert.ok(mainSource.includes('TRACEKEEPER_SOURCE_STATUS_VIEW'));

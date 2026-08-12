@@ -85,7 +85,10 @@ operation-bound preview and requires a separate confirmation whose binding
 includes the concrete effect and target state. A Wiki or lifecycle target is
 created atomically only during that explicit apply step. Creation never
 overwrites an occupied path, and interruption compensation may remove only the
-exact file owned by the confirmed operation.
+exact file owned by the confirmed operation. A project proposal whose Hub is
+missing is not review-ready: approval cannot supply the additional structure
+authority, and legacy blocked proposals must be resubmitted after the runtime
+can follow the selected Project Auto policy.
 
 Approval commits a receipt that binds the exact proposal revision and content
 hash reviewed by the user. The apply preview produces an opaque, expiring
@@ -126,9 +129,12 @@ Global and project Memory use independent policy rules:
   otherwise eligible Auto decision;
 - an explicitly supplied relation that cannot be verified, a claim conflict,
   or a lifecycle relation change falls back to review;
-- a missing or invalid canonical Global or project Hub blocks persistence and
-  directs the user to the explicit structure-repair flow. A memory write never
-  creates a Hub as a side effect.
+- a missing or invalid canonical Global Hub blocks persistence and directs the
+  user to the explicit structure-repair flow;
+- Project Auto may create a missing canonical project Hub as part of the same
+  governed operation only when an exact repository identity determines the
+  complete Hub binding. Creation is exclusive and create-only; occupied paths,
+  invalid existing Hubs, or ambiguous identities remain blocked or review-gated.
 
 A pending proposal is not durable memory. Only an eligible scope Auto-save or
 a completed approved writeback may be described as persisted.

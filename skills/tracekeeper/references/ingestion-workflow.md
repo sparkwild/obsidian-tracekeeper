@@ -29,9 +29,12 @@ Global Memory defaults to Review, while Global and Project Auto are both fully
 supported when the user's selected policy permits them. Wiki changes always
 enter review. Wiki and Source relations are optional; missing Wiki context does
 not block an otherwise eligible Memory Auto write. A supplied unverifiable
-relation enters review. Missing or invalid canonical Memory Hubs block
-persistence and require the explicit structure-repair flow. Do not claim that
-a pending proposal is durable memory.
+relation enters review. Missing or invalid canonical Global Memory Hubs block
+persistence and require the explicit structure-repair flow. Project Auto may
+exclusively create a missing canonical project Hub from exact repository
+identity; invalid Hubs, occupied paths, and ambiguous or conflicting identities
+remain blocked or review-gated. Do not claim that a pending proposal is durable
+memory.
 
 ## Retry and partial-result rules
 

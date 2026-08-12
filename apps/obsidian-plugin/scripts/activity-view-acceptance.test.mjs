@@ -97,6 +97,9 @@ assert.equal(activitySource.includes('credential-authenticated activities'), fal
 assert.equal(activitySource.includes('近期认证活动'), false);
 assert.ok(activitySource.includes("ui('最近事件', 'Recent events')"));
 assert.ok(activitySource.includes("ui('查看全部', 'View all')"));
+assert.ok(activitySource.includes('完整连接记录可在全部 Agent 活动中查看'));
+assert.ok(activityControllerSource.includes('selectRecentTimelineAuditEvents'));
+assert.ok(activityControllerSource.includes("ui('认证', 'Authentication')"));
 assert.ok(activitySource.includes('AgentActivityDetailsModal'));
 assert.equal(activitySource.includes('continue_onboarding'), false);
 assert.equal(activitySource.includes('onboardingComplete'), false);
@@ -134,4 +137,4 @@ assert.equal(
 	false
 );
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 97 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 100 })}\n`);

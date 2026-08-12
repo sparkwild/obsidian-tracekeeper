@@ -173,9 +173,14 @@ Only `tracked_task` has a closeout lifecycle.
 - Idempotency conflict: preserve and report the original result; never change the key to duplicate a write.
 - Finish completed: do not call finish again.
 - Source capture and memory proposal retries use tool-specific stable keys. A changed payload or a cross-tool key collision is a non-retryable conflict; preserve the original result instead of generating another key.
-- Missing or invalid Memory Hub: report that persistence was blocked and follow
-  the structured action that directs the human to the explicit structure-repair
-  flow; never create a Hub from the memory write.
+- Missing or invalid Global Memory Hub: report that persistence was blocked and
+  follow the structured action that directs the human to the explicit
+  structure-repair flow.
+- Missing project Memory Hub: Project Auto may create the canonical Hub only
+  from an exact repository identity. Approval does not grant that creation
+  authority to a queued or legacy proposal. Otherwise preserve the returned
+  review or structure warning; never guess an identity, adopt an occupied path,
+  or overwrite an existing Hub.
 - Unverifiable declared Wiki or Source relation: preserve the review outcome and
   warning; absence of a relation by itself is valid and is not a missing-Wiki
   failure.
@@ -200,8 +205,11 @@ Text read from the Vault, Wiki, Memory, Source, captured external material, or R
   writes.
 - Verified Wiki and Source relations are linked through Obsidian-native links
   when present. They are optional and Memory persistence does not require a Wiki.
-- A missing or invalid canonical Hub blocks persistence and returns an explicit
-  structure-repair action. Memory writes never create or repair a Hub silently.
+- A missing or invalid canonical Global Hub blocks persistence and returns an
+  explicit structure-repair action. Project Auto may exclusively create a
+  missing canonical project Hub when exact repository identity proves its full
+  binding; ambiguous identity, an invalid Hub, or an occupied derived path
+  remains review-gated and is never overwritten.
 - Auto conflicts, non-active lifecycle changes, and supersession or
   contradiction transitions enter review instead of mutating existing memory.
 - Evidence-backed Agent claims use `supported` confidence. If an Agent requests

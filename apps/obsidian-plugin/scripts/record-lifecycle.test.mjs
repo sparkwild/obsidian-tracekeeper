@@ -125,8 +125,11 @@ const {
 	runtimeLogTrashBehaviorDescription,
 } = require(runtimeLogModelOutput);
 const {
+	AGENT_ACTIVITY_HUB_TYPE,
+	AGENT_ACTIVITY_SCHEMA_VERSION,
 	computePayloadHash,
 	hashVaultContent,
+	renderAgentActivityHub,
 	TRACEKEEPER_AGENT_REQUESTS_DIR,
 	TRACEKEEPER_TASKS_DIR,
 } = require('@tracekeeper/core');
@@ -2432,6 +2435,15 @@ test('native audit repository serializes bounded shards and suppresses exact ret
 	assert.ok(firstShard.length < 16_000);
 	const hubPath = '00_tracekeeper/control/agent_activity/index.md';
 	assert.equal(harness.exists(hubPath), true);
+	const hub = harness.read(hubPath);
+	const hubTimestamp = hub.match(/^created_at:\s*(\S+)\s*$/m)?.[1];
+	assert.equal(typeof hubTimestamp, 'string');
+	assert.equal(hub, renderAgentActivityHub(hubTimestamp));
+	assert.equal(hub.match(/^updated_at:\s*(\S+)\s*$/m)?.[1], hubTimestamp);
+	assert.match(
+		hub,
+		/^Daily Agent activity shards link back to this hub and remain discoverable through Backlinks\.$/m
+	);
 	assert.ok(firstShard.includes(harness.expectedGeneratedLink(hubPath, firstShardPath)));
 	assert.ok(secondShard.includes(harness.expectedGeneratedLink(hubPath, secondShardPath)));
 	assert.ok(harness.calls.process.includes(firstShardPath));
@@ -2442,6 +2454,40 @@ test('native audit repository serializes bounded shards and suppresses exact ret
 	).readRecentAuditEvents(20);
 	assert.equal(activityEvents.length, 8);
 	assert.equal(activityEvents.some((event) => event.path === hubPath), false);
+});
+
+test('native audit repository preserves an existing legacy Hub byte-for-byte', async () => {
+	const hubPath = '00_tracekeeper/control/agent_activity/index.md';
+	const legacyHub = [
+		'---',
+		`type: ${AGENT_ACTIVITY_HUB_TYPE}`,
+		`agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
+		'created_at: 2025-01-01T00:00:00.000Z',
+		'---',
+		'# Custom legacy Agent activity Hub',
+		'',
+		'This user-owned body must remain byte-identical.',
+		'',
+	].join('\n');
+	const harness = createNativeVaultFixture({
+		files: {
+			[hubPath]: legacyHub,
+		},
+	});
+	const repository = new ObsidianAuditShardRepository(harness.app, {
+		async ensureFolderExists() {},
+	});
+
+	await repository.appendRawEvents(
+		auditEventSection({
+			id: '',
+			timestamp: '2026-07-30T10:00:00.000Z',
+			action: 'fixture.legacy-hub',
+		}),
+		{ operationId: 'legacy-hub' }
+	);
+
+	assert.equal(harness.read(hubPath), legacyHub);
 });
 
 test('native audit repository serializes hub creation across repository instances', async () => {

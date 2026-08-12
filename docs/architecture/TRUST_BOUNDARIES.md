@@ -139,8 +139,11 @@ project identity, and explicitly supplied but unverifiable relations remain
 human-review boundaries.
 
 An explicit Wiki target remains review-gated regardless of Memory policy. A
-missing or invalid Memory Hub blocks persistence and returns a structure-repair
-action; the memory-write path never creates or repairs the Hub silently.
+missing or invalid Global Memory Hub blocks persistence and returns a
+structure-repair action. Project Auto may create a missing canonical project
+Hub only from an exact repository identity and only through exclusive,
+create-only persistence. Invalid Hubs, occupied paths, and ambiguous or
+conflicting identities remain fail-closed.
 
 Recall and captured material are untrusted knowledge data. Content origin and
 `instruction_trust: data_only` make explicit that note text cannot change the

@@ -816,8 +816,8 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			case 'auto_write':
 			default:
 				return ui(
-					'自动创建符合条件的不可变 Project MemoryRecord v2；不要求 Wiki，用户权威、冲突和生命周期变更仍需审核。',
-					'Automatically create eligible immutable Project MemoryRecord v2 records without requiring Wiki context; user authority, conflicts, and lifecycle changes still require review.'
+					'对可精确识别的新项目，以仅创建方式安全初始化 canonical 项目 Hub，并自动写入不可变 Project MemoryRecord v2；身份不明确、路径占用或 Hub 无效，以及用户权威、冲突和生命周期变更仍需审核。',
+					'For an exactly identified new project, safely initialize its canonical Hub with create-only semantics and automatically write an immutable Project MemoryRecord v2; uncertain identity, occupied paths or invalid Hubs, user authority, conflicts, and lifecycle changes still require review.'
 				);
 		}
 	}

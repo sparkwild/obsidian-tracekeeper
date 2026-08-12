@@ -12,6 +12,7 @@ import {
 	computePayloadHash,
 	computeProposalContentHash,
 	computeProposalRevision,
+	deriveProjectMemoryHubBindingFromRepoPath,
 	parseMarkdown,
 	scanVault,
 	transitionProposal,
@@ -221,6 +222,42 @@ class WriteAuditRepository {
 
 	async replaceText(relativePath, expectedVersion, content) {
 		this.replacedPaths.push(relativePath);
+		return this.delegate.replaceText(relativePath, expectedVersion, content);
+	}
+
+	listMarkdown(scope) {
+		return this.delegate.listMarkdown(scope);
+	}
+}
+
+class ForcedTwoHubCreatorRepository {
+	constructor(delegate) {
+		this.delegate = delegate;
+		this.waitForHubCreate = createRendezvous(2, 'project Hub create rendezvous');
+		this.hubCreateAttempts = 0;
+		this.hubCreateConflicts = 0;
+	}
+
+	readText(relativePath) {
+		return this.delegate.readText(relativePath);
+	}
+
+	async createText(relativePath, content) {
+		if (relativePath.startsWith(`${PROJECT_ROOT}/`) && relativePath.endsWith('/index.md')) {
+			this.hubCreateAttempts += 1;
+			await this.waitForHubCreate();
+		}
+		try {
+			return await this.delegate.createText(relativePath, content);
+		} catch (error) {
+			if (relativePath.startsWith(`${PROJECT_ROOT}/`) && relativePath.endsWith('/index.md')) {
+				this.hubCreateConflicts += 1;
+			}
+			throw error;
+		}
+	}
+
+	replaceText(relativePath, expectedVersion, content) {
 		return this.delegate.replaceText(relativePath, expectedVersion, content);
 	}
 
@@ -2262,10 +2299,11 @@ test('finish_task aggregates disabled Memory candidates as no-op instead of queu
 	assert.equal(findGlobalAgentEntries(fixture).length, 0);
 });
 
-test('finish_task reports explicit structure repair for Global and Project candidates with missing Hubs', async (t) => {
+test('finish_task keeps missing Global Hub review-gated and materializes an exact new Project Hub', async (t) => {
 	const fixture = createFixture(t);
 	const context = fixture.context();
 	context.memoryRules.globalMemoryRule = 'auto_write';
+	const projectBinding = deriveProjectMemoryHubBindingFromRepoPath('/work/missing');
 	const started = expectSuccess(
 		await callTool('tracekeeper.start_task', {
 			goal: 'Verify missing-Hub closeout guidance.',
@@ -2299,38 +2337,48 @@ test('finish_task reports explicit structure repair for Global and Project candi
 		'finish missing-Hub closeout task'
 	);
 	assert.equal(finished.memory_changes.length, 2);
-	assert.ok(finished.memory_changes.every((change) => change.reason === 'missing_memory_hub'));
+	assert.equal(finished.memory_changes[0].change_kind, 'proposal_queued');
+	assert.equal(finished.memory_changes[0].reason, 'missing_memory_hub');
+	assert.equal(finished.memory_changes[1].change_kind, 'record_written');
+	assert.equal(finished.memory_changes[1].reason, undefined);
 	assert.equal(finished.next_actions.length, 1);
 	assert.match(finished.next_actions[0].action_id, /structure_repair_required/);
 	assert.equal(finished.next_actions[0].reason_code, 'MEMORY_NOT_PERSISTED');
 	assert.equal(finished.next_actions[0].kind, 'user_review');
 	assert.match(finished.next_actions[0].reason, /do not call finish_task again/i);
 	assert.equal(findGlobalAgentEntries(fixture).length, 0);
-	assert.equal(findAgentEntries(fixture).length, 0);
+	assert.equal(findAgentEntries(fixture).length, 1);
+	assert.equal(fixture.exists(projectBinding.project_hub), true);
 });
 
-test('project Auto does not create a missing Hub and keeps an explicit existing Memory target', async (t) => {
+test('project Auto materializes an exact missing Hub and keeps an explicit existing Memory target review-gated', async (t) => {
 	const fixture = createFixture(t);
 	const missing = {
-		projectId: 'missing-id',
-		projectKey: 'missing-unused',
 		projectHint: 'missing',
 		repoPath: '/work/missing',
 	};
+	const missingBinding = deriveProjectMemoryHubBindingFromRepoPath(missing.repoPath);
 	const missingResult = expectSuccess(
 		await callTool('tracekeeper.propose_memory', {
 			proposal_kind: 'task_decision',
-			content: 'Do not materialize a missing project Hub.',
+			content: 'Materialize the canonical Hub for an exact new project.',
 			memory_scope: 'project',
 			project_hint: missing.projectHint,
 			repo_path: missing.repoPath,
 			claim_key: 'architecture:missing-project-hub',
 			idempotency_key: 'project-memory-missing-hub',
 		}, fixture.context()),
-		'missing project Hub review fallback'
+		'missing project Hub materialization'
 	);
-	assert.equal(missingResult.review_reason, 'missing_memory_hub');
-	assert.equal(findAgentEntries(fixture).length, 0);
+	assert.equal(missingResult.auto_applied, true);
+	assert.equal(missingResult.project_id, missingBinding.project_id);
+	assert.equal(missingResult.project_hub, missingBinding.project_hub);
+	assert.equal(fixture.exists(missingBinding.project_hub), true);
+	assert.equal(findAgentEntries(fixture).length, 1);
+	const missingHub = parseMarkdown(fixture.read(missingBinding.project_hub));
+	assert.equal(missingHub.frontmatter.fields.type, 'project_memory_index');
+	assert.equal(missingHub.frontmatter.fields.project_id, missingBinding.project_id);
+	assert.equal(missingHub.frontmatter.fields.repo_path, missingBinding.repo_path);
 
 	const project = addProject(fixture);
 	const first = expectSuccess(
@@ -2359,6 +2407,41 @@ test('project Auto does not create a missing Hub and keeps an explicit existing 
 	const proposal = parseMarkdown(fixture.read(reviewed.proposal_path));
 	assert.equal(proposal.frontmatter.fields.target_note, first.path);
 	assert.equal(proposal.frontmatter.fields.writeback_effect, 'append');
+});
+
+test('concurrent first Project Auto writes create one exact Hub and preserve Hub recovery status', async (t) => {
+	const fixture = createFixture(t);
+	const repoPath = '/work/new-concurrent-project';
+	const binding = deriveProjectMemoryHubBindingFromRepoPath(repoPath);
+	const repository = new ForcedTwoHubCreatorRepository(fixture.baseRepository);
+	const results = await Promise.all([
+		callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'task_decision',
+			content: 'First concurrent memory for a new project.',
+			memory_scope: 'project',
+			project_hint: binding.project_hint,
+			repo_path: repoPath,
+			claim_key: 'architecture:new-project-concurrent-one',
+			idempotency_key: 'new-project-concurrent-one',
+		}, fixture.context({ repository })),
+		callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'task_decision',
+			content: 'Second concurrent memory for a new project.',
+			memory_scope: 'project',
+			project_hint: binding.project_hint,
+			repo_path: repoPath,
+			claim_key: 'architecture:new-project-concurrent-two',
+			idempotency_key: 'new-project-concurrent-two',
+		}, fixture.context({ repository })),
+	]);
+	const payloads = results.map((result, index) =>
+		expectSuccess(result, `concurrent new-project write ${index + 1}`)
+	);
+	payloads.forEach(assertAutoWriteReceipt);
+	assert.equal(fixture.exists(binding.project_hub), true);
+	assert.equal(findAgentEntries(fixture).length, 2);
+	assert.equal(repository.hubCreateAttempts, 2);
+	assert.equal(repository.hubCreateConflicts, 1);
 });
 
 test('generated Global and Project review proposals complete the Human approval and v2 apply chain', async (t) => {
@@ -2429,6 +2512,96 @@ test('generated Global and Project review proposals complete the Human approval 
 			}
 		});
 	}
+});
+
+test('Project Review proposal persists repo_path but dry-run does not create an unconfirmed Hub', async (t) => {
+	const fixture = createFixture(t);
+	const context = fixture.context({
+		agentId: 'new-project-review-apply-agent',
+		sessionId: 'new-project-review-apply-session',
+	});
+	context.credentialCapabilities = ['*'];
+	context.writebackConfirmationSecret = 'new-project-review-apply-secret-32-bytes';
+	context.memoryRules.projectMemoryRule = 'review_queue';
+	const repoPath = '/work/review-created-project';
+	const binding = deriveProjectMemoryHubBindingFromRepoPath(repoPath);
+	const content = 'Approved Project Review creates its canonical Hub before its record.';
+	const proposed = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'task_decision',
+			content,
+			memory_scope: 'project',
+			project_hint: binding.project_hint,
+			repo_path: repoPath,
+			claim_key: 'architecture:review-created-project',
+			idempotency_key: 'review-created-project-proposal',
+		}, context),
+		'new Project Review proposal'
+	);
+	assert.equal(proposed.auto_applied, false);
+	const queued = parseMarkdown(fixture.read(proposed.proposal_path));
+	assert.equal(queued.frontmatter.fields.repo_path, binding.repo_path);
+	assert.equal(queued.frontmatter.fields.project_id ?? null, null);
+	assert.equal(fixture.exists(binding.project_hub), false);
+
+	approveGeneratedMemoryProposal(fixture, proposed, content);
+	const preview = await callTool('tracekeeper.apply_approved_writeback', {
+		proposal_id: proposed.proposal_id,
+		dry_run: true,
+	}, context);
+	assert.equal(preview.isError, true);
+	assert.match(
+		String(preview.structuredContent?.error || ''),
+		/not writeback-ready.*resubmit under Project Auto.*exact repo_path/i
+	);
+	assert.equal(fixture.exists(binding.project_hub), false);
+	assert.equal(findAgentEntries(fixture).length, 0);
+});
+
+test('legacy approved Project proposal with a missing project_id and no repo_path remains blocked', async (t) => {
+	const fixture = createFixture(t);
+	const context = fixture.context({
+		agentId: 'legacy-project-review-agent',
+		sessionId: 'legacy-project-review-session',
+	});
+	context.credentialCapabilities = ['*'];
+	context.writebackConfirmationSecret = 'legacy-project-review-secret-32-bytes';
+	context.memoryRules.projectMemoryRule = 'review_queue';
+	const repoPath = '/work/legacy-unbound-project';
+	const proposed = expectSuccess(
+		await callTool('tracekeeper.propose_memory', {
+			proposal_kind: 'task_decision',
+			content: 'Legacy proposal retains only a stale project id.',
+			memory_scope: 'project',
+			project_hint: 'legacy-unbound-project',
+			repo_path: repoPath,
+			claim_key: 'architecture:legacy-unbound-project',
+			idempotency_key: 'legacy-unbound-project-proposal',
+		}, context),
+		'legacy project proposal'
+	);
+	fixture.write(
+		proposed.proposal_path,
+		applyFrontmatterMutation(fixture.read(proposed.proposal_path), {
+			project_id: 'legacy-missing-id',
+			repo_path: null,
+		})
+	);
+	approveGeneratedMemoryProposal(
+		fixture,
+		proposed,
+		'Legacy proposal retains only a stale project id.'
+	);
+	const preview = await callTool('tracekeeper.apply_approved_writeback', {
+		proposal_id: proposed.proposal_id,
+		dry_run: true,
+	}, context);
+	assert.equal(preview.isError, true);
+	assert.match(
+		String(preview.structuredContent?.error || ''),
+		/no exact Project Hub.*resubmit under Project Auto.*exact repo_path/i
+	);
+	assert.equal(findAgentEntries(fixture).length, 0);
 });
 
 test('canonical project claim lock serializes different raw identities and unrelated invalid records do not block Auto', async (t) => {

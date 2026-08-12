@@ -11,6 +11,7 @@ import type { StructureState } from '../structure/legacy-migration-controller';
 import type {
 	AgentConnectionRecord,
 	AgentTaskRecord,
+	AuditEventRecord,
 	DurableOutputStatusAtFinish,
 } from './activity-model';
 
@@ -56,6 +57,55 @@ export type TaskExecutionPresentationStatus =
 export type TaskDurableOutputPresentationStatus =
 	| Exclude<DurableOutputStatusAtFinish, ''>
 	| 'legacy_proposals';
+
+const OAUTH_CHALLENGE_RECOVERY_WINDOW_MS = 2_000;
+
+export function selectRecentTimelineAuditEvents(
+	events: readonly AuditEventRecord[],
+	limit: number
+): AuditEventRecord[] {
+	const safeLimit = Math.max(0, Math.floor(limit));
+	if (safeLimit === 0) {
+		return [];
+	}
+	const ordered = [...events].sort((left, right) => right.sortTimestamp - left.sortTimestamp);
+	const successfulOAuthConnections = ordered.filter((event) =>
+		normalizeAuditEventType(event.eventType) === 'mcp.connection'
+		&& event.authMode === 'oauth'
+		&& event.resultStatus.trim().toLowerCase() === 'success'
+	);
+	let hasUnrecoveredMissingCredential = false;
+
+	return ordered.filter((event) => {
+		if (normalizeAuditEventType(event.eventType) === 'mcp.connection') {
+			return false;
+		}
+		if (!isMissingCredentialEvent(event)) {
+			return true;
+		}
+		const recovered = successfulOAuthConnections.some((connection) => {
+			const elapsedMs = connection.sortTimestamp - event.sortTimestamp;
+			return elapsedMs >= 0 && elapsedMs <= OAUTH_CHALLENGE_RECOVERY_WINDOW_MS;
+		});
+		if (recovered) {
+			return false;
+		}
+		if (hasUnrecoveredMissingCredential) {
+			return false;
+		}
+		hasUnrecoveredMissingCredential = true;
+		return true;
+	}).slice(0, safeLimit);
+}
+
+function isMissingCredentialEvent(event: AuditEventRecord): boolean {
+	return normalizeAuditEventType(event.eventType) === 'mcp.authentication-rejected'
+		&& event.diagnosticReason.trim().toLowerCase() === 'auth_missing';
+}
+
+function normalizeAuditEventType(eventType: string): string {
+	return eventType.trim().toLowerCase().replace(/_/g, '-');
+}
 
 const MANAGED_PROPOSAL_PATH_PREFIXES = [
 	TRACEKEEPER_REVIEW_QUEUE_DIR,
