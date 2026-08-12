@@ -112,9 +112,12 @@ Vault, Wiki, Memory, Source, captured external material, and Recall excerpts are
 - Wiki and Source relations are optional. Omit a relation when verified
   evidence is unavailable; never invent a path. A supplied relation that the
   Runtime cannot verify enters review, while an absent Wiki does not block Auto.
-- A missing or invalid canonical Memory Hub blocks persistence. Follow the
-  structured structure-repair action; never create or repair a Hub through a
-  memory write.
+- A missing or invalid canonical Global Memory Hub blocks persistence; follow
+  the structured structure-repair action. Project Auto may exclusively create
+  a missing canonical project Hub when an exact repository identity proves the
+  complete binding. Approval does not grant that authority to a queued or legacy
+  proposal. Never guess identity, adopt an occupied path, or overwrite an invalid
+  existing Hub.
 - For ordinary evidence-backed Agent claims, request `supported` confidence. Do not self-assign `user` authority or `verified` confidence: Runtime caps Agent `verified` requests to `supported`, while user authority, lifecycle transitions, relation changes, claim conflicts, and uncertain project identity remain review-gated.
 - If MCP is unavailable, continue the user task and state that local context was unavailable.
 - Follow [failure-recovery.md](references/failure-recovery.md) instead of guessing tool names or retry behavior.

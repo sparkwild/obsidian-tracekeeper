@@ -161,7 +161,10 @@ export class TracekeeperActivityView extends ItemView {
 			this.renderEmptyState(
 				timeline,
 				ui('还没有最近事件。', 'No recent events yet.'),
-				ui('最近的 MCP 连接、认证拒绝和工具调用会显示在这里。', 'Recent MCP connections, authentication rejections, and tool calls appear here.')
+				ui(
+					'最近的认证异常和工具调用会显示在这里；完整连接记录可在全部 Agent 活动中查看。',
+					'Recent authentication issues and tool calls appear here; complete connection records remain available in all Agent activity.'
+				)
 			);
 		} else {
 			const list = timeline.createDiv({ cls: 'tracekeeper-timeline' });

@@ -41,8 +41,11 @@ Review semantics:
 - Global and Project Auto use the same immutable MemoryRecord v2 semantics.
   Global defaults to Review; its fully supported Auto mode writes under the
   canonical Global Memory Hub with `project_id: null`.
-- A missing or invalid canonical Hub blocks persistence and returns an explicit
-  structure-repair action. Never create a Hub from closeout or proposal writes.
+- A missing or invalid canonical Global Hub blocks persistence and returns an
+  explicit structure-repair action. Project Auto may exclusively create a
+  missing canonical project Hub from exact repository identity; ambiguous
+  identity, occupied paths, and invalid existing Hubs remain fail-closed.
+  Approval does not grant Hub-creation authority to queued or legacy proposals.
 - Auto caps an Agent `verified` request to `supported`; user authority,
   lifecycle or relation transitions, unresolved claim conflicts, and uncertain
   project identity still require review.

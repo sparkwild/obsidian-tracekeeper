@@ -3,12 +3,12 @@
 	"kind": "static_skill_characterization",
 	"tracekeeper_version": "0.3.0",
 	"skill_path": "skills/tracekeeper/SKILL.md",
-	"skill_sha256": "e4f7801b5f11c06c34cdd486401bbc59253c8c72e3ec7a5e57f045ba80a798e8",
+	"skill_sha256": "c28b8512a344236792ab1f4bb7ee11bad83a370c87487c70200c1569fe550a79",
 	"skill_sources": [
-		{ "path": "skills/tracekeeper/SKILL.md", "sha256": "e4f7801b5f11c06c34cdd486401bbc59253c8c72e3ec7a5e57f045ba80a798e8" },
-		{ "path": "skills/tracekeeper/references/closeout-fields.md", "sha256": "ef3668f0c1caf68134cb808ec9b25d00e2f6577943c271d9dbb4663187dcd72c" },
-		{ "path": "skills/tracekeeper/references/failure-recovery.md", "sha256": "8335015fb6f8acf49dcf7433efe85a320132df22e5befea752e26a96f5f01c15" },
-		{ "path": "skills/tracekeeper/references/ingestion-workflow.md", "sha256": "0c350c75f29309d84be4506b5146964383c8b593217f76be378ef61b99ef16e5" },
+		{ "path": "skills/tracekeeper/SKILL.md", "sha256": "c28b8512a344236792ab1f4bb7ee11bad83a370c87487c70200c1569fe550a79" },
+		{ "path": "skills/tracekeeper/references/closeout-fields.md", "sha256": "35d66245d4ff684d62edb45d2bd52627bb17addefb9ae8a3885286f30bd5e16f" },
+		{ "path": "skills/tracekeeper/references/failure-recovery.md", "sha256": "9144511a7a6f148ac1ee9f031f74e07b3fa5d5ad5d1d5d8749ad2752bce9b67f" },
+		{ "path": "skills/tracekeeper/references/ingestion-workflow.md", "sha256": "268c978da0e8a17c503aaf95da236c7dd457c67ad7a9ad7f5ef750cc5653704c" },
 		{ "path": "skills/tracekeeper/references/instruction-isolation.md", "sha256": "2bf2f2f047bba9a968d2ca841029f130c12a9829e2e294e3b8d56659fd8c9357" },
 		{ "path": "skills/tracekeeper/references/workflow-state-machine.md", "sha256": "d95511278c2599597f8c11ee5a1f049d4a9c5cb021373857fb58647a6395d2f6" }
 	],
@@ -23,6 +23,6 @@
 		"average_score": 100,
 		"passed_count": 37,
 		"failed_scenario_ids": [],
-		"report_sha256": "3af231ada4213683199248ce7cb88289d7f2cc9af53588b9c1f06252b8175b32"
+		"report_sha256": "90284340f5589356ce11096044241ff3b2939dafe6e7df0f3031559adc4c9ebd"
 	}
 }

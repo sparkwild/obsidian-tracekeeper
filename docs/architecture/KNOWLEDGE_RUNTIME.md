@@ -82,9 +82,14 @@ One stable `project_id` owns a project hub at
 `01_knowledge/memory/projects/<project-key>/index.md`. The display hint and
 observed Agent type are metadata, not authorization or identity. A direct
 Memory candidate declares global or project scope; `project_hint` never selects
-scope. A missing or invalid canonical Global or project Hub blocks persistence
-and returns an explicit structure-repair action. Hub creation belongs to that
-human-initiated structure flow, not the memory write.
+scope. A missing or invalid canonical Global Hub blocks persistence and returns
+an explicit structure-repair action. With Project Auto, an exact normalized
+repository path may derive the complete project binding and exclusively create
+its missing canonical Hub before the immutable record is written. Invalid
+existing Hubs, occupied derived paths, and uncertain or conflicting identities
+remain fail-closed and never authorize adoption or overwrite. Approval does not
+grant Hub-creation authority to a review-routed or legacy proposal; a missing
+Hub therefore remains blocked from preview and apply outside Project Auto.
 
 Eligible `propose_memory` and `finish_task` operations use one scope-aware
 writer and exclusive create to write an immutable entry under

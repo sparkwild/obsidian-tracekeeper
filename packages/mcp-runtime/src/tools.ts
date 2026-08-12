@@ -4601,11 +4601,24 @@ async function resolveApprovedMemoryRecordTargetPath(
 		readFrontmatterString(proposal.frontmatter, ['project_id'])
 	);
 	if (!projectId) {
+		if (readFrontmatterString(proposal.frontmatter, ['repo_path'])) {
+			throw new ToolInputError(
+				'Approved project memory proposal is not writeback-ready because its canonical Project Hub does not exist; resubmit under Project Auto with the exact repo_path or wait for a confirmed structure-write flow.'
+			);
+		}
 		throw new ToolInputError('Approved project memory proposal requires project_id.');
 	}
 	const snapshot = await projectMemoryApplication(vaultRoot, context).snapshot();
 	const route = resolveProjectMemoryWritableRoute(snapshot, { projectId });
 	if (route.status !== 'existing') {
+		if (
+			route.status === 'review_required'
+			&& route.reason === 'explicit_project_id_not_found'
+		) {
+			throw new ToolInputError(
+				'Legacy approved project memory proposal has no exact Project Hub; resubmit under Project Auto with the exact repo_path.'
+			);
+		}
 		throw new ToolInputError('Approved project memory proposal has no exact project Hub.');
 	}
 	const projectAgentsRoot = `${path.posix.dirname(route.binding.project_hub)}/agents/`;
@@ -6007,6 +6020,7 @@ async function writeImmutableMemoryRecord(
 		let projectHub: string | null = null;
 		let globalHub: string | null = null;
 		let projectKey = '';
+		let hubStatus: ImmutableMemoryRecordWriteReceipt['hub_status'] = 'existing';
 		if (input.scope === 'global') {
 			const hub = await readCanonicalMemoryHub(
 				repository,
@@ -6017,26 +6031,26 @@ async function writeImmutableMemoryRecord(
 			}
 			globalHub = KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH;
 		} else {
-			const snapshot = await projectMemoryApplication(vaultRoot, input.context).snapshot();
-			const route = resolveProjectMemoryWritableRoute(snapshot, {
+			const resolution = await projectMemoryApplication(
+				vaultRoot,
+				input.context
+			).ensureWritableProject({
 				projectId: input.projectId,
 				projectHint: input.projectHint,
 				repoPath: input.repoPath,
 			});
-			if (route.status === 'review_required') return route;
-			if (route.status === 'materialize') {
-				return missingMemoryHubReview(route.binding.project_hub);
-			}
-			if (route.binding.project_id !== canonicalProjectId) {
+			if (resolution.status === 'review_required') return resolution;
+			if (resolution.binding.project_id !== canonicalProjectId) {
 				return {
 					status: 'review_required',
 					reason: 'conflicting_project_identity',
 					warnings: ['Project identity changed while acquiring the MemoryRecord claim lock.'],
 				};
 			}
-			projectId = route.binding.project_id;
-			projectHub = route.binding.project_hub;
-			projectKey = route.binding.project_key;
+			projectId = resolution.binding.project_id;
+			projectHub = resolution.binding.project_hub;
+			projectKey = resolution.binding.project_key;
+			hubStatus = resolution.hub_status;
 		}
 
 		const entryPath = input.scope === 'global'
@@ -6159,7 +6173,7 @@ async function writeImmutableMemoryRecord(
 				memory_id: memoryId,
 				claim_key: claimKey,
 				operation_hash: operationHash,
-				hub_status: 'existing',
+				hub_status: hubStatus,
 			},
 		}, input.context);
 		return {
@@ -6173,7 +6187,7 @@ async function writeImmutableMemoryRecord(
 			operation_kind: input.operationKind,
 			memory_kinds: input.memoryKinds,
 			operation_hash: operationHash,
-			hub_status: 'existing',
+			hub_status: hubStatus,
 			memory_id: memoryId,
 			claim_key: claimKey,
 			authority,
@@ -9717,6 +9731,10 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolInvo
 	const readView = await knowledgeReadViewForContext(vaultRoot, invocationContext);
 	const { knowledgeReadViewPromise: _cachedReadView, ...memoryWriteContext } = invocationContext;
 	const preflightScan = lightweightScanFromReadView(vaultRoot, readView);
+	const proposalProjectIdentity = resolveProjectIdentity(rawArgs, preflightScan.notes);
+	const proposalRepoPath = proposalProjectIdentity.confidence === 'uncertain'
+		? ''
+		: proposalProjectIdentity.repoPath;
 	context = {
 		...invocationContext,
 		knowledgeReadViewPromise: Promise.resolve(readView),
@@ -9809,7 +9827,12 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolInvo
 			'tracekeeper.propose_memory',
 			MEMORY_PROPOSAL_DIR,
 			input.filename,
-			input.frontmatter,
+			{
+				...input.frontmatter,
+				...(input.frontmatter.memory_scope === 'project' && proposalRepoPath
+					? { repo_path: proposalRepoPath }
+					: {}),
+			},
 			input.body,
 			input.taskId,
 			context,

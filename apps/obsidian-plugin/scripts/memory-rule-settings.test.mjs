@@ -66,7 +66,8 @@ try {
 	assert.ok(settingsSource.includes('MemoryRecord 的 Wiki 与 Source 关系均为可选，不会因为缺少 Wiki 而阻止保存。'));
 	assert.ok(settingsSource.includes('自动创建符合条件的不可变 Global MemoryRecord v2'));
 	assert.ok(settingsSource.includes('这是新安装的默认设置。'));
-	assert.ok(settingsSource.includes('自动创建符合条件的不可变 Project MemoryRecord v2；不要求 Wiki'));
+	assert.ok(settingsSource.includes('对可精确识别的新项目，以仅创建方式安全初始化 canonical 项目 Hub'));
+	assert.ok(settingsSource.includes('For an exactly identified new project, safely initialize its canonical Hub with create-only semantics'));
 	assert.ok(settingsSource.includes('项目记忆保存前进入知识变更审核。'));
 	assert.ok(settingsSource.includes('不接收新的项目记忆。'));
 	assert.ok(settingsSource.includes('setDesc(this.globalMemoryRuleDescription())'));

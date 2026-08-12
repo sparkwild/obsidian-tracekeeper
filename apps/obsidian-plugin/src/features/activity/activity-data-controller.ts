@@ -58,6 +58,7 @@ import {
 import { ui } from '../../ui/localization';
 import { buildAgentWorkflowDiagnostics } from './activity-workflow-diagnostics';
 import { buildRecentObservedClientConnections } from './activity-observed-client';
+import { selectRecentTimelineAuditEvents } from './activity-view-model';
 import { withObsidianVaultPathLock } from '../../adapters/obsidian-vault-path-lock';
 import type { MemoryProposalRecordWindow } from './activity-record-repository';
 
@@ -170,10 +171,10 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			recentAuditEvents,
 			recentToolCallRecords
 		);
-		const timelineItems = recentAuditEvents
-			.filter((event) => !this.isConnectionAuditEvent(event))
-			.map((event) => this.toActivityTimelineAuditItem(event))
-			.slice(0, ACTIVITY_TIMELINE_PREVIEW_ROWS);
+		const timelineItems = selectRecentTimelineAuditEvents(
+			recentAuditEvents,
+			ACTIVITY_TIMELINE_PREVIEW_ROWS
+		).map((event) => this.toActivityTimelineAuditItem(event));
 		const workflowDiagnostics = buildAgentWorkflowDiagnostics(recentAuditEvents);
 
 		return {
@@ -1503,6 +1504,7 @@ private buildActivityTimelineItems(input: {
 
 private toActivityTimelineAuditItem(event: AuditEventRecord): ActivityTimelineItem {
 		const isConnection = this.isConnectionAuditEvent(event);
+		const isAuthenticationRejection = this.isAuthenticationRejectionAuditEvent(event);
 		const isStructureEvent = event.action === 'structure.repair' || event.action === 'legacy_structure.migrate' || event.action === 'legacy_structure.cleanup';
 		const agentLabel = this.host.formatAgentDisplayName(event.clientName, event.agentId);
 		return {
@@ -1513,14 +1515,20 @@ private toActivityTimelineAuditItem(event: AuditEventRecord): ActivityTimelineIt
 					? agentLabel
 					: isStructureEvent
 						? ui('结构', 'Structure')
-						: ui('记录', 'Record'),
+						: isAuthenticationRejection
+							? ui('认证', 'Authentication')
+							: ui('记录', 'Record'),
 			title: event.toolName
 				? this.host.formatToolDisplayName(event.toolName)
 				: isConnection
 					? ui('建立连接', 'Connected')
-					: this.runtimeLogTitle(event, 'record'),
+					: isAuthenticationRejection
+						? this.authenticationRejectionTitle(event)
+						: this.runtimeLogTitle(event, 'record'),
 			meta: event.resultStatus ? this.host.formatResultLabel(event.resultStatus) : event.actor,
-			body: event.reason || event.diagnosticReason || event.snippet,
+			body: isAuthenticationRejection
+				? this.authenticationRejectionDetail(event)
+				: event.reason || event.diagnosticReason || event.snippet,
 			path: event.target || event.path,
 		};
 	}
@@ -1533,6 +1541,46 @@ private toActivityTimelineAuditItem(event: AuditEventRecord): ActivityTimelineIt
 	isConnectionAuditEvent(event: AuditEventRecord): boolean {
 		const eventType = event.eventType.trim().toLowerCase().replace(/_/g, '-');
 		return eventType === 'mcp.connection';
+	}
+
+	private isAuthenticationRejectionAuditEvent(event: AuditEventRecord): boolean {
+		const eventType = event.eventType.trim().toLowerCase().replace(/_/g, '-');
+		return eventType === 'mcp.authentication-rejected';
+	}
+
+	private authenticationRejectionTitle(event: AuditEventRecord): string {
+		switch (event.diagnosticReason.trim().toLowerCase()) {
+			case 'auth_missing':
+				return ui('认证凭据缺失', 'Authentication credentials missing');
+			case 'auth_invalid':
+				return ui('认证凭据无效', 'Authentication credentials invalid');
+			case 'query_token_rejected':
+				return ui('URL 凭据已拒绝', 'URL credential rejected');
+			default:
+				return ui('认证请求已拒绝', 'Authentication request rejected');
+		}
+	}
+
+	private authenticationRejectionDetail(event: AuditEventRecord): string {
+		switch (event.diagnosticReason.trim().toLowerCase()) {
+			case 'auth_missing':
+				return ui(
+					'客户端请求未携带认证凭据（auth_missing）。',
+					'The client request did not include authentication credentials (auth_missing).'
+				);
+			case 'auth_invalid':
+				return ui(
+					'客户端提交的认证凭据无效或已失效（auth_invalid）。',
+					'The client credential was invalid or expired (auth_invalid).'
+				);
+			case 'query_token_rejected':
+				return ui(
+					'已阻止通过 URL 传递认证凭据（query_token_rejected）。',
+					'Credentials supplied through the URL were blocked (query_token_rejected).'
+				);
+			default:
+				return event.reason || event.diagnosticReason || event.snippet;
+		}
 	}
 
 private readAgentAuthMode(values: ParsedRecord): 'oauth' | 'bearer' | '' {

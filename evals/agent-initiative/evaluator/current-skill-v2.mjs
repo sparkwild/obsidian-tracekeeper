@@ -38,7 +38,8 @@ export function buildSkillV2Profile(sourceDocuments) {
 		wikiReviewOnly: requires(text, /Wiki changes always enter review/iu, 'review-only Wiki routing'),
 		scopeAuto: requires(text, /Global and Project Auto are fully supported/iu, 'Global and Project Auto support'),
 		optionalRelations: requires(text, /Wiki and Source relations are optional/iu, 'optional Wiki and Source relations'),
-		hubRepair: requires(text, /missing or invalid canonical Memory Hub[\s\S]*structure-repair/iu, 'Memory Hub repair recovery'),
+		globalHubRepair: requires(text, /missing or invalid canonical Global Memory Hub[\s\S]*structure-repair/iu, 'Global Memory Hub repair recovery'),
+		projectHubAuto: requires(text, /Project Auto[\s\S]{0,300}exclusively create[\s\S]{0,200}missing canonical project Hub[\s\S]{0,200}exact repository identity/iu, 'exact Project Auto Hub creation'),
 	};
 }
 
