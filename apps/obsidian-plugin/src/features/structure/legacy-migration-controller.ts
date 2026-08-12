@@ -33,6 +33,10 @@ import {
 	runLegacyLinkPreflight as executeLegacyLinkPreflight,
 	type LegacyLinkPreflightResult,
 } from './legacy-link-preflight';
+import {
+	isBaseStructurePlanReady,
+	type MemoryInitializationPlan,
+} from './base-structure-plan';
 
 const LEGACY_MIGRATION_PLAN_VERSION = 1;
 const METADATA_WAIT_TIMEOUT_MS = 5_000;
@@ -43,13 +47,6 @@ const legacyMigrationOperationQueues = new WeakMap<
 	object,
 	Map<string, Promise<void>>
 >();
-
-export interface MemoryInitializationPlan {
-	foldersToCreate: string[];
-	filesToCreate: string[];
-	invalidFiles?: string[];
-	missingAgentActivityHub: boolean;
-}
 
 export type StructureState = 'initialized' | 'partial' | 'missing' | 'legacy_detected';
 export type LegacyStructureAction =
@@ -70,7 +67,9 @@ export interface TracekeeperStructureStatus {
 	detail: string;
 	missingFolders: string[];
 	missingFiles: string[];
+	invalidFolders: string[];
 	invalidFiles: string[];
+	invalidFileContents: string[];
 	missingCount: number;
 	totalCount: number;
 }
@@ -169,6 +168,7 @@ export interface LegacyCleanupResult {
 
 export interface LegacyMigrationControllerHost {
 	initializeMemoryStructure(plan: MemoryInitializationPlan): Promise<void>;
+	buildInitializationPlan(): Promise<MemoryInitializationPlan>;
 	ensureFolderExists(path: string): Promise<void>;
 	ensureFileDoesNotExist(path: string, content: string): Promise<void>;
 	normalizeVaultPath(path: string): string;
@@ -473,12 +473,13 @@ export class LegacyMigrationController {
 	private async migrateLegacyStructureInternal(
 		snapshot: StructureOrganizerSnapshot
 	): Promise<LegacyMigrationResult> {
+		const currentBasePlan = await this.host.buildInitializationPlan();
 		if (
-			snapshot.basePlan.foldersToCreate.length > 0
-			|| snapshot.basePlan.filesToCreate.length > 0
+			!isBaseStructurePlanReady(snapshot.basePlan)
+			|| !isBaseStructurePlanReady(currentBasePlan)
 		) {
 			throw new Error(
-				'Repair the base structure and refresh the migration preview before confirming user-file moves.'
+				'Repair invalid or missing base structure entries and refresh the migration preview before confirming user-file moves.'
 			);
 		}
 		const plan = snapshot.legacyPlan;

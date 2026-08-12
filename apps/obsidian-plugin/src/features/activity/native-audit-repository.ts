@@ -1,13 +1,14 @@
 import { App, TFile, TFolder } from 'obsidian';
 import {
+	AGENT_ACTIVITY_SCHEMA_VERSION,
 	TRACEKEEPER_AGENT_ACTIVITY_DIR,
 	TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
 	auditShardPath,
 	buildStableAuditEventId,
+	renderAgentActivityHub,
 } from '@tracekeeper/core';
 import { withObsidianVaultPathLock } from '../../adapters/obsidian-vault-path-lock';
 
-const AGENT_ACTIVITY_SCHEMA_VERSION = 1;
 const AGENT_ACTIVITY_HUB_PATH = TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH;
 const MAX_ACTIVITY_VALUE_LENGTH = 320;
 const MAX_ACTIVITY_EVENT_LENGTH = 4096;
@@ -406,31 +407,20 @@ export class ObsidianAuditShardRepository {
 				AGENT_ACTIVITY_HUB_PATH,
 				async () => {
 					await this.host.ensureFolderExists(TRACEKEEPER_AGENT_ACTIVITY_DIR);
-				let hub = this.app.vault.getAbstractFileByPath(AGENT_ACTIVITY_HUB_PATH);
+					let hub = this.app.vault.getAbstractFileByPath(AGENT_ACTIVITY_HUB_PATH);
 					if (!hub) {
 						const createdAt = new Date().toISOString();
 						await this.app.vault.create(
 							AGENT_ACTIVITY_HUB_PATH,
-							[
-								'---',
-							'type: tracekeeper_agent_activity_hub',
-							`agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
-								`created_at: ${createdAt}`,
-								`updated_at: ${createdAt}`,
-								'---',
-							'# Agent activity',
-								'',
-							'Daily Agent activity shards link back to this hub and remain discoverable through Backlinks.',
-								'',
-							].join('\n')
+							renderAgentActivityHub(createdAt)
 						);
 						hub = this.app.vault.getAbstractFileByPath(AGENT_ACTIVITY_HUB_PATH);
 					}
 					if (hub instanceof TFolder) {
-					throw new Error(`Agent activity hub path is a folder: ${AGENT_ACTIVITY_HUB_PATH}.`);
+						throw new Error(`Agent activity hub path is a folder: ${AGENT_ACTIVITY_HUB_PATH}.`);
 					}
 					if (!(hub instanceof TFile)) {
-					throw new Error(`Agent activity hub is unavailable: ${AGENT_ACTIVITY_HUB_PATH}.`);
+						throw new Error(`Agent activity hub is unavailable: ${AGENT_ACTIVITY_HUB_PATH}.`);
 					}
 					return hub;
 				}

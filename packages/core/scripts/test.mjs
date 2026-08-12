@@ -23,6 +23,7 @@ import memoryRecordModule from '../dist/memory-record.js';
 import memoryLifecycleModule from '../dist/memory-lifecycle.js';
 import sourceRecordModule from '../dist/source-record.js';
 import lifecycleDiagnosticsModule from '../dist/lifecycle-diagnostics.js';
+import knowledgeArchitectureModule from '../dist/knowledge-architecture.js';
 
 const KNOWLEDGE_DIR = '01_knowledge';
 const CONFIG_DIR = 'vault-config';
@@ -269,6 +270,7 @@ async function runCharacterizationRows(suite, rows) {
 }
 
 async function run() {
+	runKnowledgeArchitectureContractTests();
 	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-core-test-'));
 	let symlinkSupported = false;
 	let directorySymlinkSupported = false;
@@ -3644,6 +3646,85 @@ async function run() {
 		};
 
 		await runCharacterizationRows('core-native-record-lifecycle-red', [
+			['agent-activity-hub-renderer-normalizes-and-validates', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const rendered = lifecycle.renderAgentActivityHub(' 2026-08-12T08:30:00+08:00 ');
+				assert.equal(rendered, [
+					'---',
+					'type: tracekeeper_agent_activity_hub',
+					'agent_activity_schema_version: 1',
+					'created_at: 2026-08-12T00:30:00.000Z',
+					'updated_at: 2026-08-12T00:30:00.000Z',
+					'---',
+					'# Agent activity',
+					'',
+					'Daily Agent activity shards link back to this hub and remain discoverable through Backlinks.',
+					'',
+				].join('\n'));
+				assert.equal(lifecycle.AGENT_ACTIVITY_SCHEMA_VERSION, 1);
+				assert.equal(lifecycle.AGENT_ACTIVITY_HUB_TYPE, 'tracekeeper_agent_activity_hub');
+				assert.equal(lifecycle.validateAgentActivityHubMarkdown(rendered), true);
+			}],
+			['agent-activity-hub-validator-accepts-legacy-and-custom-bodies', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const legacy = [
+					'---',
+					'type: tracekeeper_agent_activity_hub',
+					'agent_activity_schema_version: 1',
+					'created_at: 2026-08-11T00:00:00.000Z',
+					'---',
+					'# Agent activity',
+					'',
+					'Daily Agent activity shards link back to this hub.',
+				].join('\n');
+				const customBody = [
+					'---',
+					'type: tracekeeper_agent_activity_hub',
+					'agent_activity_schema_version: 1',
+					'---',
+					'# My Agent activity index',
+					'',
+					'Custom user-authored body content remains valid.',
+				].join('\n');
+				assert.equal(lifecycle.validateAgentActivityHubMarkdown(legacy), true);
+				assert.equal(lifecycle.validateAgentActivityHubMarkdown(customBody), true);
+			}],
+			['agent-activity-hub-validator-rejects-invalid-contracts', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				const renderFrontmatter = (type, version) => [
+					'---',
+					`type: ${type}`,
+					`agent_activity_schema_version: ${version}`,
+					'---',
+					'# Agent activity',
+				].join('\n');
+				assert.equal(lifecycle.validateAgentActivityHubMarkdown(
+					renderFrontmatter('other_type', 1)
+				), false);
+				assert.equal(lifecycle.validateAgentActivityHubMarkdown(
+					renderFrontmatter('tracekeeper_agent_activity_hub', 2)
+				), false);
+				assert.equal(lifecycle.validateAgentActivityHubMarkdown(
+					renderFrontmatter('tracekeeper_agent_activity_hub', '"1"')
+				), false);
+				assert.equal(lifecycle.validateAgentActivityHubMarkdown([
+					'---',
+					'type: [tracekeeper_agent_activity_hub',
+					'agent_activity_schema_version: 1',
+					'---',
+				].join('\n')), false);
+			}],
+			['agent-activity-hub-renderer-rejects-bad-timestamps', async () => {
+				const lifecycle = await loadRecordLifecycle();
+				assert.throws(
+					() => lifecycle.renderAgentActivityHub('not-a-timestamp'),
+					/valid date/
+				);
+				assert.throws(
+					() => lifecycle.renderAgentActivityHub('   '),
+					/valid date/
+				);
+			}],
 			['proposal-history-resolves-id-across-active-and-archive', async () => {
 				const lifecycle = await loadRecordLifecycle();
 				const stableId = lifecycle.buildStableProposalId('finish-task-identity');
@@ -4065,6 +4146,66 @@ async function run() {
 	} finally {
 		fs.rmSync(tempRoot, { recursive: true, force: true });
 	}
+}
+
+function runKnowledgeArchitectureContractTests() {
+	const expectedBase = [
+		'00_tracekeeper',
+		'00_tracekeeper/control',
+		'00_tracekeeper/control/agent_activity',
+		'00_tracekeeper/inbox',
+		'00_tracekeeper/inbox/review_queue',
+		'00_tracekeeper/work',
+		'01_knowledge',
+		'01_knowledge/memory',
+		'01_knowledge/memory/global',
+		'01_knowledge/memory/projects',
+		'01_knowledge/wiki',
+		'01_knowledge/wiki/hubs',
+		'01_knowledge/sources',
+		'02_archive',
+	];
+	const expectedOnDemand = [
+		'00_tracekeeper/control/operations',
+		'00_tracekeeper/control/dashboards',
+		'00_tracekeeper/inbox/agent_requests',
+		'00_tracekeeper/work/tasks',
+		'00_tracekeeper/work/sessions',
+		'00_tracekeeper/work/context_packs',
+		'00_tracekeeper/work/source_analysis',
+		'01_knowledge/wiki/concepts',
+		'01_knowledge/wiki/claims',
+		'01_knowledge/wiki/guides',
+		'01_knowledge/wiki/references',
+		'01_knowledge/sources/web',
+		'01_knowledge/sources/files',
+		'01_knowledge/sources/transcripts',
+		'01_knowledge/sources/attachments',
+		'02_archive/review_queue',
+	];
+
+	assert.deepEqual([...knowledgeArchitectureModule.BASE_STRUCTURE_DIRECTORIES], expectedBase);
+	assert.deepEqual([...knowledgeArchitectureModule.ON_DEMAND_STRUCTURE_DIRECTORIES], expectedOnDemand);
+	assert.equal('REQUIRED_KNOWLEDGE_DIRECTORIES' in knowledgeArchitectureModule, false);
+	assert.deepEqual(
+		expectedBase.filter((directory) => expectedOnDemand.includes(directory)),
+		[]
+	);
+	const requiredFiles = [
+		...knowledgeArchitectureModule.REQUIRED_CONTROL_FILES,
+		...knowledgeArchitectureModule.REQUIRED_KNOWLEDGE_FILES,
+	];
+	const baseSet = new Set(expectedBase);
+	assert.deepEqual(
+		requiredFiles.filter((file) => !baseSet.has(path.posix.dirname(file))),
+		[]
+	);
+
+	console.log(JSON.stringify({
+		suite: 'core-knowledge-architecture-contract',
+		result: 'pass',
+		rows: ['base-membership', 'on-demand-membership', 'no-alias', 'non-overlap', 'required-file-parents'],
+	}));
 }
 
 async function runMemoryRecordV2Tests() {

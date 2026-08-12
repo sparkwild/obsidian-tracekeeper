@@ -1,5 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.AGENT_ACTIVITY_HUB_TYPE = exports.AGENT_ACTIVITY_SCHEMA_VERSION = void 0;
+exports.renderAgentActivityHub = renderAgentActivityHub;
+exports.validateAgentActivityHubMarkdown = validateAgentActivityHubMarkdown;
 exports.auditShardPath = auditShardPath;
 exports.buildStableAuditEventId = buildStableAuditEventId;
 exports.mergeAuditEvents = mergeAuditEvents;
@@ -10,8 +13,41 @@ exports.proposalHistoryLocation = proposalHistoryLocation;
 exports.resolveProposalHistoryById = resolveProposalHistoryById;
 exports.planProposalReferenceBackfill = planProposalReferenceBackfill;
 const knowledge_architecture_1 = require("./knowledge-architecture");
+const markdown_1 = require("./markdown");
 const operation_journal_1 = require("./operation-journal");
+exports.AGENT_ACTIVITY_SCHEMA_VERSION = 1;
+exports.AGENT_ACTIVITY_HUB_TYPE = 'tracekeeper_agent_activity_hub';
 const normalizeProposalId = (value) => value.trim();
+function renderAgentActivityHub(timestamp) {
+    const normalizedTimestamp = normalizeAgentActivityTimestamp(timestamp);
+    return [
+        '---',
+        `type: ${exports.AGENT_ACTIVITY_HUB_TYPE}`,
+        `agent_activity_schema_version: ${exports.AGENT_ACTIVITY_SCHEMA_VERSION}`,
+        `created_at: ${normalizedTimestamp}`,
+        `updated_at: ${normalizedTimestamp}`,
+        '---',
+        '# Agent activity',
+        '',
+        'Daily Agent activity shards link back to this hub and remain discoverable through Backlinks.',
+        '',
+    ].join('\n');
+}
+function validateAgentActivityHubMarkdown(content) {
+    const frontmatter = (0, markdown_1.parseFrontmatter)(content);
+    return frontmatter.bodyOffset > 0
+        && frontmatter.errors.length === 0
+        && frontmatter.fields.type === exports.AGENT_ACTIVITY_HUB_TYPE
+        && frontmatter.fields.agent_activity_schema_version === exports.AGENT_ACTIVITY_SCHEMA_VERSION;
+}
+const normalizeAgentActivityTimestamp = (timestamp) => {
+    const trimmed = timestamp.trim();
+    const parsed = new Date(trimmed);
+    if (!trimmed || Number.isNaN(parsed.getTime())) {
+        throw new Error('Agent activity Hub timestamp must be a valid date.');
+    }
+    return parsed.toISOString();
+};
 function auditShardPath(timestamp) {
     const parsed = new Date(timestamp);
     if (!timestamp.trim() || Number.isNaN(parsed.getTime())) {

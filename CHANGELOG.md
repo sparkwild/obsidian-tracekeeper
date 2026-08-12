@@ -4,6 +4,11 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Distinguished required base directories from on-demand feature directories, detected file/folder path collisions before repair, and blocked legacy migration while the base structure is invalid.
+- Unified Agent Activity Hub creation across plugin and Runtime producers while accepting existing version 1 Hub bodies and reporting incompatible machine metadata without rewriting user content.
+
 ### Changed
 
 - Aligned update distribution with Obsidian's GitHub Release flow: version tags now create an attested Draft Release, and explicit publication promotes those same qualified assets without rebuilding them.

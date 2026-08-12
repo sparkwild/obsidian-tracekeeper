@@ -71,7 +71,7 @@ export interface ActivityDataControllerHost {
 	readRecentSourceRequests(limit: number): Promise<SourceRequestRecord[]>;
 	readMemoryProposalWindow(): Promise<MemoryProposalRecordWindow>;
 	readActivityTimelineRecords(limit: number): Promise<ActivityTimelineRecordWindow>;
-	getStructureStatus(): TracekeeperStructureStatus;
+	getStructureStatus(): Promise<TracekeeperStructureStatus>;
 	getRuntimeViewStatus(): RuntimeViewStatus;
 	getVaultRoot(): string;
 	refreshGovernanceViews(): Promise<void>;
@@ -129,6 +129,7 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			recentSourceRequests,
 			reviewQueueWindow,
 			recentAuditEvents,
+			structureStatus,
 		] = await Promise.all([
 			this.host.readRecentAgentTasks(MAX_TASK_ROWS),
 			this.host.readRecentContextPacks(MAX_ACTIVITY_CONTEXT_PACK_ROWS),
@@ -136,6 +137,7 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			this.host.readRecentSourceRequests(MAX_SOURCE_STATUS_ROWS),
 			this.host.readMemoryProposalWindow(),
 			this.readRecentAuditEvents(MAX_AUDIT_ROWS),
+			this.host.getStructureStatus(),
 		]);
 		const reviewQueueItems = reviewQueueWindow.records;
 		const recentProposals = reviewQueueItems.slice(0, MAX_ACTIVITY_PROPOSAL_ROWS);
@@ -155,7 +157,6 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 		const actionableReviewQueueItemCount =
 			incompleteReviewQueueItemCount + pendingReviewQueueItemCount + readyToApplyReviewQueueItemCount;
 		const latestTask = recentTasks[0] ?? null;
-		const structureStatus = this.host.getStructureStatus();
 		const taskFolderMissing =
 			this.app.vault.getAbstractFileByPath(AGENT_TASKS_PATH) === null;
 		const activityHubMissing =

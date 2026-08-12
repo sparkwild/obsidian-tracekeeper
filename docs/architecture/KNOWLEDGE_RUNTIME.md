@@ -13,6 +13,13 @@ Tracekeeper uses three top-level roots:
 02_archive/       inactive or completed artifacts
 ```
 
+The explicit structure-repair flow creates only the base owner directories and
+entry files needed to establish those roots. Feature-specific leaf directories
+are created on first use. A file/folder path collision or incompatible Agent
+Activity Hub machine schema blocks repair and legacy migration; a valid existing
+version 1 Hub remains user-owned and is never normalized or rewritten merely to
+change optional timestamps or body text.
+
 Body wikilinks are the graph contract. Relationship fields such as
 `related_wiki` and `related_sources` are mirrored in note bodies so Obsidian,
 Recall, and graph inspection share the same relationships.

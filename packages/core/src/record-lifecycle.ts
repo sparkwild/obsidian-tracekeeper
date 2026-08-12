@@ -6,7 +6,11 @@ import {
 	normalizeKnowledgePath,
 	startsWithPathPrefix,
 } from './knowledge-architecture';
+import { parseFrontmatter } from './markdown';
 import { computePayloadHash } from './operation-journal';
+
+export const AGENT_ACTIVITY_SCHEMA_VERSION = 1;
+export const AGENT_ACTIVITY_HUB_TYPE = 'tracekeeper_agent_activity_hub';
 
 export type ProposalHistoryLocation = 'active' | 'archive';
 
@@ -138,6 +142,39 @@ export type ProposalReferenceBackfillPlan =
 	};
 
 const normalizeProposalId = (value: string): string => value.trim();
+
+export function renderAgentActivityHub(timestamp: string): string {
+	const normalizedTimestamp = normalizeAgentActivityTimestamp(timestamp);
+	return [
+		'---',
+		`type: ${AGENT_ACTIVITY_HUB_TYPE}`,
+		`agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
+		`created_at: ${normalizedTimestamp}`,
+		`updated_at: ${normalizedTimestamp}`,
+		'---',
+		'# Agent activity',
+		'',
+		'Daily Agent activity shards link back to this hub and remain discoverable through Backlinks.',
+		'',
+	].join('\n');
+}
+
+export function validateAgentActivityHubMarkdown(content: string): boolean {
+	const frontmatter = parseFrontmatter(content);
+	return frontmatter.bodyOffset > 0
+		&& frontmatter.errors.length === 0
+		&& frontmatter.fields.type === AGENT_ACTIVITY_HUB_TYPE
+		&& frontmatter.fields.agent_activity_schema_version === AGENT_ACTIVITY_SCHEMA_VERSION;
+}
+
+const normalizeAgentActivityTimestamp = (timestamp: string): string => {
+	const trimmed = timestamp.trim();
+	const parsed = new Date(trimmed);
+	if (!trimmed || Number.isNaN(parsed.getTime())) {
+		throw new Error('Agent activity Hub timestamp must be a valid date.');
+	}
+	return parsed.toISOString();
+};
 
 export function auditShardPath(timestamp: string): string {
 	const parsed = new Date(timestamp);

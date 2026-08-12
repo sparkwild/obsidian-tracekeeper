@@ -22,7 +22,7 @@ import {
 } from '@tracekeeper/mcp-runtime';
 import { LocalToolExecutor } from './composition/local-tool-executor';
 import {
-	ARCHIVE_ROOT,
+	BASE_STRUCTURE_DIRECTORIES,
 	KNOWLEDGE_ROOT,
 	KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
 	KNOWLEDGE_INDEX_PATH,
@@ -43,8 +43,7 @@ import {
 	TRACEKEEPER_REVIEW_QUEUE_DIR,
 	TRACEKEEPER_ROOT,
 	TRACEKEEPER_SYSTEM_PATH,
-	TRACEKEEPER_WORK_DIR,
-	REQUIRED_KNOWLEDGE_FILES,
+	renderAgentActivityHub,
 } from '@tracekeeper/core';
 import {
 	type MemoryProposalRecord,
@@ -185,10 +184,7 @@ import {
 	type NoteContentLanguageSource,
 	type ResolvedNoteContentLanguage,
 } from './features/settings/settings-model';
-import {
-	REVIEW_QUEUE_PATH,
-	type MemoryReviewQueueSnapshot,
-} from './features/review/review-queue-model';
+import type { MemoryReviewQueueSnapshot } from './features/review/review-queue-model';
 import {
 	RUNTIME_LOG_PAGE_SIZE,
 	runtimeLogTrashBehaviorDescription,
@@ -222,11 +218,17 @@ import {
 	type LegacyCleanupResult,
 	type LegacyMigrationResult,
 	type LegacyStructurePlan,
-	type MemoryInitializationPlan,
 	type StructureState,
 	type StructureOrganizerSnapshot,
 	type TracekeeperStructureStatus,
 } from './features/structure/legacy-migration-controller';
+import {
+	BASE_STRUCTURE_FILE_PATHS,
+	buildBaseStructurePlan,
+	invalidBaseStructurePaths,
+	isBaseStructurePlanReady,
+	type MemoryInitializationPlan,
+} from './features/structure/base-structure-plan';
 import {
 	ACTIVITY_TIMELINE_PAGE_SIZE,
 	MAX_AGENT_CONNECTION_ROWS,
@@ -273,12 +275,6 @@ import {
 	type SourceStatusQuery,
 	type SourceStatusSnapshot,
 } from './features/observability/knowledge-observability-model';
-const CONTROL_FILE_PATHS = [
-	TRACEKEEPER_SYSTEM_PATH,
-	TRACEKEEPER_MEMORY_POLICY_PATH,
-	TRACEKEEPER_PERMISSIONS_PATH,
-] as const;
-const KNOWLEDGE_ENTRY_FILE_PATHS = REQUIRED_KNOWLEDGE_FILES;
 const CONTROL_PATHS = {
 	root: TRACEKEEPER_CONTROL_DIR,
 	agentActivityHub: TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
@@ -286,17 +282,6 @@ const CONTROL_PATHS = {
 };
 const ARCHIVE_TARGET_CLAIMS_DIR =
 	`${TRACEKEEPER_OPERATIONS_DIR}/archive-target-claims`;
-
-
-const vaultParentFolder = (path: string): string => path.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-const BASE_STRUCTURE_FOLDERS: string[] = [
-	CONTROL_PATHS.root,
-	CONTROL_PATHS.agentActivityDir,
-	REVIEW_QUEUE_PATH,
-	TRACEKEEPER_WORK_DIR,
-	ARCHIVE_ROOT,
-	...KNOWLEDGE_ENTRY_FILE_PATHS.map((path) => vaultParentFolder(path)).filter(Boolean),
-];
 
 
 const TRACE_RECALL_RESULT_LIMIT = 8;
@@ -560,6 +545,7 @@ export default class TracekeeperPlugin extends Plugin {
 		this.settings = this.normalizeSettings(await this.loadData());
 		this.legacyMigrationController = new LegacyMigrationController(this.app, {
 			initializeMemoryStructure: (plan) => this.initializeMemoryStructure(plan),
+			buildInitializationPlan: () => this.buildInitializationPlan(),
 			ensureFolderExists: (path) => this.ensureFolderExists(path),
 			ensureFileDoesNotExist: (path, content) => this.ensureFileDoesNotExist(path, content),
 			normalizeVaultPath: (path) => this.normalizeVaultPath(path),
@@ -827,7 +813,9 @@ export default class TracekeeperPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			this.registerAutoRefreshEvents();
 			void this.rebuildKnowledgeIndex(false);
-			this.openOnboardingEntryIfNeeded();
+			void this.openOnboardingEntryIfNeeded().catch((error) => {
+				console.error('tracekeeper failed to evaluate onboarding entry state', error);
+			});
 		});
 	}
 
@@ -1355,64 +1343,42 @@ export default class TracekeeperPlugin extends Plugin {
 		const resolvedMigrationId = migrationId
 			?? await this.legacyMigrationController.findRecoverableMigrationId()
 			?? this.legacyMigrationController.createStructureMigrationId();
-		const basePlan = this.buildInitializationPlan();
+		const basePlan = await this.buildInitializationPlan();
 		const legacyPlan = await this.legacyMigrationController.buildLegacyStructurePlan(
 			resolvedMigrationId
 		);
-		const hasMissingBase = basePlan.foldersToCreate.length > 0 || basePlan.filesToCreate.length > 0;
-		const hasInvalidBase = (basePlan.invalidFiles?.length ?? 0) > 0;
 		const state = legacyPlan.legacyRoots.length > 0
 			? 'legacy_detected'
-			: hasMissingBase || hasInvalidBase
+			: !isBaseStructurePlanReady(basePlan)
 				? 'needs_repair'
 				: 'ready';
 		return { basePlan, legacyPlan, state };
 	}
 
-	private buildInitializationPlan(): MemoryInitializationPlan {
-		const foldersToCreate = this.getNormalizedFolderPlan();
-		const missingFolders = foldersToCreate.filter(
-			(path) => this.app.vault.getAbstractFileByPath(path) === null
-		);
-
-		const missingAgentActivityHub =
-			this.app.vault.getAbstractFileByPath(CONTROL_PATHS.agentActivityHub) === null;
-
-		const filesToCreate: string[] = [];
-		const invalidFiles: string[] = [];
-		for (const filePath of [...CONTROL_FILE_PATHS, ...KNOWLEDGE_ENTRY_FILE_PATHS]) {
-			const entry = this.app.vault.getAbstractFileByPath(filePath);
-			if (!entry) {
-				filesToCreate.push(filePath);
-			} else if (!(entry instanceof TFile)) {
-				invalidFiles.push(filePath);
+	private async buildInitializationPlan(): Promise<MemoryInitializationPlan> {
+		return buildBaseStructurePlan(async (path, options) => {
+			const entry = this.app.vault.getAbstractFileByPath(path);
+			if (entry === null) return { kind: 'missing' };
+			if (entry instanceof TFolder) return { kind: 'folder' };
+			if (entry instanceof TFile) {
+				return {
+					kind: 'file',
+					content: options.readContent
+						? await this.app.vault.cachedRead(entry)
+						: undefined,
+				};
 			}
-		}
-		if (missingAgentActivityHub && !filesToCreate.includes(CONTROL_PATHS.agentActivityHub)) {
-			filesToCreate.push(CONTROL_PATHS.agentActivityHub);
-		} else {
-			const activityHub = this.app.vault.getAbstractFileByPath(CONTROL_PATHS.agentActivityHub);
-			if (activityHub && !(activityHub instanceof TFile)) invalidFiles.push(CONTROL_PATHS.agentActivityHub);
-		}
-
-		return {
-			foldersToCreate: missingFolders,
-			filesToCreate,
-			invalidFiles: [...new Set(invalidFiles)],
-			missingAgentActivityHub,
-		};
+			return { kind: 'other' };
+		});
 	}
 
 
-	getStructureStatus(): TracekeeperStructureStatus {
-		const plan = this.buildInitializationPlan();
-		const totalFolders = this.getNormalizedFolderPlan().length;
-		const expectedFiles = new Set<string>([...CONTROL_FILE_PATHS, ...KNOWLEDGE_ENTRY_FILE_PATHS]);
-		expectedFiles.add(CONTROL_PATHS.agentActivityHub);
-		const invalidFiles = plan.invalidFiles ?? [];
+	async getStructureStatus(): Promise<TracekeeperStructureStatus> {
+		const plan = await this.buildInitializationPlan();
+		const invalidPaths = invalidBaseStructurePaths(plan);
 		const missingCount = plan.foldersToCreate.length + plan.filesToCreate.length;
-		const issueCount = missingCount + invalidFiles.length;
-		const totalCount = totalFolders + expectedFiles.size;
+		const issueCount = missingCount + invalidPaths.length;
+		const totalCount = BASE_STRUCTURE_DIRECTORIES.length + BASE_STRUCTURE_FILE_PATHS.length;
 		const rootExists = this.app.vault.getAbstractFileByPath(CONTROL_PATHS.root) !== null;
 		const legacyRoots = this.legacyMigrationController.getLegacyRootFolders();
 		const state: StructureState = issueCount === 0
@@ -1433,7 +1399,9 @@ export default class TracekeeperPlugin extends Plugin {
 				),
 				missingFolders: [],
 				missingFiles: [],
+				invalidFolders: [],
 				invalidFiles: [],
+				invalidFileContents: [],
 				missingCount,
 				totalCount,
 			};
@@ -1449,7 +1417,9 @@ export default class TracekeeperPlugin extends Plugin {
 				),
 				missingFolders: [],
 				missingFiles: [],
+				invalidFolders: [],
 				invalidFiles: [],
+				invalidFileContents: [],
 				missingCount,
 				totalCount,
 			};
@@ -1458,10 +1428,10 @@ export default class TracekeeperPlugin extends Plugin {
 		return {
 			state,
 			label: state === 'partial' ? ui('需要补齐', 'Needs repair') : ui('需要校验', 'Needs check'),
-			detail: invalidFiles.length > 0
+			detail: invalidPaths.length > 0
 				? ui(
-					`${invalidFiles.length} 个必要文件路径被非文件对象占用，持久化已阻止；Tracekeeper 不会覆盖这些路径。`,
-					`${invalidFiles.length} required file path(s) are occupied by non-file entries. Persistence is blocked, and Tracekeeper will not overwrite them.`
+					`${invalidPaths.length} 个基础路径的类型或机器元数据无效，持久化已阻止；Tracekeeper 不会覆盖这些路径。`,
+					`${invalidPaths.length} base path(s) have incompatible types or invalid machine metadata. Persistence is blocked, and Tracekeeper will not overwrite them.`
 				)
 				: ui(
 					`缺少 ${missingCount} 个基础结构项。可补齐必要入口，不会移动或删除已有内容。`,
@@ -1469,7 +1439,9 @@ export default class TracekeeperPlugin extends Plugin {
 				),
 			missingFolders: plan.foldersToCreate,
 			missingFiles: plan.filesToCreate,
-			invalidFiles,
+			invalidFolders: plan.invalidFolders,
+			invalidFiles: plan.invalidFiles,
+			invalidFileContents: plan.invalidFileContents,
 			missingCount,
 			totalCount,
 		};
@@ -1481,40 +1453,6 @@ export default class TracekeeperPlugin extends Plugin {
 			state: entry === null ? 'missing' : entry instanceof TFile ? 'ready' : 'invalid',
 			path: KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
 		};
-	}
-
-	private getNormalizedFolderPlan(): string[] {
-		const foldersToCreate: string[] = [];
-		const seen = new Set<string>();
-
-		for (const path of BASE_STRUCTURE_FOLDERS) {
-			for (const folder of this.expandFolderHierarchy(path)) {
-				if (!seen.has(folder)) {
-					seen.add(folder);
-					foldersToCreate.push(folder);
-				}
-			}
-		}
-
-		return foldersToCreate;
-	}
-
-	private expandFolderHierarchy(path: string): string[] {
-		const normalized = this.normalizeVaultPath(path);
-		if (!normalized) {
-			return [];
-		}
-
-		const parts = normalized.split('/').filter(Boolean);
-		const folders: string[] = [];
-		let current = '';
-
-		for (const part of parts) {
-			current = current ? `${current}/${part}` : part;
-			folders.push(current);
-		}
-
-		return folders;
 	}
 
 	private normalizeVaultPath(path: string): string {
@@ -1751,8 +1689,9 @@ export default class TracekeeperPlugin extends Plugin {
 
 	async initializeMemoryStructure(plan: MemoryInitializationPlan): Promise<void> {
 		try {
-			if ((plan.invalidFiles?.length ?? 0) > 0) {
-				throw new Error(`Structure repair is blocked by invalid paths: ${plan.invalidFiles?.join(', ')}`);
+			const invalidPaths = invalidBaseStructurePaths(plan);
+			if (invalidPaths.length > 0) {
+				throw new Error(`Structure repair is blocked by invalid paths: ${invalidPaths.join(', ')}`);
 			}
 			for (const folder of plan.foldersToCreate) {
 				await this.ensureFolderExists(folder);
@@ -1772,7 +1711,7 @@ export default class TracekeeperPlugin extends Plugin {
 			if (plan.missingAgentActivityHub) {
 				await this.ensureFileDoesNotExist(
 					CONTROL_PATHS.agentActivityHub,
-					this.buildAgentActivityHubHeader()
+					renderAgentActivityHub(new Date().toISOString())
 				);
 			}
 
@@ -1801,22 +1740,6 @@ export default class TracekeeperPlugin extends Plugin {
 		return this.legacyMigrationController.cleanupLegacyStructure(preview);
 	}
 
-
-	private buildAgentActivityHubHeader(): string {
-		const timestamp = new Date().toISOString();
-		return [
-			'---',
-			'type: tracekeeper_agent_activity_hub',
-			'agent_activity_schema_version: 1',
-			`created_at: ${timestamp}`,
-			`updated_at: ${timestamp}`,
-			'---',
-			'# Agent activity',
-			'',
-			'Daily MCP Agent activity shards link back to this hub.',
-			'',
-		].join('\n');
-	}
 
 	private getConfiguredTrashDescription(): string {
 		return runtimeLogTrashBehaviorDescription();
@@ -2568,9 +2491,8 @@ export default class TracekeeperPlugin extends Plugin {
 		};
 	}
 
-	isVaultStructureReady(): boolean {
-		const plan = this.buildInitializationPlan();
-		return plan.foldersToCreate.length === 0 && plan.filesToCreate.length === 0;
+	async isVaultStructureReady(): Promise<boolean> {
+		return isBaseStructurePlanReady(await this.buildInitializationPlan());
 	}
 
 	getOnboardingContext(
@@ -2592,7 +2514,7 @@ export default class TracekeeperPlugin extends Plugin {
 		});
 	}
 
-	isOnboardingComplete(): boolean {
+	async isOnboardingComplete(): Promise<boolean> {
 		const clientConfigs = this.buildClientConfigs();
 		const resolved = resolveOnboardingSelectedClient(
 			this.settings.onboarding,
@@ -2605,7 +2527,7 @@ export default class TracekeeperPlugin extends Plugin {
 			client.clientId === resolved.selectedClientId
 		) ?? null;
 		const context = buildOnboardingContext({
-			vaultReady: this.isVaultStructureReady(),
+			vaultReady: await this.isVaultStructureReady(),
 			runtimeState: this.getRuntimeViewStatus().state,
 			runtimeEnabled: this.settings.mcpRuntimeEnabled,
 			selectedClient: selectedClient ? {
@@ -2785,8 +2707,11 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.persistOnboardingState();
 	}
 
-	private openOnboardingEntryIfNeeded(): void {
-		if (this.isOnboardingComplete() || !shouldShowOnboardingEntryPrompt(this.settings.onboarding)) {
+	private async openOnboardingEntryIfNeeded(): Promise<void> {
+		if (
+			await this.isOnboardingComplete()
+			|| !shouldShowOnboardingEntryPrompt(this.settings.onboarding)
+		) {
 			return;
 		}
 		new OnboardingEntryModal(

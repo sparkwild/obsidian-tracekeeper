@@ -148,6 +148,14 @@ function createVaultFixture(options = {}) {
 		loadKnowledgeSnapshot: 0,
 		waitForKnowledgeSnapshot: 0,
 	};
+	let currentBaseStructurePlan = {
+		foldersToCreate: [],
+		filesToCreate: [],
+		invalidFolders: [],
+		invalidFiles: [],
+		invalidFileContents: [],
+		missingAgentActivityHub: false,
+	};
 
 	const pendingSnapshotWaiters = [];
 	let knowledgeGeneration = 1;
@@ -781,6 +789,7 @@ function createVaultFixture(options = {}) {
 		},
 		host: {
 			initializeMemoryStructure: async () => {},
+			buildInitializationPlan: async () => currentBaseStructurePlan,
 			ensureFolderExists: async (folderPath) => {
 				let current = '';
 				for (const segment of normalizePath(folderPath).split('/').filter(Boolean)) {
@@ -820,6 +829,21 @@ function createVaultFixture(options = {}) {
 		events,
 		auditEntries,
 		settings,
+		setBaseStructurePlan(plan) {
+			currentBaseStructurePlan = plan;
+		},
+		snapshotVaultState() {
+			return JSON.stringify({
+				entries: [...files.values()]
+					.map((entry) => [entry.path, entry.__tracekeeper_kind])
+					.sort(([left], [right]) => left.localeCompare(right)),
+				content: [...content.entries()]
+					.sort(([left], [right]) => left.localeCompare(right)),
+				binaryContent: [...binaryContent.entries()]
+					.map(([entryPath, bytes]) => [entryPath, bytes.toString('base64')])
+					.sort(([left], [right]) => left.localeCompare(right)),
+			});
+		},
 		getFileRecord,
 		loadKnowledgeSnapshot,
 		waitForKnowledgeSnapshot,
@@ -1206,6 +1230,88 @@ try {
 			assert.equal(raceBlocked.linkCapability.reason, 'probe_path_exists');
 			assert.equal(raceFixture.events.trashFile, raceTrashCount);
 			assert.ok(raceFixture.getFileRecord(raceProbeFolder));
+		}],
+		['invalid-base-structure-blocks-before-any-user-file-move', async () => {
+			const fixture = createVaultFixture({ cleanMigration: true });
+			const controller = createController(bundle, fixture);
+			const rawPlan = await controller.buildLegacyStructurePlan(
+				'legacy-migration-base-conflict'
+			);
+			const plan = await controller.runLegacyLinkPreflight(rawPlan);
+			const renameCountBeforeBlockedMigrations = fixture.events.renameFile;
+			const blockedBasePlans = [
+				{
+					foldersToCreate: [],
+					filesToCreate: [],
+					invalidFolders: ['00_tracekeeper'],
+					invalidFiles: [],
+					invalidFileContents: [],
+					missingAgentActivityHub: false,
+				},
+				{
+					foldersToCreate: [],
+					filesToCreate: [],
+					invalidFolders: [],
+					invalidFiles: ['00_tracekeeper/control/system.md'],
+					invalidFileContents: [],
+					missingAgentActivityHub: false,
+				},
+				{
+					foldersToCreate: [],
+					filesToCreate: [],
+					invalidFolders: [],
+					invalidFiles: [],
+					invalidFileContents: ['00_tracekeeper/control/agent_activity/index.md'],
+					missingAgentActivityHub: false,
+				},
+			];
+
+			for (const basePlan of blockedBasePlans) {
+				await assert.rejects(
+					() => controller.migrateLegacyStructure({
+						basePlan,
+						legacyPlan: plan,
+						state: 'legacy_detected',
+					}),
+					/Repair invalid or missing base structure entries/
+				);
+			}
+			assert.equal(fixture.events.renameFile, renameCountBeforeBlockedMigrations);
+		}],
+		['stale-ready-preview-rechecks-live-base-before-every-migration-write', async () => {
+			const fixture = createVaultFixture({ cleanMigration: true });
+			const controller = createController(bundle, fixture);
+			const rawPlan = await controller.buildLegacyStructurePlan(
+				'legacy-migration-stale-base'
+			);
+			const plan = await controller.runLegacyLinkPreflight(rawPlan);
+			const readyBasePlan = {
+				foldersToCreate: [],
+				filesToCreate: [],
+				invalidFolders: [],
+				invalidFiles: [],
+				invalidFileContents: [],
+				missingAgentActivityHub: false,
+			};
+			fixture.setBaseStructurePlan({
+				...readyBasePlan,
+				invalidFileContents: ['00_tracekeeper/control/agent_activity/index.md'],
+			});
+			const vaultStateBefore = fixture.snapshotVaultState();
+			const eventsBefore = { ...fixture.events };
+			const auditEntriesBefore = structuredClone(fixture.auditEntries);
+
+			await assert.rejects(
+				() => controller.migrateLegacyStructure({
+					basePlan: readyBasePlan,
+					legacyPlan: plan,
+					state: 'legacy_detected',
+				}),
+				/Repair invalid or missing base structure entries/
+			);
+			assert.equal(fixture.snapshotVaultState(), vaultStateBefore);
+			assert.deepEqual(fixture.events, eventsBefore);
+			assert.deepEqual(fixture.auditEntries, auditEntriesBefore);
 		}],
 		['native-move-keeps-inside-and-outside-link-graph-visible', async () => {
 			const fixture = createVaultFixture({ cleanMigration: true });

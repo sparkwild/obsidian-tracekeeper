@@ -209,10 +209,14 @@ assert.ok(skillPromptSource.includes("case 'location_required'"));
 		assert.equal(mainSource.includes('hasOnboardingConnectionEvidence'), false);
 		assert.ok(mainSource.includes('connectionVerifiedSessionId'));
 		const completionMethodSource = mainSource.slice(
-			mainSource.indexOf('isOnboardingComplete(): boolean'),
-			mainSource.indexOf('getOnboardingSelectedClient(', mainSource.indexOf('isOnboardingComplete(): boolean'))
+			mainSource.indexOf('async isOnboardingComplete(): Promise<boolean>'),
+			mainSource.indexOf(
+				'getOnboardingSelectedClient(',
+				mainSource.indexOf('async isOnboardingComplete(): Promise<boolean>')
+			)
 		);
 		assert.ok(completionMethodSource.includes('resolveOnboardingSelectedClient'));
+		assert.ok(completionMethodSource.includes('await this.isVaultStructureReady()'));
 		assert.equal(activityDataSource.includes('sessionId: event.sessionId || event.agentId'), false);
 		assert.ok(activityDataSource.includes('sessionId: event.sessionId,'));
 		assert.equal(

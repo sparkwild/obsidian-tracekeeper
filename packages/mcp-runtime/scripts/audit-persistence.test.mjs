@@ -3,6 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const {
+	AGENT_ACTIVITY_HUB_TYPE,
+	AGENT_ACTIVITY_SCHEMA_VERSION,
+	renderAgentActivityHub,
+} = require('@tracekeeper/core');
 
 import {
 	appendAuditEvent,
@@ -53,12 +61,55 @@ test('audit persistence appends idempotent UTC shards and reads merged sections'
 		const shard = fs.readFileSync(shardPath, 'utf8');
 		assert.equal((shard.match(/activity_event_id:/g) || []).length, 1);
 		assert.match(shard, /type: tracekeeper_agent_activity_shard/);
-		assert.equal(fs.existsSync(path.join(vaultRoot, '00_tracekeeper/control/agent_activity/index.md')), true);
+		const hubPath = path.join(vaultRoot, '00_tracekeeper/control/agent_activity/index.md');
+		assert.equal(fs.existsSync(hubPath), true);
+		const hub = fs.readFileSync(hubPath, 'utf8');
+		assert.equal(hub, renderAgentActivityHub(input.timestamp));
+		assert.equal(hub.match(/^created_at:\s*(\S+)\s*$/m)?.[1], input.timestamp);
+		assert.equal(hub.match(/^updated_at:\s*(\S+)\s*$/m)?.[1], input.timestamp);
+		assert.match(
+			hub,
+			/^Daily Agent activity shards link back to this hub and remain discoverable through Backlinks\.$/m
+		);
 
 		const sections = await readMergedAuditSections(vaultRoot, {});
 		assert.equal(sections.length, 1);
 		assert.equal(sections[0].source_path, first.path);
 		assert.equal(sections[0].source_kind, 'shard');
+	} finally {
+		fs.rmSync(vaultRoot, { recursive: true, force: true });
+	}
+});
+
+test('audit persistence preserves an existing legacy Agent activity Hub byte-for-byte', () => {
+	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-audit-legacy-hub-'));
+	try {
+		const hubPath = path.join(vaultRoot, '00_tracekeeper/control/agent_activity/index.md');
+		const legacyHub = [
+			'---',
+			`type: ${AGENT_ACTIVITY_HUB_TYPE}`,
+			`agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
+			'created_at: 2025-01-01T00:00:00.000Z',
+			'---',
+			'# Custom legacy Agent activity Hub',
+			'',
+			'This user-owned body must remain byte-identical.',
+			'',
+		].join('\n');
+		fs.mkdirSync(path.dirname(hubPath), { recursive: true });
+		fs.writeFileSync(hubPath, legacyHub, 'utf8');
+
+		appendAuditEvent(vaultRoot, {
+			type: 'mcp.tool_call',
+			event: 'mcp.tool_call',
+			action: 'tracekeeper.status',
+			operationId: 'audit-persistence-legacy-hub',
+			tool: 'tracekeeper.status',
+			resultStatus: 'success',
+			timestamp: '2026-08-03T12:00:00.000Z',
+		});
+
+		assert.equal(fs.readFileSync(hubPath, 'utf8'), legacyHub);
 	} finally {
 		fs.rmSync(vaultRoot, { recursive: true, force: true });
 	}

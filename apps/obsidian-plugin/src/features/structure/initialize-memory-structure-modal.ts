@@ -7,6 +7,7 @@ import type {
 	LegacyStructurePlan,
 	StructureOrganizerSnapshot,
 } from './legacy-migration-controller';
+import { invalidBaseStructurePaths } from './base-structure-plan';
 import { ui } from '../../ui/localization';
 
 export class InitializeMemoryStructureModal extends Modal {
@@ -48,13 +49,13 @@ export class InitializeMemoryStructureModal extends Modal {
 		const basePlan = this.snapshot.basePlan;
 		const legacyPlan = this.snapshot.legacyPlan;
 		const baseMissingCount = basePlan.foldersToCreate.length + basePlan.filesToCreate.length;
-		const invalidFiles = basePlan.invalidFiles ?? [];
+		const invalidPaths = invalidBaseStructurePaths(basePlan);
 		const summary = contentEl.createDiv({ cls: 'tracekeeper-structure-check-summary tracekeeper-detail-grid' });
 		this.renderFact(
 			summary,
 			ui('基础结构', 'Base structure'),
-			invalidFiles.length > 0
-				? ui(`${invalidFiles.length} 个路径无效`, `${invalidFiles.length} invalid path(s)`)
+			invalidPaths.length > 0
+				? ui(`${invalidPaths.length} 个路径无效`, `${invalidPaths.length} invalid path(s)`)
 				: baseMissingCount === 0
 					? ui('完整', 'Ready')
 					: ui(`${baseMissingCount} 项缺失`, `${baseMissingCount} missing`)
@@ -86,16 +87,16 @@ export class InitializeMemoryStructureModal extends Modal {
 		}
 
 		if (this.snapshot.state === 'needs_repair') {
-			this.renderBaseRepair(contentEl, baseMissingCount, invalidFiles);
+			this.renderBaseRepair(contentEl, baseMissingCount, invalidPaths);
 			return;
 		}
 
-		this.renderLegacyDetected(contentEl, legacyPlan, baseMissingCount, invalidFiles);
+		this.renderLegacyDetected(contentEl, legacyPlan, baseMissingCount, invalidPaths);
 	}
 
-	private renderBaseRepair(contentEl: HTMLElement, missingCount: number, invalidFiles: string[]): void {
-		if (invalidFiles.length > 0) {
-			this.renderInvalidBasePaths(contentEl, invalidFiles);
+	private renderBaseRepair(contentEl: HTMLElement, missingCount: number, invalidPaths: string[]): void {
+		if (invalidPaths.length > 0) {
+			this.renderInvalidBasePaths(contentEl, invalidPaths);
 			this.renderCloseAction(contentEl);
 			return;
 		}
@@ -134,7 +135,7 @@ export class InitializeMemoryStructureModal extends Modal {
 		contentEl: HTMLElement,
 		plan: LegacyStructurePlan,
 		baseMissingCount: number,
-		invalidFiles: string[]
+		invalidPaths: string[]
 	): void {
 		const detail = contentEl.createDiv({ cls: 'tracekeeper-card' });
 		detail.createEl('h3', { text: ui('发现旧目录结构', 'Legacy structure found') });
@@ -182,8 +183,8 @@ export class InitializeMemoryStructureModal extends Modal {
 
 		const actions = contentEl.createDiv({ cls: 'modal-button-container' });
 		actions.createEl('button', { text: ui('取消', 'Cancel') }).addEventListener('click', () => this.close());
-		if (invalidFiles.length > 0) {
-			this.renderInvalidBasePaths(detail, invalidFiles);
+		if (invalidPaths.length > 0) {
+			this.renderInvalidBasePaths(detail, invalidPaths);
 			return;
 		}
 		if (baseMissingCount > 0) {
@@ -278,17 +279,17 @@ export class InitializeMemoryStructureModal extends Modal {
 		});
 	}
 
-	private renderInvalidBasePaths(contentEl: HTMLElement, invalidFiles: string[]): void {
+	private renderInvalidBasePaths(contentEl: HTMLElement, invalidPaths: string[]): void {
 		const blocked = contentEl.createDiv({ cls: 'tracekeeper-card' });
 		blocked.createEl('h3', { text: ui('基础结构修复已阻断', 'Base structure repair blocked') });
 		blocked.createEl('p', {
 			text: ui(
-				'以下必要文件路径被文件夹或其他非文件对象占用。Tracekeeper 不会删除或覆盖它们；请在 Obsidian 中处理路径冲突后重新运行结构检查。',
-				'The required file paths below are occupied by folders or other non-file entries. Tracekeeper will not delete or overwrite them. Resolve the path conflicts in Obsidian, then run structure check again.'
+				'以下必要目录、文件路径类型或 Agent Activity Hub 机器元数据无效。Tracekeeper 不会删除或覆盖它们；请在 Obsidian 中处理冲突后重新运行结构检查。',
+				'The required directory or file types, or Agent Activity Hub machine metadata, are invalid. Tracekeeper will not delete or overwrite them. Resolve the conflicts in Obsidian, then run structure check again.'
 			),
 		});
 		const list = blocked.createEl('ul');
-		for (const path of invalidFiles) list.createEl('li', { text: path });
+		for (const path of invalidPaths) list.createEl('li', { text: path });
 	}
 
 	private renderMigrationDone(contentEl: HTMLElement, result: LegacyMigrationResult): void {

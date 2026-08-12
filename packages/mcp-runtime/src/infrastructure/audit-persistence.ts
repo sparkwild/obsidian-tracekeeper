@@ -3,10 +3,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {
+	AGENT_ACTIVITY_SCHEMA_VERSION,
 	auditShardPath,
 	buildStableAuditEventId,
 	mergeAuditEvents,
 	OperationConflictError,
+	renderAgentActivityHub,
 	TRACEKEEPER_AGENT_ACTIVITY_DIR,
 	TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
 	VaultPathError,
@@ -23,7 +25,6 @@ import { isRecord } from '../protocol';
 
 const AGENT_ACTIVITY_DIR = TRACEKEEPER_AGENT_ACTIVITY_DIR;
 const AGENT_ACTIVITY_HUB_PATH = TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH;
-const AGENT_ACTIVITY_SCHEMA_VERSION = 1;
 const MAX_AUDIT_SCALAR_LENGTH = 240;
 const MAX_AUDIT_ARRAY_ITEMS = 12;
 const MAX_AUDIT_METADATA_FIELDS = 32;
@@ -796,20 +797,6 @@ function auditShardHeader(timestamp: string): string {
 	].join('\n');
 }
 
-function auditHubContent(timestamp: string): string {
-	return [
-		'---',
-		'type: tracekeeper_agent_activity_hub',
-		`agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
-		`created_at: ${timestamp}`,
-		'---',
-		'# Agent activity',
-		'',
-		'Daily Agent activity shards link back to this hub.',
-		'',
-	].join('\n');
-}
-
 function ensureDirectAuditHub(vaultRoot: string, timestamp: string): void {
 	const hub = auditHubFile(vaultRoot);
 	if (fs.existsSync(hub.absolute)) {
@@ -819,7 +806,7 @@ function ensureDirectAuditHub(vaultRoot: string, timestamp: string): void {
 		return;
 	}
 	try {
-		fs.writeFileSync(hub.absolute, auditHubContent(timestamp), {
+		fs.writeFileSync(hub.absolute, renderAgentActivityHub(timestamp), {
 			encoding: 'utf8',
 			flag: 'wx',
 		});
@@ -836,7 +823,10 @@ async function ensureRepositoryAuditHub(repository: VaultRepository, timestamp: 
 			return;
 		}
 		try {
-			await repository.createText(AGENT_ACTIVITY_HUB_PATH, auditHubContent(timestamp));
+			await repository.createText(
+				AGENT_ACTIVITY_HUB_PATH,
+				renderAgentActivityHub(timestamp)
+			);
 		} catch (error) {
 			if (!(await repository.readText(AGENT_ACTIVITY_HUB_PATH))) {
 				throw error;

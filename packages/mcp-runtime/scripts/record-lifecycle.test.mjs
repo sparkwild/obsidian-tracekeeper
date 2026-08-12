@@ -10,9 +10,12 @@ const require = createRequire(import.meta.url);
 const { callTool } = require('../dist/tools.js');
 const { McpJsonRpcHandler } = require('../dist/handler.js');
 const {
+	AGENT_ACTIVITY_HUB_TYPE,
+	AGENT_ACTIVITY_SCHEMA_VERSION,
 	computeProposalContentHash,
 	computeProposalRevision,
 	NodeFsVaultRepository,
+	renderAgentActivityHub,
 	transitionProposal,
 } = require('@tracekeeper/core');
 
@@ -446,8 +449,10 @@ test('concurrent MCP Agent activity uses one idempotent UTC shard', async () => 
 			assert.match(dayOne, /Agent activity hub/);
 			const auditHubPath = '00_tracekeeper/control/agent_activity/index.md';
 			const auditHub = fixture.read(auditHubPath);
-			assert.match(auditHub, /type:\s*tracekeeper_agent_activity_hub/);
-			assert.match(auditHub, /^# Agent activity$/m);
+			assert.equal(
+				auditHub,
+				renderAgentActivityHub('2026-07-30T23:59:59.000Z')
+			);
 
 			setNow('2026-07-31T00:00:00.000Z');
 			await invoke('tracekeeper.status', {}, {
@@ -496,6 +501,34 @@ test('concurrent MCP Agent activity uses one idempotent UTC shard', async () => 
 			assert.ok(Buffer.byteLength(bounded, 'utf8') < 64 * 1024);
 			assert.equal(fixture.read(auditHubPath), auditHub);
 		});
+	} finally {
+		fixture.cleanup();
+	}
+});
+
+test('MCP Agent activity append preserves an existing legacy Hub byte-for-byte', async () => {
+	const fixture = createFixture();
+	try {
+		const auditHubPath = '00_tracekeeper/control/agent_activity/index.md';
+		const legacyHub = [
+			'---',
+			`type: ${AGENT_ACTIVITY_HUB_TYPE}`,
+			`agent_activity_schema_version: ${AGENT_ACTIVITY_SCHEMA_VERSION}`,
+			'created_at: 2025-01-01T00:00:00.000Z',
+			'---',
+			'# Custom legacy Agent activity Hub',
+			'',
+			'This user-owned body must remain byte-identical.',
+			'',
+		].join('\n');
+		fixture.write(auditHubPath, legacyHub);
+
+		await invoke('tracekeeper.status', {}, {
+			...fixture.context,
+			requestId: 'record-lifecycle-legacy-hub',
+		});
+
+		assert.equal(fixture.read(auditHubPath), legacyHub);
 	} finally {
 		fixture.cleanup();
 	}
