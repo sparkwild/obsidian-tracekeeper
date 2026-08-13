@@ -129,9 +129,29 @@ export async function buildTracekeeperSkillBundle(repoRoot = process.cwd()) {
 	};
 }
 
-export async function writeTracekeeperSkillBundle(repoRoot = process.cwd()) {
+export async function writeTracekeeperSkillBundle(
+	repoRoot = process.cwd(),
+	{ enforceVersionChange = false } = {},
+) {
 	const skillRoot = path.join(repoRoot, 'skills', 'tracekeeper');
 	const built = await buildTracekeeperSkillBundle(repoRoot);
+	if (enforceVersionChange) {
+		let existingManifest = null;
+		try {
+			existingManifest = JSON.parse(
+				await readFile(path.join(skillRoot, TRACEKEEPER_SKILL_MANIFEST_PATH), 'utf8')
+			);
+		} catch {
+			existingManifest = null;
+		}
+		if (existingManifest?.bundle_hash
+			&& existingManifest.bundle_hash !== built.manifest.bundle_hash
+			&& existingManifest.skill_version === built.manifest.skill_version) {
+			throw new Error(
+				`Tracekeeper Skill content changed without a skill_version bump from ${built.manifest.skill_version}.`
+			);
+		}
+	}
 	await mkdir(path.join(skillRoot, 'dist'), { recursive: true });
 	await writeFile(path.join(skillRoot, TRACEKEEPER_SKILL_FLATTENED_PATH), built.flattened, 'utf8');
 	await writeFile(path.join(skillRoot, TRACEKEEPER_SKILL_MANIFEST_PATH), built.manifestText, 'utf8');
@@ -180,7 +200,7 @@ async function main() {
 		return;
 	}
 
-	await writeTracekeeperSkillBundle(repoRoot);
+	await writeTracekeeperSkillBundle(repoRoot, { enforceVersionChange: true });
 	console.log('Generated Tracekeeper Skill manifest and flattened compatibility artifact.');
 }
 

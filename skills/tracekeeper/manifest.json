@@ -1,9 +1,9 @@
 {
   "format_version": 1,
   "name": "tracekeeper",
-  "skill_version": "2.2.0",
+  "skill_version": "2.2.1",
   "workflow_contract_version": 4,
-  "minimum_tracekeeper_version": "0.3.2",
+  "minimum_tracekeeper_version": "0.3.3",
   "hash_algorithm": "sha256",
   "bundle_hash": "sha256:50d01c928f7cdc68a16bce4016fad0ee6014234c61c7f506b8de9a547d5227c9",
   "files": [

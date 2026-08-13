@@ -460,6 +460,15 @@ export class ClientSkillAdapter {
 		}
 		if (versionComparison === 0) {
 			if (!this.matchesEmbeddedBundle(targetDirectory, installedManifest)) {
+				if (this.isOwnedBundle(profile, installedManifest)) {
+					return {
+						state: 'update_available',
+						installedVersion: installedManifest.skill_version,
+						fileVerified: true,
+						updateAvailable: true,
+						detail: 'A verified receipt-backed official bundle has updated content at the same Skill version.',
+					};
+				}
 				return {
 					state: 'modified',
 					installedVersion: installedManifest.skill_version,
