@@ -133,8 +133,8 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 	'tracekeeper.apply_approved_writeback': {
 		title: { zh: '预览并写入', en: 'Preview and apply' },
 		description: {
-			zh: '只对已通过审核的变更提案执行写入，把明确确认的内容追加到目标笔记。',
-			en: 'Applies only approved change proposals by appending explicitly confirmed content to the target note.',
+			zh: '只处理已在 Obsidian 中通过人工审核的提案；先 dry-run 获取短期确认令牌，再追加现有目标或创建明确批准的 Wiki/MemoryRecord。',
+			en: 'Handles only proposals approved by a human in Obsidian. Run a dry-run for a short-lived confirmation token, then append to an existing target or create the explicitly approved Wiki/MemoryRecord.',
 		},
 		category: { zh: '写回', en: 'Writeback' },
 	},
@@ -157,8 +157,8 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 	'tracekeeper.finish_task': {
 		title: { zh: '结束任务', en: 'Finish task' },
 		description: {
-			zh: '记录任务执行结果，并单独报告该任务关联的 Wiki/Memory 是否仍待审核、待写入、已写入或未解决。',
-			en: 'Records task execution and separately reports whether task-linked Wiki/Memory output is pending, ready, applied, or unresolved.',
+			zh: '在同一份 Markdown 任务记录中写入结束结果，不隐式创建会话文件；若开始记录缺失，则在规范任务路径重建完整记录并明确标注来源，同时单独报告关联 Wiki/Memory 的持久化状态。',
+			en: 'Completes one canonical Markdown task record without an implicit session file; when the start record is missing, reconstructs the complete record at the canonical task path with explicit provenance, while separately reporting task-linked Wiki/Memory persistence.',
 		},
 		category: { zh: '任务', en: 'Task' },
 	},
@@ -225,8 +225,8 @@ export class McpCapabilitiesModal extends Modal {
 
 		contentEl.createEl('p', {
 			text: ui(
-				'以下是当前默认权限允许 Agent 调用的功能。人工审核和确认写入仍在 Obsidian 中完成。移动到功能项上可查看说明。',
-				'These capabilities are available to Agents under the current default permissions. Human review and confirmed writeback remain in Obsidian. Hover a capability to see its explanation.'
+				'以下是当前默认权限允许 Agent 调用的功能。人工审核必须在 Obsidian 中完成；审核通过后，可在 Obsidian 中确认写入，也可由具备权限的 Agent 通过公开 MCP 工具先 dry-run，再携带短期确认令牌执行。移动到功能项上可查看说明。',
+				'These capabilities are available to Agents under the current default permissions. Human review must happen in Obsidian. After approval, writeback can be confirmed in Obsidian or performed by an authorized Agent through the public MCP tool after a dry-run and with its short-lived confirmation token. Hover a capability to see its explanation.'
 			),
 			cls: 'tracekeeper-view__description',
 		});

@@ -1364,7 +1364,7 @@ test('unfinished legacy finish_task recovery fails closed before any Memory appe
 			if (
 				!interrupted
 				&& injection.phase === 'before_step'
-				&& injection.stepName === 'finish-task:session-note'
+				&& injection.stepName === 'finish-task:update-task-record'
 			) {
 				interrupted = true;
 				throw new Error('interrupt before v2 finish execution');

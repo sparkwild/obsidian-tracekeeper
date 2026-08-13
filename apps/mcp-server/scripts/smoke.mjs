@@ -1769,9 +1769,12 @@ async function main() {
 			'finish audit should preserve tracked workflow closeout evidence'
 		);
 		assert.ok(fs.existsSync(path.join(vaultRoot, finishTask.path)));
-			taskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
-			assert.ok(taskText.includes('status: completed') || taskText.includes('status: "completed"'));
-			assert.ok(taskText.includes(finishTask.path));
+		assert.equal(finishTask.path, startTask.path);
+		assert.equal(finishTask.task_path, startTask.path);
+		assert.equal(finishTask.session_path, startTask.path);
+		taskText = fs.readFileSync(path.join(vaultRoot, startTask.path), 'utf8');
+		assert.ok(taskText.includes('status: completed') || taskText.includes('status: "completed"'));
+		assert.equal(/^session_note:/m.test(taskText), false);
 			const replayedFinishTask = buildStructured(await client.call('tools/call', {
 				name: 'tracekeeper.finish_task',
 				arguments: {
@@ -1880,10 +1883,11 @@ async function main() {
 			}));
 			assert.equal(zhFinish.content_language, 'zh-CN');
 			assert.equal(zhFinish.memory_status, 'no_candidates');
-			const zhSessionText = fs.readFileSync(path.join(vaultRoot, zhFinish.path), 'utf8');
-			assert.ok(zhSessionText.includes('# 任务会话记录'));
-			assert.ok(zhSessionText.includes('## 摘要'));
-			assert.ok(zhSessionText.includes('中文收尾内容保持原文。'));
+			assert.equal(zhFinish.path, zhStart.path);
+			const zhFinishedTaskText = fs.readFileSync(path.join(vaultRoot, zhFinish.path), 'utf8');
+			assert.ok(zhFinishedTaskText.includes('# Agent 任务'));
+			assert.ok(zhFinishedTaskText.includes('## 完成摘要'));
+			assert.ok(zhFinishedTaskText.includes('中文收尾内容保持原文。'));
 			const zhCapture = buildStructured(await zhClient.call('tools/call', {
 				name: 'tracekeeper.capture_source',
 				arguments: {
@@ -2219,7 +2223,7 @@ async function main() {
 		assert.ok(Array.isArray(projectHistoryEntries[0].graph_links));
 		assert.ok(
 			projectHistoryEntries.some((entry) => entry.path === finishTask.path),
-			'project_history should include prior session notes linked through the project task'
+			'project_history should include the completed canonical task record'
 		);
 		assert.ok(projectHistory.scope === 'project_history' || (projectHistory.scope && projectHistory.scope.scope === 'project_history'));
 

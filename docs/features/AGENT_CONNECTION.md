@@ -123,20 +123,24 @@ the existing write-plan, recheck, backup, rollback, symlink, and receipt
 controls. Initial installation and location changes explicitly choose a Skills
 root through the desktop directory picker and confirm the preview; Tracekeeper
 appends one `tracekeeper` directory unless that directory was chosen directly.
-When a receipt-backed installation has a verified older bundle, Settings offers
-an in-place **Update** action. It uses the recorded target directory without
-asking for the directory or a second confirmation, while still creating a
-short-lived plan, rechecking the files immediately before writing, retaining a
-backup, and refusing modified or newer content. Officially documented locations
-are shown only as suggestions. While an in-place update runs, the card exposes
-an explicit busy state and progress message. Success replaces the same card with
-the verified **installed** state immediately and leaves a longer restart notice;
-failure remains actionable without claiming that a successful write failed only
-because a view refresh failed. An AI-assisted panel can export the complete local
-bundle to a versioned plugin source directory and provide a selectable prompt;
-copying that prompt is not installation. A direct install, in-place update, or
-external directory verification must pass the bundle and manifest hash checks
-before the card shows **installed**.
+When a receipt-backed installation still matches its previously installed
+official manifest but differs from the current embedded bundle, Settings offers
+an in-place **Update** action. This includes the defensive case where official
+content changed without a Skill semantic-version bump; the same difference
+without a matching receipt remains **modified** and is never overwritten. The
+update uses the recorded target directory without asking for the directory or a
+second confirmation, while still creating a short-lived plan, rechecking the
+files immediately before writing, retaining a backup, and refusing modified or
+newer content. Officially documented locations are shown only as suggestions.
+While an in-place update runs, the card exposes an explicit busy state and
+progress message. Success replaces the same card with the verified **installed**
+state immediately and leaves a longer restart notice; failure remains actionable
+without claiming that a successful write failed only because a view refresh
+failed. An AI-assisted panel can export the complete local bundle to a versioned
+plugin source directory and provide a selectable prompt; copying that prompt is
+not installation. A direct install, in-place update, or external directory
+verification must pass the bundle and manifest hash checks before the card shows
+**installed**.
 
 Settings owns connection, authorization, revocation, replacement, card removal,
 and Skill actions. Activity may show recent non-secret integration and

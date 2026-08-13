@@ -1,4 +1,4 @@
-import { type KnowledgeReadView, type ScanResult, type ScannedNote } from '@tracekeeper/core';
+import { type KnowledgeCatalogEntry, type KnowledgeReadView, type ScanResult, type ScannedNote } from '@tracekeeper/core';
 export declare const MAX_READ_VIEW_LEXICAL_CANDIDATES = 256;
 export declare const MAX_READ_VIEW_GRAPH_EXPANSIONS = 64;
 export declare const MAX_READ_VIEW_RERANKED_ROWS = 32;
@@ -179,6 +179,8 @@ interface ProjectCandidate {
     title: string;
     type: string | null;
 }
+export declare function buildKnowledgeRelationEvidenceFromReadView(entry: KnowledgeCatalogEntry, view: KnowledgeReadView): RecallRelationEvidence;
+export declare function buildKnowledgeGraphLinksFromReadView(entry: KnowledgeCatalogEntry, view: KnowledgeReadView): string[];
 export declare class RecallApplicationService {
     private readonly dependencies;
     constructor(dependencies: RecallApplicationDependencies);

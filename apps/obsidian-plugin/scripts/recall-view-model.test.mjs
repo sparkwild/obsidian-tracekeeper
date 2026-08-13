@@ -8,6 +8,7 @@ import { build } from 'esbuild';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-recall-view-model-test-'));
 const output = path.join(tempRoot, 'recall-view-model.test.mjs');
+const modalSource = fs.readFileSync('src/features/recall/memory-recall-preview-modal.ts', 'utf8');
 
 try {
 	await build({
@@ -35,6 +36,15 @@ try {
 
 	const result = recallModule.parseMemoryRecallResult(
 		{
+			uncertain: false,
+			project_identity: {
+				project_hint: 'obsidian-tracekeeper',
+				project_id: 'tracekeeper-project',
+				repo_path: '/work/obsidian-tracekeeper',
+				source: 'explicit_project_id',
+				confidence: 'exact',
+				warnings: [],
+			},
 			matches: [
 				{
 					path: 'projects/tracekeeper/main.md',
@@ -73,6 +83,15 @@ try {
 	assert.equal(result.query, 'tracekeeper');
 	assert.equal(result.sourceTool, 'tracekeeper.recall');
 	assert.equal(result.projectHint, 'obsidian-tracekeeper');
+	assert.equal(result.uncertain, false);
+	assert.deepEqual(result.projectIdentity, {
+		projectHint: 'obsidian-tracekeeper',
+		projectId: 'tracekeeper-project',
+		repoPath: '/work/obsidian-tracekeeper',
+		source: 'explicit_project_id',
+		confidence: 'exact',
+		warnings: [],
+	});
 	assert.equal(result.items.length, 2);
 	assert.equal(result.items[0].path, 'projects/tracekeeper/main.md');
 	assert.equal(result.items[0].scope, '项目');
@@ -84,9 +103,76 @@ try {
 	assert.equal(result.items[1].scope, '全局');
 	assert.equal(result.items[1].reason, 'legacy fallback');
 
+	const conflict = recallModule.parseMemoryRecallResult(
+		{
+			uncertain: true,
+			project_identity: {
+				project_hint: 'tracekeeper',
+				project_id: 'tracekeeper-project',
+				repo_path: '/work/another-project',
+				source: 'explicit_project_id',
+				confidence: 'uncertain',
+				warnings: [
+					'project_hint_conflicts_with_project_id',
+					'repo_path_conflicts_with_project_id',
+				],
+			},
+			matches: [],
+		},
+		{ query: 'conflict', scope: 'project', sourceTool: 'tracekeeper.recall' },
+		{
+			unknownPathLabel: '未知路径',
+			unknownTitleLabel: '未知标题',
+			unknownTypeLabel: '笔记',
+			noDisplayLabel: '缺少可展示字段',
+			noReasonLabel: '暂无说明',
+			scopeLabel,
+		}
+	);
+	assert.equal(conflict.uncertain, true);
+	assert.equal(conflict.items.length, 0);
+	assert.deepEqual(conflict.projectIdentity.warnings, [
+		'project_hint_conflicts_with_project_id',
+		'repo_path_conflicts_with_project_id',
+	]);
+
+	const ambiguous = recallModule.parseMemoryRecallResult(
+		{
+			uncertain: true,
+			project_identity: {
+				project_hint: null,
+				project_id: null,
+				repo_path: '/work/shared',
+				source: 'unknown',
+				confidence: 'uncertain',
+				warnings: ['ambiguous_vault_project_identity', 'future_warning_code'],
+			},
+			matches: [],
+		},
+		{ query: 'ambiguous', scope: 'project', sourceTool: 'tracekeeper.recall' },
+		{
+			unknownPathLabel: '未知路径',
+			unknownTitleLabel: '未知标题',
+			unknownTypeLabel: '笔记',
+			noDisplayLabel: '缺少可展示字段',
+			noReasonLabel: '暂无说明',
+			scopeLabel,
+		}
+	);
+	assert.equal(ambiguous.uncertain, true);
+	assert.equal(ambiguous.projectIdentity.projectHint, '');
+	assert.deepEqual(ambiguous.projectIdentity.warnings, [
+		'ambiguous_vault_project_identity',
+		'future_warning_code',
+	]);
+	assert.ok(modalSource.includes("ui('项目身份存在不确定性', 'Project identity is uncertain')"));
+	assert.ok(modalSource.includes("case 'ambiguous_vault_project_identity'"));
+	assert.ok(modalSource.includes("case 'project_hint_conflicts_with_project_id'"));
+	assert.ok(modalSource.includes('default: return code;'));
+
 	assert.equal(recallModule.normalizeMemoryRecallScope('foo'), 'global');
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 13 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 25 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

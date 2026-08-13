@@ -2202,7 +2202,7 @@ try {
 				evidence: [`00_tracekeeper/evidence/technical-evidence-${ordinal}.md`],
 				relatedSources: [`01_knowledge/sources/technical-source-${ordinal}.md`],
 				supersedes: [`technical-memory-id-${ordinal}`],
-				approvalStatus: 'rejected',
+				approvalStatus: 'pending',
 				writebackContent: `# Hidden heading\n\nReadable summary ${ordinal}`,
 				sortTimestamp: Date.parse(`2026-07-${String(30 - index).padStart(2, '0')}T00:00:00.000Z`),
 			});
@@ -2268,7 +2268,7 @@ try {
 			},
 		};
 		const view = new TracekeeperReviewQueueView({ app }, plugin);
-		view.activeFilter = 'all';
+		view.activeFilter = 'needs_review';
 
 		await view.render(snapshot);
 		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__row')).length, 5);
@@ -2338,7 +2338,7 @@ try {
 		assert.match(collectElementText(view.contentEl), /Selected/);
 	});
 
-	test('rejecting a detail moves it into processed review without losing its position', async () => {
+	test('rejecting a detail removes it from the actionable queue and leaves an organize entrypoint', async () => {
 		const proposal = makeProposalRecord({
 			approvalStatus: 'pending',
 			writebackContent: 'Readable change',
@@ -2397,14 +2397,10 @@ try {
 		assert.ok(reject);
 		reject.handlers.click();
 		await new Promise((resolve) => setImmediate(resolve));
-		assert.equal(view.activeFilter, 'history');
-		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__detail')).length, 1);
-		assert.match(collectElementText(view.contentEl), /Reviewing 1 of 1/);
-		const back = findElement(view.contentEl, (element) => element.text === '← Back to review list');
-		assert.ok(back);
-		back.handlers.click();
-		await Promise.resolve();
-		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'is-selected')).length, 1);
+		assert.equal(view.activeFilter, 'needs_review');
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__detail')).length, 0);
+		assert.match(collectElementText(view.contentEl), /No knowledge changes require action/);
+		assert.ok(findElement(view.contentEl, (element) => element.text === 'Organize processed records'));
 
 		proposal.approvalStatus = 'revision_requested';
 		await view.refreshSelectedProposal(proposal.path);

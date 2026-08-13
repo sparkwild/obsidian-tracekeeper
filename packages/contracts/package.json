@@ -1,6 +1,6 @@
 {
 	"name": "@tracekeeper/contracts",
-	"version": "0.3.3",
+	"version": "0.3.4",
 	"description": "Typed Tracekeeper MCP tool contracts for public/compatibility API boundaries.",
 	"private": true,
 	"type": "commonjs",

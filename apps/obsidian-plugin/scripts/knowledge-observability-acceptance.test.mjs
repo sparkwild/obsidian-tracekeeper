@@ -10,6 +10,7 @@ const observabilityModelSource = fs.readFileSync('src/features/observability/kno
 const repositorySource = fs.readFileSync('src/features/activity/activity-record-repository.ts', 'utf8');
 const activityControllerSource = fs.readFileSync('src/features/activity/activity-data-controller.ts', 'utf8');
 const graphSource = fs.readFileSync('src/features/graph/graph-health-controller.ts', 'utf8');
+const graphViewSource = fs.readFileSync('src/features/graph/graph-health-view.ts', 'utf8');
 const permissionSource = fs.readFileSync('src/features/permissions/permission-policy-view.ts', 'utf8');
 const reviewQueueSource = fs.readFileSync('src/features/review/review-queue-view.ts', 'utf8');
 const baseStructureSource = fs.readFileSync('src/features/structure/base-structure-plan.ts', 'utf8');
@@ -69,6 +70,8 @@ assert.ok(sourceSource.includes("ui('内容哈希', 'Content hash')"));
 assert.ok(sourceSource.includes("ui('存储路由', 'Storage route')"));
 assert.ok(sourceSource.includes("ui('分片清单', 'Part manifest')"));
 assert.ok(sourceSource.includes("ui('捕获证据不完整', 'Incomplete capture evidence')"));
+assert.ok(sourceSource.includes("ui('仅外部引用', 'External reference only')"));
+assert.ok(sourceSource.includes('No body text is available offline'));
 assert.ok(sourceSource.includes("ui('缺失或无效字段', 'Missing or invalid fields')"));
 assert.ok(sourceSource.includes("'tracekeeper-badge--warning'"));
 assert.ok(sourceSource.includes("ui('分片内容哈希（source_part.content_hash）', 'Part content hash (source_part.content_hash)')"));
@@ -78,6 +81,7 @@ assert.ok(observabilityModelSource.includes('const strictIntegerField ='));
 assert.ok(observabilityModelSource.includes('const strictPathListField ='));
 assert.ok(observabilityModelSource.includes("rawValues.some((value) => typeof value !== 'string')"));
 assert.ok(observabilityModelSource.includes('value.some((entry, index) => entry !== canonical[index])'));
+assert.ok(observabilityModelSource.includes("mode.trim().toLowerCase() === 'external_reference'"));
 
 assert.ok(repositorySource.includes('collectRecentMarkdownFiles(folder, limit)'));
 assert.ok(repositorySource.includes('MEMORY_PROPOSAL_BODY_READ_LIMIT = 250'));
@@ -87,6 +91,9 @@ assert.equal(activityControllerSource.includes('readRecentMemoryProposals(Number
 assert.ok(graphSource.includes("executeLocalTool('tracekeeper.lint'"));
 assert.equal(graphSource.includes("executeLocalTool('tracekeeper.graph_health'"), false);
 assert.ok(graphSource.includes('result.graph_health'));
+assert.ok(graphViewSource.includes('Rebuild knowledge index'));
+assert.ok(graphViewSource.includes('Obsidian developer console'));
+assert.equal(graphViewSource.includes('Check whether the MCP service is running.'), false);
 assert.ok(permissionSource.includes("ui('Agent / MCP 不会执行', 'Agent / MCP boundaries')"));
 assert.ok(reviewQueueSource.includes("ui('上一批', 'Previous batch')"));
 assert.ok(reviewQueueSource.includes("ui('下一批', 'Next batch')"));

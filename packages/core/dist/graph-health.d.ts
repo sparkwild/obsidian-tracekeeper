@@ -17,6 +17,7 @@ export interface GraphProfileEvaluation {
 }
 export interface GraphHealthReport {
     note_count: number;
+    edge_observation_count: number;
     wikilink_edge_count: number;
     unresolved_edges: GraphHealthUnresolvedEdge[];
     resolved_edge_count: number;
@@ -48,6 +49,8 @@ export interface GraphHealthUnresolvedEdge {
     line: number;
     target: string;
     context?: string;
+    occurrence_count: number;
+    declared_via: Array<'frontmatter' | 'body_wikilink'>;
 }
 export declare const DEFAULT_GRAPH_PROFILE: GraphProfile;
 export declare function analyzeGraphHealth(notes: ScannedNote[], options?: GraphHealthOptions): GraphHealthReport;

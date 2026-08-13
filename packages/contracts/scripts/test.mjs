@@ -226,7 +226,7 @@ assert.match(memoryContract.description, /metadata only/i);
 assert.match(memoryContract.description, /read_note/i);
 
 const finishContract = getContractByName('tracekeeper.finish_task');
-assert.equal(finishContract.version, 4);
+assert.equal(finishContract.version, 5);
 assert.equal(finishContract.inputSchema.properties.memory_candidates, undefined);
 assert.equal(finishContract.inputSchema.properties.review_proposal_mode, undefined);
 assert.equal(finishContract.inputSchema.properties.memory_scope, undefined);
@@ -235,6 +235,15 @@ assert.match(
 	finishContract.inputSchema.properties.related_wiki.description,
 	/local Vault Wiki note paths/i,
 	'finish_task related_wiki should identify local Vault paths',
+);
+assert.match(finishContract.description, /canonical Markdown task record/i);
+assert.match(finishContract.description, /without creating an implicit session note/i);
+assert.match(finishContract.description, /start_task record is missing/i);
+assert.match(finishContract.description, /reconstruct a complete task record/i);
+assert.match(finishContract.inputSchema.properties.filename.description, /does not create/i);
+assert.match(
+	FINISH_TASK_OUTPUT_SCHEMA.oneOf[0].properties.task_path.description,
+	/reconstructed at this path/i,
 );
 
 const proposeMemoryContract = getContractByName('tracekeeper.propose_memory');

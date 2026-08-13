@@ -52,6 +52,7 @@ try {
 					disabled: false,
 					profile: 'balanced',
 					note_count: 12,
+					edge_observation_count: 20,
 					wikilink_edge_count: 18,
 					resolved_edge_count: 17,
 					unresolved_edge_count: 1,
@@ -90,6 +91,7 @@ try {
 	assert.equal(calls[0].name, 'tracekeeper.lint');
 	assert.deepEqual(calls[0].args, { max_items: 20, graph_profile: 'balanced' });
 	assert.equal(snapshot.noteCount, 12);
+	assert.equal(snapshot.edgeObservationCount, 20);
 	assert.equal(snapshot.unresolvedEdgeCount, 1);
 	assert.deepEqual(snapshot.missingRecommendedHubs, ['01_knowledge/memory/global/index.md']);
 	assert.equal(snapshot.profileIssues.length > 0, true);
@@ -100,7 +102,7 @@ try {
 	assert.match(calls[1].args.evidence, /^tracekeeper\.lint /);
 	assert.equal(refreshCount, 1);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 10 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 11 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

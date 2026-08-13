@@ -222,6 +222,7 @@ export interface AgentActivitySnapshot {
 	recentProposals: MemoryProposalRecord[];
 	reviewQueueItemCount: number;
 	reviewQueueCountsTruncated: boolean;
+	blockedReviewQueueItemCount: number;
 	incompleteReviewQueueItemCount: number;
 	pendingReviewQueueItemCount: number;
 	readyToApplyReviewQueueItemCount: number;

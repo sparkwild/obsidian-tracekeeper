@@ -1025,7 +1025,8 @@ test('review proposal window bounds body reads and prioritizes attention items',
 	const fixture = createNativeVaultFixture({
 		files: {
 			[processedPath]: {
-				content: proposalMarkdown({ proposalId: 'recent-applied', status: 'applied' }),
+				content: proposalMarkdown({ proposalId: 'recent-applied', status: 'applied' })
+					.replace('approval_status: applied\n', ''),
 				mtime: Date.parse('2026-07-31T00:00:00.000Z'),
 			},
 			[pendingPath]: {

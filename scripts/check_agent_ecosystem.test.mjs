@@ -82,6 +82,17 @@ test('accepts the generated Skill v2 bundle and completed plugin integration', a
 	});
 });
 
+test('requires a Skill version bump before regenerating changed source content', async () => {
+	await withFixture(async (root) => {
+		const skillPath = path.join(root, 'skills/tracekeeper/SKILL.md');
+		await writeFile(skillPath, `${await readFile(skillPath, 'utf8')}\nChanged guidance.\n`, 'utf8');
+		await assert.rejects(
+			writeTracekeeperSkillBundle(root, { enforceVersionChange: true }),
+			/Skill content changed without a skill_version bump/,
+		);
+	});
+});
+
 test('rejects the retired public project-memory alias in workflow guidance', async () => {
 	await withFixture(async (root) => {
 		const skillPath = path.join(root, 'skills/tracekeeper/SKILL.md');

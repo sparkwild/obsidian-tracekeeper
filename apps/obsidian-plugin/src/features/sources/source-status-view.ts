@@ -220,17 +220,30 @@ export class TracekeeperSourceStatusView extends ItemView {
 		header.createSpan({
 			text: record.state === 'captured'
 				? ui('已捕获', 'Captured')
+				: record.state === 'reference_only'
+					? ui('仅外部引用', 'External reference only')
 				: record.state === 'incomplete'
 					? ui('捕获证据不完整', 'Incomplete capture evidence')
 					: ui('证据缺失', 'Missing evidence'),
 			cls: `tracekeeper-badge ${
 				record.state === 'captured'
 					? 'tracekeeper-badge--success'
+					: record.state === 'reference_only'
+						? 'tracekeeper-badge--muted'
 					: record.state === 'incomplete'
 						? 'tracekeeper-badge--warning'
 						: 'tracekeeper-badge--error'
 			}`,
 		});
+		if (record.state === 'reference_only') {
+			item.createEl('p', {
+				text: ui(
+					'这里只保存 URL 或来源标识，没有可离线读取的正文，不能作为已捕获正文证据。',
+					'Only the URL or source identifier is saved. No body text is available offline, so this is not captured-content evidence.'
+				),
+				cls: 'tracekeeper-view__description',
+			});
+		}
 
 		const details = item.createDiv({ cls: 'tracekeeper-detail-grid' });
 		this.renderDetail(details, ui('资料类型', 'Source type'), record.sourceKind || ui('未记录', 'Not recorded'));

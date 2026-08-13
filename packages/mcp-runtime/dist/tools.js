@@ -1656,6 +1656,8 @@ function resolveFrontmatterRelationEdge(note, reference, allNotes) {
 }
 function buildRecallRelationEvidence(note, allNotes) {
     const relationMap = new Map();
+    const explicitSourceTargets = new Set();
+    const sourceNote = (0, core_1.isKnowledgeSourcePath)(note.relativePath) || (note.type ?? '').toLowerCase().includes('source');
     const addResolvedRelation = (resolved, declaredVia) => {
         if (!resolved) {
             return;
@@ -1685,16 +1687,19 @@ function buildRecallRelationEvidence(note, allNotes) {
     };
     const addFrontmatterRelation = (reference) => {
         const sharedEdge = resolveFrontmatterRelationEdge(note, reference, allNotes);
-        addResolvedRelation(sharedEdge.matched
+        const resolved = sharedEdge.matched
             ? sharedEdge.note
-            : resolveSnapshotRelation(reference, allNotes), 'frontmatter');
+            : resolveSnapshotRelation(reference, allNotes);
+        if (resolved)
+            explicitSourceTargets.add(resolved.relativePath.toLowerCase());
+        addResolvedRelation(resolved, 'frontmatter');
     };
     for (const key of ['related_wiki', 'relatedWiki', 'wiki']) {
         for (const value of relationValues(note.frontmatter[key])) {
             addFrontmatterRelation(value);
         }
     }
-    for (const key of ['related_sources', 'relatedSources', 'sources', 'source']) {
+    for (const key of ['related_sources', 'relatedSources', 'sources']) {
         for (const value of relationValues(note.frontmatter[key])) {
             addFrontmatterRelation(value);
         }
@@ -1703,9 +1708,13 @@ function buildRecallRelationEvidence(note, allNotes) {
         if (edge.source !== 'body') {
             continue;
         }
-        addResolvedRelation(edge.resolution.status === 'resolved'
+        const resolved = edge.resolution.status === 'resolved'
             ? findSnapshotNoteByPath(edge.resolution.path, allNotes)
-            : null, 'body_wikilink');
+            : null;
+        if (sourceNote && (!resolved || !explicitSourceTargets.has(resolved.relativePath.toLowerCase()))) {
+            continue;
+        }
+        addResolvedRelation(resolved, 'body_wikilink');
     }
     const evidence = {
         related_wiki: [],
@@ -1720,42 +1729,6 @@ function buildRecallRelationEvidence(note, allNotes) {
         }
     }
     return evidence;
-}
-function buildReadViewRelationEvidence(notePath, view) {
-    const rows = new Map();
-    for (const edge of view.graph.edges) {
-        if (edge.sourcePath !== notePath || edge.resolution.status !== 'resolved')
-            continue;
-        const targetPath = edge.resolution.path;
-        if (!view.catalog.has(targetPath))
-            continue;
-        const relationKind = (0, core_1.isKnowledgeWikiPath)(targetPath)
-            ? 'related_wiki'
-            : (0, core_1.isKnowledgeSourcePath)(targetPath)
-                ? 'related_sources'
-                : null;
-        if (!relationKind)
-            continue;
-        const key = `${relationKind}:${targetPath.toLowerCase()}`;
-        const declaredVia = edge.source === 'frontmatter' ? 'frontmatter' : 'body_wikilink';
-        const existing = rows.get(key);
-        if (existing) {
-            if (!existing.declared_via.includes(declaredVia))
-                existing.declared_via.push(declaredVia);
-            continue;
-        }
-        rows.set(key, {
-            path: targetPath,
-            declared_by: notePath,
-            declared_via: [declaredVia],
-            verified_by: 'active_vault_snapshot',
-        });
-    }
-    const ordered = [...rows.entries()].sort(([left], [right]) => left.localeCompare(right));
-    return {
-        related_wiki: ordered.filter(([key]) => key.startsWith('related_wiki:')).map(([, row]) => row),
-        related_sources: ordered.filter(([key]) => key.startsWith('related_sources:')).map(([, row]) => row),
-    };
 }
 function recallContentOrigin(relativePath, noteType) {
     const normalizedPath = relativePath.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -4702,7 +4675,7 @@ function unresolvedDurableProposalSnapshot(proposalId, proposalPath) {
         exact: false,
     };
 }
-async function snapshotExactTaskProposal(vaultRoot, taskId, proposalId, rawPath, context) {
+async function snapshotExactTaskProposal(vaultRoot, taskId, proposalId, rawPath, context, expectedStatus) {
     let proposalPath = '';
     try {
         const normalized = (0, safety_1.normalizeNotePath)(rawPath, pathSafetyOptions(context));
@@ -4739,9 +4712,9 @@ async function snapshotExactTaskProposal(vaultRoot, taskId, proposalId, rawPath,
             }
         }
         const approvalStatus = stripYamlQuotes(readFrontmatterString(document.frontmatter, ['approval_status', 'approvalStatus', 'status']));
-        const durableStatus = approvalStatus
+        const durableStatus = expectedStatus ?? (approvalStatus
             ? durableProposalStatusFromApproval(approvalStatus)
-            : 'unresolved';
+            : 'unresolved');
         return {
             proposalId,
             path: proposalPath,
@@ -6140,7 +6113,9 @@ async function handleReadNote(rawArgs, context) {
         instruction_trust: 'data_only',
         content: data.text,
         excerpt: parsed.body.slice(0, 1024),
-        relation_evidence: buildReadViewRelationEvidence(data.path, view),
+        relation_evidence: view.catalog.has(data.path)
+            ? (0, recall_1.buildKnowledgeRelationEvidenceFromReadView)(view.catalog.get(data.path), view)
+            : { related_wiki: [], related_sources: [] },
     };
 }
 function handleProjectContext(rawArgs, context) {
@@ -7405,6 +7380,7 @@ function buildLegacyStructureSummary(vaultRoot, notes) {
 function buildGraphSummary(graphHealth) {
     return {
         note_count: graphHealth.note_count,
+        edge_observation_count: graphHealth.edge_observation_count,
         wikilink_edge_count: graphHealth.wikilink_edge_count,
         resolved_edge_count: graphHealth.resolved_edge_count,
         unresolved_edge_count: graphHealth.unresolved_edge_count,
@@ -7656,6 +7632,15 @@ function isFinishTaskOperationPayload(payload) {
         && payload.memoryRecordWriteVersion !== 2) {
         return false;
     }
+    if (payload.taskRecordCloseoutVersion !== undefined
+        && payload.taskRecordCloseoutVersion !== 1) {
+        return false;
+    }
+    if (payload.taskRecordCloseoutVersion === 1
+        && (typeof payload.taskFinishedAt !== 'string'
+            || Number.isNaN(Date.parse(payload.taskFinishedAt)))) {
+        return false;
+    }
     if (payload.projectMemoryEntryVersion !== undefined
         && payload.projectMemoryEntryVersion !== 1) {
         return false;
@@ -7675,6 +7660,148 @@ function isFinishTaskOperationPayload(payload) {
         return false;
     }
     return true;
+}
+function finishTaskUsesSingleTaskRecord(input) {
+    return input.taskRecordCloseoutVersion === 1;
+}
+function buildFinishTaskCompletionBody(input, context, operationId) {
+    return [
+        contentText(context, '## 完成摘要', '## Completion Summary'),
+        input.summary,
+        '',
+        contentText(context, '## 结果', '## Outcomes'),
+        ...formatListMarkdown(input.outcomes).split('\n'),
+        '',
+        contentText(context, '## 下一步', '## Next Actions'),
+        ...formatListMarkdown(input.nextActions).split('\n'),
+        '',
+        contentText(context, '## 决策', '## Decisions'),
+        ...formatListMarkdown(input.decisions).split('\n'),
+        '',
+        contentText(context, '## 方案调整', '## Solution Changes'),
+        ...formatListMarkdown(input.solutionChanges).split('\n'),
+        '',
+        contentText(context, '## 经验教训', '## Lessons'),
+        ...formatListMarkdown(input.lessons).split('\n'),
+        '',
+        contentText(context, '## 偏好', '## Preferences'),
+        ...formatListMarkdown(input.preferences).split('\n'),
+        '',
+        contentText(context, '## 长期记忆处理', '## Durable Memory Processing'),
+        ...(input.memoryCandidateRecords && input.memoryCandidateRecords.length > 0
+            ? input.memoryCandidateRecords.map((candidate) => `- [${candidate.scope}] ${candidate.content}`)
+            : ['- (none; task facts remain task history only)']),
+        `^finish-${operationId}`,
+    ].join('\n');
+}
+function assertFinishTaskRecordBinding(taskPath, content, taskId, operationId, requireOperationBinding = false) {
+    const frontmatter = (0, core_1.parseMarkdown)(content).frontmatter.fields;
+    const storedTaskId = stripYamlQuotes(readFrontmatterString(frontmatter, ['task_id']));
+    const recordType = stripYamlQuotes(readFrontmatterString(frontmatter, ['type']));
+    const finishOperationId = stripYamlQuotes(readFrontmatterString(frontmatter, ['finish_operation_id']));
+    if (storedTaskId !== taskId || (recordType && recordType !== 'agent-task')) {
+        throw new core_1.OperationConflictError(`Task path is not the canonical record for task ${taskId}: ${taskPath}`);
+    }
+    if (finishOperationId && finishOperationId !== operationId) {
+        throw new core_1.OperationConflictError(`Task record is bound to another finish-task operation: ${taskPath}`);
+    }
+    if (requireOperationBinding && finishOperationId !== operationId) {
+        throw new core_1.OperationConflictError(`Task record is not bound to the current finish-task operation: ${taskPath}`);
+    }
+}
+async function ensureFinishTaskRecordExists(input, context, operationId) {
+    const taskPath = buildTaskNotePath(input.taskId);
+    const current = await readCurrentVaultTextState(input.vaultRoot, taskPath, context);
+    if (current) {
+        assertFinishTaskRecordBinding(taskPath, current.content, input.taskId, operationId);
+        return taskPath;
+    }
+    const projectIdentity = projectIdentityFromFinishPayload(input);
+    const reconstructedAt = input.taskFinishedAt ?? new Date().toISOString();
+    const clientName = input.client;
+    const body = [
+        contentText(context, '# Agent 任务', '# Agent Task'),
+        '',
+        contentText(context, '## 目标', '## Objective'),
+        input.summary,
+        '',
+        contentText(context, '## 重建说明', '## Reconstruction'),
+        '- start_record: missing',
+        '- reconstructed_by: tracekeeper.finish_task',
+        `- reconstructed_at: ${reconstructedAt}`,
+        '- objective_source: finish_summary',
+        '',
+        buildFinishTaskCompletionBody(input, context, operationId),
+    ].join('\n');
+    const markdown = buildMarkdownNote({
+        tool: 'tracekeeper.finish_task',
+        type: 'agent-task',
+        title: `Task ${input.taskId}`,
+        task_id: input.taskId,
+        status: 'closing',
+        agent: clientName || 'unknown',
+        client: clientName || null,
+        session_id: null,
+        objective: input.summary,
+        objective_source: 'finish_summary',
+        project_hint: input.projectHint || null,
+        related_project: input.projectHint || null,
+        project_id: input.projectId || null,
+        repo_path: input.repoPath || null,
+        project_identity_source: projectIdentity.source,
+        project_identity_confidence: projectIdentity.confidence,
+        project_identity_warnings: projectIdentity.warnings,
+        started_at: null,
+        start_operation_id: null,
+        start_record_missing: true,
+        task_record_origin: 'finish_task_reconstruction',
+        reconstructed_at: reconstructedAt,
+        finish_operation_id: operationId,
+    }, body);
+    try {
+        if (context.vaultRepository) {
+            await context.vaultRepository.createText(taskPath, markdown);
+        }
+        else {
+            const resolved = (0, safety_1.resolveSafeWritableNotePath)(input.vaultRoot, taskPath, AGENT_TASK_DIR, pathSafetyOptions(context));
+            fs.mkdirSync(path.dirname(resolved.absolutePath), { recursive: true });
+            fs.writeFileSync(resolved.absolutePath, markdown, { encoding: 'utf8', flag: 'wx' });
+        }
+    }
+    catch (error) {
+        const racedRecord = await readCurrentVaultTextState(input.vaultRoot, taskPath, context);
+        if (!racedRecord) {
+            throw error;
+        }
+        assertFinishTaskRecordBinding(taskPath, racedRecord.content, input.taskId, operationId);
+        return taskPath;
+    }
+    await (0, audit_persistence_1.appendAuditEventAsync)(input.vaultRoot, {
+        operationId,
+        tool: 'tracekeeper.finish_task',
+        targetPath: taskPath,
+        status: 'written',
+        taskId: input.taskId,
+        timestamp: reconstructedAt,
+        metadata: {
+            target_type: 'agent_task',
+            task_stage: 'finish',
+        },
+    }, context);
+    return taskPath;
+}
+async function markFinishTaskRecordClosing(input, context, operationId) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        await ensureFinishTaskRecordExists(input, context, operationId);
+        const taskPath = await updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, {
+            status: 'closing',
+            finish_operation_id: operationId,
+        }, context);
+        if (taskPath) {
+            return;
+        }
+    }
+    throw new core_1.OperationConflictError(`Task record could not be reconstructed for finish-task operation: ${buildTaskNotePath(input.taskId)}`);
 }
 function projectIdentityFromFinishPayload(input) {
     return input.projectIdentity ?? {
@@ -7701,7 +7828,7 @@ async function buildFinishTaskDurableOutput(input, proposalResult, context) {
         if (seenIds.has(proposal.proposalId) || seenPaths.has(proposal.path)) {
             continue;
         }
-        const generated = await snapshotExactTaskProposal(input.vaultRoot, input.taskId, proposal.proposalId, proposal.path, context);
+        const generated = await snapshotExactTaskProposal(input.vaultRoot, input.taskId, proposal.proposalId, proposal.path, context, 'pending_review');
         proposals.push(generated);
         if (generated.proposalId) {
             seenIds.add(generated.proposalId);
@@ -7959,41 +8086,53 @@ function durableOutputFromFrontmatter(frontmatter, context) {
         ? evidence
         : null;
 }
-async function readFinishTaskDurableOutputEvidence(input, sessionNotePath, context, mode) {
-    const session = await readCurrentVaultTextState(input.vaultRoot, sessionNotePath, context);
+async function readFinishTaskDurableOutputEvidence(input, finishRecordPath, context, mode) {
+    const finishRecord = await readCurrentVaultTextState(input.vaultRoot, finishRecordPath, context);
     const task = await readCurrentVaultTextState(input.vaultRoot, buildTaskNotePath(input.taskId), context);
-    const sessionFrontmatter = session
-        ? (0, core_1.parseMarkdown)(session.content).frontmatter.fields
+    const finishRecordFrontmatter = finishRecord
+        ? (0, core_1.parseMarkdown)(finishRecord.content).frontmatter.fields
         : {};
     const taskFrontmatter = task
         ? (0, core_1.parseMarkdown)(task.content).frontmatter.fields
         : {};
-    const sessionEvidence = session
-        ? durableOutputFromFrontmatter(sessionFrontmatter, context)
+    const finishRecordEvidence = finishRecord
+        ? durableOutputFromFrontmatter(finishRecordFrontmatter, context)
         : null;
     const taskEvidence = task
         ? durableOutputFromFrontmatter(taskFrontmatter, context)
         : null;
-    const sessionHasEvidenceFields = Object.keys(sessionFrontmatter)
+    const finishRecordHasEvidenceFields = Object.keys(finishRecordFrontmatter)
         .some((key) => key.startsWith('durable_output_'));
     const taskHasEvidenceFields = Object.keys(taskFrontmatter)
         .some((key) => key.startsWith('durable_output_'));
-    if (sessionEvidence
+    if (finishTaskUsesSingleTaskRecord(input)) {
+        if (mode === 'finalize' && !taskEvidence) {
+            throw new core_1.OperationConflictError('Finish-task durable-output evidence is not complete in the task record.');
+        }
+        if (taskEvidence) {
+            return taskEvidence;
+        }
+        if (finishRecordHasEvidenceFields || taskHasEvidenceFields) {
+            throw new core_1.OperationConflictError('Finish-task durable-output evidence is incomplete, invalid, or internally inconsistent.');
+        }
+        return null;
+    }
+    if (finishRecordEvidence
         && taskEvidence
-        && JSON.stringify(sessionEvidence) !== JSON.stringify(taskEvidence)) {
+        && JSON.stringify(finishRecordEvidence) !== JSON.stringify(taskEvidence)) {
         throw new core_1.OperationConflictError('Finish-task durable-output evidence differs between the task and session records.');
     }
     if (mode === 'finalize') {
-        if (!sessionEvidence || !taskEvidence) {
+        if (!finishRecordEvidence || !taskEvidence) {
             throw new core_1.OperationConflictError('Finish-task durable-output evidence is not complete in both the task and session records.');
         }
-        return sessionEvidence;
+        return finishRecordEvidence;
     }
-    const trustedEvidence = sessionEvidence ?? taskEvidence;
+    const trustedEvidence = finishRecordEvidence ?? taskEvidence;
     if (trustedEvidence) {
         return trustedEvidence;
     }
-    if (sessionHasEvidenceFields || taskHasEvidenceFields) {
+    if (finishRecordHasEvidenceFields || taskHasEvidenceFields) {
         throw new core_1.OperationConflictError('Finish-task durable-output evidence is incomplete, invalid, or internally inconsistent.');
     }
     return null;
@@ -8071,6 +8210,8 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
         requestHash,
         requestSnapshot,
         memoryRecordWriteVersion: 2,
+        taskRecordCloseoutVersion: 1,
+        taskFinishedAt: new Date().toISOString(),
         projectMemoryCreatedAt: new Date().toISOString(),
         projectMemoryAgentType: (() => {
             const observed = context.observedClientType ?? (0, observed_client_1.normalizeObservedClientType)(client);
@@ -8113,6 +8254,43 @@ function resolveFinishTaskSessionNotePath(input, context) {
     const safeLeaf = (0, safety_1.normalizeNotePath)(input.filename, pathSafetyOptions(context));
     const normalized = safeLeaf.endsWith('.md') ? safeLeaf : `${safeLeaf}.md`;
     return `${SESSION_NOTE_DIR}/${normalized}`;
+}
+function resolveFinishTaskRecordPath(input, context) {
+    return finishTaskUsesSingleTaskRecord(input)
+        ? buildTaskNotePath(input.taskId)
+        : resolveFinishTaskSessionNotePath(input, context);
+}
+async function findFinishTaskRecord(input, context, operationId) {
+    if (!finishTaskUsesSingleTaskRecord(input)) {
+        const sessionNote = await findOperationOwnedNoteAsync(input.vaultRoot, SESSION_NOTE_DIR, input.filename, 'finish_operation_id', operationId, context);
+        if (!sessionNote) {
+            throw new safety_1.ToolInputError(`Session note is missing for finish-task operation: ${resolveFinishTaskSessionNotePath(input, context)}`);
+        }
+        return sessionNote;
+    }
+    const taskPath = buildTaskNotePath(input.taskId);
+    let task = await readCurrentVaultTextState(input.vaultRoot, taskPath, context);
+    if (!task) {
+        await ensureFinishTaskRecordExists(input, context, operationId);
+        task = await readCurrentVaultTextState(input.vaultRoot, taskPath, context);
+    }
+    if (!task) {
+        throw new core_1.OperationConflictError(`Task record could not be reconstructed for finish-task operation: ${taskPath}`);
+    }
+    assertFinishTaskRecordBinding(taskPath, task.content, input.taskId, operationId, true);
+    const audit = await (0, audit_persistence_1.appendAuditEventAsync)(input.vaultRoot, {
+        operationId,
+        tool: 'tracekeeper.finish_task',
+        targetPath: taskPath,
+        status: 'written',
+        taskId: input.taskId,
+        timestamp: input.taskFinishedAt,
+        metadata: {
+            target_type: 'agent_task',
+            task_stage: 'finish',
+        },
+    }, context);
+    return { path: taskPath, activity_path: audit.path };
 }
 async function writeFinishTaskSessionNote(input, context, operationId) {
     const projectIdentity = projectIdentityFromFinishPayload(input);
@@ -8253,14 +8431,14 @@ async function writeFinishTaskProjectMemoryArtifacts(input, context, operationId
             write_status: immutable.write_status,
         };
     }
-    const sessionNotePath = resolveFinishTaskSessionNotePath(input, context);
+    const sourceNotePath = resolveFinishTaskRecordPath(input, context);
     for (const group of plan.groups) {
-        await createFinishTaskProposal(input.vaultRoot, input.taskId, sessionNotePath, operationId, group.kind, group.label, group.values, input.projectHint, input.reviewProposalMode, 'project', plan.bridgeMetadata.related_wiki, plan.bridgeMetadata.related_sources, input.architectureStatus, input.architectureStatus.missing_graph_bridges, false, plan.bridgeMetadata.missing_related_wiki, plan.bridgeMetadata.missing_related_sources, context, true);
+        await createFinishTaskProposal(input.vaultRoot, input.taskId, sourceNotePath, operationId, group.kind, group.label, group.values, input.projectHint, input.reviewProposalMode, 'project', plan.bridgeMetadata.related_wiki, plan.bridgeMetadata.related_sources, input.architectureStatus, input.architectureStatus.missing_graph_bridges, false, plan.bridgeMetadata.missing_related_wiki, plan.bridgeMetadata.missing_related_sources, context, true);
     }
     return { outcome: 'review_fallback' };
 }
 async function writeFinishTaskCloseoutArtifacts(input, group, context, operationId) {
-    const sessionNotePath = resolveFinishTaskSessionNotePath(input, context);
+    const sourceNotePath = resolveFinishTaskRecordPath(input, context);
     const memoryScope = resolveMemoryScope(group.kind, '', input.projectHint, input.memoryScope);
     const bridgeMetadata = resolveProjectMemoryBridgeMetadata(input.vaultRoot, memoryScope, input.projectHint, input.rawRelatedWiki ?? input.relatedWiki, input.rawRelatedSources ?? input.relatedSources, context);
     const memoryRule = memoryProposalRuleFor(group.kind, '', input.projectHint, context, memoryScope);
@@ -8284,7 +8462,7 @@ async function writeFinishTaskCloseoutArtifacts(input, group, context, operation
                 context,
                 operationId,
                 projectHint: input.projectHint,
-                sourceNote: sessionNotePath,
+                sourceNote: sourceNotePath,
                 memoryScope,
                 relatedWiki: bridgeMetadata.related_wiki,
                 relatedSources: bridgeMetadata.related_sources,
@@ -8298,16 +8476,12 @@ async function writeFinishTaskCloseoutArtifacts(input, group, context, operation
             return;
         }
     }
-    await createFinishTaskProposal(input.vaultRoot, input.taskId, sessionNotePath, operationId, group.kind, group.label, group.values, input.projectHint, input.reviewProposalMode, memoryScope, bridgeMetadata.related_wiki, bridgeMetadata.related_sources, input.architectureStatus, input.architectureStatus.missing_graph_bridges, false, bridgeMetadata.missing_related_wiki, bridgeMetadata.missing_related_sources, context);
+    await createFinishTaskProposal(input.vaultRoot, input.taskId, sourceNotePath, operationId, group.kind, group.label, group.values, input.projectHint, input.reviewProposalMode, memoryScope, bridgeMetadata.related_wiki, bridgeMetadata.related_sources, input.architectureStatus, input.architectureStatus.missing_graph_bridges, false, bridgeMetadata.missing_related_wiki, bridgeMetadata.missing_related_sources, context);
 }
 async function updateFinishTaskRecord(input, context, operationId) {
     const projectIdentity = projectIdentityFromFinishPayload(input);
-    const notePath = resolveFinishTaskSessionNotePath(input, context);
-    const sessionNote = await findOperationOwnedNoteAsync(input.vaultRoot, SESSION_NOTE_DIR, input.filename, 'finish_operation_id', operationId, context);
-    if (!sessionNote) {
-        throw new safety_1.ToolInputError(`Session note is missing for finish-task operation: ${notePath}`);
-    }
-    const proposalResult = await collectFinishTaskArtifacts(input.vaultRoot, input.taskId, sessionNote.path, input.reviewProposalMode, input.projectHint, input.projectId, input.repoPath, input.memoryScope, input.rawRelatedWiki ?? input.relatedWiki, input.rawRelatedSources ?? input.relatedSources, input.architectureStatus, {
+    const finishRecord = await findFinishTaskRecord(input, context, operationId);
+    const proposalResult = await collectFinishTaskArtifacts(input.vaultRoot, input.taskId, finishRecord.path, input.reviewProposalMode, input.projectHint, input.projectId, input.repoPath, input.memoryScope, input.rawRelatedWiki ?? input.relatedWiki, input.rawRelatedSources ?? input.relatedSources, input.architectureStatus, {
         decisions: input.decisions,
         solution_changes: input.solutionChanges,
         lessons: input.lessons,
@@ -8316,17 +8490,21 @@ async function updateFinishTaskRecord(input, context, operationId) {
         memory_candidates: input.memoryCandidates,
     }, input.memoryCandidateRecords ?? [], context, operationId, input.projectMemoryEntryVersion === 1
         && buildFinishTaskProjectMemoryPlan(input, context) !== null);
-    const durableOutputEvidence = await readFinishTaskDurableOutputEvidence(input, sessionNote.path, context, 'repair') ?? await buildFinishTaskDurableOutput(input, proposalResult, context);
-    const aggregatedProposals = aggregateFinishTaskProposalReferences(input, proposalResult, sessionNote.path, context);
+    const durableOutputEvidence = await readFinishTaskDurableOutputEvidence(input, finishRecord.path, context, 'repair') ?? await buildFinishTaskDurableOutput(input, proposalResult, context);
+    const aggregatedProposals = aggregateFinishTaskProposalReferences(input, proposalResult, finishRecord.path, context);
     const proposalPaths = aggregatedProposals.map((proposal) => proposal.path);
     const proposalIds = aggregatedProposals.map((proposal) => proposal.proposalId);
     const autoWritePaths = proposalResult.autoAppliedMemoryUpdates.map((update) => update.path);
-    await updateManagedRecordFields(input.vaultRoot, sessionNote.path, durableOutputFrontmatterFields(durableOutputEvidence), context);
-    const taskPath = await updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, {
+    if (!finishTaskUsesSingleTaskRecord(input)) {
+        await updateManagedRecordFields(input.vaultRoot, finishRecord.path, durableOutputFrontmatterFields(durableOutputEvidence), context);
+    }
+    const taskFields = {
         status: input.status,
-        finished_at: new Date().toISOString(),
+        finished_at: input.taskFinishedAt ?? new Date().toISOString(),
         summary: input.summary,
-        session_note: sessionNote.path,
+        ...(finishTaskUsesSingleTaskRecord(input)
+            ? {}
+            : { session_note: finishRecord.path }),
         outcomes: input.outcomes.join(', '),
         next_actions: input.nextActions.join(', '),
         decisions: input.decisions.join(', '),
@@ -8343,52 +8521,35 @@ async function updateFinishTaskRecord(input, context, operationId) {
         project_identity_warnings: projectIdentity.warnings.join(', '),
         finish_operation_id: operationId,
         ...durableOutputFrontmatterFields(durableOutputEvidence),
-    }, context, {
-        memory_writes: [sessionNote.path, ...autoWritePaths],
+    };
+    const taskReferences = {
+        memory_writes: finishTaskUsesSingleTaskRecord(input)
+            ? autoWritePaths
+            : [finishRecord.path, ...autoWritePaths],
         proposal_ids: proposalIds,
         proposal_paths: proposalPaths,
         proposal_link_targets: proposalPaths,
-    }, [
-        contentText(context, '## 完成摘要', '## Completion Summary'),
-        input.summary,
-        '',
-        contentText(context, '## 结果', '## Outcomes'),
-        ...formatListMarkdown(input.outcomes).split('\n'),
-        '',
-        contentText(context, '## 下一步', '## Next Actions'),
-        ...formatListMarkdown(input.nextActions).split('\n'),
-        '',
-        contentText(context, '## 决策', '## Decisions'),
-        ...formatListMarkdown(input.decisions).split('\n'),
-        '',
-        contentText(context, '## 方案调整', '## Solution Changes'),
-        ...formatListMarkdown(input.solutionChanges).split('\n'),
-        '',
-        contentText(context, '## 经验教训', '## Lessons'),
-        ...formatListMarkdown(input.lessons).split('\n'),
-        '',
-        contentText(context, '## 偏好', '## Preferences'),
-        ...formatListMarkdown(input.preferences).split('\n'),
-        '',
-        contentText(context, '## 长期记忆处理', '## Durable Memory Processing'),
-        ...(input.memoryCandidateRecords && input.memoryCandidateRecords.length > 0
-            ? input.memoryCandidateRecords.map((candidate) => `- [${candidate.scope}] ${candidate.content}`)
-            : ['- (none; task facts remain task history only)']),
-        `^finish-${operationId}`,
-    ].join('\n'), `^finish-${operationId}`);
-    await updateManagedProposalReferences(input.vaultRoot, sessionNote.path, aggregatedProposals, context);
-    if (taskPath) {
-        await updateManagedProposalReferences(input.vaultRoot, taskPath, aggregatedProposals, context);
+    };
+    const completionBody = buildFinishTaskCompletionBody(input, context, operationId);
+    const updateTaskRecord = () => updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, taskFields, context, taskReferences, completionBody, `^finish-${operationId}`);
+    let taskPath = await updateTaskRecord();
+    if (!taskPath && finishTaskUsesSingleTaskRecord(input)) {
+        await ensureFinishTaskRecordExists(input, context, operationId);
+        taskPath = await updateTaskRecord();
     }
+    if (!taskPath) {
+        throw new safety_1.ToolInputError(`Task record is missing for finish-task operation: ${buildTaskNotePath(input.taskId)}`);
+    }
+    if (!finishTaskUsesSingleTaskRecord(input)) {
+        await updateManagedProposalReferences(input.vaultRoot, finishRecord.path, aggregatedProposals, context);
+    }
+    await updateManagedProposalReferences(input.vaultRoot, taskPath, aggregatedProposals, context);
     return taskPath;
 }
 async function executeFinishTaskOperation(input, context, operationId, idempotencyKey) {
     const projectIdentity = projectIdentityFromFinishPayload(input);
-    const sessionNote = await findOperationOwnedNoteAsync(input.vaultRoot, SESSION_NOTE_DIR, input.filename, 'finish_operation_id', operationId, context);
-    if (!sessionNote) {
-        throw new safety_1.ToolInputError(`Session note is missing for finish-task operation: ${resolveFinishTaskSessionNotePath(input, context)}`);
-    }
-    const proposalResult = await collectFinishTaskArtifacts(input.vaultRoot, input.taskId, sessionNote.path, input.reviewProposalMode, input.projectHint, input.projectId, input.repoPath, input.memoryScope, input.rawRelatedWiki ?? input.relatedWiki, input.rawRelatedSources ?? input.relatedSources, input.architectureStatus, {
+    const finishRecord = await findFinishTaskRecord(input, context, operationId);
+    const proposalResult = await collectFinishTaskArtifacts(input.vaultRoot, input.taskId, finishRecord.path, input.reviewProposalMode, input.projectHint, input.projectId, input.repoPath, input.memoryScope, input.rawRelatedWiki ?? input.relatedWiki, input.rawRelatedSources ?? input.relatedSources, input.architectureStatus, {
         decisions: input.decisions,
         solution_changes: input.solutionChanges,
         lessons: input.lessons,
@@ -8397,12 +8558,12 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         memory_candidates: input.memoryCandidates,
     }, input.memoryCandidateRecords ?? [], context, operationId, input.projectMemoryEntryVersion === 1
         && buildFinishTaskProjectMemoryPlan(input, context) !== null);
-    const durableOutputEvidence = await readFinishTaskDurableOutputEvidence(input, sessionNote.path, context, 'finalize');
+    const durableOutputEvidence = await readFinishTaskDurableOutputEvidence(input, finishRecord.path, context, 'finalize');
     if (!durableOutputEvidence) {
         throw new core_1.OperationConflictError('Finish-task durable-output evidence is unavailable at finalization.');
     }
     const durableOutput = durableOutputEvidence.summary;
-    const aggregatedProposals = aggregateFinishTaskProposalReferences(input, proposalResult, sessionNote.path, context);
+    const aggregatedProposals = aggregateFinishTaskProposalReferences(input, proposalResult, finishRecord.path, context);
     const memoryCloseoutState = compatibleMemoryCloseoutStatus(durableOutput, resolveCanonicalMemoryCloseoutStatus(input.reviewProposalMode, proposalResult, input.hasCloseoutCandidates, resolveMemoryCloseoutStatus(input.reviewProposalMode, proposalResult, input.hasCloseoutCandidates)));
     const response = {
         ok: true,
@@ -8411,9 +8572,9 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         idempotency_key: idempotencyKey,
         task_id: input.taskId,
         task_path: buildTaskNotePath(input.taskId),
-        path: sessionNote.path,
-        session_path: sessionNote.path,
-        activity_path: sessionNote.activity_path,
+        path: finishRecord.path,
+        session_path: finishRecord.path,
+        activity_path: finishRecord.activity_path,
         status: input.status,
         content_language: input.contentLanguage,
         content_language_source: contentLanguageSourceFromContext(context),
@@ -8558,12 +8719,7 @@ async function handleFinishTask(rawArgs, context) {
         buildPayload: (args, operationId, requestHash, requestSnapshot) => buildFinishTaskOperationPayload(args, context, operationId, requestHash, requestSnapshot),
         getTaskId: (payload) => payload.taskId,
         readLifecycle: (taskId) => readTaskLifecycleStateAsync(vaultRoot, taskId, context),
-        markClosing: async (payload, operationId) => {
-            await updateAgentTaskRecordAsync(vaultRoot, payload.taskId, {
-                status: 'closing',
-                finish_operation_id: operationId,
-            }, context);
-        },
+        markClosing: (payload, operationId) => markFinishTaskRecordClosing(payload, context, operationId),
         buildSteps: (operationPayload, operationId) => {
             const closeoutGroups = operationPayload.closeoutGroups.filter((group) => finishTaskShouldWriteCloseoutGroup(group, operationPayload, context));
             const projectMemoryPlan = buildFinishTaskProjectMemoryPlan(operationPayload, context);
@@ -8587,10 +8743,12 @@ async function handleFinishTask(rawArgs, context) {
                 });
             }
             return [
-                {
-                    name: 'finish-task:session-note',
-                    execute: () => writeFinishTaskSessionNote(operationPayload, context, operationId),
-                },
+                ...(finishTaskUsesSingleTaskRecord(operationPayload)
+                    ? []
+                    : [{
+                            name: 'finish-task:session-note',
+                            execute: () => writeFinishTaskSessionNote(operationPayload, context, operationId),
+                        }]),
                 ...closeoutSteps,
                 {
                     name: 'finish-task:update-task-record',

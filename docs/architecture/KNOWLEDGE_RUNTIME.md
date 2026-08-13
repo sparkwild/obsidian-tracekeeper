@@ -24,6 +24,13 @@ Body wikilinks are the graph contract. Relationship fields such as
 `related_wiki` and `related_sources` are mirrored in note bodies so Obsidian,
 Recall, and graph inspection share the same relationships.
 
+The read model preserves every physical frontmatter and body-link observation,
+but graph-health relationship totals are semantic: the same source-to-target
+relation mirrored in both locations counts once. `edge_observation_count`
+exposes the raw occurrence total, while `wikilink_edge_count`,
+`resolved_edge_count`, and `unresolved_edge_count` report deduplicated semantic
+edges. Unresolved rows retain their occurrence count and declaration channels.
+
 ## Repository Boundary
 
 Core defines an asynchronous Vault repository port for safe reads,
@@ -38,6 +45,27 @@ only Vault-relative paths.
 
 Optimistic versions detect external edits; they are not a second source of
 truth. A stale replacement fails instead of silently overwriting newer content.
+
+## Task Lifecycle Writes
+
+`start_task` creates one canonical Markdown record under
+`00_tracekeeper/work/tasks/`. `finish_task` closes that same record by adding
+the final status, summary, execution details, durable-output snapshot, and
+proposal references. If the canonical file is missing at finish time, the
+Runtime exclusively recreates it at the same task path from the stable finish
+payload, marks `start_record_missing`, `task_record_origin`, and
+`reconstructed_at`, and then writes the full closeout. It does not invent an
+unknown start time. Normal closeout does not create a second file under
+`00_tracekeeper/work/sessions/`; the optional `session_path` response field is
+a compatibility alias for the canonical task path.
+
+Explicit session distillation and compatibility session-note tools remain
+separate, intentional artifact flows. They may create a session note, but their
+existence does not split the start/finish lifecycle. Reconstructed task creation
+is exclusive and operation-bound, so exact retries converge while a competing
+finish operation conflicts. Recoverable finish writes use the operation journal
+and the canonical task record; unfinished older journal entries retain their
+original step layout so an upgrade does not change an in-flight operation.
 
 ## Read And Recall Flow
 
@@ -55,6 +83,12 @@ Source candidates are durable provenance, not approved synthesis. Their
 presence in Recall or `read_note` does not imply that any linked Wiki/Memory
 proposal has been approved or applied; the finish-task durable-output summary
 owns that closeout distinction.
+
+A Source note's `source` metadata, capture structure, part links, and incidental
+body links remain visible in the raw Vault graph but do not become Recall
+knowledge relations. Only dedicated `related_wiki` or `related_sources`
+frontmatter, optionally mirrored by the same body link, contributes Source
+`relation_evidence`, `graph_links`, or graph-neighbor expansion.
 
 The index is disposable. Status exposes readiness and generation, and a rebuild
 can reproduce it from Markdown.

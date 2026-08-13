@@ -12,8 +12,10 @@ const { McpJsonRpcHandler } = require('../dist/handler.js');
 const {
 	AGENT_ACTIVITY_HUB_TYPE,
 	AGENT_ACTIVITY_SCHEMA_VERSION,
+	computePayloadHash,
 	computeProposalContentHash,
 	computeProposalRevision,
+	NodeFileOperationJournal,
 	NodeFsVaultRepository,
 	renderAgentActivityHub,
 	transitionProposal,
@@ -122,6 +124,179 @@ const startTask = async (fixture, suffix) => invoke('tracekeeper.start_task', {
 	idempotency_key: `record-lifecycle-start-${suffix}`,
 }, fixture.context);
 
+test('finish task completes the original task record without creating an implicit session note', async () => {
+	const fixture = createFixture();
+	try {
+		const task = await startTask(fixture, 'single-record');
+		const taskPath = `00_tracekeeper/work/tasks/${task.task_id}.md`;
+		const finished = await invoke('tracekeeper.finish_task', {
+			task_id: task.task_id,
+			status: 'completed',
+			summary: 'Complete the existing task record only.',
+			outcomes: ['No implicit session note was created.'],
+			filename: 'ignored-finish-session-name',
+			idempotency_key: 'record-lifecycle-finish-single-record',
+		}, fixture.context);
+
+		assert.equal(finished.path, taskPath);
+		assert.equal(finished.task_path, taskPath);
+		assert.equal(finished.session_path, taskPath);
+		assert.equal(
+			fs.existsSync(path.join(fixture.vaultRoot, '00_tracekeeper/work/sessions')),
+			false
+		);
+		const taskText = fixture.read(taskPath);
+		assert.match(taskText, /^status: completed$/m);
+		assert.match(taskText, /^summary: "?Complete the existing task record only\."?$/m);
+		assert.match(taskText, /## Completion Summary\nComplete the existing task record only\./);
+		assert.doesNotMatch(taskText, /^session_note:/m);
+	} finally {
+		fixture.cleanup();
+	}
+});
+
+test('finish task reconstructs a missing canonical task record without creating an orphan note', async () => {
+	const fixture = createFixture();
+	try {
+		const args = {
+			task_id: 'obs_task_missing',
+			status: 'completed',
+			summary: 'This closeout has no matching start record.',
+			outcomes: ['The canonical task record was reconstructed and completed.'],
+			next_actions: ['Continue from the reconstructed task history.'],
+			decisions: ['Keep start and finish data in one canonical task record.'],
+			solution_changes: ['Create the task record during finish when it is missing.'],
+			lessons: ['A missing start record should not force an orphan finish note.'],
+			preferences: ['Prefer a complete recoverable task record.'],
+			project_hint: 'record-lifecycle',
+			repo_path: '/workspace/record-lifecycle',
+			filename: 'must-not-be-created',
+			idempotency_key: 'record-lifecycle-finish-missing-task',
+		};
+		const taskPath = '00_tracekeeper/work/tasks/obs_task_missing.md';
+		let injected = false;
+		const interrupted = await callTool('tracekeeper.finish_task', args, {
+			...fixture.context,
+			operationFailureInjection({ phase, stepName }) {
+				if (
+					!injected
+					&& phase === 'before_step'
+					&& stepName === 'finish-task:update-task-record'
+				) {
+					injected = true;
+					throw new Error('interrupt before reconstructed task finalization');
+				}
+			},
+		});
+		assert.equal(interrupted.isError, true);
+		assert.equal(injected, true);
+		const reconstructedText = fixture.read(taskPath);
+		assert.match(reconstructedText, /^status: closing$/m);
+		assert.match(reconstructedText, /## Completion Summary\nThis closeout has no matching start record\./);
+		assert.match(reconstructedText, /## Outcomes\n- The canonical task record was reconstructed and completed\./);
+		assert.match(reconstructedText, /\^finish-finish-task-/);
+
+		const finished = await invoke('tracekeeper.finish_task', args, fixture.context);
+
+		assert.equal(finished.path, taskPath);
+		assert.equal(finished.task_path, taskPath);
+		assert.equal(finished.session_path, taskPath);
+		assert.equal(
+			fs.existsSync(path.join(fixture.vaultRoot, '00_tracekeeper/work/sessions')),
+			false
+		);
+		const taskText = fixture.read(taskPath);
+		assert.match(taskText, /^tool: "tracekeeper\.finish_task"$/m);
+		assert.match(taskText, /^type: "agent-task"$/m);
+		assert.match(taskText, /^task_id: "obs_task_missing"$/m);
+		assert.match(taskText, /^status: completed$/m);
+		assert.match(taskText, /^task_record_origin: "finish_task_reconstruction"$/m);
+		assert.match(taskText, /^start_record_missing: true$/m);
+		assert.match(taskText, /^started_at: null$/m);
+		assert.match(taskText, /^objective_source: "finish_summary"$/m);
+		assert.match(taskText, /^objective: "This closeout has no matching start record\."$/m);
+		assert.match(taskText, /^reconstructed_at: ".+"$/m);
+		assert.match(taskText, /^finished_at: ".+"$/m);
+		assert.match(taskText, /## Objective\nThis closeout has no matching start record\./);
+		assert.match(taskText, /## Reconstruction\n- start_record: missing/);
+		assert.match(taskText, /## Completion Summary\nThis closeout has no matching start record\./);
+		assert.match(taskText, /## Outcomes\n- The canonical task record was reconstructed and completed\./);
+		assert.match(taskText, /## Next Actions\n- Continue from the reconstructed task history\./);
+		assert.match(taskText, /## Decisions\n- Keep start and finish data in one canonical task record\./);
+		assert.match(taskText, /## Solution Changes\n- Create the task record during finish when it is missing\./);
+		assert.match(taskText, /## Lessons\n- A missing start record should not force an orphan finish note\./);
+		assert.match(taskText, /## Preferences\n- Prefer a complete recoverable task record\./);
+
+		const retried = await invoke('tracekeeper.finish_task', args, fixture.context);
+		assert.deepEqual(retried, finished);
+		assert.equal(
+			(fixture.read(taskPath).match(new RegExp(`\\^finish-${finished.operation_id}`, 'g')) || []).length,
+			1
+		);
+	} finally {
+		fixture.cleanup();
+	}
+});
+
+test('unfinished legacy finish operation keeps its original session-note recovery topology', async () => {
+	const fixture = createFixture();
+	try {
+		const task = await startTask(fixture, 'legacy-finish-recovery');
+		const args = {
+			task_id: task.task_id,
+			status: 'completed',
+			summary: 'Resume an operation created before single-record closeout.',
+			idempotency_key: 'record-lifecycle-finish-legacy-recovery',
+		};
+		let injected = false;
+		const interrupted = await callTool('tracekeeper.finish_task', args, {
+			...fixture.context,
+			operationFailureInjection({ phase, stepName }) {
+				if (
+					!injected
+					&& phase === 'before_step'
+					&& stepName === 'finish-task:update-task-record'
+				) {
+					injected = true;
+					throw new Error('interrupt before single-record closeout');
+				}
+			},
+		});
+		assert.equal(interrupted.isError, true);
+		assert.equal(injected, true);
+
+		const operationDirectory = path.join(
+			fixture.vaultRoot,
+			'00_tracekeeper/control/operations'
+		);
+		const operationFile = fs.readdirSync(operationDirectory)
+			.find((entry) => entry.startsWith('finish-task-') && entry.endsWith('.json'));
+		assert.ok(operationFile);
+		const operationPath = path.join(operationDirectory, operationFile);
+		const operationId = path.basename(operationFile, '.json');
+		const operation = await new NodeFileOperationJournal({ directory: operationDirectory })
+			.loadById(operationId);
+		assert.ok(operation);
+		delete operation.payload.taskRecordCloseoutVersion;
+		delete operation.payload.taskFinishedAt;
+		operation.payload_hash = computePayloadHash(operation.payload);
+		fs.writeFileSync(operationPath, `${JSON.stringify(operation, null, 2)}\n`, 'utf8');
+		fs.rmSync(
+			path.join(operationDirectory, `.progress-${operation.operation_id}.anchor`),
+			{ force: true }
+		);
+
+		const resumed = await invoke('tracekeeper.finish_task', args, fixture.context);
+		assert.match(resumed.path, /^00_tracekeeper\/work\/sessions\//);
+		assert.notEqual(resumed.path, resumed.task_path);
+		const taskText = fixture.read(resumed.task_path);
+		assert.match(taskText, new RegExp(`^session_note: "?${resumed.path}"?$`, 'm'));
+		assert.equal(fs.existsSync(path.join(fixture.vaultRoot, resumed.path)), true);
+	} finally {
+		fixture.cleanup();
+	}
+});
+
 const withMutableClock = async (initialIso, run) => {
 	const NativeDate = globalThis.Date;
 	let nowMs = NativeDate.parse(initialIso);
@@ -224,7 +399,7 @@ test('new proposals persist and return a path-independent proposal id', async ()
 	}
 });
 
-test('finish task stores proposal ids and generated-link handoff in task and session records', async () => {
+test('finish task stores proposal ids and generated-link handoff in the task record', async () => {
 	const fixture = createFixture();
 	try {
 		const task = await startTask(fixture, 'finish-links');
@@ -246,15 +421,10 @@ test('finish task stores proposal ids and generated-link handoff in task and ses
 		assert.match(taskText, /proposal_paths:.*review_queue/);
 		assert.match(taskText, /proposal_link_targets:.*review_queue/);
 		assert.doesNotMatch(taskText, /^proposals: .*review_queue/m);
-		const sessionPath = taskText.match(/^session_note:\s*(.+)$/m)?.[1]?.trim();
-		assert.ok(sessionPath);
-		const sessionText = fixture.read(sessionPath);
-		assert.match(sessionText, /proposal_ids:/);
-		assert.match(sessionText, /proposal_paths:.*review_queue/);
-		assert.match(sessionText, /proposal_link_targets:.*review_queue/);
-		assert.doesNotMatch(
-			sessionText,
-			/\[\[.*review_queue.*\]\]|\[.*\]\(.*review_queue.*\)/
+		assert.doesNotMatch(taskText, /^session_note:/m);
+		assert.equal(
+			fs.existsSync(path.join(fixture.vaultRoot, '00_tracekeeper/work/sessions')),
+			false
 		);
 	} finally {
 		fixture.cleanup();
@@ -280,13 +450,10 @@ test('finish task persists human links returned by a Vault adapter', async () =>
 		}, fixture.context);
 		const proposalPath = finished.proposals[0].path;
 		const taskText = fixture.read(`00_tracekeeper/work/tasks/${task.task_id}.md`);
-		const sessionPath = taskText.match(/^session_note:\s*(.+)$/m)?.[1]?.trim();
-		assert.ok(sessionPath);
-		for (const recordText of [taskText, fixture.read(sessionPath)]) {
-			assert.match(recordText, /proposal_links:/);
-			assert.match(recordText, new RegExp(`\\[\\[${proposalPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\|generated-from-`));
-			assert.match(recordText, /\^tracekeeper-proposal-proposal-/);
-		}
+		assert.match(taskText, /proposal_links:/);
+		assert.match(taskText, new RegExp(`\\[\\[${proposalPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\|generated-from-${task.task_id}`));
+		assert.match(taskText, /\^tracekeeper-proposal-proposal-/);
+		assert.doesNotMatch(taskText, /^session_note:/m);
 	} finally {
 		fixture.cleanup();
 	}

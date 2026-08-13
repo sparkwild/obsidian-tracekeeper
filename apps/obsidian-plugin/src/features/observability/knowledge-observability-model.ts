@@ -114,7 +114,7 @@ export interface SourceStatusQuery {
 	taskId?: string;
 }
 
-export type SourceEvidenceState = 'captured' | 'incomplete' | 'missing';
+export type SourceEvidenceState = 'captured' | 'reference_only' | 'incomplete' | 'missing';
 export type SourceCaptureEvidenceIssue =
 	| 'type'
 	| 'source'
@@ -1006,9 +1006,12 @@ export const buildSourceStatusSnapshot = (
 			notesByPath,
 			partPathsByParent
 		);
-		const state: SourceEvidenceState = evidenceIssues.length === 0
-			? 'captured'
-			: 'incomplete';
+		const mode = frontmatterString(note, ['mode', 'source_mode', 'sourceMode']);
+		const state: SourceEvidenceState = evidenceIssues.length > 0
+			? 'incomplete'
+			: mode.trim().toLowerCase() === 'external_reference'
+				? 'reference_only'
+				: 'captured';
 		records.push({
 			id: `${state}:${path}`,
 			path,
@@ -1026,7 +1029,7 @@ export const buildSourceStatusSnapshot = (
 			partManifest: uniquePaths(
 				frontmatterStringList(note, ['part_manifest', 'partManifest'])
 			),
-			mode: frontmatterString(note, ['mode', 'source_mode', 'sourceMode']),
+			mode,
 			state,
 			evidenceIssues,
 			taskIds,

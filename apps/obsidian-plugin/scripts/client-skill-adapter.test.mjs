@@ -162,6 +162,27 @@ try {
 	assert.equal(updated.action, 'update');
 	assert.equal(updated.backupDirectory !== '', true);
 	assert.equal(updateAdapter.detect(ownedCodexProfile).state, 'installed');
+	const sameVersionBundle = buildBundle('2.1.0', '# Tracekeeper same-version refresh\n');
+	const currentProfile = {
+		...codexProfile,
+		ownedBundleHash: embeddedBundle.manifest.bundle_hash,
+		ownedSkillVersion: embeddedBundle.manifest.skill_version,
+	};
+	const sameVersionAdapter = new module.ClientSkillAdapter({
+		fs: fileApi,
+		path: { dirname: path.dirname, join: path.join },
+		bundle: sameVersionBundle,
+		now: () => now,
+		planTtlMs: 1_000,
+	});
+	assert.equal(sameVersionAdapter.detect(codexProfile).state, 'modified');
+	const sameVersionState = sameVersionAdapter.detect(currentProfile);
+	assert.equal(sameVersionState.state, 'update_available');
+	assert.equal(sameVersionState.fileVerified, true);
+	assert.equal(sameVersionState.updateAvailable, true);
+	const sameVersionUpdatePlan = sameVersionAdapter.previewUpdate(currentProfile);
+	assert.equal(sameVersionUpdatePlan.action, 'update');
+	assert.equal(sameVersionUpdatePlan.canConfirm, true);
 	const nextBundle = buildBundle('2.2.0', '# Tracekeeper next\n');
 	const nextAdapter = new module.ClientSkillAdapter({
 		fs: fileApi,
@@ -170,11 +191,6 @@ try {
 		now: () => now,
 		planTtlMs: 1_000,
 	});
-	const currentProfile = {
-		...codexProfile,
-		ownedBundleHash: embeddedBundle.manifest.bundle_hash,
-		ownedSkillVersion: embeddedBundle.manifest.skill_version,
-	};
 	const beforeFailedUpdate = new Map(
 		Object.keys(embeddedBundle.installFiles).map((filePath) => [filePath, files.get(path.join(primaryDirectory, filePath))])
 	);

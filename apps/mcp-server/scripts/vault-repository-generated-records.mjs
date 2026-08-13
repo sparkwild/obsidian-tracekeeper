@@ -366,7 +366,7 @@ async function main() {
 		const failedFinish = await callTool('tracekeeper.finish_task', finishArgs, {
 			...context,
 			operationFailureInjection({ phase, stepName }) {
-				if (!interrupted && phase === 'before_step' && stepName === 'finish-task:session-note') {
+				if (!interrupted && phase === 'before_step' && stepName === 'finish-task:update-task-record') {
 					interrupted = true;
 					throw new Error('simulated finish snapshot interruption');
 				}

@@ -1489,7 +1489,13 @@ async function runSingle(scenario, options, runOutputDir) {
 	};
 }
 
-async function runRealMatrix(scenarios, args, outputPaths, runSingleImpl = runSingle) {
+async function runRealMatrix(
+	scenarios,
+	args,
+	outputPaths,
+	runSingleImpl = runSingle,
+	scanExternalSkillsImpl = hasExternalTracekeeperSkill
+) {
 	const dryRun = !args.execute;
 	const runStarted = new Date().toISOString();
 	if (dryRun) {
@@ -1511,7 +1517,7 @@ async function runRealMatrix(scenarios, args, outputPaths, runSingleImpl = runSi
 	await fs.access(mcpRuntimePath);
 	const expandedArms = expandArms(args.arm);
 	const externalTracekeeperSkillScan = expandedArms.includes('mcp-only')
-		? await hasExternalTracekeeperSkill()
+		? await scanExternalSkillsImpl()
 		: [];
 	if (expandedArms.includes('mcp-only') && externalTracekeeperSkillScan.length > 0) {
 		const safeLocations = externalTracekeeperSkillScan.map((entry) =>

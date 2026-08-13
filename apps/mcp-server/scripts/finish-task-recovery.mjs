@@ -151,14 +151,13 @@ async function main() {
 		const failedOperationPath = findFinishTaskOperation(vaultRoot);
 		const failedOperation = readJson(failedOperationPath);
 		assert.equal(failedOperation.status, 'failed');
-		assert.equal(failedOperation.completed_steps.length, 1);
-		assert.equal(failedOperation.completed_steps[0].name, 'finish-task:session-note');
+		assert.equal(failedOperation.completed_steps.length, 0);
 		assert.match(failedOperation.error, /simulated finish_task interruption/);
 
 		const sessionNotesForOperation = collectMatches(sessionDir, (entryPath) =>
 			fs.readFileSync(entryPath, 'utf8').includes(`finish_operation_id: "${failedOperation.operation_id}"`)
 		);
-		assert.equal(sessionNotesForOperation.length, 1);
+		assert.equal(sessionNotesForOperation.length, 0);
 		const proposedForOperationOnFail = collectMatches(reviewQueueDir, (entryPath) =>
 			fs.readFileSync(entryPath, 'utf8').includes(failedOperation.operation_id)
 		);
@@ -200,10 +199,10 @@ async function main() {
 
 		const completedOperation = readJson(failedOperationPath);
 		assert.equal(completedOperation.status, 'completed');
-		assert.equal(completedOperation.completed_steps.length, 2);
+		assert.equal(completedOperation.completed_steps.length, 1);
 		assert.deepEqual(
 			completedOperation.completed_steps.map((step) => step.name),
-			['finish-task:session-note', 'finish-task:update-task-record']
+			['finish-task:update-task-record']
 		);
 
 		const proposalFilesForOperation = collectMatches(reviewQueueDir, () => true);
@@ -237,16 +236,23 @@ async function main() {
 			'finish_task replay by the same idempotency key should be identical'
 		);
 
-		const sessionText = fs.readFileSync(path.join(vaultRoot, resumed.structuredContent.path), 'utf8');
+		assert.equal(
+			resumed.structuredContent.path,
+			'00_tracekeeper/work/tasks/recovery-task.md'
+		);
+		const finishRecordText = fs.readFileSync(path.join(vaultRoot, resumed.structuredContent.path), 'utf8');
 		const finishMarker = `^finish-${resumed.structuredContent.operation_id}`;
-		assert.equal(countOccurrences(sessionText, `finish_operation_id: "${resumed.structuredContent.operation_id}"`), 1);
+		assert.match(
+			finishRecordText,
+			new RegExp(`^finish_operation_id: "?${resumed.structuredContent.operation_id}"?$`, 'm')
+		);
 		const completedSessionNotes = collectMatches(sessionDir, (entryPath) =>
 			fs.readFileSync(entryPath, 'utf8').includes(`finish_operation_id: "${resumed.structuredContent.operation_id}"`)
 		);
-		assert.equal(completedSessionNotes.length, 1);
+		assert.equal(completedSessionNotes.length, 0);
 		const taskText = fs.readFileSync(taskPath, 'utf8');
-		assert.equal(countOccurrences(taskText, resumed.structuredContent.path), 2);
-		assert.equal(countOccurrences(taskText, 'sessions/'), 2);
+		assert.equal(taskText, finishRecordText);
+		assert.equal(countOccurrences(taskText, 'sessions/'), 0);
 		assert.equal(countOccurrences(taskText, finishMarker), 1);
 
 		const conflictingReplay = await callTool(

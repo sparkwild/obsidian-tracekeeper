@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RecallApplicationService = exports.MAX_READ_VIEW_RERANKED_ROWS = exports.MAX_READ_VIEW_GRAPH_EXPANSIONS = exports.MAX_READ_VIEW_LEXICAL_CANDIDATES = void 0;
+exports.buildKnowledgeRelationEvidenceFromReadView = buildKnowledgeRelationEvidenceFromReadView;
+exports.buildKnowledgeGraphLinksFromReadView = buildKnowledgeGraphLinksFromReadView;
 const core_1 = require("@tracekeeper/core");
 const PROJECT_MEMORY_READ_DIRS = [core_1.KNOWLEDGE_PROJECTS_MEMORY_DIR, '05_projects', '04_projects'];
 const MAX_PROJECT_SCOPE_CANDIDATES = 8;
@@ -357,7 +359,13 @@ function compactNoteText(text, maxLength = MAX_RECALL_EXCERPT_LENGTH) {
     }
     return `${compact.slice(0, maxLength - 1).trimEnd()}…`;
 }
-function buildRecallGraphLinks(note) {
+function buildRecallGraphLinks(note, relationEvidence) {
+    if ((0, core_1.isKnowledgeSourcePath)(note.relativePath) || (note.type ?? '').toLocaleLowerCase('en-US').includes('source')) {
+        return [...new Set([
+                ...relationEvidence.related_wiki.map((relation) => relation.path),
+                ...relationEvidence.related_sources.map((relation) => relation.path),
+            ])].sort((left, right) => left.localeCompare(right)).slice(0, MAX_RECALL_GRAPH_LINKS);
+    }
     const links = new Set();
     for (const link of note.edges) {
         if (link.resolution.status !== 'resolved') {
@@ -386,6 +394,7 @@ function buildRecallWhyMatched(match, scope) {
     return [scopeLabel, tokenText ? `matched tokens: ${tokenText}` : '', reasonText].filter(Boolean).join(' - ');
 }
 function buildRecallEntry(match, scope, allNotes, dependencies) {
+    const relationEvidence = dependencies.buildRelationEvidence(match.note, allNotes);
     return {
         path: match.note.relativePath,
         title: match.note.title,
@@ -400,8 +409,8 @@ function buildRecallEntry(match, scope, allNotes, dependencies) {
         excerpt: compactNoteText(match.note.content),
         content_origin: dependencies.contentOrigin(match.note.relativePath, match.note.type),
         instruction_trust: 'data_only',
-        graph_links: buildRecallGraphLinks(match.note),
-        relation_evidence: dependencies.buildRelationEvidence(match.note, allNotes),
+        graph_links: buildRecallGraphLinks(match.note, relationEvidence),
+        relation_evidence: relationEvidence,
     };
 }
 function buildProjectHistoryWhy(note, query) {
@@ -416,22 +425,25 @@ function buildProjectHistoryWhy(note, query) {
     return parts.join(' - ');
 }
 function buildProjectHistoryEntries(matches, query, allNotes, dependencies) {
-    return matches.map((note) => ({
-        path: note.relativePath,
-        title: note.title,
-        type: note.type,
-        note_type: note.type ?? null,
-        scope: 'project_history',
-        modifiedAt: note.modifiedAt,
-        content_origin: dependencies.contentOrigin(note.relativePath, note.type),
-        instruction_trust: 'data_only',
-        task_id: readFrontmatterString(note.frontmatter, ['task_id', 'taskId']),
-        project_hint: readFrontmatterString(note.frontmatter, ['project_hint', 'related_project', 'project']),
-        why_matched: buildProjectHistoryWhy(note, query),
-        excerpt: compactNoteText(note.content),
-        graph_links: buildRecallGraphLinks(note),
-        relation_evidence: dependencies.buildRelationEvidence(note, allNotes),
-    }));
+    return matches.map((note) => {
+        const relationEvidence = dependencies.buildRelationEvidence(note, allNotes);
+        return {
+            path: note.relativePath,
+            title: note.title,
+            type: note.type,
+            note_type: note.type ?? null,
+            scope: 'project_history',
+            modifiedAt: note.modifiedAt,
+            content_origin: dependencies.contentOrigin(note.relativePath, note.type),
+            instruction_trust: 'data_only',
+            task_id: readFrontmatterString(note.frontmatter, ['task_id', 'taskId']),
+            project_hint: readFrontmatterString(note.frontmatter, ['project_hint', 'related_project', 'project']),
+            why_matched: buildProjectHistoryWhy(note, query),
+            excerpt: compactNoteText(note.content),
+            graph_links: buildRecallGraphLinks(note, relationEvidence),
+            relation_evidence: relationEvidence,
+        };
+    });
 }
 function taskProjectMatches(note, identity) {
     const haystack = [
@@ -489,6 +501,7 @@ function buildTaskHistoryEntries(groups, query, allNotes, dependencies) {
         const summary = readFrontmatterString(session?.frontmatter ?? task.frontmatter, ['summary']);
         const objective = readFrontmatterString(task.frontmatter, ['goal', 'objective', 'title']) || task.title;
         const status = readFrontmatterString(task.frontmatter, ['status']) || null;
+        const relationEvidence = dependencies.buildRelationEvidence(source, allNotes);
         return {
             path: task.relativePath,
             task_path: task.relativePath,
@@ -508,8 +521,8 @@ function buildTaskHistoryEntries(groups, query, allNotes, dependencies) {
             excerpt: compactNoteText([task.content, session?.content, summary].filter(Boolean).join(' ')),
             content_origin: dependencies.contentOrigin(source.relativePath, source.type),
             instruction_trust: 'data_only',
-            graph_links: buildRecallGraphLinks(source),
-            relation_evidence: dependencies.buildRelationEvidence(source, allNotes),
+            graph_links: buildRecallGraphLinks(source, relationEvidence),
+            relation_evidence: relationEvidence,
         };
     });
 }
@@ -585,14 +598,64 @@ function isCurrentReadViewEntry(entry, view) {
         return true;
     return view.memory.lifecycle.current.some((row) => row.record.path === entry.path);
 }
-function relationEvidenceFromReadView(entry, view) {
+function normalizeCatalogRelationReference(value) {
+    return value.trim()
+        .replace(/^\[\[/, '')
+        .replace(/\]\]$/, '')
+        .split('|', 1)[0]
+        .replace(/#.*$/, '')
+        .replace(/^\.\//, '')
+        .replace(/\\/g, '/')
+        .toLocaleLowerCase('en-US');
+}
+function resolveCatalogRelationReference(value, view) {
+    const normalized = normalizeCatalogRelationReference(value);
+    if (!normalized)
+        return null;
+    for (const candidate of view.catalog.values()) {
+        const candidatePath = candidate.path.toLocaleLowerCase('en-US');
+        if (candidatePath === normalized || candidatePath.replace(/\.md$/i, '') === normalized.replace(/\.md$/i, '')) {
+            return candidate.path;
+        }
+        if (candidate.title.toLocaleLowerCase('en-US') === normalized)
+            return candidate.path;
+        if (candidate.aliases.some((alias) => alias.toLocaleLowerCase('en-US') === normalized))
+            return candidate.path;
+    }
+    return null;
+}
+function explicitRelationReferences(entry) {
+    const references = [];
+    for (const key of [
+        'related_wiki', 'relatedWiki', 'wiki',
+        'related_sources', 'relatedSources', 'sources',
+    ]) {
+        const value = entry.frontmatter[key];
+        const values = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
+        references.push(...values
+            .filter((item) => typeof item === 'string')
+            .flatMap((item) => item.split(/[\n,]/g))
+            .map((item) => item.trim())
+            .filter(Boolean));
+    }
+    return references;
+}
+function explicitSourceRelationTargets(entry, view) {
+    if (!(0, core_1.isKnowledgeSourcePath)(entry.path) && !(entry.type ?? '').toLocaleLowerCase('en-US').includes('source')) {
+        return new Set();
+    }
+    return new Set(explicitRelationReferences(entry)
+        .map((reference) => resolveCatalogRelationReference(reference, view))
+        .filter((path) => Boolean(path)));
+}
+function buildKnowledgeRelationEvidenceFromReadView(entry, view) {
     const rows = new Map();
     const addRelation = (targetPath, declaredVia) => {
         if (!view.catalog.has(targetPath))
             return;
         const relationKind = (0, core_1.isKnowledgeWikiPath)(targetPath)
             ? 'related_wiki'
-            : targetPath.startsWith(`${core_1.KNOWLEDGE_SOURCES_DIR}/`)
+            : (0, core_1.isKnowledgeSourcePath)(targetPath)
                 ? 'related_sources'
                 : null;
         if (!relationKind)
@@ -611,60 +674,33 @@ function relationEvidenceFromReadView(entry, view) {
             verified_by: 'active_vault_snapshot',
         });
     };
-    const normalizeReference = (value) => value.trim()
-        .replace(/^\[\[/, '')
-        .replace(/\]\]$/, '')
-        .split('|', 1)[0]
-        .replace(/#.*$/, '')
-        .replace(/^\.\//, '')
-        .replace(/\\/g, '/')
-        .toLocaleLowerCase('en-US');
-    const resolveCatalogReference = (value) => {
-        const normalized = normalizeReference(value);
-        if (!normalized)
-            return null;
-        for (const candidate of view.catalog.values()) {
-            const candidatePath = candidate.path.toLocaleLowerCase('en-US');
-            if (candidatePath === normalized || candidatePath.replace(/\.md$/i, '') === normalized.replace(/\.md$/i, '')) {
-                return candidate.path;
+    for (const reference of explicitRelationReferences(entry)) {
+        const normalizedReference = normalizeCatalogRelationReference(reference);
+        const declaredEdge = [...view.graph.edges, ...view.graph.unresolvedEdges].find((edge) => edge.source === 'frontmatter'
+            && (!edge.sourcePath || edge.sourcePath === entry.path)
+            && normalizeCatalogRelationReference(edge.linkPath || edge.target || edge.raw) === normalizedReference);
+        if (declaredEdge) {
+            if (declaredEdge.resolution.status === 'resolved') {
+                addRelation(declaredEdge.resolution.path, 'frontmatter');
             }
-            if (candidate.title.toLocaleLowerCase('en-US') === normalized)
-                return candidate.path;
-            if (candidate.aliases.some((alias) => alias.toLocaleLowerCase('en-US') === normalized))
-                return candidate.path;
+            continue;
         }
-        return null;
-    };
-    for (const key of ['related_wiki', 'relatedWiki', 'wiki', 'related_sources', 'relatedSources', 'sources', 'source']) {
-        const value = entry.frontmatter[key];
-        const values = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
-        for (const reference of values
-            .filter((item) => typeof item === 'string')
-            .flatMap((item) => item.split(/[\n,]/g))) {
-            const normalizedReference = normalizeReference(reference);
-            const declaredEdge = [...view.graph.edges, ...view.graph.unresolvedEdges].find((edge) => edge.source === 'frontmatter'
-                && (!edge.sourcePath || edge.sourcePath === entry.path)
-                && normalizeReference(edge.linkPath || edge.target || edge.raw) === normalizedReference);
-            if (declaredEdge) {
-                if (declaredEdge.resolution.status === 'resolved') {
-                    addRelation(declaredEdge.resolution.path, 'frontmatter');
-                }
-                continue;
-            }
-            const targetPath = resolveCatalogReference(reference);
-            if (targetPath)
-                addRelation(targetPath, 'frontmatter');
-        }
+        const targetPath = resolveCatalogRelationReference(reference, view);
+        if (targetPath)
+            addRelation(targetPath, 'frontmatter');
     }
-    const outgoing = new Set(view.graph.outgoing.get(entry.path) ?? []);
+    const sourceRelationTargets = explicitSourceRelationTargets(entry, view);
     for (const edge of view.graph.edges) {
         if (edge.resolution.status !== 'resolved')
             continue;
-        if (edge.sourcePath !== entry.path && (edge.sourcePath || !outgoing.has(edge.resolution.path)))
+        if (edge.sourcePath !== entry.path || edge.source !== 'body')
             continue;
         const targetPath = edge.resolution.path;
-        const declaredVia = edge.source === 'frontmatter' ? 'frontmatter' : 'body_wikilink';
-        addRelation(targetPath, declaredVia);
+        if ((0, core_1.isKnowledgeSourcePath)(entry.path) || (entry.type ?? '').toLocaleLowerCase('en-US').includes('source')) {
+            if (!sourceRelationTargets.has(targetPath))
+                continue;
+        }
+        addRelation(targetPath, 'body_wikilink');
     }
     const ordered = [...rows.entries()].sort(([left], [right]) => left.localeCompare(right));
     return {
@@ -672,7 +708,14 @@ function relationEvidenceFromReadView(entry, view) {
         related_sources: ordered.filter(([key]) => key.startsWith('related_sources:')).slice(0, MAX_RECALL_GRAPH_LINKS).map(([, row]) => row),
     };
 }
-function buildCatalogGraphLinks(entry, view) {
+function buildKnowledgeGraphLinksFromReadView(entry, view) {
+    if ((0, core_1.isKnowledgeSourcePath)(entry.path) || (entry.type ?? '').toLocaleLowerCase('en-US').includes('source')) {
+        const evidence = buildKnowledgeRelationEvidenceFromReadView(entry, view);
+        return [...new Set([
+                ...evidence.related_wiki.map((relation) => relation.path),
+                ...evidence.related_sources.map((relation) => relation.path),
+            ])].sort((left, right) => left.localeCompare(right)).slice(0, MAX_RECALL_GRAPH_LINKS);
+    }
     const outgoing = new Set(view.graph.outgoing.get(entry.path) ?? []);
     const links = new Set();
     const edgeTargets = new Set();
@@ -689,6 +732,27 @@ function buildCatalogGraphLinks(entry, view) {
             links.add(targetPath);
     }
     return [...links].sort((left, right) => left.localeCompare(right)).slice(0, MAX_RECALL_GRAPH_LINKS);
+}
+function knowledgeGraphNeighbors(entryPath, view) {
+    const entry = view.catalog.get(entryPath);
+    const outgoing = new Set(view.graph.outgoing.get(entryPath) ?? []);
+    if (entry && ((0, core_1.isKnowledgeSourcePath)(entry.path) || (entry.type ?? '').toLocaleLowerCase('en-US').includes('source'))) {
+        const allowed = explicitSourceRelationTargets(entry, view);
+        for (const target of outgoing) {
+            if (!allowed.has(target))
+                outgoing.delete(target);
+        }
+    }
+    const incoming = new Set(view.graph.incoming.get(entryPath) ?? []);
+    for (const sourcePath of incoming) {
+        const source = view.catalog.get(sourcePath);
+        if (!source || (!(0, core_1.isKnowledgeSourcePath)(source.path) && !(source.type ?? '').toLocaleLowerCase('en-US').includes('source'))) {
+            continue;
+        }
+        if (!explicitSourceRelationTargets(source, view).has(entryPath))
+            incoming.delete(sourcePath);
+    }
+    return new Set([...outgoing, ...incoming]);
 }
 function rankCatalogMatches(rows, query, scope, nowMs) {
     const fullQuery = query.trim().toLocaleLowerCase('en-US');
@@ -760,8 +824,8 @@ function buildReadViewEntry(match, scope, view, dependencies) {
         excerpt: compactNoteText(match.entry.excerpt),
         content_origin: dependencies.contentOrigin(match.entry.path, match.entry.type ?? undefined),
         instruction_trust: 'data_only',
-        graph_links: buildCatalogGraphLinks(match.entry, view),
-        relation_evidence: relationEvidenceFromReadView(match.entry, view),
+        graph_links: buildKnowledgeGraphLinksFromReadView(match.entry, view),
+        relation_evidence: buildKnowledgeRelationEvidenceFromReadView(match.entry, view),
     };
 }
 function selectCatalogRecallMatches(matches, maxItems) {
@@ -809,10 +873,7 @@ function boundedReadViewMatches(view, entries, query, scope, nowMs) {
     }
     let graphExpansions = 0;
     for (const [seedPath] of lexical) {
-        const neighbors = new Set([
-            ...(view.graph.outgoing.get(seedPath) ?? []),
-            ...(view.graph.incoming.get(seedPath) ?? []),
-        ]);
+        const neighbors = knowledgeGraphNeighbors(seedPath, view);
         for (const neighbor of [...neighbors].sort((left, right) => left.localeCompare(right))) {
             if (graphExpansions >= exports.MAX_READ_VIEW_GRAPH_EXPANSIONS)
                 break;
@@ -974,8 +1035,8 @@ class RecallApplicationService {
                 project_hint: readFrontmatterString(entry.frontmatter, ['project_hint', 'related_project', 'project']),
                 why_matched: buildProjectHistoryWhy(catalogMetadataProjection(entry), request.query),
                 excerpt: compactNoteText(entry.excerpt),
-                graph_links: buildCatalogGraphLinks(entry, view),
-                relation_evidence: relationEvidenceFromReadView(entry, view),
+                graph_links: buildKnowledgeGraphLinksFromReadView(entry, view),
+                relation_evidence: buildKnowledgeRelationEvidenceFromReadView(entry, view),
             })),
         };
     }

@@ -4,6 +4,19 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.4] - Knowledge Lifecycle Consistency
+
+### Fixed
+
+- Completed `start_task` and `finish_task` in one canonical Markdown task record, including explicit reconstruction at the same path when the start record is unexpectedly missing.
+- Deduplicated mirrored proposal relationships in graph-health totals while preserving raw observations, and stopped treating Source provenance or incidental body links as knowledge relations.
+- Kept completed Review Queue history out of the active inbox, added an explicit processed-record organizer, and aligned activity counts with changes that still need attention.
+- Recognized receipt-backed official Skill content updates at the same Skill version without treating locally modified bundles as safe to overwrite.
+
+### Changed
+
+- Clarified task closeout, Source relationship, graph-health, review-state, and MCP capability descriptions across the plugin and public workflow documentation.
+
 ## [0.3.3] - Project Memory And Runtime Reliability
 
 ### Fixed

@@ -131,11 +131,15 @@ try {
 		'所选 Skill 版本低于插件内置版本，无法作为当前版本验证。'
 	);
 	assert.equal(
+		skillVerificationFailureDetail(state({ state: 'update_available', installedVersion: '2.1.0', expectedVersion: '2.1.0', fileVerified: true }), english),
+		'The selected Skill is a verified previous official bundle, but it does not match the current embedded bundle; update it first.'
+	);
+	assert.equal(
 		skillVerificationFailureDetail(state({ state: 'newer_than_bundled', installedVersion: '3.0.0', fileVerified: true }), english),
 		'The selected Skill is newer than the embedded version and cannot be verified as current.'
 	);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 34 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 35 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

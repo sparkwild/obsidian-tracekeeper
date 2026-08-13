@@ -26,6 +26,7 @@ export type MemoryProposalStatus =
 	| 'applied';
 
 export type ReviewProposalAttentionState =
+	| 'blocked'
 	| 'incomplete'
 	| 'pending_review'
 	| 'awaiting_revision'
@@ -460,6 +461,9 @@ export const getReviewProposalAttentionState = (
 	proposal: MemoryProposalRecord,
 	targetResolution: ReviewProposalTargetResolution = {}
 ): ReviewProposalAttentionState => {
+	if (isReviewProposalBlocked(proposal)) {
+		return 'blocked';
+	}
 	const validity = getReviewProposalValidity(proposal, targetResolution);
 	if (proposal.approvalStatus === 'approved') {
 		if (proposal.classification === 'memory_proposal' && !validity.isComplete) {
@@ -481,6 +485,11 @@ export const getReviewProposalAttentionState = (
 	}
 	return 'pending_review';
 };
+
+export const isReviewProposalBlocked = (proposal: MemoryProposalRecord): boolean =>
+	(proposal.approvalStatus === 'pending' || proposal.approvalStatus === 'approved')
+	&& proposal.memoryScope === 'project'
+	&& proposal.reviewReason === 'missing_memory_hub';
 
 const snippetFromText = (text: string, fallback: string = ''): string => {
 	const lines = text
@@ -626,7 +635,7 @@ export const parseMemoryProposalRecord = ({
 	const proposalId = firstString(fields, ['proposal_id', 'proposalId'])
 		|| filePath.split('/').pop() || '';
 	const approvalStatus = normalizeProposalStatus(
-		firstString(fields, ['approval_status', 'approvalStatus'])
+		firstString(fields, ['approval_status', 'approvalStatus', 'status'])
 	);
 	const sortTimestamp = parseTimestamp(created, fileMtime);
 	const revisionComment = readMultilineString(fields, ['revision_comment', 'revisionComment']);

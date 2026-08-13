@@ -61,7 +61,9 @@ export function skillVerificationFailureDetail(state: SkillInstallState, localiz
 		case 'not_installed':
 			return localize('所选目录中未找到 Tracekeeper Skill。', 'No Tracekeeper Skill was found in the selected directory.');
 		case 'update_available':
-			return localize('所选 Skill 版本低于插件内置版本，无法作为当前版本验证。', 'The selected Skill is older than the embedded version and cannot be verified as current.');
+			return state.installedVersion === state.expectedVersion
+				? localize('所选 Skill 是已验证的先前官方包，但内容不是当前内置包；请先更新。', 'The selected Skill is a verified previous official bundle, but it does not match the current embedded bundle; update it first.')
+				: localize('所选 Skill 版本低于插件内置版本，无法作为当前版本验证。', 'The selected Skill is older than the embedded version and cannot be verified as current.');
 		case 'newer_than_bundled':
 			return localize('所选 Skill 版本高于插件内置版本，无法作为当前版本验证。', 'The selected Skill is newer than the embedded version and cannot be verified as current.');
 		case 'modified':

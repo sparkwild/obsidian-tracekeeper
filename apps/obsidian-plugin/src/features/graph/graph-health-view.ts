@@ -74,10 +74,14 @@ export class TracekeeperGraphHealthView extends ItemView {
 		});
 
 		if (!snapshot.ok) {
+			const recovery = ui(
+				'请先刷新当前视图；若持续失败，请运行“重建知识索引”命令，然后检查 Obsidian 开发者控制台中的 Tracekeeper 扫描错误。',
+				'First refresh this view. If the problem persists, run the Rebuild knowledge index command, then inspect Tracekeeper scan errors in the Obsidian developer console.'
+			);
 			this.renderEmptyState(
 				contentEl,
 				ui('无法读取图谱健康状态。', 'Graph health is unavailable.'),
-				snapshot.errorMessage || ui('请确认 MCP 服务正在运行。', 'Check whether the MCP service is running.')
+				snapshot.errorMessage ? `${snapshot.errorMessage} ${recovery}` : recovery
 			);
 			return;
 		}
@@ -90,7 +94,12 @@ export class TracekeeperGraphHealthView extends ItemView {
 
 		const metrics = contentEl.createDiv({ cls: 'tracekeeper-metric-grid' });
 		this.renderMetricCard(metrics, ui('笔记', 'Notes'), String(snapshot.noteCount), ui('参与图谱扫描的 Markdown 文件', 'Markdown notes in the graph scan'));
-		this.renderMetricCard(metrics, ui('Wikilink', 'Wikilinks'), String(snapshot.wikilinkEdgeCount), `${ui('已解析', 'Resolved')}: ${snapshot.resolvedEdgeCount}`);
+		this.renderMetricCard(
+			metrics,
+			ui('语义关系', 'Semantic links'),
+			String(snapshot.wikilinkEdgeCount),
+			`${ui('已解析', 'Resolved')}: ${snapshot.resolvedEdgeCount} · ${ui('原始声明', 'Raw observations')}: ${snapshot.edgeObservationCount}`
+		);
 		this.renderMetricCard(metrics, ui('未解析链接', 'Unresolved links'), String(snapshot.unresolvedEdgeCount), ui('无法解析到目标笔记的 wikilink', 'Wikilinks that do not resolve to a note'), snapshot.unresolvedEdgeCount > 0 ? 'warning' : 'ok');
 		this.renderMetricCard(metrics, ui('连通分量', 'Components'), String(snapshot.componentCount), `${ui('最大分量', 'Largest')}: ${snapshot.largestComponentNodeCount}`, snapshot.componentCount > 1 ? 'warning' : 'ok');
 		this.renderMetricCard(metrics, ui('孤立节点', 'Isolated'), String(snapshot.isolatedNodeCount), ui('没有入链或出链的笔记', 'Notes with no inbound or outbound links'), snapshot.isolatedNodeCount > 0 ? 'warning' : 'ok');

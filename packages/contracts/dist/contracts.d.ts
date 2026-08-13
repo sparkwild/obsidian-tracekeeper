@@ -354,7 +354,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.finish_task";
-    readonly version: 4;
+    readonly version: 5;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -363,7 +363,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "task-finish";
     readonly useCase: "finish_task";
-    readonly description: "[low-risk write] Record task execution closeout and report durable Wiki/Memory output separately. The result includes direct proposals already linked to the task; a captured Source or Recall match does not prove that proposed knowledge was applied.";
+    readonly description: "[low-risk write] Complete the canonical Markdown task record without creating an implicit session note. If the start_task record is missing, reconstruct a complete task record at the canonical task path from the finish request and mark that provenance explicitly. Report durable Wiki/Memory output separately. The result includes direct proposals already linked to the task; a captured Source or Recall match does not prove that proposed knowledge was applied.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly deprecated: {
