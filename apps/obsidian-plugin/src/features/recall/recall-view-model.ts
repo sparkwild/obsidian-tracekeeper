@@ -2,8 +2,7 @@ export const MEMORY_RECALL_SCOPES = ['global', 'project', 'project_history', 'ta
 
 export type TracekeeperRecallScope = typeof MEMORY_RECALL_SCOPES[number];
 
-type ParsedRecordValue = string | string[];
-type ParsedRecord = Record<string, ParsedRecordValue>;
+type ParsedRecord = Record<string, unknown>;
 
 export interface MemoryRecallInput {
 	query: string;
@@ -15,8 +14,19 @@ export interface MemoryRecallResult {
 	query: string;
 	scope: string;
 	projectHint: string;
+	uncertain: boolean;
+	projectIdentity: MemoryRecallProjectIdentity;
 	items: MemoryRecallResultEntry[];
 	sourceTool: string;
+}
+
+export interface MemoryRecallProjectIdentity {
+	projectHint: string;
+	projectId: string;
+	repoPath: string;
+	source: string;
+	confidence: string;
+	warnings: string[];
 }
 
 export interface MemoryRecallResultEntry {
@@ -56,9 +66,11 @@ const firstString = (values: ParsedRecord, keys: string[]): string => {
 			return value.trim();
 		}
 		if (Array.isArray(value)) {
-			const first = value.find((entry) => Boolean(entry && entry.trim()));
+			const first = value.find(
+				(entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())
+			);
 			if (first) {
-				return first;
+				return first.trim();
 			}
 		}
 	}
@@ -71,12 +83,33 @@ const readStringList = (values: ParsedRecord, keys: string[]): string[] => {
 		const value = values[key];
 		if (!value) continue;
 		if (Array.isArray(value)) {
-			items.push(...value.filter(Boolean));
+			items.push(...value
+				.filter((entry): entry is string => typeof entry === 'string')
+				.map((entry) => entry.trim())
+				.filter(Boolean));
 			continue;
 		}
-		items.push(...value.split(',').map((entry) => entry.trim()).filter(Boolean));
+		if (typeof value === 'string') {
+			items.push(...value.split(',').map((entry) => entry.trim()).filter(Boolean));
+		}
 	}
 	return [...new Set(items)];
+};
+
+const parseProjectIdentity = (result: Record<string, unknown>): MemoryRecallProjectIdentity => {
+	const rawIdentity = isRecord(result.project_identity)
+		? result.project_identity
+		: isRecord(result.scope)
+			? result.scope
+			: {};
+	return {
+		projectHint: firstString(rawIdentity, ['project_hint', 'projectHint']),
+		projectId: firstString(rawIdentity, ['project_id', 'projectId']),
+		repoPath: firstString(rawIdentity, ['repo_path', 'repoPath']),
+		source: firstString(rawIdentity, ['source']),
+		confidence: firstString(rawIdentity, ['confidence']),
+		warnings: readStringList(rawIdentity, ['warnings']),
+	};
 };
 
 export const normalizeMemoryRecallScope = (scope: string): TracekeeperRecallScope => {
@@ -142,10 +175,13 @@ export const parseMemoryRecallResult = (
 	const normalizedScope = normalizeMemoryRecallScope(input.scope);
 	const rawMatches = extractRecallMatches(result);
 	const rawEntries = rawMatches.map((match) => normalizeMatch(match, normalizedScope));
+	const projectIdentity = parseProjectIdentity(result);
 	return {
 		query: input.query,
 		scope: localization.scopeLabel(normalizedScope),
 		projectHint: input.projectHint || '',
+		uncertain: result.uncertain === true || projectIdentity.confidence === 'uncertain',
+		projectIdentity,
 		sourceTool: input.sourceTool,
 		items: rawEntries.map((entry) => ({
 			path: entry.path || localization.unknownPathLabel,

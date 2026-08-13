@@ -380,6 +380,7 @@ try {
 	assert.deepEqual(captured.taskPaths, ['00_tracekeeper/work/tasks/task-1.md']);
 	assert.deepEqual(captured.proposalPaths, ['00_tracekeeper/inbox/review_queue/proposal-1.md']);
 	assert.deepEqual(captured.finalNotePaths, ['00_tracekeeper/work/sessions/task-1-final.md']);
+	assert.equal(source.records.find((record) => record.path === missingSourcePath)?.state, 'missing');
 
 	const focusedSource = buildSourceStatusSnapshot({
 		index,
@@ -648,6 +649,37 @@ try {
 	});
 	assert.equal(equivalentAliases?.state, 'captured');
 	assert.deepEqual(equivalentAliases?.evidenceIssues, []);
+
+	const externalReferencePath = '01_knowledge/sources/web/reference-only.md';
+	const externalReference = classifyReceipt(externalReferencePath, {
+		...sourceReceipt,
+		source: 'https://example.com/reference',
+		source_kind: 'web',
+		route: '01_knowledge/sources/web',
+		mode: 'external_reference',
+	});
+	assert.equal(externalReference?.state, 'reference_only');
+	assert.deepEqual(externalReference?.evidenceIssues, []);
+
+	const malformedExternalReference = classifyReceipt(
+		'01_knowledge/sources/web/malformed-reference.md',
+		withoutField({
+			...sourceReceipt,
+			source: 'https://example.com/malformed',
+			source_kind: 'web',
+			route: '01_knowledge/sources/web',
+			mode: 'external_reference',
+		}, 'source_id')
+	);
+	assert.equal(malformedExternalReference?.state, 'incomplete');
+	assert.deepEqual(malformedExternalReference?.evidenceIssues, ['source_id']);
+
+	const extractedSnapshot = classifyReceipt(`${receiptRoot}/extracted-snapshot.md`, {
+		...sourceReceipt,
+		mode: 'extracted_snapshot',
+	});
+	assert.equal(extractedSnapshot?.state, 'captured');
+	assert.equal(receiptByPath.get(receiptPaths.sourceRequestSingle)?.mode, 'local_copy');
 
 	const arrayFields = classifyReceipt(`${receiptRoot}/array-fields.md`, {
 		...sourceReceipt,

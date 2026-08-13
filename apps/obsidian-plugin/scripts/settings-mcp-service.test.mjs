@@ -70,6 +70,11 @@ const toolNodeIndex = modalSource.indexOf("body.createEl('code'");
 const subtitleNodeIndex = modalSource.indexOf("body.createEl('small'");
 assert.ok(toolNodeIndex >= 0 && subtitleNodeIndex > toolNodeIndex);
 assert.equal(modalSource.includes('tracekeeper-capability-row__heading'), false);
+assert.ok(modalSource.includes('Human review must happen in Obsidian'));
+assert.ok(modalSource.includes('public MCP tool after a dry-run'));
+assert.ok(modalSource.includes('short-lived confirmation token'));
+assert.ok(modalSource.includes('explicitly approved Wiki/MemoryRecord'));
+assert.equal(modalSource.includes('Human review and confirmed writeback remain in Obsidian'), false);
 assert.ok(stylesSource.includes('.tracekeeper-capability-row__tool'));
 assert.ok(stylesSource.includes('.tracekeeper-capability-row__subtitle'));
 assert.equal(stylesSource.includes('.tracekeeper-capability-row__heading'), false);
@@ -102,4 +107,4 @@ assert.equal(pluginManifest.minAppVersion, '1.11.0');
 assert.equal(rootManifest.minAppVersion, '1.11.0');
 assert.equal(resolveMinimumAppVersion(versions, pluginManifest.version), '1.11.0');
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 72 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 77 })}\n`);

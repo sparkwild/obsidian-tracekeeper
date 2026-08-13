@@ -74,10 +74,14 @@ export class TracekeeperGraphHealthView extends ItemView {
 		});
 
 		if (!snapshot.ok) {
+			const recovery = ui(
+				'请先刷新当前视图；若持续失败，请运行“重建知识索引”命令，然后检查 Obsidian 开发者控制台中的 Tracekeeper 扫描错误。',
+				'First refresh this view. If the problem persists, run the Rebuild knowledge index command, then inspect Tracekeeper scan errors in the Obsidian developer console.'
+			);
 			this.renderEmptyState(
 				contentEl,
 				ui('无法读取图谱健康状态。', 'Graph health is unavailable.'),
-				snapshot.errorMessage || ui('请确认 MCP 服务正在运行。', 'Check whether the MCP service is running.')
+				snapshot.errorMessage ? `${snapshot.errorMessage} ${recovery}` : recovery
 			);
 			return;
 		}

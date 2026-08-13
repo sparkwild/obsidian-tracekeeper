@@ -4,14 +4,33 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.4] - Knowledge Lifecycle Consistency
+
+### Fixed
+
+- Completed `start_task` and `finish_task` in one canonical Markdown task record, including explicit reconstruction at the same path when the start record is unexpectedly missing.
+- Deduplicated mirrored proposal relationships in graph-health totals while preserving raw observations, and stopped treating Source provenance or incidental body links as knowledge relations.
+- Kept completed Review Queue history out of the active inbox, added an explicit processed-record organizer, and aligned activity counts with changes that still need attention.
+- Recognized receipt-backed official Skill content updates at the same Skill version without treating locally modified bundles as safe to overwrite.
+
+### Changed
+
+- Clarified task closeout, Source relationship, graph-health, review-state, and MCP capability descriptions across the plugin and public workflow documentation.
+
+## [0.3.3] - Project Memory And Runtime Reliability
+
 ### Fixed
 
 - Distinguished required base directories from on-demand feature directories, detected file/folder path collisions before repair, and blocked legacy migration while the base structure is invalid.
 - Unified Agent Activity Hub creation across plugin and Runtime producers while accepting existing version 1 Hub bodies and reporting incompatible machine metadata without rewriting user content.
+- Restored Project Auto for exactly identified repositories by creating a missing canonical project Hub with exclusive, create-only semantics before writing the immutable MemoryRecord; concurrent first writes converge safely while ambiguous, occupied, invalid, and legacy review routes remain fail-closed.
+- Reduced recovered OAuth `auth_missing` handshake noise in Recent Events while retaining complete audit history, deduplicated unresolved credential failures, and replaced opaque authentication event labels with actionable diagnostics.
+- Prevented legacy project proposals with a missing Hub from appearing approval- or writeback-ready, and added explicit upgrade-and-resubmit guidance.
 
 ### Changed
 
 - Aligned update distribution with Obsidian's GitHub Release flow: version tags now create an attested Draft Release, and explicit publication promotes those same qualified assets without rebuilding them.
+- Aligned Project Auto behavior and safety exceptions across settings, public documentation, the companion Skill, and deterministic Agent-initiative evaluation.
 
 ## [0.3.2] - OAuth Approval Flow Correction
 

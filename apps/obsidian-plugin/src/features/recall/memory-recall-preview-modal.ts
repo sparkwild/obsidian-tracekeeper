@@ -125,6 +125,7 @@ export class MemoryRecallPreviewModal extends Modal {
 			`共 ${result.items.length} 条结果 · ${result.scope}`,
 			`${result.items.length} results · ${result.scope}`
 		));
+		this.renderProjectIdentityWarning(result);
 		if (result.items.length === 0) {
 			const empty = this.resultsContainer.createDiv({ cls: 'tracekeeper-empty-state' });
 			empty.createEl('strong', { text: ui('没有匹配结果', 'No matches') });
@@ -143,6 +144,76 @@ export class MemoryRecallPreviewModal extends Modal {
 			this.renderDetail(details, ui('类型', 'Type'), item.type || ui('笔记', 'Note'));
 			this.renderDetail(details, ui('命中词', 'Matched tokens'), item.matchedTokens.length ? item.matchedTokens.join(', ') : ui('无', 'None'));
 			this.renderDetail(details, ui('原因', 'Reason'), item.reason);
+		}
+	}
+
+	private renderProjectIdentityWarning(result: MemoryRecallResult): void {
+		if (
+			!this.resultsContainer
+			|| (!result.uncertain && result.projectIdentity.warnings.length === 0)
+		) {
+			return;
+		}
+		const identity = result.projectIdentity;
+		const warning = this.resultsContainer.createDiv({
+			cls: 'tracekeeper-card tracekeeper-observability-warning',
+		});
+		warning.createEl('strong', {
+			text: result.uncertain
+				? ui('项目身份存在不确定性', 'Project identity is uncertain')
+				: ui('项目身份提示', 'Project identity notice'),
+		});
+		warning.createEl('p', {
+			text: ui(
+				'以下结果使用了 Runtime 返回的项目身份。请先核对身份和警告，不要把候选结果视为已准确归属当前项目。',
+				'These results use the project identity returned by the Runtime. Verify the identity and warnings before treating candidates as belonging to the current project.'
+			),
+		});
+		const details = warning.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderDetail(details, ui('项目', 'Project'), identity.projectHint || ui('未确定', 'Unresolved'));
+		this.renderDetail(details, ui('项目 ID', 'Project ID'), identity.projectId || ui('未确定', 'Unresolved'));
+		this.renderDetail(details, ui('仓库路径', 'Repository path'), identity.repoPath || ui('未确定', 'Unresolved'));
+		this.renderDetail(details, ui('识别来源', 'Identity source'), this.projectIdentitySourceLabel(identity.source));
+		this.renderDetail(details, ui('置信度', 'Confidence'), this.projectIdentityConfidenceLabel(identity.confidence));
+		if (identity.warnings.length > 0) {
+			const list = warning.createEl('ul');
+			for (const code of identity.warnings) {
+				list.createEl('li', { text: this.projectIdentityWarningLabel(code) });
+			}
+		}
+	}
+
+	private projectIdentitySourceLabel(source: string): string {
+		switch (source) {
+			case 'explicit_project_id': return ui('显式项目 ID', 'Explicit project ID');
+			case 'explicit_project_hint': return ui('显式项目名称', 'Explicit project hint');
+			case 'vault_match': return ui('知识库匹配', 'Vault match');
+			case 'repo_leaf': return ui('仓库目录名', 'Repository directory name');
+			case 'task_metadata': return ui('任务元数据', 'Task metadata');
+			case 'unknown': return ui('未知', 'Unknown');
+			default: return source || ui('未确定', 'Unresolved');
+		}
+	}
+
+	private projectIdentityConfidenceLabel(confidence: string): string {
+		switch (confidence) {
+			case 'exact': return ui('精确', 'Exact');
+			case 'derived': return ui('推导', 'Derived');
+			case 'uncertain': return ui('不确定', 'Uncertain');
+			default: return confidence || ui('未确定', 'Unresolved');
+		}
+	}
+
+	private projectIdentityWarningLabel(code: string): string {
+		switch (code) {
+			case 'ambiguous_vault_project_identity': return ui('知识库中存在多个可能的项目身份。', 'Multiple project identities in the vault may match.');
+			case 'path_project_hint_treated_as_repo_path': return ui('输入的项目名称看起来是路径，已按仓库路径处理。', 'The project hint looked like a path and was treated as a repository path.');
+			case 'project_hint_conflicts_with_project_id': return ui('项目名称与项目 ID 对应的身份冲突。', 'The project hint conflicts with the identity selected by project ID.');
+			case 'repo_path_conflicts_with_project_id': return ui('仓库路径与项目 ID 对应的身份冲突。', 'The repository path conflicts with the identity selected by project ID.');
+			case 'project_hint_conflicts_with_repo_path': return ui('项目名称与仓库路径对应的身份冲突。', 'The project hint conflicts with the identity selected by repository path.');
+			case 'project_hint_canonicalized_from_repo_match': return ui('项目名称已根据仓库匹配规范化。', 'The project hint was canonicalized from a repository match.');
+			case 'project_hint_derived_from_repo_leaf': return ui('项目名称由仓库目录名推导，尚未得到稳定身份确认。', 'The project hint was derived from the repository directory name and is not yet a stable identity.');
+			default: return code;
 		}
 	}
 

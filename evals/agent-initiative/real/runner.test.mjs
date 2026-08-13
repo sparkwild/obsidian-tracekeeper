@@ -25,6 +25,7 @@ import {
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const scenariosPath = path.join(testDir, 'scenarios.json');
+const noExternalTracekeeperSkills = async () => [];
 
 async function loadRealScenarios() {
 	const raw = await fs.readFile(scenariosPath, 'utf8');
@@ -309,6 +310,30 @@ test('paired outcomes exclude infrastructure-failed arm pairs', () => {
 	assert.equal(paired.strict_pass_counts.overall.total, 0);
 });
 
+test('runRealMatrix blocks an mcp-only run when the contamination scan finds an external Skill', async () => {
+	const scenario = {
+		id: 'contamination-scenario',
+		class: 'no_track',
+		prompt: 'Run a no-track scenario.',
+		kind: 'positive',
+		expected: { required_tools: [] },
+	};
+	const args = parseArgs([
+		'--execute',
+		'--scenario', scenario.id,
+		'--arm', 'mcp-only',
+		'--codex-bin', 'node',
+		'--experiment-id', `contamination-${Date.now()}`,
+	]);
+	const output = resolveOutputPaths(args);
+	const run = createFakeRunSingle();
+	await assert.rejects(
+		runRealMatrix([scenario], args, output, run.runSingle, async () => ['/tmp/external/tracekeeper']),
+		/mcp-only arm blocked by existing external tracekeeper skill/
+	);
+	assert.equal(run.calls(), 0);
+});
+
 test('runRealMatrix supports resume with checkpoint and skips already completed tuples', async (context) => {
 	const experimentId = `resume-checkpoint-${Date.now()}`;
 	context.after(async () => {
@@ -335,7 +360,7 @@ test('runRealMatrix supports resume with checkpoint and skips already completed 
 		'resume-scenario:1:mcp-only': true,
 		'resume-scenario:1:mcp-skill': true,
 	});
-	const firstReport = await runRealMatrix([scenario], firstArgs, output, firstRun.runSingle);
+	const firstReport = await runRealMatrix([scenario], firstArgs, output, firstRun.runSingle, noExternalTracekeeperSkills);
 	assert.equal(firstRun.calls(), 2);
 	const resumeArgs = parseArgs([
 		'--execute',
@@ -349,7 +374,7 @@ test('runRealMatrix supports resume with checkpoint and skips already completed 
 	]);
 	const resumeOutput = resolveOutputPaths(resumeArgs);
 	const resumeRun = createFakeRunSingle();
-	const secondReport = await runRealMatrix([scenario], resumeArgs, resumeOutput, resumeRun.runSingle);
+	const secondReport = await runRealMatrix([scenario], resumeArgs, resumeOutput, resumeRun.runSingle, noExternalTracekeeperSkills);
 	assert.equal(resumeRun.calls(), 0);
 	assert.equal(firstReport.runs.length, 2);
 	assert.equal(secondReport.runs.length, 2);
@@ -367,7 +392,7 @@ test('runRealMatrix supports resume with checkpoint and skips already completed 
 	]);
 	const mismatchOutput = resolveOutputPaths(mismatchSeedArgs);
 	await assert.rejects(
-		runRealMatrix([scenario], mismatchSeedArgs, mismatchOutput, resumeRun.runSingle),
+		runRealMatrix([scenario], mismatchSeedArgs, mismatchOutput, resumeRun.runSingle, noExternalTracekeeperSkills),
 		/Cannot resume: checkpoint config differs/,
 	);
 
@@ -375,7 +400,7 @@ test('runRealMatrix supports resume with checkpoint and skips already completed 
 	checkpoint.completed_runs[0].passed = !checkpoint.completed_runs[0].passed;
 	await fs.writeFile(output.checkpointPath, `${JSON.stringify(checkpoint, null, 2)}\n`, 'utf8');
 	await assert.rejects(
-		runRealMatrix([scenario], resumeArgs, resumeOutput, resumeRun.runSingle),
+		runRealMatrix([scenario], resumeArgs, resumeOutput, resumeRun.runSingle, noExternalTracekeeperSkills),
 		/Cannot resume: checkpoint integrity check failed/,
 	);
 });
@@ -405,7 +430,7 @@ test('runRealMatrix includes experiment provenance fields and runtime metadata',
 	]);
 	const output = resolveOutputPaths(args);
 	const run = createFakeRunSingle();
-	const report = await runRealMatrix([scenario], args, output, run.runSingle);
+	const report = await runRealMatrix([scenario], args, output, run.runSingle, noExternalTracekeeperSkills);
 	const { provenance } = report;
 	assert.equal(typeof provenance.commit_sha, 'undefined');
 	assert.equal(typeof provenance.git.commit_sha, 'string');
@@ -461,7 +486,7 @@ test('runRealMatrix tracks requested model provenance and release_grade markers'
 	]);
 	const output = resolveOutputPaths(args);
 	const run = createFakeRunSingle({ 'provenance-model-scenario:1:mcp-only': true });
-	const report = await runRealMatrix([scenario], args, output, run.runSingle);
+	const report = await runRealMatrix([scenario], args, output, run.runSingle, noExternalTracekeeperSkills);
 	assert.equal(report.provenance.model, 'o4-mini');
 	assert.equal(report.provenance.model_status, 'requested');
 	assert.equal(report.provenance.release_grade, true);
@@ -492,7 +517,7 @@ test('runRealMatrix retries infra-failed runs on resume up to the configured bud
 	]);
 	const retryOutput = resolveOutputPaths(retryArgs);
 	const retryRun = createFlakyRunSingle({ 'resume-retry-scenario:1:mcp-only': 1 });
-	const firstRetryReport = await runRealMatrix([scenario], retryArgs, retryOutput, retryRun.runSingle);
+	const firstRetryReport = await runRealMatrix([scenario], retryArgs, retryOutput, retryRun.runSingle, noExternalTracekeeperSkills);
 	assert.equal(retryRun.calls(), 1);
 	assert.equal(firstRetryReport.runs[0].executed, false);
 	assert.equal(firstRetryReport.runs[0].attempts, 1);
@@ -510,7 +535,7 @@ test('runRealMatrix retries infra-failed runs on resume up to the configured bud
 		'--resume',
 	]);
 	const retryResumeOutput = resolveOutputPaths(retryResumeArgs);
-	const secondRetryReport = await runRealMatrix([scenario], retryResumeArgs, retryResumeOutput, retryRun.runSingle);
+	const secondRetryReport = await runRealMatrix([scenario], retryResumeArgs, retryResumeOutput, retryRun.runSingle, noExternalTracekeeperSkills);
 	assert.equal(retryRun.calls(), 2);
 	assert.equal(secondRetryReport.runs[0].executed, true);
 	assert.equal(secondRetryReport.runs[0].attempts, 2);
@@ -530,7 +555,7 @@ test('runRealMatrix retries infra-failed runs on resume up to the configured bud
 	]);
 	const hardLimitOutput = resolveOutputPaths(hardLimitArgs);
 	const hardLimitRun = createFlakyRunSingle({ 'resume-retry-scenario:1:mcp-only': 1 });
-	const hardLimitReport = await runRealMatrix([scenario], hardLimitArgs, hardLimitOutput, hardLimitRun.runSingle);
+	const hardLimitReport = await runRealMatrix([scenario], hardLimitArgs, hardLimitOutput, hardLimitRun.runSingle, noExternalTracekeeperSkills);
 	assert.equal(hardLimitRun.calls(), 1);
 	assert.equal(hardLimitReport.runs[0].executed, false);
 	assert.equal(hardLimitReport.runs[0].attempts, 1);
@@ -548,7 +573,7 @@ test('runRealMatrix retries infra-failed runs on resume up to the configured bud
 		'--resume',
 	]);
 	const hardLimitResumeOutput = resolveOutputPaths(hardLimitResumeArgs);
-	const hardLimitResumeReport = await runRealMatrix([scenario], hardLimitResumeArgs, hardLimitResumeOutput, hardLimitRun.runSingle);
+	const hardLimitResumeReport = await runRealMatrix([scenario], hardLimitResumeArgs, hardLimitResumeOutput, hardLimitRun.runSingle, noExternalTracekeeperSkills);
 	assert.equal(hardLimitRun.calls(), 1);
 	assert.equal(hardLimitResumeReport.runs[0].executed, false);
 	assert.equal(hardLimitResumeReport.runs[0].attempts, 1);
