@@ -545,6 +545,57 @@ test('read view owner: lexical, graph, and rerank work obey hard ceilings', asyn
 	});
 });
 
+test('source boundary: provenance and structural links stay raw unless a dedicated relation field declares them', async (t) => {
+	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-recall-source-boundary-'));
+	t.after(() => fs.rmSync(vaultRoot, { recursive: true, force: true }));
+	const rawTargetPath = '01_knowledge/wiki/concepts/raw-source-target.md';
+	const explicitTargetPath = '01_knowledge/wiki/concepts/explicit-source-target.md';
+	const sourcePath = '01_knowledge/sources/web/source-boundary.md';
+	const source = note(vaultRoot, sourcePath, {
+		frontmatter: {
+			type: 'captured-source',
+			source: `[[${rawTargetPath}]]`,
+			related_wiki: `[[${explicitTargetPath}]]`,
+		},
+		content: [
+			'# Source boundary',
+			'sourceboundaryfixture provenance example.',
+			`Raw source reference: [[${rawTargetPath}]]`,
+			`Declared knowledge relation: [[${explicitTargetPath}]]`,
+		].join('\n\n'),
+	});
+	const rawTarget = note(vaultRoot, rawTargetPath, {
+		content: '# Raw source target\nraw-only provenance target.',
+	});
+	const explicitTarget = note(vaultRoot, explicitTargetPath, {
+		content: '# Explicit source target\nexplicit knowledge relation target.',
+	});
+	const scan = {
+		vaultRoot,
+		scannedAt: '2026-08-13T00:00:00.000Z',
+		notes: resolveScannedNoteEdges([source, rawTarget, explicitTarget]),
+		errors: [],
+	};
+	const index = new InMemoryKnowledgeIndex({ vaultRoot, initialScan: scan });
+	const view = await index.readView();
+	const service = new RecallApplicationService(directApplicationDependencies(scan));
+	const result = service.executeReadView({
+		scope: 'global', query: 'sourceboundaryfixture', maxItems: 10, vaultRoot, projectIdentityInput: {},
+	}, view);
+	const sourceMatch = result.matches.find((entry) => entry.path === sourcePath);
+	assert.ok(sourceMatch);
+	assert.deepEqual(sourceMatch.graph_links, [explicitTargetPath]);
+	assert.deepEqual(sourceMatch.relation_evidence.related_sources, []);
+	assert.deepEqual(sourceMatch.relation_evidence.related_wiki, [{
+		path: explicitTargetPath,
+		declared_by: sourcePath,
+		declared_via: ['frontmatter', 'body_wikilink'],
+		verified_by: 'active_vault_snapshot',
+	}]);
+	assert.equal(result.matches.some((entry) => entry.path === explicitTargetPath), true);
+	assert.equal(result.matches.some((entry) => entry.path === rawTargetPath), false);
+});
+
 test('application owner: injected clock exclusively controls the existing recency boost', (t) => {
 	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-recall-r2-clock-'));
 	t.after(() => fs.rmSync(vaultRoot, { recursive: true, force: true }));
@@ -1077,7 +1128,9 @@ test('shared edge authority: Recall graph links and relation evidence use the na
 		max_items: 20,
 	}, context);
 	assert.equal(graphHealth.payload.snapshot_generation, 17);
-	assert.equal(graphHealth.payload.resolved_edge_count, 2);
+	assert.equal(graphHealth.payload.edge_observation_count, 2);
+	assert.equal(graphHealth.payload.wikilink_edge_count, 1);
+	assert.equal(graphHealth.payload.resolved_edge_count, 1);
 	assert.equal(graphHealth.payload.unresolved_edge_count, 0);
 });
 

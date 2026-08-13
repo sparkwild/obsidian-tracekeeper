@@ -134,13 +134,6 @@ function removeDurableOutputFields(fixture, recordPath) {
 		.join('\n'));
 }
 
-function onlySessionPath(fixture) {
-	const directory = path.join(fixture.vaultRoot, '00_tracekeeper/work/sessions');
-	const entries = fs.readdirSync(directory).filter((entry) => entry.endsWith('.md'));
-	assert.equal(entries.length, 1);
-	return `00_tracekeeper/work/sessions/${entries[0]}`;
-}
-
 function taskWriteInterruptingRepository(vaultRoot, taskPath, phase) {
 	const repository = new NodeFsVaultRepository({ vaultRoot });
 	let interrupted = false;
@@ -241,12 +234,7 @@ test('finish_task reports a directly linked pending proposal without creating a 
 	assert.equal(taskFrontmatter.durable_output_proposal_paths, proposal.proposal_path);
 	assert.equal(taskFrontmatter.durable_output_target_paths, '01_knowledge/wiki/direct-pending.md');
 	assert.match(taskText, new RegExp(captured.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-
-	const sessionFrontmatter = parseMarkdown(fixture.read(finished.session_path)).frontmatter.fields;
-	assert.equal(sessionFrontmatter.durable_output_status_at_finish, 'pending_review');
-	assert.equal(sessionFrontmatter.durable_output_source_capture_count, 1);
-	assert.equal(sessionFrontmatter.durable_output_proposal_count, 1);
-	assert.equal(sessionFrontmatter.durable_output_proposal_ids_at_finish, proposal.proposal_id);
+	assert.equal(finished.session_path, finished.task_path);
 });
 
 test('finish_task exact retry preserves the journaled proposal snapshot', async (t) => {
@@ -335,13 +323,12 @@ test('finish_task aggregates direct and finish-generated proposals exactly once'
 	assert.equal(finished.proposals.length, 2);
 	assert.equal(new Set(finished.proposals.map((proposal) => proposal.proposal_id)).size, 2);
 	const expectedProposalIds = finished.proposals.map((proposal) => proposal.proposal_id);
-	for (const recordPath of [finished.task_path, finished.session_path]) {
-		const fields = parseMarkdown(fixture.read(recordPath)).frontmatter.fields;
-		assert.deepEqual(
-			frontmatterList(fields.durable_output_proposal_ids_at_finish),
-			expectedProposalIds
-		);
-	}
+	assert.equal(finished.session_path, finished.task_path);
+	const fields = parseMarkdown(fixture.read(finished.task_path)).frontmatter.fields;
+	assert.deepEqual(
+		frontmatterList(fields.durable_output_proposal_ids_at_finish),
+		expectedProposalIds
+	);
 	assert.equal(finished.memory_status, 'queued_for_review');
 	assert.equal(finished.next_actions[0].kind, 'user_review');
 	assert.equal(finished.next_actions[0].reason_code, 'MEMORY_REVIEW_REQUIRED');
@@ -422,13 +409,10 @@ test('finish_task recovery reuses persisted generated-output evidence', async (t
 		taskFields.durable_output_proposal_ids_at_finish
 	);
 	assert.equal(proposalIdsAtFinish.length, 1);
-	const sessionPath = String(taskFields.session_note || '');
-	assert.ok(sessionPath);
-	const sessionFields = parseMarkdown(fixture.read(sessionPath)).frontmatter.fields;
-	assert.equal(sessionFields.durable_output_status_at_finish, 'pending_review');
-	assert.deepEqual(
-		frontmatterList(sessionFields.durable_output_proposal_ids_at_finish),
-		proposalIdsAtFinish
+	assert.equal(taskFields.session_note, undefined);
+	assert.equal(
+		fs.existsSync(path.join(fixture.vaultRoot, '00_tracekeeper/work/sessions')),
+		false
 	);
 	replaceProposalStatus(fixture, proposalPaths[0], 'rejected');
 
@@ -442,10 +426,6 @@ test('finish_task recovery reuses persisted generated-output evidence', async (t
 	assert.equal(recovered.memory_status, 'queued_for_review');
 	assert.equal(
 		parseMarkdown(fixture.read(taskPath)).frontmatter.fields.durable_output_status_at_finish,
-		'pending_review'
-	);
-	assert.equal(
-		parseMarkdown(fixture.read(sessionPath)).frontmatter.fields.durable_output_status_at_finish,
 		'pending_review'
 	);
 });
@@ -501,19 +481,13 @@ for (const corruption of [
 		assert.equal(interrupted.isError, true);
 		assert.equal(injected, true);
 		const taskPath = `00_tracekeeper/work/tasks/${task.task_id}.md`;
-		const sessionPath = String(
-			parseMarkdown(fixture.read(taskPath)).frontmatter.fields.session_note
-		);
-		assert.ok(sessionPath);
 		const corruptedValue = corruption.value(proposal);
-		for (const recordPath of [taskPath, sessionPath]) {
-			replaceFrontmatterField(
-				fixture,
-				recordPath,
-				corruption.key,
-				corruptedValue
-			);
-		}
+		replaceFrontmatterField(
+			fixture,
+			taskPath,
+			corruption.key,
+			corruptedValue
+		);
 
 		const replay = await callTool('tracekeeper.finish_task', args, fixture.context);
 		assert.equal(replay.isError, true);
@@ -525,7 +499,7 @@ for (const corruption of [
 }
 
 for (const phase of ['before', 'after']) {
-	test(`finish_task repairs a ${phase}-task-write interruption from redundant evidence`, async (t) => {
+	test(`finish_task repairs a ${phase}-task-write interruption from canonical evidence`, async (t) => {
 		const fixture = createFixture(t);
 		const task = await startTask(fixture, `task-write-${phase}`);
 		const proposal = await proposeForTask(fixture, task.task_id, `task-write-${phase}`);
@@ -542,9 +516,6 @@ for (const phase of ['before', 'after']) {
 		});
 		assert.equal(first.isError, true);
 		assert.equal(interruption.interrupted, true);
-		const sessionPath = onlySessionPath(fixture);
-		const sessionFields = parseMarkdown(fixture.read(sessionPath)).frontmatter.fields;
-		assert.equal(sessionFields.durable_output_status_at_finish, 'pending_review');
 		const taskBeforeRecovery = parseMarkdown(fixture.read(taskPath)).frontmatter.fields;
 		assert.equal(
 			Object.hasOwn(taskBeforeRecovery, 'durable_output_status_at_finish'),
@@ -556,15 +527,13 @@ for (const phase of ['before', 'after']) {
 		assert.equal(recovered.durable_output.status, 'pending_review');
 		assert.equal(recovered.durable_output.rejected_count, 0);
 		const taskFields = parseMarkdown(fixture.read(taskPath)).frontmatter.fields;
-		const repairedSessionFields = parseMarkdown(fixture.read(sessionPath)).frontmatter.fields;
-		for (const key of Object.keys(repairedSessionFields)
-			.filter((key) => key.startsWith('durable_output_'))) {
-			assert.deepEqual(taskFields[key], repairedSessionFields[key]);
-		}
+		assert.equal(taskFields.durable_output_status_at_finish, 'pending_review');
+		assert.equal(taskFields.durable_output_rejected_count, 0);
+		assert.equal(taskFields.session_note, undefined);
 	});
 }
 
-test('finish_task finalization refuses a single-sided durable-output snapshot', async (t) => {
+test('finish_task finalization refuses a missing task-record durable-output snapshot', async (t) => {
 	const fixture = createFixture(t);
 	const task = await startTask(fixture, 'single-sided-finalize');
 	await proposeForTask(fixture, task.task_id, 'single-sided-finalize');
@@ -587,7 +556,7 @@ test('finish_task finalization refuses a single-sided durable-output snapshot', 
 	assert.equal(replay.isError, true);
 	assert.match(
 		String(replay.structuredContent?.error || ''),
-		/durable-output evidence.*both|finalization/i
+		/durable-output evidence.*task record|finalization/i
 	);
 });
 
@@ -874,23 +843,22 @@ test('finish_task without sources or proposals reports no durable output', async
 	assert.equal(finished.memory_status, 'no_candidates');
 	assert.equal(finished.next_actions[0].kind, 'report_status');
 	assert.equal(finished.next_actions[0].reason_code, 'MEMORY_NOT_PERSISTED');
-	for (const recordPath of [finished.task_path, finished.session_path]) {
-		const fields = parseMarkdown(fixture.read(recordPath)).frontmatter.fields;
-		assert.equal(fields.durable_output_status_at_finish, 'none');
-		for (const key of [
-			'durable_output_source_capture_count',
-			'durable_output_proposal_count',
-			'durable_output_pending_review_count',
-			'durable_output_ready_to_apply_count',
-			'durable_output_revision_requested_count',
-			'durable_output_applied_count',
-			'durable_output_rejected_count',
-			'durable_output_unresolved_count',
-			'durable_output_proposal_ids_at_finish',
-			'durable_output_proposal_paths',
-			'durable_output_target_paths',
-		]) {
-			assert.equal(Object.hasOwn(fields, key), true, `${recordPath} missing ${key}`);
-		}
+	assert.equal(finished.session_path, finished.task_path);
+	const fields = parseMarkdown(fixture.read(finished.task_path)).frontmatter.fields;
+	assert.equal(fields.durable_output_status_at_finish, 'none');
+	for (const key of [
+		'durable_output_source_capture_count',
+		'durable_output_proposal_count',
+		'durable_output_pending_review_count',
+		'durable_output_ready_to_apply_count',
+		'durable_output_revision_requested_count',
+		'durable_output_applied_count',
+		'durable_output_rejected_count',
+		'durable_output_unresolved_count',
+		'durable_output_proposal_ids_at_finish',
+		'durable_output_proposal_paths',
+		'durable_output_target_paths',
+	]) {
+		assert.equal(Object.hasOwn(fields, key), true, `${finished.task_path} missing ${key}`);
 	}
 });

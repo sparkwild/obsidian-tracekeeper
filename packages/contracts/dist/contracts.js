@@ -647,7 +647,7 @@ exports.toolContracts = [
     },
     {
         name: 'tracekeeper.finish_task',
-        version: 4,
+        version: 5,
         visibility: 'public',
         capability: 'workflow.manage',
         risk: 'low-risk-write',
@@ -656,7 +656,7 @@ exports.toolContracts = [
         world: 'closed',
         workflowRole: 'task-finish',
         useCase: 'finish_task',
-        description: '[low-risk write] Record task execution closeout and report durable Wiki/Memory output separately. The result includes direct proposals already linked to the task; a captured Source or Recall match does not prove that proposed knowledge was applied.',
+        description: '[low-risk write] Complete the canonical Markdown task record without creating an implicit session note. If the start_task record is missing, reconstruct a complete task record at the canonical task path from the finish request and mark that provenance explicitly. Report durable Wiki/Memory output separately. The result includes direct proposals already linked to the task; a captured Source or Recall match does not prove that proposed knowledge was applied.',
         inputSchema: withToolInput({
             task_id: { type: 'string', description: 'Task id.' },
             summary: { type: 'string', description: 'Task summary.' },
@@ -700,7 +700,10 @@ exports.toolContracts = [
                 oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
                 description: 'Optional related sources.',
             },
-            filename: { type: 'string', description: 'Optional file stem.' },
+            filename: {
+                type: 'string',
+                description: 'Deprecated compatibility input. Accepted for exact retries but does not create or select a separate finish note.',
+            },
             project_id: {
                 type: 'string',
                 description: 'Optional project id; a value conflicting with the started task identity is rejected.',

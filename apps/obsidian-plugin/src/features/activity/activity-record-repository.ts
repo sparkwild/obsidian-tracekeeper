@@ -12,7 +12,12 @@ import {
 	resolveProposalHistoryById,
 	type ProposalHistoryRecord,
 } from '@tracekeeper/core';
-import { compareProposalRecords, parseMemoryProposalRecord, type MemoryProposalRecord } from '../review/review-view-model';
+import {
+	compareProposalRecords,
+	normalizeProposalStatus,
+	parseMemoryProposalRecord,
+	type MemoryProposalRecord,
+} from '../review/review-view-model';
 import { REVIEW_QUEUE_PATH } from '../review/review-queue-model';
 import {
 	AGENT_TASKS_PATH,
@@ -419,12 +424,11 @@ export class ActivityRecordRepository {
 					|| proposalType.includes('memory-proposal')
 					|| proposalType.includes('legacy-migration-review')
 					|| Boolean(proposalKind);
-				const status = this.cachedFirstString(
+				const status = normalizeProposalStatus(this.cachedFirstString(
 					frontmatter ?? {},
-					['approval_status', 'approvalStatus']
-				).toLowerCase().replace(/-/g, '_');
-				const requiresAttention = !status
-					|| status === 'pending'
+					['approval_status', 'approvalStatus', 'status']
+				));
+				const requiresAttention = status === 'pending'
 					|| status === 'approved'
 					|| status === 'revision_requested';
 				return {

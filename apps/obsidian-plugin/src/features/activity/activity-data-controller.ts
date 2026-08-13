@@ -14,6 +14,7 @@ import {
 	type MemoryProposalRecord,
 } from '../review/review-view-model';
 import { memoryProposalStatusLabel } from '../review/review-queue-model';
+import { normalizeReviewTargetPath } from '../review/review-target-policy';
 import {
 	RUNTIME_LOG_FILTERS,
 	RUNTIME_LOG_CLEANUP_OPTIONS,
@@ -143,20 +144,29 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 		const reviewQueueItems = reviewQueueWindow.records;
 		const recentProposals = reviewQueueItems.slice(0, MAX_ACTIVITY_PROPOSAL_ROWS);
 		const reviewQueueItemCount = reviewQueueWindow.totalItems;
-		const incompleteReviewQueueItemCount = reviewQueueItems.filter(
-			(proposal) => getReviewProposalAttentionState(proposal) === 'incomplete'
+		const reviewAttentionStates = reviewQueueItems.map((proposal) =>
+			this.reviewProposalAttentionState(proposal)
+		);
+		const blockedReviewQueueItemCount = reviewAttentionStates.filter(
+			(state) => state === 'blocked'
 		).length;
-		const pendingReviewQueueItemCount = reviewQueueItems.filter(
-			(proposal) => getReviewProposalAttentionState(proposal) === 'pending_review'
+		const incompleteReviewQueueItemCount = reviewAttentionStates.filter(
+			(state) => state === 'incomplete'
 		).length;
-		const readyToApplyReviewQueueItemCount = reviewQueueItems.filter(
-			(proposal) => getReviewProposalAttentionState(proposal) === 'ready_to_apply'
+		const pendingReviewQueueItemCount = reviewAttentionStates.filter(
+			(state) => state === 'pending_review'
 		).length;
-		const revisionRequestedReviewQueueItemCount = reviewQueueItems.filter(
-			(proposal) => getReviewProposalAttentionState(proposal) === 'awaiting_revision'
+		const readyToApplyReviewQueueItemCount = reviewAttentionStates.filter(
+			(state) => state === 'ready_to_apply'
+		).length;
+		const revisionRequestedReviewQueueItemCount = reviewAttentionStates.filter(
+			(state) => state === 'awaiting_revision'
 		).length;
 		const actionableReviewQueueItemCount =
-			incompleteReviewQueueItemCount + pendingReviewQueueItemCount + readyToApplyReviewQueueItemCount;
+			blockedReviewQueueItemCount
+			+ incompleteReviewQueueItemCount
+			+ pendingReviewQueueItemCount
+			+ readyToApplyReviewQueueItemCount;
 		const latestTask = recentTasks[0] ?? null;
 		const taskFolderMissing =
 			this.app.vault.getAbstractFileByPath(AGENT_TASKS_PATH) === null;
@@ -189,6 +199,7 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			recentProposals,
 			reviewQueueItemCount,
 			reviewQueueCountsTruncated: reviewQueueWindow.isTruncated,
+			blockedReviewQueueItemCount,
 			incompleteReviewQueueItemCount,
 			pendingReviewQueueItemCount,
 			readyToApplyReviewQueueItemCount,
@@ -204,6 +215,15 @@ async loadAgentActivitySnapshot(): Promise<AgentActivitySnapshot> {
 			missingAuditSources: activityHubMissing || activityDirMissing,
 			updatedAt: new Date().toISOString(),
 		};
+	}
+
+	private reviewProposalAttentionState(proposal: MemoryProposalRecord) {
+		const targetPath = normalizeReviewTargetPath(proposal.targetNote);
+		const exists = Boolean(
+			targetPath
+			&& this.app.vault.getAbstractFileByPath(targetPath) instanceof TFile
+		);
+		return getReviewProposalAttentionState(proposal, { exists });
 	}
 
 async loadActivityTimelineSnapshot(

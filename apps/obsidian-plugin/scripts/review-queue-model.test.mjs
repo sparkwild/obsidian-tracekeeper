@@ -70,6 +70,16 @@ const baseProposals = [
 		sortTimestamp: 2500,
 	}),
 	makeProposal({
+		proposalId: 'blocked-project',
+		targetNote: '01_knowledge/memory/projects/project-old/index.md',
+		writebackContent: 'append this',
+		approvalStatus: 'pending',
+		memoryScope: 'project',
+		reviewReason: 'missing_memory_hub',
+		relatedProject: 'project old',
+		sortTimestamp: 5000,
+	}),
+	makeProposal({
 		proposalId: 'history-item',
 		targetNote: '01_knowledge/wiki/history.md',
 		writebackContent: 'append this',
@@ -170,6 +180,17 @@ try {
 
 	const queueModule = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
 
+	const blocked = queueModule.filterReviewQueueItems([...baseProposals], {
+		filter: 'blocked',
+		sort: 'attention',
+		search: '',
+		pageIndex: 0,
+		pageSize: 20,
+	});
+	assert.equal(blocked.totalItems, 1);
+	assert.equal(blocked.counts.blocked, 1);
+	assert.equal(blocked.items[0].proposalId, 'blocked-project');
+
 	const filteredNeedsCompletion = queueModule.filterReviewQueueItems([...baseProposals], {
 		filter: 'needs_completion',
 		sort: 'attention',
@@ -237,25 +258,15 @@ try {
 	});
 	assert.equal(awaiting.counts.awaiting_revision, 1);
 
-	const history = queueModule.filterReviewQueueItems([...baseProposals], {
-		filter: 'history',
-		sort: 'newest',
-		search: '',
-		pageIndex: 0,
-		pageSize: 20,
-	});
-	assert.equal(history.totalItems, 1);
-	assert.equal(history.items[0].approvalStatus, 'applied');
-
 	const searchAlpha = queueModule.filterReviewQueueItems([...baseProposals], {
-		filter: 'all',
+		filter: 'needs_review',
 		sort: 'newest',
 		search: 'project alpha',
 		pageIndex: 0,
 		pageSize: 20,
 	});
-	assert.equal(searchAlpha.totalItems, 3);
-	assert.equal(searchAlpha.counts.all, 3);
+	assert.equal(searchAlpha.totalItems, 1);
+	assert.equal(searchAlpha.items[0].proposalId, 'pending-complete');
 
 	const riskSort = queueModule.filterReviewQueueItems(riskProposals, {
 		filter: 'needs_review',
@@ -266,18 +277,6 @@ try {
 	assert.equal(riskSort.items[0].riskLevel, 'high');
 	assert.equal(riskSort.items[1].riskLevel, 'medium');
 	assert.equal(riskSort.items[2].riskLevel, 'low');
-
-	const attentionSort = queueModule.filterReviewQueueItems(baseProposals, {
-		filter: 'all',
-		sort: 'attention',
-		pageIndex: 0,
-		pageSize: 20,
-	});
-	assert.equal(attentionSort.items[0].proposalId, 'pending-incomplete');
-	assert.equal(attentionSort.items[1].proposalId, 'pending-complete');
-	assert.equal(attentionSort.items[2].proposalId, 'approved-ready');
-	assert.equal(attentionSort.items[3].proposalId, 'revision-needed');
-	assert.equal(attentionSort.items[4].proposalId, 'history-item');
 
 	const pageOne = queueModule.filterReviewQueueItems([...pagedProposals], {
 		filter: 'ready_to_apply',
@@ -305,7 +304,7 @@ try {
 	assert.equal(pageTwo.page.pageIndex, 1);
 	assert.equal(pageTwo.page.hasPrevious, true);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 24 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 23 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

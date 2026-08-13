@@ -168,8 +168,13 @@ destination paths plus every managed task/session reference. Any duplicate id,
 occupied destination, changed source or reference, or unresolved association
 blocks confirmation. A successful move preserves proposal history and updates
 Tracekeeper-owned links; it does not rewrite unrelated notes or historical
-Agent activity text. Confirmation persists operation ownership before the move. If the
-operation is interrupted, the same operation may resume from its bounded
+Agent activity text. The main review surface lists only changes that still need
+attention: blocked proposals that must be resubmitted, incomplete proposals,
+pending review, approved changes awaiting apply, and requested revisions.
+Rejected, applied, and otherwise completed records remain available through a
+separate, explicitly confirmed archive-maintenance action instead of occupying
+the working queue. Confirmation persists operation ownership before the move.
+If the operation is interrupted, the same operation may resume from its bounded
 receipt; a newly generated archive operation cannot take over those claimed
 targets and instead reports a recoverable conflict.
 
@@ -220,11 +225,23 @@ directory growth, and legacy Memory candidates. Graph profiles control
 reporting severity but never create notes or rewrite links. A selected graph
 suggestion may become a normal Knowledge Change Review proposal.
 
+Managed proposal references in task and session records are one semantic
+relationship even though Tracekeeper mirrors them in frontmatter and the note
+body for machine and Obsidian readability. Lint reports misaligned ids, paths,
+links, duplicate identities, missing mirror markers, and mirrors that resolve to
+different targets; it does not rewrite historical Markdown. Graph-health totals
+deduplicate a valid mirror and separately expose the raw observation count.
+
 Source records use a normalized `web`, `file`, or `transcript` owner route and
 carry a stable `source_id` plus content hash. Small captures keep content in the
 Source index note. Large captures use a bounded manifest of content-addressed
 part notes linked visibly from that index; Memory and Wiki relations target the
 Source index rather than an individual part.
+
+Provenance fields and Source index-to-part links are structural evidence, not
+knowledge relationships. They remain inspectable in the raw Obsidian graph but
+are excluded from Recall relation evidence and expansion unless the Source note
+also declares the target through `related_wiki` or `related_sources`.
 
 Legacy Memory remains readable but has no inferred `claim_key` and does not
 participate in automatic lifecycle resolution. The plugin may turn a unique

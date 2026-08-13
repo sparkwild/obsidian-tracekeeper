@@ -397,10 +397,10 @@ export class TracekeeperActivityView extends ItemView {
 		const reviewButton = actions.createEl('button', {
 			text: snapshot.actionableReviewQueueItemCount > 0
 				? ui(`处理知识变更 (${actionableCount})`, `Review knowledge changes (${actionableCount})`)
-				: ui(`查看知识变更 (${snapshot.reviewQueueItemCount})`, `Open knowledge changes (${snapshot.reviewQueueItemCount})`),
+				: ui('查看知识变更', 'Open knowledge changes'),
 			cls: [
 				'tracekeeper-review-queue-button',
-				snapshot.reviewQueueItemCount > 0
+				snapshot.actionableReviewQueueItemCount > 0
 					? 'tracekeeper-review-queue-button--has-items'
 					: '',
 			].filter(Boolean).join(' '),
@@ -424,11 +424,19 @@ export class TracekeeperActivityView extends ItemView {
 		summary.createEl('p', {
 			text: snapshot.actionableReviewQueueItemCount > 0
 				? ui(
-					`信息不完整 ${snapshot.incompleteReviewQueueItemCount} · 待审核 ${snapshot.pendingReviewQueueItemCount} · 待写入 ${snapshot.readyToApplyReviewQueueItemCount} · 已退回修改 ${snapshot.revisionRequestedReviewQueueItemCount} · 全部 ${snapshot.reviewQueueItemCount}${snapshot.reviewQueueCountsTruncated ? ' · 子状态为有界统计' : ''}`,
-					`${snapshot.incompleteReviewQueueItemCount} incomplete · ${snapshot.pendingReviewQueueItemCount} pending review · ${snapshot.readyToApplyReviewQueueItemCount} ready to apply · ${snapshot.revisionRequestedReviewQueueItemCount} returned for revision · ${snapshot.reviewQueueItemCount} total${snapshot.reviewQueueCountsTruncated ? ' · bounded subtype counts' : ''}`
+					`需重提 ${snapshot.blockedReviewQueueItemCount} · 信息不完整 ${snapshot.incompleteReviewQueueItemCount} · 待审核 ${snapshot.pendingReviewQueueItemCount} · 待写入 ${snapshot.readyToApplyReviewQueueItemCount}${snapshot.reviewQueueCountsTruncated ? ' · 当前为有界统计' : ''}`,
+					`${snapshot.blockedReviewQueueItemCount} to resubmit · ${snapshot.incompleteReviewQueueItemCount} incomplete · ${snapshot.pendingReviewQueueItemCount} pending review · ${snapshot.readyToApplyReviewQueueItemCount} ready to apply${snapshot.reviewQueueCountsTruncated ? ' · bounded counts' : ''}`
 				)
 				: snapshot.reviewQueueItemCount > 0
-					? ui(`暂无待处理项 · 已退回修改 ${snapshot.revisionRequestedReviewQueueItemCount} · 全部 ${snapshot.reviewQueueItemCount}`, `No action needed · ${snapshot.revisionRequestedReviewQueueItemCount} returned for revision · ${snapshot.reviewQueueItemCount} total`)
+					? snapshot.revisionRequestedReviewQueueItemCount > 0
+						? ui(
+							`暂无需要你处理的知识变更；${snapshot.revisionRequestedReviewQueueItemCount} 项正在等待修订。`,
+							`No knowledge changes require your action; ${snapshot.revisionRequestedReviewQueueItemCount} await revision.`
+						)
+						: ui(
+							'暂无需要你处理的知识变更。已处理记录可进入审核页整理。',
+							'No knowledge changes require your action. Processed records can be organized from the review view.'
+						)
 					: ui('暂无知识变更。', 'No knowledge changes.'),
 		});
 		const details = card.createDiv({ cls: 'tracekeeper-detail-grid tracekeeper-memory-loop-grid' });

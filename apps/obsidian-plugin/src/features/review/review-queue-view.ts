@@ -138,6 +138,17 @@ export class TracekeeperReviewQueueView extends ItemView {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass('tracekeeper-view-root');
+		const actionableProposals = snapshot.proposals.filter((proposal) =>
+			this.proposalAttentionState(proposal, snapshot.contexts[proposal.path]) !== 'completed'
+		);
+		const batchActionableProposals = actionableProposals.filter((proposal) => {
+			const state = this.proposalAttentionState(proposal, snapshot.contexts[proposal.path]);
+			return proposal.approvalStatus === 'pending'
+				&& (state === 'blocked' || state === 'pending_review' || state === 'incomplete');
+		});
+		const archiveCandidates = snapshot.proposals
+			.filter(isReviewQueueArchiveCandidate)
+			.slice(0, 64);
 
 		const header = contentEl.createDiv({ cls: 'tracekeeper-shell-header' });
 		const heading = header.createDiv();
@@ -151,7 +162,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 		const headerActions = header.createDiv({ cls: 'tracekeeper-action-row' });
 		this.renderRefreshButton(headerActions);
-		if (!this.showingDetail && !snapshot.missingReviewQueueFolder && snapshot.proposals.length > 0) {
+		if (!this.showingDetail && !snapshot.missingReviewQueueFolder && batchActionableProposals.length > 0) {
 			const selectionButton = headerActions.createEl('button', {
 				text: this.selectionMode ? ui('退出批量操作', 'Exit batch actions') : ui('批量操作', 'Batch actions'),
 				cls: this.selectionMode ? 'mod-warning' : '',
@@ -160,6 +171,19 @@ export class TracekeeperReviewQueueView extends ItemView {
 				this.selectionMode = !this.selectionMode;
 				this.selectedProposalPaths.clear();
 				void this.render(snapshot);
+			});
+		}
+		if (!this.showingDetail && archiveCandidates.length > 0) {
+			const archiveButton = headerActions.createEl('button', {
+				text: ui('整理已处理记录', 'Organize processed records'),
+			});
+			archiveButton.addEventListener('click', () => {
+				new ReviewQueueArchiveModal(
+					this.app,
+					this.plugin,
+					archiveCandidates,
+					(receipt) => this.afterBatchArchive(receipt.moved.length)
+				).open();
 			});
 		}
 
@@ -228,11 +252,11 @@ export class TracekeeperReviewQueueView extends ItemView {
 		}, snapshot.contexts);
 		if (result.totalItems === 0 && !this.searchQuery && !this.filterExplicitlySelected) {
 			const fallback = ([
+				'blocked',
 				'needs_completion',
 				'needs_review',
 				'ready_to_apply',
 				'awaiting_revision',
-				'history',
 			] as ReviewInboxFilter[]).find((filter) => result.counts[filter] > 0);
 			if (fallback && fallback !== this.activeFilter) {
 				this.activeFilter = fallback;
@@ -246,7 +270,36 @@ export class TracekeeperReviewQueueView extends ItemView {
 			}
 		}
 		this.pageIndex = result.page.pageIndex;
-		const selected = this.resolveSelectedProposal(snapshot.proposals);
+		const actionableCount = Object.values(result.counts).reduce((sum, count) => sum + count, 0);
+		if (actionableCount === 0 && !this.searchQuery) {
+			this.showingDetail = false;
+			this.selectedProposalPath = '';
+			this.selectionMode = false;
+			this.selectedProposalPaths.clear();
+			this.renderEmptyState(
+				contentEl,
+				ui('暂无需要处理的知识变更。', 'No knowledge changes require action.'),
+				archiveCandidates.length > 0
+					? ui(
+						'已拒绝、已写入和其他已完成记录不会占用审核列表；可通过右上角整理入口归档。',
+						'Rejected, applied, and other completed records do not occupy the review list. Use the organize action above to archive them.'
+					)
+					: ui(
+						'Agent 建议、图谱调整和结构迁移差异会显示在这里。',
+						'Agent suggestions, graph changes, and structure-migration differences will appear here.'
+					)
+			);
+			return;
+		}
+		let selected = this.resolveSelectedProposal(snapshot.proposals);
+		if (
+			selected
+			&& this.proposalAttentionState(selected, snapshot.contexts[selected.path]) === 'completed'
+		) {
+			this.selectedProposalPath = '';
+			this.showingDetail = false;
+			selected = null;
+		}
 
 		if (this.showingDetail && selected) {
 			const inbox = contentEl.createDiv({ cls: 'tracekeeper-review-inbox is-detail' });
@@ -258,7 +311,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 		this.showingDetail = false;
 		this.renderControls(contentEl, snapshot, result.counts);
-		this.renderBatchActions(contentEl, snapshot.proposals);
+		this.renderBatchActions(contentEl, batchActionableProposals, snapshot);
 
 		const inbox = contentEl.createDiv({ cls: 'tracekeeper-review-inbox' });
 		const list = inbox.createDiv({ cls: 'tracekeeper-review-inbox__list' });
@@ -288,6 +341,12 @@ export class TracekeeperReviewQueueView extends ItemView {
 			proposal,
 			context ? { exists: context.target.exists } : {}
 		);
+		if (state === 'completed') {
+			this.selectedProposalPath = '';
+			this.showingDetail = false;
+			await this.render(snapshot);
+			return;
+		}
 		this.activeFilter = this.attentionFilter(state);
 		this.pageIndex = 0;
 		this.selectedProposalPath = proposal.path;
@@ -321,7 +380,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 	): void {
 		const controls = container.createDiv({ cls: 'tracekeeper-review-inbox__controls' });
 		const filters = controls.createDiv({ cls: 'tracekeeper-review-inbox__filters' });
-		for (const filter of ['needs_completion', 'needs_review', 'ready_to_apply', 'awaiting_revision', 'history', 'all'] as ReviewInboxFilter[]) {
+		for (const filter of ['blocked', 'needs_completion', 'needs_review', 'ready_to_apply', 'awaiting_revision'] as ReviewInboxFilter[]) {
 			const button = filters.createEl('button', {
 				text: `${reviewInboxFilterLabel(filter)} (${counts[filter]})`,
 				cls: this.activeFilter === filter ? 'is-active' : '',
@@ -332,6 +391,8 @@ export class TracekeeperReviewQueueView extends ItemView {
 				this.pageIndex = 0;
 				this.selectedProposalPath = '';
 				this.showingDetail = false;
+				this.selectionMode = false;
+				this.selectedProposalPaths.clear();
 				void this.render(snapshot);
 			});
 		}
@@ -385,13 +446,20 @@ export class TracekeeperReviewQueueView extends ItemView {
 		option.value = value;
 	}
 
-	private renderBatchActions(container: HTMLElement, proposals: MemoryProposalRecord[]): void {
+	private renderBatchActions(
+		container: HTMLElement,
+		proposals: MemoryProposalRecord[],
+		snapshot: MemoryReviewQueueSnapshot
+	): void {
 		if (!this.selectionMode) {
 			return;
 		}
 		const selected = proposals.filter((proposal) => this.selectedProposalPaths.has(proposal.path));
-		const pending = selected.filter((proposal) => getReviewProposalAttentionState(proposal) === 'pending_review' || getReviewProposalAttentionState(proposal) === 'incomplete');
-		const archiveCandidates = selected.filter((proposal) => isReviewQueueArchiveCandidate(proposal));
+		const pending = selected.filter((proposal) => {
+			const state = this.proposalAttentionState(proposal, snapshot.contexts[proposal.path]);
+			return proposal.approvalStatus === 'pending'
+				&& (state === 'blocked' || state === 'pending_review' || state === 'incomplete');
+		});
 		const toolbar = container.createDiv({ cls: 'tracekeeper-batch-toolbar' });
 		toolbar.createSpan({
 			text: ui(`已选择 ${selected.length} 项`, `${selected.length} items selected`),
@@ -409,19 +477,6 @@ export class TracekeeperReviewQueueView extends ItemView {
 					ui(`将把 ${pending.length} 项标记为未采纳。这不会删除原始记录。`, `This marks ${pending.length} item(s) as not accepted. It does not delete source records.`),
 					ui('确认不采纳', 'Do not accept items'),
 					() => this.batchUpdate(pending, 'rejected')
-				).open();
-			});
-		}
-		if (archiveCandidates.length > 0) {
-			const archive = toolbar.createEl('button', {
-				text: ui(`归档处理记录 (${archiveCandidates.length})`, `Archive processed records (${archiveCandidates.length})`),
-			});
-			archive.addEventListener('click', () => {
-				new ReviewQueueArchiveModal(
-					this.app,
-					this.plugin,
-					archiveCandidates,
-					(receipt) => this.afterBatchArchive(receipt.moved.length)
 				).open();
 			});
 		}
@@ -991,23 +1046,27 @@ export class TracekeeperReviewQueueView extends ItemView {
 		isComplete: boolean,
 		context?: ReviewProposalContext
 	): void {
-		if (proposal.classification !== 'memory_proposal') {
-			if (status === 'pending_review') {
-				this.addStatusAction(container, proposal, 'applied', ui('确认完成', 'Confirm complete'), 'tracekeeper-confirm-button', 'history');
-				this.addRevisionAction(container, proposal);
-				this.addStatusAction(container, proposal, 'rejected', ui('不采纳', 'Do not accept'), 'mod-warning', 'history');
+		if (status === 'blocked') {
+			if (proposal.approvalStatus === 'approved') {
+				this.addStatusAction(
+					container,
+					proposal,
+					'pending',
+					ui('撤回错误审核', 'Withdraw invalid approval'),
+					'',
+					'blocked'
+				);
+			} else if (proposal.approvalStatus === 'pending') {
+				this.addStatusAction(container, proposal, 'rejected', ui('不采纳', 'Do not accept'), 'mod-warning');
 			}
 			return;
 		}
-		if (this.isProjectMissingHubBlock(proposal) && status === 'ready_to_apply') {
-			this.addStatusAction(
-				container,
-				proposal,
-				'pending',
-				ui('撤回错误审核', 'Withdraw invalid approval'),
-				'',
-				'needs_review'
-			);
+		if (proposal.classification !== 'memory_proposal') {
+			if (status === 'pending_review') {
+				this.addStatusAction(container, proposal, 'applied', ui('确认完成', 'Confirm complete'), 'tracekeeper-confirm-button');
+				this.addRevisionAction(container, proposal);
+				this.addStatusAction(container, proposal, 'rejected', ui('不采纳', 'Do not accept'), 'mod-warning');
+			}
 			return;
 		}
 
@@ -1025,16 +1084,14 @@ export class TracekeeperReviewQueueView extends ItemView {
 			}
 			this.addEditAction(container, proposal, context, ui('补全内容', 'Complete details'), true);
 			this.addRevisionAction(container, proposal);
-			this.addStatusAction(container, proposal, 'rejected', ui('不采纳', 'Do not accept'), 'mod-warning', 'history');
+			this.addStatusAction(container, proposal, 'rejected', ui('不采纳', 'Do not accept'), 'mod-warning');
 			return;
 		}
 		if (status === 'pending_review') {
 			this.addEditAction(container, proposal, context, ui('编辑变更', 'Edit change'));
 			this.addRevisionAction(container, proposal);
-			this.addStatusAction(container, proposal, 'rejected', ui('不采纳', 'Do not accept'), 'mod-warning', 'history');
-			if (!this.isProjectMissingHubBlock(proposal)) {
-				this.addStatusAction(container, proposal, 'approved', ui('通过审核', 'Approve'), 'mod-cta', 'ready_to_apply');
-			}
+			this.addStatusAction(container, proposal, 'rejected', ui('不采纳', 'Do not accept'), 'mod-warning');
+			this.addStatusAction(container, proposal, 'approved', ui('通过审核', 'Approve'), 'mod-cta', 'ready_to_apply');
 			return;
 		}
 		if (status === 'awaiting_revision') {
@@ -1051,7 +1108,6 @@ export class TracekeeperReviewQueueView extends ItemView {
 			const apply = container.createEl('button', { text: ui('预览并写入', 'Preview and apply'), cls: 'mod-cta' });
 			apply.addEventListener('click', () => {
 				new ApprovedWritebackApplyModal(this.app, this.plugin, proposal, () => {
-					this.activeFilter = 'history';
 					this.selectedProposalPath = '';
 					this.showingDetail = false;
 					void this.refresh();
@@ -1116,7 +1172,12 @@ export class TracekeeperReviewQueueView extends ItemView {
 						this.activeFilter = nextFilter;
 						this.pageIndex = 0;
 					}
-					this.selectedProposalPath = proposal.path;
+					if (status === 'rejected' || status === 'applied') {
+						this.selectedProposalPath = '';
+						this.showingDetail = false;
+					} else {
+						this.selectedProposalPath = proposal.path;
+					}
 					await this.refresh();
 				} catch (error) {
 					console.error('tracekeeper failed to update review proposal status', error);
@@ -1192,8 +1253,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 			proposal,
 			context ? { exists: context.target.exists } : {}
 		);
-		const projectMissingHubBlock = this.isProjectMissingHubBlock(proposal);
-		const className = projectMissingHubBlock || state === 'incomplete'
+		const className = state === 'blocked' || state === 'incomplete'
 			? 'tracekeeper-badge tracekeeper-badge--warning'
 			: state === 'ready_to_apply'
 				? 'tracekeeper-badge tracekeeper-badge--success'
@@ -1201,15 +1261,15 @@ export class TracekeeperReviewQueueView extends ItemView {
 					? 'tracekeeper-badge tracekeeper-badge--warning'
 					: 'tracekeeper-badge tracekeeper-badge--muted';
 		container.createSpan({
-			text: projectMissingHubBlock
-				? ui('历史阻断，需重提', 'Legacy block; resubmit')
-				: this.attentionStateLabel(state),
+			text: this.attentionStateLabel(state),
 			cls: className,
 		});
 	}
 
 	private attentionFilter(state: ReviewProposalAttentionState): ReviewInboxFilter {
 		switch (state) {
+			case 'blocked':
+				return 'blocked';
 			case 'incomplete':
 				return 'needs_completion';
 			case 'pending_review':
@@ -1220,12 +1280,14 @@ export class TracekeeperReviewQueueView extends ItemView {
 				return 'awaiting_revision';
 			case 'completed':
 			default:
-				return 'history';
+				return 'needs_review';
 		}
 	}
 
 	private attentionStateLabel(state: ReviewProposalAttentionState): string {
 		switch (state) {
+		case 'blocked':
+			return ui('历史阻断，需重提', 'Legacy block; resubmit');
 		case 'incomplete':
 				return ui('待补全，不能审核', 'Needs completion; not reviewable');
 			case 'pending_review':
@@ -1487,8 +1549,14 @@ export class TracekeeperReviewQueueView extends ItemView {
 		}
 	}
 
-	private isProjectMissingHubBlock(proposal: MemoryProposalRecord): boolean {
-		return proposal.memoryScope === 'project' && proposal.reviewReason === 'missing_memory_hub';
+	private proposalAttentionState(
+		proposal: MemoryProposalRecord,
+		context?: ReviewProposalContext
+	): ReviewProposalAttentionState {
+		return getReviewProposalAttentionState(
+			proposal,
+			context ? { exists: context.target.exists } : {}
+		);
 	}
 
 	private rowMeta(proposal: MemoryProposalRecord): string {

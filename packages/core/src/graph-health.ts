@@ -38,6 +38,7 @@ export interface GraphProfileEvaluation {
 
 export interface GraphHealthReport {
 	note_count: number;
+	edge_observation_count: number;
 	wikilink_edge_count: number;
 	unresolved_edges: GraphHealthUnresolvedEdge[];
 	resolved_edge_count: number;
@@ -71,6 +72,8 @@ export interface GraphHealthUnresolvedEdge {
 	line: number;
 	target: string;
 	context?: string;
+	occurrence_count: number;
+	declared_via: Array<'frontmatter' | 'body_wikilink'>;
 }
 
 const DEFAULT_MAX_ITEMS = 20;
@@ -99,9 +102,16 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 	}
 
 	let wikilinkEdgeCount = 0;
+	let edgeObservationCount = 0;
 	let resolvedEdgeCount = 0;
 	let unresolvedEdgeCount = 0;
 	const unresolvedEdges: GraphHealthUnresolvedEdge[] = [];
+	const semanticEdges = new Map<string, {
+		link: ScannedNote['edges'][number];
+		path: string;
+		occurrenceCount: number;
+		declaredVia: Set<'frontmatter' | 'body_wikilink'>;
+	}>();
 
 	for (const note of notes) {
 		const sourcePath = normalizeRelativePath(note.relativePath);
@@ -110,41 +120,67 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 		}
 
 		for (const link of resolvedEdges.get(sourcePath) ?? note.edges) {
-			wikilinkEdgeCount += 1;
-			if (link.resolution.status !== 'resolved') {
-				unresolvedEdgeCount += 1;
-				unresolvedEdges.push({
-					path: note.relativePath,
-					line: link.line,
-					target: link.target || link.referenceLabel || link.raw,
-					context: link.raw,
-				});
+			edgeObservationCount += 1;
+			const key = semanticGraphEdgeKey(sourcePath, link);
+			const declaredVia = link.source === 'frontmatter' ? 'frontmatter' : 'body_wikilink';
+			const existing = semanticEdges.get(key);
+			if (existing) {
+				existing.occurrenceCount += 1;
+				existing.declaredVia.add(declaredVia);
 				continue;
 			}
-			const target = link.resolution.path;
-			if (!notePathSet.has(target)) {
-				if (isNativeAttachmentResolution(link.resolution)) {
-					resolvedEdgeCount += 1;
-					continue;
-				}
-				unresolvedEdgeCount += 1;
-				unresolvedEdges.push({
-					path: note.relativePath,
-					line: link.line,
-					target: link.target || link.referenceLabel || link.raw,
-					context: link.raw,
-				});
+			semanticEdges.set(key, {
+				link,
+				path: note.relativePath,
+				occurrenceCount: 1,
+				declaredVia: new Set([declaredVia]),
+			});
+		}
+	}
+
+	for (const { link, path: sourceDisplayPath, occurrenceCount, declaredVia } of semanticEdges.values()) {
+		const sourcePath = normalizeRelativePath(link.sourcePath ?? sourceDisplayPath);
+		if (!sourcePath) {
+			continue;
+		}
+		wikilinkEdgeCount += 1;
+		if (link.resolution.status !== 'resolved') {
+			unresolvedEdgeCount += 1;
+			unresolvedEdges.push({
+				path: sourceDisplayPath,
+				line: link.line,
+				target: link.target || link.referenceLabel || link.raw,
+				context: link.raw,
+				occurrence_count: occurrenceCount,
+				declared_via: [...declaredVia].sort(),
+			});
+			continue;
+		}
+		const target = link.resolution.path;
+		if (!notePathSet.has(target)) {
+			if (isNativeAttachmentResolution(link.resolution)) {
+				resolvedEdgeCount += 1;
 				continue;
 			}
+			unresolvedEdgeCount += 1;
+			unresolvedEdges.push({
+				path: sourceDisplayPath,
+				line: link.line,
+				target: link.target || link.referenceLabel || link.raw,
+				context: link.raw,
+				occurrence_count: occurrenceCount,
+				declared_via: [...declaredVia].sort(),
+			});
+			continue;
+		}
 
-			resolvedEdgeCount += 1;
-			outgoing.get(sourcePath)?.add(target);
-			incoming.get(target)?.add(sourcePath);
+		resolvedEdgeCount += 1;
+		outgoing.get(sourcePath)?.add(target);
+		incoming.get(target)?.add(sourcePath);
 
-			if (sourcePath !== target) {
-				undirected.get(sourcePath)?.add(target);
-				undirected.get(target)?.add(sourcePath);
-			}
+		if (sourcePath !== target) {
+			undirected.get(sourcePath)?.add(target);
+			undirected.get(target)?.add(sourcePath);
 		}
 	}
 
@@ -236,6 +272,7 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 
 	return {
 		note_count: notes.length,
+		edge_observation_count: edgeObservationCount,
 		wikilink_edge_count: wikilinkEdgeCount,
 		unresolved_edges: unresolvedEdges.slice(0, maxItems),
 		resolved_edge_count: resolvedEdgeCount,
@@ -256,6 +293,22 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 		recommendations: recommendations.slice(0, maxItems),
 		recommendation_count: recommendations.length,
 	};
+}
+
+function semanticGraphEdgeKey(
+	sourcePath: string,
+	link: ScannedNote['edges'][number]
+): string {
+	if (link.resolution.status === 'resolved') {
+		return `resolved\0${sourcePath}\0${link.resolution.path.toLocaleLowerCase('en-US')}`;
+	}
+	const target = (link.linkPath || link.target || link.referenceLabel || link.raw)
+		.replace(/\\/g, '/')
+		.replace(/^\.\//, '')
+		.replace(/\.(?:md|markdown)$/iu, '')
+		.trim()
+		.toLocaleLowerCase('en-US');
+	return `unresolved\0${sourcePath}\0${target}\0${link.resolution.reason}`;
 }
 
 function isNativeAttachmentResolution(resolution: {

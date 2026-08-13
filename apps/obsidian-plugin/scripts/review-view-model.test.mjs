@@ -586,6 +586,35 @@ try {
 		fields: { type: 'memory-proposal', approval_status: 'rejected', proposal_id: 'p3', target_note: '01_knowledge/wiki/c.md' },
 		body: 'rejected',
 	});
+	const statusOnlyApproved = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/status-only-approved.md',
+		fields: { type: 'memory-proposal', status: 'approved', target_note: '01_knowledge/wiki/status-approved.md' },
+		body: '## Writeback\n\nstatus-only approved',
+	});
+	const statusOnlyApplied = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/status-only-applied.md',
+		fields: { type: 'memory-proposal', status: 'applied', target_note: '01_knowledge/wiki/status-applied.md' },
+		body: 'status-only applied',
+	});
+	const statusOnlyRejected = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/status-only-rejected.md',
+		fields: { type: 'memory-proposal', status: 'rejected', target_note: '01_knowledge/wiki/status-rejected.md' },
+		body: 'status-only rejected',
+	});
+	assert.equal(statusOnlyApproved?.approvalStatus, 'approved');
+	assert.equal(statusOnlyApplied?.approvalStatus, 'applied');
+	assert.equal(statusOnlyRejected?.approvalStatus, 'rejected');
+	assert.equal(reviewModule.getReviewProposalAttentionState({
+		...memoryProposal,
+		memoryScope: 'project',
+		reviewReason: 'missing_memory_hub',
+	}), 'blocked');
+	assert.equal(reviewModule.getReviewProposalAttentionState({
+		...memoryProposal,
+		approvalStatus: 'rejected',
+		memoryScope: 'project',
+		reviewReason: 'missing_memory_hub',
+	}), 'completed');
 
 	assert.ok(reviewModule.compareProposalRecords(pending, applied) < 0);
 	assert.ok(reviewModule.compareProposalRecords(rejected, applied) > 0);
@@ -596,7 +625,7 @@ try {
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...invalidTarget, approvalStatus: 'pending' }), 'incomplete');
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...legacyProposal, approvalStatus: 'approved' }), 'completed');
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 61 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 66 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

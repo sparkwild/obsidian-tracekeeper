@@ -157,8 +157,8 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 	'tracekeeper.finish_task': {
 		title: { zh: '结束任务', en: 'Finish task' },
 		description: {
-			zh: '记录任务执行结果，并单独报告该任务关联的 Wiki/Memory 是否仍待审核、待写入、已写入或未解决。',
-			en: 'Records task execution and separately reports whether task-linked Wiki/Memory output is pending, ready, applied, or unresolved.',
+			zh: '在同一份 Markdown 任务记录中写入结束结果，不隐式创建会话文件；若开始记录缺失，则在规范任务路径重建完整记录并明确标注来源，同时单独报告关联 Wiki/Memory 的持久化状态。',
+			en: 'Completes one canonical Markdown task record without an implicit session file; when the start record is missing, reconstructs the complete record at the canonical task path with explicit provenance, while separately reporting task-linked Wiki/Memory persistence.',
 		},
 		category: { zh: '任务', en: 'Task' },
 	},

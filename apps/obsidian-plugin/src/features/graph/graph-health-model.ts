@@ -27,6 +27,7 @@ export interface GraphHealthSnapshot {
 	updatedAt: string;
 	errorMessage: string;
 	noteCount: number;
+	edgeObservationCount: number;
 	wikilinkEdgeCount: number;
 	resolvedEdgeCount: number;
 	unresolvedEdgeCount: number;

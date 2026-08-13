@@ -90,7 +90,12 @@ export class TracekeeperGraphHealthView extends ItemView {
 
 		const metrics = contentEl.createDiv({ cls: 'tracekeeper-metric-grid' });
 		this.renderMetricCard(metrics, ui('笔记', 'Notes'), String(snapshot.noteCount), ui('参与图谱扫描的 Markdown 文件', 'Markdown notes in the graph scan'));
-		this.renderMetricCard(metrics, ui('Wikilink', 'Wikilinks'), String(snapshot.wikilinkEdgeCount), `${ui('已解析', 'Resolved')}: ${snapshot.resolvedEdgeCount}`);
+		this.renderMetricCard(
+			metrics,
+			ui('语义关系', 'Semantic links'),
+			String(snapshot.wikilinkEdgeCount),
+			`${ui('已解析', 'Resolved')}: ${snapshot.resolvedEdgeCount} · ${ui('原始声明', 'Raw observations')}: ${snapshot.edgeObservationCount}`
+		);
 		this.renderMetricCard(metrics, ui('未解析链接', 'Unresolved links'), String(snapshot.unresolvedEdgeCount), ui('无法解析到目标笔记的 wikilink', 'Wikilinks that do not resolve to a note'), snapshot.unresolvedEdgeCount > 0 ? 'warning' : 'ok');
 		this.renderMetricCard(metrics, ui('连通分量', 'Components'), String(snapshot.componentCount), `${ui('最大分量', 'Largest')}: ${snapshot.largestComponentNodeCount}`, snapshot.componentCount > 1 ? 'warning' : 'ok');
 		this.renderMetricCard(metrics, ui('孤立节点', 'Isolated'), String(snapshot.isolatedNodeCount), ui('没有入链或出链的笔记', 'Notes with no inbound or outbound links'), snapshot.isolatedNodeCount > 0 ? 'warning' : 'ok');

@@ -3370,6 +3370,100 @@ async function run() {
 					false
 				);
 			}],
+			['graph-health-deduplicates-managed-proposal-mirrors', () => {
+				const proposalPath = '00_tracekeeper/inbox/review_queue/proposal-a.md';
+				const proposal = scannedCharacterizationNote(proposalPath, '# Proposal A');
+				const task = scannedCharacterizationNote(
+					'00_tracekeeper/work/tasks/task-a.md',
+					[
+						'---',
+						'type: agent-task',
+						'proposal_ids:',
+						'  - proposal_a',
+						'proposal_paths:',
+						`  - ${proposalPath}`,
+						'proposal_links:',
+						`  - "[[${proposalPath}|Proposal A]]"`,
+						'---',
+						'# Task A',
+						`- [[${proposalPath}|Proposal A]] ^tracekeeper-proposal-proposal_a`,
+					].join('\n')
+				);
+				const graph = graphHealthModule.analyzeGraphHealth([task, proposal]);
+				const lint = lintModule.lintNotes('/characterization-vault', [task, proposal], {
+					graphProfile: 'off',
+				});
+				assert.equal(graph.edge_observation_count, 2);
+				assert.equal(graph.wikilink_edge_count, 1);
+				assert.equal(graph.resolved_edge_count, 1);
+				assert.equal(graph.unresolved_edge_count, 0);
+				assert.equal(
+					lint.issues.some((issue) => issue.kind.startsWith('managed_proposal_reference_')),
+					false
+				);
+			}],
+			['graph-health-aggregates-unresolved-mirror-observations', () => {
+				const missingPath = '00_tracekeeper/inbox/review_queue/missing-proposal.md';
+				const task = scannedCharacterizationNote(
+					'00_tracekeeper/work/tasks/task-missing.md',
+					[
+						'---',
+						'type: agent-task',
+						`proposal_links: ["[[${missingPath}|Missing proposal]]"]`,
+						'---',
+						`- [[${missingPath}|Missing proposal]]`,
+					].join('\n')
+				);
+				const graph = graphHealthModule.analyzeGraphHealth([task]);
+				assert.equal(graph.edge_observation_count, 2);
+				assert.equal(graph.wikilink_edge_count, 1);
+				assert.equal(graph.unresolved_edge_count, 1);
+				assert.equal(graph.unresolved_edges[0]?.occurrence_count, 2);
+				assert.deepEqual(graph.unresolved_edges[0]?.declared_via, ['body_wikilink', 'frontmatter']);
+			}],
+			['lint-reports-managed-proposal-reference-mismatch-and-ambiguity', () => {
+				const proposalAPath = '00_tracekeeper/inbox/review_queue/proposal-a.md';
+				const proposalBPath = '00_tracekeeper/inbox/review_queue/proposal-b.md';
+				const proposalA = scannedCharacterizationNote(proposalAPath, '# Proposal A');
+				const proposalB = scannedCharacterizationNote(proposalBPath, '# Proposal B');
+				const mismatch = scannedCharacterizationNote(
+					'00_tracekeeper/work/tasks/task-mismatch.md',
+					[
+						'---',
+						'type: agent-task',
+						'proposal_ids: [proposal_a]',
+						`proposal_paths: [${proposalAPath}]`,
+						`proposal_links: ["[[${proposalAPath}|Proposal A]]"]`,
+						'---',
+						`- [[${proposalBPath}|Proposal B]] ^tracekeeper-proposal-proposal_a`,
+					].join('\n')
+				);
+				const ambiguous = scannedCharacterizationNote(
+					'00_tracekeeper/work/sessions/session-ambiguous.md',
+					[
+						'---',
+						'type: session-note',
+						'proposal_ids: [proposal_a, proposal_b]',
+						`proposal_paths: [${proposalAPath}]`,
+						`proposal_links: ["[[${proposalAPath}|Proposal A]]"]`,
+						'---',
+						'# Session',
+					].join('\n')
+				);
+				const lint = lintModule.lintNotes(
+					'/characterization-vault',
+					[mismatch, ambiguous, proposalA, proposalB],
+					{ graphProfile: 'off' }
+				);
+				assert.equal(
+					lint.issues.some((issue) => issue.path === mismatch.relativePath && issue.kind === 'managed_proposal_reference_mismatch'),
+					true
+				);
+				assert.equal(
+					lint.issues.some((issue) => issue.path === ambiguous.relativePath && issue.kind === 'managed_proposal_reference_ambiguous'),
+					true
+				);
+			}],
 			['event-same-size-same-mtime-replacement', async () => {
 				const notePath = '01_knowledge/wiki/same-tuple.md';
 				const modifiedAt = '2026-07-30T01:00:00.000Z';

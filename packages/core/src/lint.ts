@@ -41,6 +41,8 @@ export type LintIssueKind =
 	| 'graph_missing_wiki_memory_backlink'
 	| 'graph_missing_project_index'
 	| 'graph_yaml_only_relation'
+	| 'managed_proposal_reference_ambiguous'
+	| 'managed_proposal_reference_mismatch'
 	| 'write_policy_unstable_target'
 	| LifecycleDiagnosticKind
 	| GraphProfileIssue['kind'];
@@ -304,6 +306,103 @@ function getRequiredEntries(notePathSet: Set<string>): string[] {
 	return requiredEntries;
 }
 
+function readManagedProposalValues(note: ScannedNote, key: string): string[] {
+	const raw = note.frontmatter[key];
+	const values = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
+	return values
+		.filter((value): value is string => typeof value === 'string')
+		.flatMap((value) => value.split(/[\n,]/u))
+		.map((value) => value.trim().replace(/^['"]|['"]$/g, ''))
+		.filter(Boolean);
+}
+
+function managedProposalMarkers(proposalId: string): string[] {
+	const normalized = proposalId.toLocaleLowerCase('en-US');
+	return [...new Set([
+		normalized.replace(/[^a-z0-9_-]+/g, '-'),
+		normalized.replace(/[^a-z0-9-]+/g, '-'),
+	].map((value) => value.replace(/^-+|-+$/g, '').slice(0, 80))
+		.filter(Boolean)
+		.map((value) => `^tracekeeper-proposal-${value}`))];
+}
+
+function normalizeManagedProposalPath(value: string): string {
+	return normalizeVaultPath(value)
+		.replace(/^['"]|['"]$/g, '')
+		.toLocaleLowerCase('en-US');
+}
+
+function collectManagedProposalReferenceIssues(
+	note: ScannedNote,
+	edges: readonly (ScannedNote['edges'][number])[]
+): LintIssue[] {
+	const type = (note.type ?? '').toLocaleLowerCase('en-US').replace(/_/g, '-');
+	if (type !== 'agent-task' && type !== 'session-note') {
+		return [];
+	}
+
+	const proposalIds = readManagedProposalValues(note, 'proposal_ids');
+	const proposalPaths = readManagedProposalValues(note, 'proposal_paths');
+	const proposalLinks = readManagedProposalValues(note, 'proposal_links');
+	if (proposalIds.length === 0 && proposalPaths.length === 0 && proposalLinks.length === 0) {
+		return [];
+	}
+
+	const duplicateIds = new Set(proposalIds).size !== proposalIds.length;
+	const duplicatePaths = new Set(proposalPaths.map(normalizeManagedProposalPath)).size !== proposalPaths.length;
+	if (
+		proposalIds.length !== proposalPaths.length
+		|| proposalIds.some((value) => !value)
+		|| proposalPaths.some((value) => !normalizeManagedProposalPath(value))
+		|| duplicateIds
+		|| duplicatePaths
+		|| proposalLinks.length !== proposalIds.length
+	) {
+		return [{
+			severity: 'warning',
+			kind: 'managed_proposal_reference_ambiguous',
+			path: note.relativePath,
+			line: 1,
+			message: 'Managed proposal references must contain unique, positionally aligned ids, paths, and links.',
+			context: `proposal_ids=${proposalIds.length}, proposal_paths=${proposalPaths.length}, proposal_links=${proposalLinks.length}`,
+		}];
+	}
+
+	const bodyLines = note.text.split(/\r?\n/u);
+	const issues: LintIssue[] = [];
+	for (let index = 0; index < proposalIds.length; index += 1) {
+		const proposalId = proposalIds[index] ?? '';
+		const expectedPath = normalizeManagedProposalPath(proposalPaths[index] ?? '');
+		const markers = managedProposalMarkers(proposalId);
+		const bodyLineIndexes = bodyLines
+			.map((line, lineIndex) => markers.some((marker) => line.includes(marker)) ? lineIndex + 1 : 0)
+			.filter((line): line is number => line > 0);
+		const frontmatterMatches = edges.filter((edge) =>
+			edge.source === 'frontmatter'
+			&& edge.resolution.status === 'resolved'
+			&& normalizeManagedProposalPath(edge.resolution.path) === expectedPath
+		);
+		const bodyMatches = edges.filter((edge) =>
+			edge.source === 'body'
+			&& bodyLineIndexes.includes(edge.line)
+			&& edge.resolution.status === 'resolved'
+			&& normalizeManagedProposalPath(edge.resolution.path) === expectedPath
+		);
+		if (frontmatterMatches.length !== 1 || bodyLineIndexes.length !== 1 || bodyMatches.length !== 1) {
+			issues.push({
+				severity: 'warning',
+				kind: 'managed_proposal_reference_mismatch',
+				path: note.relativePath,
+				line: bodyLineIndexes[0] ?? 1,
+				message: `Managed proposal reference mirror does not resolve consistently: ${proposalId}`,
+				context: proposalPaths[index],
+				paths: [proposalPaths[index] ?? ''].filter(Boolean),
+			});
+		}
+	}
+	return issues;
+}
+
 export function lintNotes(vaultRoot: string, notes: ScannedNote[], options: LintOptions = {}): LintReport {
 	const issues: LintIssue[] = [];
 	const graphProfile = normalizeGraphProfile(options.graphProfile);
@@ -340,6 +439,7 @@ export function lintNotes(vaultRoot: string, notes: ScannedNote[], options: Lint
 			edges: semanticEdges,
 			wikilinks: semanticEdges,
 		};
+		issues.push(...collectManagedProposalReferenceIssues(note, semanticEdges));
 
 		const sourceKinds = getSourceType(note);
 		if (isInLegacyDirectory(normalizedPath)) {
