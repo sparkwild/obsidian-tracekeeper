@@ -4,6 +4,18 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.5] - Review Proposal Integrity
+
+### Fixed
+
+- Preserved complete nested Markdown proposal payloads through review, preview, and writeback with proposal-bound integrity markers shared by every producer and consumer.
+- Blocked ambiguous legacy proposals with explicit resubmission guidance instead of exposing unsafe review or apply actions.
+- Rejected unknown or conflicting project identities before proposal creation and required one canonical project Memory Hub for project-scoped enumeration.
+
+### Changed
+
+- Aligned Review Queue and Agent Activity states so actionable integrity failures appear as `需重提`, while rejected, deferred, and applied records remain terminal history.
+
 ## [0.3.4] - Knowledge Lifecycle Consistency
 
 ### Fixed
