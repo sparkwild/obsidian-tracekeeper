@@ -120,13 +120,18 @@ try {
 			{
 				name: 'tracekeeper-core-stub',
 				setup(build) {
+					const proposalWritebackPath = path.resolve('../../packages/core/dist/proposal-writeback.js');
 					build.onResolve({ filter: /^@tracekeeper\/core$/ }, () => ({
 						path: 'tracekeeper-core-stub',
 						namespace: 'tracekeeper-core-stub',
 					}));
+					build.onResolve({ filter: /proposal-writeback\.js$/ }, () => ({
+						path: proposalWritebackPath,
+					}));
 					build.onLoad({ filter: /^tracekeeper-core-stub$/, namespace: 'tracekeeper-core-stub' }, () => ({
 						loader: 'js',
 						contents: `
+							export { resolveProposalWriteback } from ${JSON.stringify(proposalWritebackPath)};
 							export const ARCHIVE_REVIEW_QUEUE_DIR = '02_archive/review_queue';
 							export const KNOWLEDGE_INDEX_PATH = '01_knowledge/index.md';
 							export const KNOWLEDGE_MEMORY_DIR = '01_knowledge/memory';

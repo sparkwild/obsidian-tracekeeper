@@ -80,6 +80,16 @@ const baseProposals = [
 		sortTimestamp: 5000,
 	}),
 	makeProposal({
+		proposalId: 'blocked-ambiguous-writeback',
+		targetNote: '01_knowledge/memory/projects/project-old/index.md',
+		writebackContent: '# Only the legacy title was safely parsed',
+		writebackAmbiguous: true,
+		approvalStatus: 'pending',
+		memoryScope: 'project',
+		relatedProject: 'project old',
+		sortTimestamp: 4900,
+	}),
+	makeProposal({
 		proposalId: 'history-item',
 		targetNote: '01_knowledge/wiki/history.md',
 		writebackContent: 'append this',
@@ -147,13 +157,18 @@ try {
 			{
 				name: 'tracekeeper-core-stub',
 				setup(build) {
+					const proposalWritebackPath = path.resolve('../../packages/core/dist/proposal-writeback.js');
 					build.onResolve({ filter: /^@tracekeeper\/core$/ }, () => ({
 						path: 'tracekeeper-core-stub',
 						namespace: 'tracekeeper-core-stub',
 					}));
+					build.onResolve({ filter: /proposal-writeback\.js$/ }, () => ({
+						path: proposalWritebackPath,
+					}));
 					build.onLoad({ filter: /^tracekeeper-core-stub$/, namespace: 'tracekeeper-core-stub' }, () => ({
 						loader: 'js',
 						contents: `
+							export { resolveProposalWriteback } from ${JSON.stringify(proposalWritebackPath)};
 							export const TRACEKEEPER_REVIEW_QUEUE_DIR = 'review_queue';
 							export const ARCHIVE_REVIEW_QUEUE_DIR = '02_archive/review_queue';
 							export const KNOWLEDGE_INDEX_PATH = '01_knowledge/index.md';
@@ -187,9 +202,12 @@ try {
 		pageIndex: 0,
 		pageSize: 20,
 	});
-	assert.equal(blocked.totalItems, 1);
-	assert.equal(blocked.counts.blocked, 1);
-	assert.equal(blocked.items[0].proposalId, 'blocked-project');
+	assert.equal(blocked.totalItems, 2);
+	assert.equal(blocked.counts.blocked, 2);
+	assert.deepEqual(
+		blocked.items.map((proposal) => proposal.proposalId),
+		['blocked-project', 'blocked-ambiguous-writeback']
+	);
 
 	const filteredNeedsCompletion = queueModule.filterReviewQueueItems([...baseProposals], {
 		filter: 'needs_completion',
@@ -304,7 +322,7 @@ try {
 	assert.equal(pageTwo.page.pageIndex, 1);
 	assert.equal(pageTwo.page.hasPrevious, true);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 23 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 24 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

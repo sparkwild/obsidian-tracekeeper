@@ -12,6 +12,7 @@ export * from './source-record';
 export * from './legacy-structure';
 export * from './operation-journal';
 export * from './proposal-transition';
+export * from './proposal-writeback';
 export * from './record-lifecycle';
 export * from './knowledge-index';
 export * from './vault-repository';

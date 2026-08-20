@@ -2458,7 +2458,17 @@ test('generated Global and Project review proposals complete the Human approval 
 			context.writebackConfirmationSecret = `${scope}-review-apply-confirmation-secret`;
 			context.memoryRules.globalMemoryRule = 'review_queue';
 			context.memoryRules.projectMemoryRule = 'review_queue';
-			const content = `${scope} generated proposal becomes one approved v2 MemoryRecord.`;
+			const content = [
+				`# ${scope} generated proposal`,
+				'',
+				'## Product boundary',
+				'- Preserve the complete nested Markdown payload.',
+				'',
+				'### Evidence',
+				'```ts',
+				'const heading = "## payload, not a proposal boundary";',
+				'```',
+			].join('\n');
 			const proposed = expectSuccess(
 				await callTool('tracekeeper.propose_memory', {
 					proposal_kind: 'task_decision',
@@ -2473,6 +2483,15 @@ test('generated Global and Project review proposals complete the Human approval 
 			assert.equal(proposed.auto_applied, false);
 			assert.equal(proposed.proposal_destination, 'memory');
 			assert.equal(proposed.memory_scope, scope);
+			const queuedText = fixture.read(proposed.proposal_path);
+			assert.match(
+				queuedText,
+				new RegExp(`tracekeeper:writeback:start proposal_id="${proposed.proposal_id}"`)
+			);
+			assert.match(
+				queuedText,
+				new RegExp(`tracekeeper:writeback:end proposal_id="${proposed.proposal_id}"`)
+			);
 			approveGeneratedMemoryProposal(fixture, proposed, content);
 			const approvedQueue = expectSuccess(
 				await callTool('tracekeeper.review_queue', {
@@ -2489,6 +2508,7 @@ test('generated Global and Project review proposals complete the Human approval 
 				`${scope} approved MemoryRecord preview`
 			);
 			assert.equal(preview.writeback_effect, 'create_memory_record');
+			assert.equal(preview.writeback_preview.includes(content), true);
 			const applied = expectSuccess(
 				await callTool('tracekeeper.apply_approved_writeback', {
 					proposal_id: proposed.proposal_id,
@@ -2497,7 +2517,11 @@ test('generated Global and Project review proposals complete the Human approval 
 				`${scope} approved MemoryRecord apply`
 			);
 			assert.equal(applied.target_note, preview.target_note);
-			const record = parseMarkdown(fixture.read(preview.target_note)).frontmatter.fields;
+			const appliedNote = parseMarkdown(fixture.read(preview.target_note));
+			const record = appliedNote.frontmatter.fields;
+			assert.match(appliedNote.body, /## Product boundary/);
+			assert.match(appliedNote.body, /### Evidence/);
+			assert.match(appliedNote.body, /payload, not a proposal boundary/);
 			assert.equal(record.schema_version, 2);
 			assert.equal(record.type, 'memory_record');
 			assert.equal(record.scope, scope);
@@ -2849,7 +2873,7 @@ test('hint-only uncertain identity is review-bound and does not auto-write a nam
 	assert.equal(findAgentEntries(fixture).length, 0);
 });
 
-test('conflicting explicit identity is review-bound, preserves its explicit target, and does not auto-write', async (t) => {
+test('conflicting explicit identity is rejected before a review artifact is written', async (t) => {
 	const fixture = createFixture(t);
 	const alpha = addProject(fixture, {
 		projectId: 'alpha-id',
@@ -2863,8 +2887,7 @@ test('conflicting explicit identity is review-bound, preserves its explicit targ
 		projectHint: 'beta',
 		repoPath: '/work/beta',
 	});
-	const result = expectSuccess(
-		await callTool(
+	const result = await callTool(
 			'tracekeeper.propose_memory',
 			{
 				proposal_kind: 'task_decision',
@@ -2878,14 +2901,34 @@ test('conflicting explicit identity is review-bound, preserves its explicit targ
 				idempotency_key: 'project-memory-conflicting-identity',
 			},
 			fixture.context()
-		),
-		'conflicting project-memory proposal'
+		);
+	assert.equal(result.isError, true);
+	assert.equal(errorCode(result), 'invalid_request');
+	assert.equal(result.structuredContent.error_detail.recovery_actions[0]?.reason_code, 'PROJECT_SCOPE_UNCERTAIN');
+	assert.equal(fixture.exists('00_tracekeeper/inbox/review_queue'), false);
+	assert.equal(findAgentEntries(fixture).length, 0);
+});
+
+test('a project key supplied as project_id is rejected before a review artifact is written', async (t) => {
+	const fixture = createFixture(t);
+	const result = await callTool(
+		'tracekeeper.propose_memory',
+		{
+			proposal_kind: 'task_decision',
+			content: 'A project key is not a project id.',
+			memory_scope: 'project',
+			project_id: 'vigilshell-7c7355abdec43cf2a275dae49f8f9b1f',
+			project_hint: 'vigilshell',
+			repo_path: '/work/vigilshell',
+			claim_key: 'identity:project-key-is-not-id',
+			idempotency_key: 'project-key-is-not-project-id',
+		},
+		fixture.context()
 	);
-	assert.equal(result.auto_applied, false);
-	assert.equal(typeof result.proposal_path, 'string');
-	const proposal = parseMarkdown(fixture.read(result.proposal_path));
-	assert.equal(proposal.frontmatter.fields.target_note, alpha.legacyPath);
-	assert.match(proposal.body, /\/memory\.md\b/);
+	assert.equal(result.isError, true);
+	assert.equal(errorCode(result), 'invalid_request');
+	assert.equal(result.structuredContent.error_detail.recovery_actions[0]?.reason_code, 'PROJECT_SCOPE_UNCERTAIN');
+	assert.equal(fixture.exists('00_tracekeeper/inbox/review_queue'), false);
 	assert.equal(findAgentEntries(fixture).length, 0);
 });
 

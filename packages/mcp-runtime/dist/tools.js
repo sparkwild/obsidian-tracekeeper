@@ -705,9 +705,15 @@ function classifyToolError(message) {
     if (/unknown tool|tool not available/i.test(message)) {
         return { code: 'TOOL_UNAVAILABLE', retryable: true, reasonCode: 'TOOL_UNAVAILABLE' };
     }
+    if (/project_scope_uncertain|project_identity_not_found/i.test(message)) {
+        return { code: 'INVALID_REQUEST', retryable: false, reasonCode: 'PROJECT_SCOPE_UNCERTAIN' };
+    }
     return { code: 'INVALID_REQUEST', retryable: false };
 }
-function safeToolErrorDescription(code) {
+function safeToolErrorDescription(code, reasonCode) {
+    if (reasonCode === 'PROJECT_SCOPE_UNCERTAIN') {
+        return 'The supplied project identity is not an exact current Vault identity; use Runtime-resolved identity evidence instead of guessing.';
+    }
     switch (code) {
         case 'PERMISSION_DENIED':
             return 'The current principal is not allowed to perform this action.';
@@ -730,7 +736,7 @@ function decorateToolResult(toolName, result, context) {
     if (isToolResultFailure(result)) {
         const message = typeof payload.error === 'string' ? payload.error : 'Tracekeeper tool call failed.';
         const classified = classifyToolError(message);
-        const safeMessage = safeToolErrorDescription(classified.code);
+        const safeMessage = safeToolErrorDescription(classified.code, classified.reasonCode);
         const recoveryActions = classified.reasonCode
             ? [{
                     action_id: `${toolName}:error:${classified.code.toLowerCase()}`,
@@ -1895,8 +1901,7 @@ async function createFinishTaskProposal(vaultRoot, taskId, sessionNotePath, oper
         `## ${label}`,
         writebackContent,
         '',
-        contentText(context, '## 写回内容', '## Writeback'),
-        writebackContent,
+        (0, core_1.renderProposalWritebackSection)(contentText(context, '## 写回内容', '## Writeback'), proposalId, writebackContent),
     ].filter(Boolean).join('\n');
     return buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.finish_task', MEMORY_PROPOSAL_DIR, filename, {
         tool: 'tracekeeper.finish_task',
@@ -2527,29 +2532,6 @@ async function resolveMemoryProposalFromArgs(vaultRoot, rawArgs, context) {
     }
     return readMemoryProposal(vaultRoot, proposalPath, context);
 }
-function extractMarkdownSection(body, allowedHeadings) {
-    const allowed = new Set(allowedHeadings.map((heading) => heading.toLowerCase()));
-    const lines = body.replace(/\r\n/g, '\n').split('\n');
-    const collected = [];
-    let capturing = false;
-    for (const line of lines) {
-        const headingMatch = line.match(/^#{2,6}\s+(.+?)\s*$/);
-        if (headingMatch) {
-            const heading = (headingMatch[1] || '').trim().toLowerCase();
-            if (capturing) {
-                break;
-            }
-            if (allowed.has(heading)) {
-                capturing = true;
-            }
-            continue;
-        }
-        if (capturing) {
-            collected.push(line);
-        }
-    }
-    return collected.join('\n').trim();
-}
 function readWritebackPlanEffectValue(frontmatter) {
     const keys = ['writeback_effect', 'writebackEffect'];
     const values = [];
@@ -2634,6 +2616,21 @@ function resolveWritebackPlanEffect(proposal, targetState) {
     return 'append';
 }
 function buildWritebackPlanForTarget(proposal, targetState) {
+    const writeback = (0, core_1.resolveProposalWriteback)({
+        body: proposal.body,
+        proposalId: proposal.proposalId,
+        frontmatterContent: stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['writeback_content', 'writebackContent'])),
+    });
+    if (writeback.error || writeback.ambiguous) {
+        return {
+            proposal,
+            targetNote: proposal.targetNote,
+            writebackContent: writeback.content,
+            ready: false,
+            reason: `proposal writeback boundary is ${writeback.error || 'ambiguous'}`,
+            effectKind: undefined,
+        };
+    }
     let writebackEffect;
     try {
         writebackEffect = resolveWritebackPlanEffect(proposal, targetState);
@@ -2643,14 +2640,7 @@ function buildWritebackPlanForTarget(proposal, targetState) {
             return {
                 proposal,
                 targetNote: proposal.targetNote,
-                writebackContent: extractMarkdownSection(proposal.body, [
-                    'writeback',
-                    'approved writeback',
-                    'writeback content',
-                    '写回',
-                    '已批准写回',
-                    '写回内容',
-                ]),
+                writebackContent: writeback.content,
                 ready: false,
                 reason: error.message,
                 effectKind: undefined,
@@ -2658,9 +2648,7 @@ function buildWritebackPlanForTarget(proposal, targetState) {
         }
         throw error;
     }
-    const frontmatterWriteback = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['writeback_content', 'writebackContent']));
-    const writebackContent = frontmatterWriteback ||
-        extractMarkdownSection(proposal.body, ['writeback', 'approved writeback', 'writeback content', '写回', '已批准写回', '写回内容']);
+    const writebackContent = writeback.content;
     const createsMemoryRecord = writebackEffect === 'create_memory_record';
     const createsWikiNote = writebackEffect === 'create_wiki_note';
     if (!proposal.targetNote && !createsMemoryRecord && !createsWikiNote) {
@@ -2812,29 +2800,34 @@ function proposalTransitionSnapshot(proposal) {
     if (!classification) {
         throw new core_1.ProposalTransitionValidationError('Proposal is not a memory proposal.');
     }
+    const proposalId = proposalScalarField(frontmatter, ['proposal_id', 'proposalId'], 'Proposal id') || path.basename(proposal.path, path.extname(proposal.path));
     const frontmatterWriteback = proposalMultilineField(frontmatter, ['writeback_content', 'writebackContent'], 'Proposal writeback content');
     const rawWritebackEffect = readWritebackPlanEffectValue(frontmatter);
     const writebackEffect = normalizeWritebackPlanEffect(rawWritebackEffect);
     if (rawWritebackEffect !== null && writebackEffect === null) {
         throw new core_1.ProposalTransitionValidationError(`Unknown writeback_effect value: ${rawWritebackEffect}`);
     }
-    const bodyWriteback = extractMarkdownSection(parsed.body, ['writeback', 'approved writeback', 'writeback content', '写回', '已批准写回', '写回内容']);
-    if (frontmatterWriteback
-        && bodyWriteback
-        && frontmatterWriteback.replace(/\r\n/g, '\n').trim()
-            !== bodyWriteback.replace(/\r\n/g, '\n').trim()) {
+    const writeback = (0, core_1.resolveProposalWriteback)({
+        body: parsed.body,
+        proposalId,
+        frontmatterContent: frontmatterWriteback,
+    });
+    if (writeback.error === 'conflicting_sources') {
         throw new core_1.ProposalTransitionConflictError('Proposal writeback sources conflict.');
+    }
+    if (writeback.error || writeback.ambiguous) {
+        throw new core_1.ProposalTransitionValidationError(`Proposal writeback boundary is ${writeback.error || 'ambiguous'}.`);
     }
     const lastTransition = (0, core_1.proposalTransitionReceiptFromFrontmatter)(frontmatter);
     return {
         path: proposal.path,
         classification,
-        proposalId: proposalScalarField(frontmatter, ['proposal_id', 'proposalId'], 'Proposal id') || path.basename(proposal.path, path.extname(proposal.path)),
+        proposalId,
         proposalKind: proposalKind || classification,
         taskId: proposalScalarField(frontmatter, ['task_id', 'taskId'], 'Task id'),
         status: proposalTransitionStatus(frontmatter),
         targetPath: proposalScalarField(frontmatter, ['target_note', 'targetNote', 'target_path', 'targetPath'], 'Proposal target'),
-        writebackContent: frontmatterWriteback || bodyWriteback,
+        writebackContent: writeback.content,
         writebackEffect: writebackEffect || undefined,
         revisionComment: proposalMultilineField(frontmatter, ['revision_comment', 'revisionComment'], 'Revision comment'),
         revisionRequestedAt: proposalScalarField(frontmatter, ['revision_requested_at', 'revisionRequestedAt'], 'Revision request time'),
@@ -5943,6 +5936,17 @@ async function handleMemory(rawArgs, context) {
         throw new safety_1.ToolInputError('memory project scope requires project_id.');
     }
     const readView = await knowledgeReadViewForContext(vaultRoot, context);
+    if (scope === 'project') {
+        const matchingHubs = [...readView.catalog.values()].filter((entry) => {
+            const normalizedType = (entry.type || '').toLowerCase().replace(/-/g, '_');
+            return entry.path.startsWith(`${core_1.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)
+                && normalizedType === 'project_memory_index'
+                && readFrontmatterString(entry.frontmatter, ['project_id', 'projectId']) === projectId;
+        });
+        if (matchingHubs.length !== 1) {
+            throw new safety_1.ToolInputError(`project_identity_not_found: project_id is not bound to exactly one current Project Memory Hub: ${projectId}`);
+        }
+    }
     const lifecycle = readView.memory.lifecycle;
     const selected = requestedView === 'current'
         ? lifecycle.current
@@ -7111,14 +7115,21 @@ async function handleProposeMemory(rawArgs, context) {
     const readView = await knowledgeReadViewForContext(vaultRoot, invocationContext);
     const { knowledgeReadViewPromise: _cachedReadView, ...memoryWriteContext } = invocationContext;
     const preflightScan = lightweightScanFromReadView(vaultRoot, readView);
-    const proposalProjectIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs, preflightScan.notes);
+    const explicitProjectId = coerceOptionalString(rawArgs.project_id);
+    const identityScan = explicitProjectId
+        ? (0, core_1.scanVault)(vaultRoot, pathSafetyOptions(invocationContext))
+        : preflightScan;
+    const proposalProjectIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs, identityScan.notes);
+    if (explicitProjectId && proposalProjectIdentity.confidence === 'uncertain') {
+        throw new safety_1.ToolInputError(`project_scope_uncertain: explicit project_id is not a unique current Vault identity: ${explicitProjectId}`);
+    }
     const proposalRepoPath = proposalProjectIdentity.confidence === 'uncertain'
         ? ''
         : proposalProjectIdentity.repoPath;
     context = {
         ...invocationContext,
         knowledgeReadViewPromise: Promise.resolve(readView),
-        knowledgeSnapshotProvider: () => preflightScan,
+        knowledgeSnapshotProvider: () => identityScan,
     };
     const observed = context.observedClientType ?? (0, observed_client_1.normalizeObservedClientType)(context.clientName);
     const application = new propose_memory_1.ProposeMemoryApplicationService({
@@ -7527,18 +7538,17 @@ function buildSessionNoteBodyWithDistill(context, summary, outcomes, nextActions
 }
 async function createDistillProposal(vaultRoot, taskId, proposalKind, kindLabel, contentItems, projectHint, context) {
     const writebackContent = contentItems.map((item) => `- ${item}`).join('\n');
+    const now = new Date().toISOString();
+    const creationNonce = crypto.randomUUID();
+    const proposalId = (0, core_1.buildStableProposalId)(`distill-session\0${taskId}\0${proposalKind}\0${creationNonce}`);
     const body = [
         contentText(context, `## 提炼内容：${kindLabel}`, `## Distilled ${kindLabel}`),
         writebackContent,
         '',
         `- task_id: ${taskId}`,
         '',
-        contentText(context, '## 写回内容', '## Writeback'),
-        writebackContent,
+        (0, core_1.renderProposalWritebackSection)(contentText(context, '## 写回内容', '## Writeback'), proposalId, writebackContent),
     ].join('\n');
-    const now = new Date().toISOString();
-    const creationNonce = crypto.randomUUID();
-    const proposalId = (0, core_1.buildStableProposalId)(`distill-session\0${taskId}\0${proposalKind}\0${creationNonce}`);
     const filenameToken = `${proposalKind}-${taskId}-${now.replace(/[:.]/g, '-')}-${creationNonce.slice(0, 8)}`;
     const proposal = await buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.distill_session', MEMORY_PROPOSAL_DIR, buildSafeFilename(filenameToken, proposalKind, context), {
         tool: 'tracekeeper.distill_session',

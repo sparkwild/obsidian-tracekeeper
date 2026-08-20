@@ -111,6 +111,14 @@ test('ProposeMemoryApplicationService owns normalization, journaling, and propos
 	assert.equal(writes.length, 1);
 	assert.equal(writes[0].frontmatter.writeback_effect, 'create_memory_record');
 	assert.match(writes[0].body, /Keep the bounded decision\./);
+	assert.match(
+		writes[0].body,
+		new RegExp(`tracekeeper:writeback:start proposal_id="${result.proposal_id}"`)
+	);
+	assert.match(
+		writes[0].body,
+		new RegExp(`tracekeeper:writeback:end proposal_id="${result.proposal_id}"`)
+	);
 	assert.deepEqual(taskReferences, [{
 		taskId: 'direct-task',
 		proposal: {

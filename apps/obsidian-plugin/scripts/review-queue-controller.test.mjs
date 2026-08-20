@@ -821,7 +821,7 @@ try {
 		assert.equal('writebackContent' in harness.proposalFile.frontmatter, false);
 		assert.match(
 			harness.proposalFile.content,
-			/## Writeback\s*\n\s*\n- revised native draft/
+			/## Writeback\s*\n\s*\n<!-- tracekeeper:writeback:start proposal_id="proposal-1" -->\s*\n- revised native draft\s*\n<!-- tracekeeper:writeback:end proposal_id="proposal-1" -->/
 		);
 		assert.doesNotMatch(harness.proposalFile.content, /- native writeback/);
 	});

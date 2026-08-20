@@ -1928,9 +1928,9 @@ async function main() {
 			name: 'tracekeeper.start_task',
 			arguments: {
 				goal: 'Smoke explicit project memory candidate.',
-				project_hint: 'demo',
-				project_id: 'demo-proj-id',
-				repo_path: atlasRepoPath,
+					project_hint: 'demo',
+					project_id: 'demo-proj-id',
+					repo_path: '/repo/demo-temp',
 				idempotency_key: 'smoke-explicit-project-start',
 			},
 		}));
@@ -1942,9 +1942,9 @@ async function main() {
 				summary: 'Smoke explicit project memory candidate.',
 				status: 'completed',
 				outcomes: ['Task tracking and durable routing validated'],
-				project_hint: 'demo',
-				project_id: 'demo-proj-id',
-				repo_path: atlasRepoPath,
+					project_hint: 'demo',
+					project_id: 'demo-proj-id',
+					repo_path: '/repo/demo-temp',
 				related_wiki: ['01_knowledge/wiki/hubs/smoke-hub.md'],
 				related_sources: ['01_knowledge/sources/local-source.md'],
 				memory_candidate_records: [{
@@ -1959,13 +1959,13 @@ async function main() {
 		}));
 		assert.equal(explicitProjectFinish.ok, true);
 		assert.equal(explicitProjectFinish.status, 'completed');
-		assert.equal(explicitProjectFinish.memory_status, 'queued_for_review');
+			assert.equal(explicitProjectFinish.memory_status, 'auto_saved');
 		assert.equal(explicitProjectFinish.memory_candidate_records.length, 1);
 		assert.equal(explicitProjectFinish.memory_candidate_records[0].scope, 'project');
 		assert.equal(explicitProjectFinish.memory_changes[0].scope, 'project');
-		assert.equal(explicitProjectFinish.proposal_count, 1);
-		assert.equal(explicitProjectFinish.auto_applied_count, 0);
-		assert.equal(countReviewQueueFiles(vaultRoot), explicitProjectQueueBefore + 1);
+			assert.equal(explicitProjectFinish.proposal_count, 0);
+			assert.equal(explicitProjectFinish.auto_applied_count, 1);
+			assert.equal(countReviewQueueFiles(vaultRoot), explicitProjectQueueBefore);
 
 		const explicitGlobalStart = buildStructured(await client.call('tools/call', {
 			name: 'tracekeeper.start_task',

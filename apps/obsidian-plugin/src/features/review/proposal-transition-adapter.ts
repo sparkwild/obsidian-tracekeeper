@@ -9,12 +9,15 @@ import {
 	ARCHIVE_REVIEW_QUEUE_DIR,
 	ProposalTransitionConflictError,
 	ProposalTransitionValidationError,
+	ProposalWritebackFormatError,
 	computeProposalRevision,
 	computePayloadHash,
 	hashVaultContent,
 	isAllowedProposalTargetPath,
 	isKnowledgeWikiPath,
 	proposalTransitionReceiptFromFrontmatter,
+	replaceProposalWriteback,
+	resolveProposalWriteback,
 	transitionProposal,
 	type ProposalFrontmatterMutationValue,
 	type ProposalTransitionCommand,
@@ -177,74 +180,6 @@ const parseWritebackEffect = (
 	throw new ProposalTransitionValidationError('Proposal writeback effect is not supported.');
 };
 
-const extractWritebackSection = (body: string): string => {
-	const lines = body.replace(/\r\n/g, '\n').split('\n');
-	const supported = new Set([
-		'writeback',
-		'approved writeback',
-		'writeback content',
-		'写回',
-		'已批准写回',
-		'写回内容',
-	]);
-	for (let index = 0; index < lines.length; index += 1) {
-		const match = lines[index].match(/^\s*#{2,}\s*(.+?)\s*$/);
-		if (!match || !supported.has(match[1].trim().replace(/\s+/g, ' ').toLowerCase())) {
-			continue;
-		}
-		const content: string[] = [];
-		for (let next = index + 1; next < lines.length; next += 1) {
-			if (/^\s*#{2,}\s*(.+?)\s*$/.test(lines[next])) {
-				break;
-			}
-			content.push(lines[next]);
-		}
-		return content.join('\n').trim();
-	}
-	return '';
-};
-
-const replaceWritebackSection = (body: string, writebackContent: string): string => {
-	const normalizedBody = body.replace(/\r\n/g, '\n');
-	const hadTrailingNewline = normalizedBody.endsWith('\n');
-	const lines = normalizedBody.split('\n');
-	const supported = new Set([
-		'writeback',
-		'approved writeback',
-		'writeback content',
-		'写回',
-		'已批准写回',
-		'写回内容',
-	]);
-	for (let index = 0; index < lines.length; index += 1) {
-		const match = lines[index].match(/^\s*#{2,}\s*(.+?)\s*$/);
-		if (!match || !supported.has(match[1].trim().replace(/\s+/g, ' ').toLowerCase())) {
-			continue;
-		}
-		let end = index + 1;
-		while (end < lines.length && !/^\s*#{2,}\s*(.+?)\s*$/.test(lines[end])) {
-			end += 1;
-		}
-		const replacement = [
-			lines[index],
-			'',
-			...(writebackContent ? writebackContent.split('\n') : []),
-		];
-		if (end < lines.length) {
-			replacement.push('');
-		}
-		const replaced = [
-			...lines.slice(0, index),
-			...replacement,
-			...lines.slice(end),
-		].join('\n');
-		return hadTrailingNewline && !replaced.endsWith('\n')
-			? `${replaced}\n`
-			: replaced;
-	}
-	return body;
-};
-
 const proposalStatus = (
 	frontmatter: Readonly<Record<string, unknown>>
 ): ProposalTransitionStatus => {
@@ -311,27 +246,31 @@ const proposalSnapshot = (
 	if (!classification) {
 		throw new ProposalTransitionValidationError('Proposal is not a supported review item.');
 	}
-	const frontmatterWriteback = multilineField(
-		frontmatter,
-		['writeback_content', 'writebackContent'],
-		'Proposal writeback content'
-	);
-	const bodyWriteback = extractWritebackSection(body);
-	if (
-		frontmatterWriteback
-		&& bodyWriteback
-		&& frontmatterWriteback.replace(/\r\n/g, '\n').trim()
-			!== bodyWriteback.replace(/\r\n/g, '\n').trim()
-	) {
-		throw new ProposalTransitionConflictError('Proposal writeback sources conflict.');
-	}
-	const lastTransition = proposalTransitionReceiptFromFrontmatter(frontmatter);
 	const pathLeaf = file.path.split('/').pop() || '';
 	const proposalId = scalarField(
 		frontmatter,
 		['proposal_id', 'proposalId'],
 		'Proposal id'
 	) || pathLeaf.replace(/\.md$/i, '');
+	const frontmatterWriteback = multilineField(
+		frontmatter,
+		['writeback_content', 'writebackContent'],
+		'Proposal writeback content'
+	);
+	const writeback = resolveProposalWriteback({
+		body,
+		proposalId,
+		frontmatterContent: frontmatterWriteback,
+	});
+	if (writeback.error === 'conflicting_sources') {
+		throw new ProposalTransitionConflictError('Proposal writeback sources conflict.');
+	}
+	if (writeback.error || writeback.ambiguous) {
+		throw new ProposalTransitionValidationError(
+			`Proposal writeback boundary is ${writeback.error || 'ambiguous'}.`
+		);
+	}
+	const lastTransition = proposalTransitionReceiptFromFrontmatter(frontmatter);
 	return {
 		path: file.path,
 		classification,
@@ -344,7 +283,7 @@ const proposalSnapshot = (
 			['target_note', 'targetNote', 'target_path', 'targetPath'],
 			'Proposal target'
 		),
-		writebackContent: frontmatterWriteback || bodyWriteback,
+		writebackContent: writeback.content,
 		writebackEffect: parseWritebackEffect(frontmatter),
 		revisionComment: multilineField(
 			frontmatter,
@@ -582,12 +521,21 @@ export class ObsidianProposalTransitionAdapter {
 				);
 			}
 			applyFrontmatterMutation(frontmatter, committed.frontmatter);
-			const synchronized = request.action.kind === 'draft'
-				? `${content.slice(0, info.contentStart)}${replaceWritebackSection(
-					content.slice(info.contentStart),
-					committed.state.writebackContent
-				)}`
-				: content;
+			let synchronized = content;
+			if (request.action.kind === 'draft') {
+				try {
+					synchronized = `${content.slice(0, info.contentStart)}${replaceProposalWriteback(
+						content.slice(info.contentStart),
+						committed.state.proposalId,
+						committed.state.writebackContent
+					)}`;
+				} catch (error) {
+					if (error instanceof ProposalWritebackFormatError) {
+						throw new ProposalTransitionValidationError(error.message);
+					}
+					throw error;
+				}
+			}
 			return replaceFrontmatter(synchronized, frontmatter);
 		});
 		if (!committed) {

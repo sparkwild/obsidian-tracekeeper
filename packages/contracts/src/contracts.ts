@@ -397,7 +397,7 @@ export const toolContracts = [
 		workflowRole: 'memory',
 		useCase: 'memory',
 		description:
-			'[read-only] Enumerate the generation-bound global or project memory catalog by current, history, conflicts, or all view. Returns metadata only; use tracekeeper.read_note for full note bodies.',
+			'[read-only] Enumerate the generation-bound global or project memory catalog by current, history, conflicts, or all view. Project scope requires one current Runtime-resolved project_id; unknown ids fail instead of returning an empty catalog. Returns metadata only; use tracekeeper.read_note for full note bodies.',
 		inputSchema: withToolInput(
 			{
 				scope: {
@@ -411,7 +411,7 @@ export const toolContracts = [
 					description: 'Lifecycle projection. Defaults to current.',
 				},
 				project_hint: { type: 'string', description: 'Project hint for scoped matching.' },
-				project_id: { type: 'string', description: 'Project id for scoped matching.' },
+				project_id: { type: 'string', description: 'Current Runtime-resolved project id. Required for project scope; project keys and hints are not ids.' },
 				repo_path: { type: 'string', description: 'Repository/path prefix for scoped matching.' },
 				repo: { type: 'string', description: 'Alias of repo_path for repository-scoped matching.' },
 				project_path: { type: 'string', description: 'Alias of repo_path for workspace/project path matching.' },

@@ -336,6 +336,18 @@ test('finish_task aggregates direct and finish-generated proposals exactly once'
 
 test('finish_task keeps an explicitly unresolved Wiki relation pending for review', async (t) => {
 	const fixture = createFixture(t);
+	fixture.write(
+		'01_knowledge/memory/projects/demo/index.md',
+		[
+			'---',
+			'type: project_memory_index',
+			'project_id: demo-project-id',
+			'project_key: demo',
+			'project_hint: demo',
+			'---',
+			'# Demo project memory',
+		].join('\n')
+	);
 	fixture.context.memoryRules.projectMemoryRule = 'auto_write';
 	const task = await invoke('tracekeeper.start_task', {
 		goal: 'Finish candidate declares a Wiki relation that must resolve',

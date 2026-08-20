@@ -8,6 +8,7 @@ import {
 	normalizeProjectAgentType,
 	OperationConflictError,
 	RecoverableOperationRunner,
+	renderProposalWritebackSection,
 	type OperationFailureInjection,
 	type OperationJournal,
 } from '@tracekeeper/core';
@@ -833,8 +834,11 @@ export class ProposeMemoryApplicationService {
 			reviewRequirement ? `- review_reason: ${reviewRequirement.reason}` : '',
 			reviewRequirement?.warnings.length ? `- review_warnings: ${JSON.stringify(reviewRequirement.warnings)}` : '',
 			'',
-			dependencies.renderText('## 写回内容', '## Writeback'),
-			content,
+			renderProposalWritebackSection(
+				dependencies.renderText('## 写回内容', '## Writeback'),
+				proposalId,
+				content
+			),
 		].filter(Boolean).join('\n');
 
 		const filename = dependencies.buildFilename(

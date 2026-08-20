@@ -110,6 +110,21 @@ test('keeps explicit project id and canonical hint as stronger evidence', () => 
 	assert.equal(byHint.source, 'explicit_project_hint');
 });
 
+test('marks an unknown explicit project id uncertain', () => {
+	const result = resolveProjectIdentity(
+		{
+			project_id: 'vigilshell-7c7355abdec43cf2a275dae49f8f9b1f',
+			project_hint: 'vigilshell',
+			repo_path: '/work/vigilshell',
+		},
+		[]
+	);
+	assert.equal(result.projectId, 'vigilshell-7c7355abdec43cf2a275dae49f8f9b1f');
+	assert.equal(result.source, 'explicit_project_id');
+	assert.equal(result.confidence, 'uncertain');
+	assert.ok(result.warnings.includes('explicit_project_id_not_found'));
+});
+
 test('collapses hub and project-memory entries with one stable project id', () => {
 	const result = resolveProjectIdentity(
 		{ project_id: 'atlas-id' },
@@ -136,6 +151,29 @@ test('collapses hub and project-memory entries with one stable project id', () =
 	assert.equal(result.source, 'explicit_project_id');
 	assert.equal(result.confidence, 'exact');
 	assert.equal(result.warnings.includes('ambiguous_vault_project_identity'), false);
+});
+
+test('collapses a v2 MemoryRecord with its canonical project Hub', () => {
+	const result = resolveProjectIdentity(
+		{ project_id: 'atlas-id', repo_path: '/work/atlas' },
+		[
+			note('01_knowledge/memory/projects/atlas-stable/index.md', {
+				type: 'project_memory_index',
+				project_hint: 'atlas',
+				project_id: 'atlas-id',
+				repo_path: '/work/atlas',
+			}),
+			note('01_knowledge/memory/projects/atlas-stable/agents/codex/propose_memory-op.md', {
+				type: 'memory_record',
+				scope: 'project',
+				project_id: 'atlas-id',
+			}),
+		]
+	);
+	assert.equal(result.projectHint, 'atlas');
+	assert.equal(result.projectId, 'atlas-id');
+	assert.equal(result.confidence, 'exact');
+	assert.deepEqual(result.warnings, []);
 });
 
 test('canonicalizes an unmatched Agent hint when the repository uniquely matches durable Vault identity', () => {

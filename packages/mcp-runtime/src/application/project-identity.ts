@@ -111,7 +111,7 @@ function repoPathMatches(left: string, right: string): boolean {
 }
 
 function candidateFromNote(note: ScannedNote): ProjectIdentityCandidate | null {
-	const pathHint = note.type === 'project_memory_entry'
+	const pathHint = note.type === 'project_memory_entry' || note.type === 'memory_record'
 		? ''
 		: projectPathSegment(note);
 	const projectHint =
@@ -219,6 +219,9 @@ export function resolveProjectIdentity(
 			(entry) => normalizedIdentityValue(entry.projectId) === normalizedIdentityValue(projectId),
 			warnings
 		);
+		if (!candidate && !warnings.includes('ambiguous_vault_project_identity')) {
+			warnings.push('explicit_project_id_not_found');
+		}
 		const conflictingHint = Boolean(
 			candidate?.projectHint &&
 			explicitProjectHint &&
@@ -236,8 +239,8 @@ export function resolveProjectIdentity(
 		if (conflictingRepoPath) {
 			warnings.push('repo_path_conflicts_with_project_id');
 		}
-		const uncertain =
-			warnings.includes('ambiguous_vault_project_identity')
+		const uncertain = !candidate
+			|| warnings.includes('ambiguous_vault_project_identity')
 			|| conflictingHint
 			|| conflictingRepoPath;
 		return {

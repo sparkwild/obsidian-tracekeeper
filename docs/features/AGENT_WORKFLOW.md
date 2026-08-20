@@ -76,6 +76,10 @@ Only when `next_actions` is absent may an Agent use the compatibility text in `n
 - Pass a canonical project name in `project_hint` when it is known. Pass the local repository or workspace path separately as `repo_path`.
 - Do not substitute an absolute workspace path for a project name. Path-valued `project_hint` remains accepted only as compatibility evidence and may produce a warning.
 - Treat the Runtime's returned `project_identity` as authoritative for the active workflow. Reuse the exact identity arguments in `recommended_recall` instead of reconstructing them.
+- Never copy a project Hub directory name, `project_key`, `project_hint`, or
+  `related_project` value into `project_id`. An unknown explicit id is uncertain
+  input: project Recall stops, project Memory enumeration fails, and proposal
+  creation writes no review artifact.
 - For `build_context_pack` and `finish_task`, prefer the real `task_id` and omit duplicate identity fields unless they add verified evidence. The Runtime inherits the started task identity.
 - Never change project identity during a tracked task. A conflict is an input error, not a reason to retry with a different project or task id.
 - When identity confidence is `uncertain`, follow the returned global-recall or confirmation action. Do not guess among Vault projects or force project-scoped Recall.
@@ -105,7 +109,9 @@ Only when `next_actions` is absent may an Agent use the compatibility text in `n
   one project, or `scope: "global"` for global Memory. Select `current`,
   `history`, `conflicts`, or `all`, follow its generation-bound pagination to
   completion, and use `tracekeeper.read_note` only for selected entry bodies.
-  There is no public project-specific alias.
+  There is no public project-specific alias. A successful empty project catalog
+  is therefore evidence about one verified current Hub, never proof that an
+  arbitrary id is valid.
 
 ## Source Ingestion
 
