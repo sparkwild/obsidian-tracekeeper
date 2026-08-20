@@ -4,6 +4,7 @@ import {
 	KNOWLEDGE_WIKI_DIR,
 	computeProposalContentHash,
 	computeProposalRevision,
+	resolveProposalWriteback,
 	startsWithPathPrefix,
 	proposalTransitionReceiptFromFrontmatter,
 	type ProposalTransitionReceipt,
@@ -37,6 +38,17 @@ export type ReviewQueueItemType =
 	| 'memory_proposal'
 	| 'legacy_migration_review'
 	| 'other_review_item';
+
+const PROJECT_REVIEW_RESUBMISSION_REASONS = new Set([
+	'missing_memory_hub',
+	'missing_exact_project_identity',
+	'invalid_repo_path',
+	'explicit_project_id_not_found',
+	'conflicting_project_identity',
+	'project_hint_conflict',
+	'derived_project_key_occupied',
+	'project_snapshot_incomplete',
+]);
 
 export interface MemoryProposalRecord {
 	path: string;
@@ -75,6 +87,9 @@ export interface MemoryProposalRecord {
 	revisionRequestedBy: string;
 	writebackContent: string;
 	writebackSource: 'frontmatter' | 'body' | 'none';
+	writebackFormat: 'bounded_v2' | 'legacy_heading' | 'frontmatter_v1' | 'missing' | 'invalid';
+	writebackAmbiguous: boolean;
+	writebackError: string;
 	writebackEffect?: ProposalWritebackEffect;
 	invalidWritebackEffect?: boolean;
 	writebackOperationId: string;
@@ -488,8 +503,13 @@ export const getReviewProposalAttentionState = (
 
 export const isReviewProposalBlocked = (proposal: MemoryProposalRecord): boolean =>
 	(proposal.approvalStatus === 'pending' || proposal.approvalStatus === 'approved')
-	&& proposal.memoryScope === 'project'
-	&& proposal.reviewReason === 'missing_memory_hub';
+	&& (
+		proposal.writebackAmbiguous
+		|| (
+			proposal.memoryScope === 'project'
+			&& PROJECT_REVIEW_RESUBMISSION_REASONS.has(proposal.reviewReason)
+		)
+	);
 
 const snippetFromText = (text: string, fallback: string = ''): string => {
 	const lines = text
@@ -518,15 +538,6 @@ export const compareProposalRecords = (a: MemoryProposalRecord, b: MemoryProposa
 		return rankA - rankB;
 	}
 	return b.sortTimestamp - a.sortTimestamp;
-};
-
-export const extractMemoryProposalWritebackContent = (data: ParsedRecord, body: string): string => {
-	const frontmatterWriteback = readMultilineString(data, ['writeback_content', 'writebackContent']);
-	if (frontmatterWriteback) {
-		return normalizeProposalText(frontmatterWriteback.replace(/\\n/g, '\n'));
-	}
-	const section = extractSectionText(body, ['Writeback', 'Approved writeback', 'Writeback content', '写回', '已批准写回', '写回内容']);
-	return normalizeProposalText(section);
 };
 
 export const proposalTransitionSnapshotFromRecord = (
@@ -642,10 +653,16 @@ export const parseMemoryProposalRecord = ({
 	const revisionRequestedAt = firstString(fields, ['revision_requested_at', 'revisionRequestedAt']);
 	const revisionRequestedBy = firstString(fields, ['revision_requested_by', 'revisionRequestedBy']);
 	const frontmatterWriteback = readMultilineString(fields, ['writeback_content', 'writebackContent']);
-	const writebackContent = extractMemoryProposalWritebackContent(fields, body);
+	const writeback = resolveProposalWriteback({
+		body,
+		proposalId,
+		frontmatterContent: frontmatterWriteback,
+	});
+	const writebackContent = normalizeProposalText(writeback.content);
 	const writebackSource: MemoryProposalRecord['writebackSource'] = frontmatterWriteback
-		? 'frontmatter'
-		: writebackContent
+		&& writeback.source === 'frontmatter'
+			? 'frontmatter'
+			: writebackContent
 			? 'body'
 			: 'none';
 	const { effect, invalid } = parseProposalWritebackEffect(fields);
@@ -702,6 +719,9 @@ export const parseMemoryProposalRecord = ({
 		revisionRequestedBy,
 		writebackContent,
 		writebackSource,
+		writebackFormat: writeback.format,
+		writebackAmbiguous: writeback.ambiguous,
+		writebackError: writeback.error || '',
 		writebackEffect: effect,
 		invalidWritebackEffect: invalid,
 		writebackOperationId: writebackOperation.value,

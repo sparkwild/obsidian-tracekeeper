@@ -90,10 +90,20 @@ test('SourceRequestApplicationService owns analysis, generated notes, and task r
 	assert.match(proposal.frontmatter.claim_key, /^source:source-[a-f0-9]{32}:/);
 	assert.equal(proposal.frontmatter.proposed_authority, 'source');
 	assert.equal(proposal.frontmatter.proposed_confidence, 'supported');
+	assert.equal(proposal.frontmatter.project_hint, 'tracekeeper');
+	assert.equal(proposal.frontmatter.project_id, undefined);
 	assert.equal(proposal.frontmatter.observed_at, '2026-08-03T00:00:00.000Z');
 	assert.deepEqual(proposal.frontmatter.evidence, [writes[0].directory + '/' + writes[0].filename + '.md']);
 	assert.deepEqual(proposal.frontmatter.related_sources, proposal.frontmatter.evidence);
 	assert.match(proposal.body, /- source: \[source\]\(/);
+	assert.match(
+		proposal.body,
+		new RegExp(`tracekeeper:writeback:start proposal_id="${proposal.frontmatter.proposal_id}"`)
+	);
+	assert.match(
+		proposal.body,
+		new RegExp(`tracekeeper:writeback:end proposal_id="${proposal.frontmatter.proposal_id}"`)
+	);
 	assert.deepEqual(statuses, [{
 		requestPath: '00_tracekeeper/inbox/agent_requests/direct-request.md',
 		status: 'completed',

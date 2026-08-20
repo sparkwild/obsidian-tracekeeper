@@ -21,13 +21,18 @@ try {
 			{
 				name: 'tracekeeper-core-stub',
 				setup(build) {
+					const proposalWritebackPath = path.resolve('../../packages/core/dist/proposal-writeback.js');
 					build.onResolve({ filter: /^@tracekeeper\/core$/ }, () => ({
 						path: 'tracekeeper-core-stub',
 						namespace: 'tracekeeper-core-stub',
 					}));
+					build.onResolve({ filter: /proposal-writeback\.js$/ }, () => ({
+						path: proposalWritebackPath,
+					}));
 					build.onLoad({ filter: /^tracekeeper-core-stub$/, namespace: 'tracekeeper-core-stub' }, () => ({
 						loader: 'js',
 						contents: `
+							export { resolveProposalWriteback } from ${JSON.stringify(proposalWritebackPath)};
 							export const ARCHIVE_REVIEW_QUEUE_DIR = '02_archive/review_queue';
 							export const KNOWLEDGE_INDEX_PATH = '01_knowledge/index.md';
 							export const KNOWLEDGE_MEMORY_DIR = '01_knowledge/memory';
@@ -89,7 +94,7 @@ try {
 			revision_requested_at: '2026-01-01T00:00:00Z',
 			revision_comment: 'please keep scope',
 		},
-		body: '# Memory proposal\n\nNo details\n\n## Writeback\nBody writeback should be ignored when frontmatter exists.\n',
+		body: '# Memory proposal\n\nNo body writeback; frontmatter is the compatibility source.\n',
 	});
 
 	assert.equal(memoryProposal?.classification, 'memory_proposal');
@@ -615,6 +620,48 @@ try {
 		memoryScope: 'project',
 		reviewReason: 'missing_memory_hub',
 	}), 'completed');
+	for (const reviewReason of [
+		'missing_exact_project_identity',
+		'invalid_repo_path',
+		'explicit_project_id_not_found',
+		'conflicting_project_identity',
+		'project_hint_conflict',
+		'derived_project_key_occupied',
+		'project_snapshot_incomplete',
+	]) {
+		assert.equal(reviewModule.getReviewProposalAttentionState({
+			...memoryProposal,
+			memoryScope: 'project',
+			reviewReason,
+		}), 'blocked');
+		assert.equal(reviewModule.getReviewProposalAttentionState({
+			...memoryProposal,
+			approvalStatus: 'rejected',
+			memoryScope: 'project',
+			reviewReason,
+		}), 'completed');
+	}
+
+	const ambiguousLegacy = reviewModule.parseMemoryProposalRecord({
+		filePath: 'review_queue/ambiguous-legacy.md',
+		fields: {
+			type: 'memory-proposal',
+			proposal_id: 'ambiguous-legacy',
+			approval_status: 'pending',
+			target_note: '01_knowledge/memory/projects/vigilshell/index.md',
+			memory_scope: 'project',
+			claim_key: 'vigilshell.project-continuity-baseline',
+			writeback_effect: 'create_memory_record',
+		},
+		body: '## Proposal\n\n## Writeback\n# VigilShell baseline\n\n## Product boundary\nBody\n',
+	});
+	assert.equal(ambiguousLegacy?.writebackAmbiguous, true);
+	assert.equal(ambiguousLegacy?.writebackError, 'legacy_boundary_ambiguous');
+	assert.equal(reviewModule.getReviewProposalAttentionState(ambiguousLegacy), 'blocked');
+	assert.equal(reviewModule.getReviewProposalAttentionState({
+		...ambiguousLegacy,
+		approvalStatus: 'rejected',
+	}), 'completed');
 
 	assert.ok(reviewModule.compareProposalRecords(pending, applied) < 0);
 	assert.ok(reviewModule.compareProposalRecords(rejected, applied) > 0);
@@ -625,7 +672,7 @@ try {
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...invalidTarget, approvalStatus: 'pending' }), 'incomplete');
 	assert.equal(reviewModule.getReviewProposalAttentionState({ ...legacyProposal, approvalStatus: 'approved' }), 'completed');
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 66 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 86 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

@@ -486,8 +486,7 @@ class ProposeMemoryApplicationService {
             reviewRequirement ? `- review_reason: ${reviewRequirement.reason}` : '',
             reviewRequirement?.warnings.length ? `- review_warnings: ${JSON.stringify(reviewRequirement.warnings)}` : '',
             '',
-            dependencies.renderText('## 写回内容', '## Writeback'),
-            content,
+            (0, core_1.renderProposalWritebackSection)(dependencies.renderText('## 写回内容', '## Writeback'), proposalId, content),
         ].filter(Boolean).join('\n');
         const filename = dependencies.buildFilename(snapshot.filename, `proposal-${identity.operationId}`);
         const existing = await dependencies.findOwnedProposalNote(filename, identity.operationId);

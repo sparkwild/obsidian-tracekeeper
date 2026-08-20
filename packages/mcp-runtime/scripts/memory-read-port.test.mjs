@@ -148,6 +148,23 @@ test('project scope requires an exact project id', async () => {
 	assert.equal(counter.calls, 0);
 });
 
+test('project scope rejects an id without one canonical current Hub', async () => {
+	const counter = { calls: 0 };
+	const result = await callTool(
+		'tracekeeper.memory',
+		{ scope: 'project', project_id: 'vigilshell-7c7355abdec43cf2a275dae49f8f9b1f' },
+		context(counter)
+	);
+	assert.equal(result.isError, true);
+	assert.equal(counter.calls, 1);
+	assert.match(result.structuredContent.error, /project_identity_not_found/i);
+	assert.equal(result.structuredContent.error_detail.code, 'INVALID_REQUEST');
+	assert.equal(
+		result.structuredContent.error_detail.recovery_actions[0]?.reason_code,
+		'PROJECT_SCOPE_UNCERTAIN'
+	);
+});
+
 test('status, source listing, and review listing use the lightweight read view', async () => {
 	for (const [tool, args] of [
 		['tracekeeper.status', {}],

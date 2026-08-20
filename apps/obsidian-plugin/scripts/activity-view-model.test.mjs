@@ -12,15 +12,20 @@ const output = path.join(tempRoot, 'activity-view-model.mjs');
 const coreStub = {
 	name: 'tracekeeper-core-stub',
 	setup(buildContext) {
+		const proposalWritebackPath = path.resolve('../../packages/core/dist/proposal-writeback.js');
 		buildContext.onResolve({ filter: /^@tracekeeper\/core$/ }, () => ({
 			path: 'tracekeeper-core-stub',
 			namespace: 'tracekeeper-core-stub',
+		}));
+		buildContext.onResolve({ filter: /proposal-writeback\.js$/ }, () => ({
+			path: proposalWritebackPath,
 		}));
 		buildContext.onLoad(
 			{ filter: /.*/, namespace: 'tracekeeper-core-stub' },
 				() => ({
 					loader: 'js',
 					contents: `
+						export { resolveProposalWriteback } from ${JSON.stringify(proposalWritebackPath)};
 						export const TRACEKEEPER_REVIEW_QUEUE_DIR = '00_tracekeeper/inbox/review_queue';
 						export const ARCHIVE_REVIEW_QUEUE_DIR = '02_archive/review_queue';
 						export const isKnowledgeWikiPath = (path) => path.startsWith('01_knowledge/wiki/');

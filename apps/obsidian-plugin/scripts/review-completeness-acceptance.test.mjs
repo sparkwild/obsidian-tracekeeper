@@ -49,6 +49,8 @@ assert.match(viewSource, /Approval does not write/);
 assert.match(viewSource, /missing_memory_hub/);
 assert.match(viewSource, /历史\/不完整结构阻断/);
 assert.match(viewSource, /This is a legacy or incomplete structural block/);
+assert.match(viewSource, /旧版提案无法可靠区分写回正文与内部标题/);
+assert.match(viewSource, /该提案没有可验证的规范项目身份/);
 assert.match(reviewViewModelSource, /isReviewProposalBlocked/);
 assert.match(reviewViewModelSource, /return 'blocked'/);
 assert.match(viewSource, /阻断原因：/);

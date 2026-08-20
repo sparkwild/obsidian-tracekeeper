@@ -135,7 +135,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "memory";
     readonly useCase: "memory";
-    readonly description: "[read-only] Enumerate the generation-bound global or project memory catalog by current, history, conflicts, or all view. Returns metadata only; use tracekeeper.read_note for full note bodies.";
+    readonly description: "[read-only] Enumerate the generation-bound global or project memory catalog by current, history, conflicts, or all view. Project scope requires one current Runtime-resolved project_id; unknown ids fail instead of returning an empty catalog. Returns metadata only; use tracekeeper.read_note for full note bodies.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly deprecated: {

@@ -1530,8 +1530,14 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 	private reviewReasonCodeLabel(
 		reason: string,
-		proposal?: Pick<MemoryProposalRecord, 'memoryScope' | 'reviewReason'>
+		proposal?: Pick<MemoryProposalRecord, 'memoryScope' | 'reviewReason' | 'writebackAmbiguous'>
 	): string {
+		if (proposal?.writebackAmbiguous) {
+			return ui(
+				'旧版提案无法可靠区分写回正文与内部标题，不能继续审核或写入；请由 Agent 重新提交。',
+				'This legacy proposal cannot reliably distinguish its writeback body from nested headings. It cannot be reviewed or applied; resubmit it through the agent.'
+			);
+		}
 		switch (reason) {
 			case 'missing_memory_hub':
 				if (proposal?.memoryScope === 'project') {
@@ -1543,6 +1549,17 @@ export class TracekeeperReviewQueueView extends ItemView {
 				return ui(
 					'记忆候选需要项目或全局 Hub 才能持久化；当前 Hub 无效/缺失，请先在 Obsidian 执行结构修复。',
 					'This memory candidate needs a valid project or global Hub to persist; repair structure in Obsidian first.'
+				);
+			case 'missing_exact_project_identity':
+			case 'invalid_repo_path':
+			case 'explicit_project_id_not_found':
+			case 'conflicting_project_identity':
+			case 'project_hint_conflict':
+			case 'derived_project_key_occupied':
+			case 'project_snapshot_incomplete':
+				return ui(
+					'该提案没有可验证的规范项目身份，补全目标或通过审核都无法修复；请使用 Runtime 返回的 project_id 或精确 repo_path 重新提交。',
+					'This proposal has no verifiable canonical project identity. Completing a target or approving it cannot repair the record; resubmit it with the Runtime-resolved project_id or exact repo_path.'
 				);
 			default:
 				return '';

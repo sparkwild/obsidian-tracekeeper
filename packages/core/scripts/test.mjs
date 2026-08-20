@@ -18,6 +18,7 @@ import knowledgeIndexModule from '../dist/knowledge-index.js';
 import knowledgeNoteModule from '../dist/knowledge-note.js';
 import vaultRepositoryModule from '../dist/vault-repository.js';
 import proposalTransitionModule from '../dist/proposal-transition.js';
+import proposalWritebackModule from '../dist/proposal-writeback.js';
 import projectMemoryModule from '../dist/project-memory.js';
 import memoryRecordModule from '../dist/memory-record.js';
 import memoryLifecycleModule from '../dist/memory-lifecycle.js';
@@ -27,6 +28,93 @@ import knowledgeArchitectureModule from '../dist/knowledge-architecture.js';
 
 const KNOWLEDGE_DIR = '01_knowledge';
 const CONFIG_DIR = 'vault-config';
+
+function runProposalWritebackTests() {
+	const proposalId = 'proposal-nested-markdown';
+	const nested = [
+		'# VigilShell baseline',
+		'',
+		'## Product boundary',
+		'- Human lane',
+		'',
+		'### Evidence',
+		'```ts',
+		'const value = "## not a boundary";',
+		'```',
+	].join('\n');
+	const section = proposalWritebackModule.renderProposalWritebackSection(
+		'## Writeback',
+		proposalId,
+		nested
+	);
+	const bounded = proposalWritebackModule.resolveProposalWriteback({
+		body: `## Proposal\n\n- status: pending\n\n${section}\n`,
+		proposalId,
+	});
+	assert.equal(bounded.format, 'bounded_v2');
+	assert.equal(bounded.content, nested);
+	assert.equal(bounded.ambiguous, false);
+
+	const replaced = proposalWritebackModule.replaceProposalWriteback(
+		`## Proposal\n\n${section}\n`,
+		proposalId,
+		'# Revised\n\n## Still nested'
+	);
+	assert.equal(
+		proposalWritebackModule.parseProposalWritebackBody(replaced, proposalId).content,
+		'# Revised\n\n## Still nested'
+	);
+
+	const mismatched = proposalWritebackModule.parseProposalWritebackBody(
+		section.replaceAll(proposalId, 'proposal-other'),
+		proposalId
+	);
+	assert.equal(mismatched.format, 'invalid');
+	assert.equal(mismatched.error, 'boundary_id_mismatch');
+	assert.throws(
+		() => proposalWritebackModule.renderProposalWritebackSection(
+			'## Writeback',
+			proposalId,
+			`<!-- tracekeeper:writeback:end proposal_id="${proposalId}" -->`
+		),
+		(error) => error instanceof proposalWritebackModule.ProposalWritebackFormatError
+	);
+
+	const simpleLegacy = proposalWritebackModule.resolveProposalWriteback({
+		body: '## Proposal\n\n## Writeback\n\n- one line\n',
+		proposalId,
+	});
+	assert.equal(simpleLegacy.format, 'legacy_heading');
+	assert.equal(simpleLegacy.content, '- one line');
+	assert.equal(simpleLegacy.ambiguous, false);
+
+	const ambiguousLegacy = proposalWritebackModule.resolveProposalWriteback({
+		body: '## Proposal\n\n## Writeback\n# Title\n\n## Nested\nBody\n',
+		proposalId,
+	});
+	assert.equal(ambiguousLegacy.format, 'legacy_heading');
+	assert.equal(ambiguousLegacy.content, '# Title');
+	assert.equal(ambiguousLegacy.ambiguous, true);
+	assert.equal(ambiguousLegacy.error, 'legacy_boundary_ambiguous');
+	assert.throws(
+		() => proposalWritebackModule.replaceProposalWriteback(
+			'## Writeback\n# Title\n## Nested\nBody',
+			proposalId,
+			'Revised'
+		),
+		(error) => error instanceof proposalWritebackModule.ProposalWritebackFormatError
+	);
+
+	const conflict = proposalWritebackModule.resolveProposalWriteback({
+		body: `## Proposal\n\n${section}`,
+		proposalId,
+		frontmatterContent: 'different content',
+	});
+	assert.equal(conflict.format, 'invalid');
+	assert.equal(conflict.error, 'conflicting_sources');
+
+	console.log(JSON.stringify({ suite: 'core-proposal-writeback', result: 'pass', checks: 16 }));
+}
 
 function writeFile(relativePath, content, basePath) {
 	const target = path.join(basePath, relativePath);
@@ -5009,7 +5097,7 @@ async function runKnowledgeReadIndexTests() {
 	}));
 }
 
-run().then(runMemoryRecordV2Tests).then(runMemoryLifecycleTests).then(runSourceRecordTests).then(runLifecycleGraphFixtureTests).then(runLifecycleDiagnosticTests).then(runKnowledgeReadIndexTests).catch((error) => {
+run().then(runProposalWritebackTests).then(runMemoryRecordV2Tests).then(runMemoryLifecycleTests).then(runSourceRecordTests).then(runLifecycleGraphFixtureTests).then(runLifecycleDiagnosticTests).then(runKnowledgeReadIndexTests).catch((error) => {
 	console.error(error);
 	process.exitCode = 1;
 });

@@ -2,6 +2,7 @@ import {
 	analyzeSourceText,
 	buildSourceCapturePlan,
 	buildStableProposalId,
+	renderProposalWritebackSection,
 	type NormalizedSourceKind,
 	type SourceAnalysisContentLanguage,
 	type SourceAnalysisResult,
@@ -528,7 +529,7 @@ export class SourceRequestApplicationService {
 						proposal_kind: entry.proposalKind,
 						status: 'pending',
 						scope: request.relatedProject ? 'project' : 'global',
-						project_id: request.relatedProject || null,
+						project_hint: request.relatedProject || null,
 						claim_key: `source:${sourcePlan.source_id}:${entry.proposalKind}:${proposalIndex}`,
 						proposed_authority: 'source',
 						proposed_confidence: 'supported',
@@ -543,7 +544,19 @@ export class SourceRequestApplicationService {
 						created_at: now,
 						task_id: taskId,
 					},
-					body: `${dependencies.renderText('## 来源分析提案', '## Source analysis proposal')}\n\n- source: ${markdownLink(dependencies, sourceNote.path, proposalPath)}\n- evidence: ${entry.evidence}\n\n${dependencies.renderText('## 写回内容', '## Writeback')}\n${entry.content}\n`,
+						body: [
+							dependencies.renderText('## 来源分析提案', '## Source analysis proposal'),
+							'',
+							`- source: ${markdownLink(dependencies, sourceNote.path, proposalPath)}`,
+							`- evidence: ${entry.evidence}`,
+							'',
+							renderProposalWritebackSection(
+								dependencies.renderText('## 写回内容', '## Writeback'),
+								proposalId,
+								entry.content
+							),
+							'',
+						].join('\n'),
 					taskId,
 					metadata: {
 						target_type: 'memory_proposal',

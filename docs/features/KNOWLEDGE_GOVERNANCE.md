@@ -78,6 +78,14 @@ inside its exact allowed knowledge boundary and writable content must be
 present. Existing Wiki targets stay append-only; a missing Memory append target
 does not inherit Wiki creation authority.
 
+Managed proposal writeback bodies use proposal-id-bound hidden Markdown
+boundaries so headings inside the proposed content remain payload rather than
+record sections. The Runtime, transition owner, and Obsidian review projection
+consume the same boundary parser. Missing, duplicated, reordered, or mismatched
+boundaries fail closed. Legacy body-only proposals remain compatible only when
+their heading boundary is unambiguous; an ambiguous actionable legacy proposal
+must be resubmitted, while terminal history is never rewritten or reopened.
+
 The review detail presents the available task and source evidence, current or
 absent target state, and a projected append or create diff from the reviewed
 proposal. Approval still does not write. Apply generates the authoritative,
@@ -89,6 +97,12 @@ exact file owned by the confirmed operation. A project proposal whose Hub is
 missing is not review-ready: approval cannot supply the additional structure
 authority, and legacy blocked proposals must be resubmitted after the runtime
 can follow the selected Project Auto policy.
+
+Project identity is equally fail-closed. `project_id` is an opaque stable id
+returned by the Runtime, not the human label, Hub directory key, or repository
+leaf. An unknown or conflicting explicit id is rejected before a proposal file
+or task link is written. Project Memory enumeration requires one current
+canonical Hub and never returns a successful empty catalog for an arbitrary id.
 
 Approval commits a receipt that binds the exact proposal revision and content
 hash reviewed by the user. The apply preview produces an opaque, expiring
