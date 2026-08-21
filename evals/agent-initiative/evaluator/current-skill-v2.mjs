@@ -16,7 +16,10 @@ export function buildSkillV2Profile(sourceDocuments) {
 	return {
 		noTrackMode: requires(text, /`no_track`[\s\S]*do not call Tracekeeper/iu, 'no_track mode'),
 		recallOnlyMode: requires(text, /`recall_only`[\s\S]*tracekeeper\.recall/iu, 'recall_only mode'),
-		trackedTaskMode: requires(text, /`tracked_task`[\s\S]*tracekeeper\.start_task[\s\S]*tracekeeper\.finish_task/iu, 'tracked_task mode'),
+		trackedTaskMode: requires(text, /`tracked_task`[\s\S]*closeout_only[\s\S]*tracekeeper\.start_task[\s\S]*tracekeeper\.finish_task/iu, 'tracked_task mode'),
+		closeoutOnlyDefault: requires(text, /closeout_only[\s\S]{0,500}(?:ordinary default|default for an ordinary task|ordinary task)/iu, 'closeout-only default'),
+		liveSelection: requires(text, /cross-session[\s\S]{0,500}interruption recovery[\s\S]{0,500}(?:intermediate|task-linked)/iu, 'live recording selection'),
+		startUnavailable: requires(text, /start_unavailable[\s\S]{0,400}start_idempotency_key/iu, 'unknown-start recovery'),
 		immediateTiming: requires(text, /`immediate`/iu, 'immediate next_action timing'),
 		contextInsufficientTiming: requires(text, /if_context_insufficient/iu, 'if_context_insufficient next_action timing'),
 		closeoutTiming: requires(text, /at_task_closeout/iu, 'at_task_closeout next_action timing'),
@@ -32,7 +35,7 @@ export function buildSkillV2Profile(sourceDocuments) {
 		instructionIsolation: requires(text, /untrusted knowledge data[\s\S]*disclose a token/iu, 'instruction isolation'),
 		projectRecallRouting: requires(text, /known project[\s\S]*first knowledge Recall[\s\S]*scope:\s*"project"[\s\S]*repo_path/iu, 'known-project Recall routing'),
 		recallOnlyRouteGuard: requires(text, /recall_only[\s\S]*never start[\s\S]*scope:\s*"global"[\s\S]*scope:\s*"project_history"/iu, 'recall_only route guard'),
-		trackedRecallRouting: requires(text, /tracked_task[\s\S]*start first[\s\S]*(?:next_actions|recommended_recall)/iu, 'tracked-task Recall routing'),
+		trackedRecallRouting: requires(text, /(?:live `?tracked_task`?|live tracking)[\s\S]*start first[\s\S]*(?:next_actions|recommended_recall)/iu, 'live tracked-task Recall routing'),
 		operationSpecificKeys: requires(text, /One idempotency key replays only the same logical operation/iu, 'operation-specific idempotency keys'),
 		explicitMemoryScope: requires(text, /MemoryRecord candidate declares\s*`memory_scope/iu, 'explicit MemoryRecord scope'),
 		wikiReviewOnly: requires(text, /Wiki changes always enter review/iu, 'review-only Wiki routing'),
@@ -124,6 +127,7 @@ function trackedTrace(scenario, signals) {
 		};
 	}
 	const taskId = `task-${scenario.id}`;
+	const startedAt = '2026-08-21T00:00:00.000Z';
 	if (signals.toolUnavailable) {
 		return {
 			scenario_id: scenario.id,
@@ -132,6 +136,50 @@ function trackedTrace(scenario, signals) {
 				{ type: 'tool_call', tool: 'tracekeeper.start_task', args: { goal: scenario.prompt } },
 				{ type: 'tool_result', tool: 'tracekeeper.start_task', result: { error: 'tool not available' } },
 				report('', ['tool_unavailable']),
+			],
+		};
+	}
+	if (signals.startResultUnknown) {
+		const startKey = `start-${scenario.id}`;
+		return {
+			scenario_id: scenario.id,
+			classification: 'tracked_task',
+			events: [
+				{ type: 'tool_call', tool: 'tracekeeper.start_task', args: {
+					goal: scenario.prompt,
+					started_at: startedAt,
+					idempotency_key: startKey,
+				} },
+				{ type: 'tool_result', tool: 'tracekeeper.start_task', result: { error: 'transport outcome unknown' } },
+				{ type: 'tool_call', tool: 'tracekeeper.finish_task', args: {
+					goal: scenario.prompt,
+					started_at: startedAt,
+					recording_reason: 'start_unavailable',
+					start_idempotency_key: startKey,
+					status: 'completed',
+					summary: `Completed ${scenario.id}.`,
+					idempotency_key: `finish-${scenario.id}`,
+				} },
+				{ type: 'tool_result', tool: 'tracekeeper.finish_task', result: { memory_closeout_status: 'recorded', start_recovery: 'matched' } },
+				report('recorded', ['start_recovered']),
+			],
+		};
+	}
+	if (signals.ordinaryCloseout) {
+		return {
+			scenario_id: scenario.id,
+			classification: 'tracked_task',
+			events: [
+				...recallEvents(scenario),
+				{ type: 'tool_call', tool: 'tracekeeper.finish_task', args: {
+					goal: scenario.prompt,
+					started_at: startedAt,
+					status: 'completed',
+					summary: `Completed ${scenario.id}.`,
+					idempotency_key: `finish-${scenario.id}`,
+				} },
+				{ type: 'tool_result', tool: 'tracekeeper.finish_task', result: { memory_closeout_status: 'recorded', tracking_mode: 'closeout_only', task_id: taskId } },
+				report('recorded'),
 			],
 		};
 	}

@@ -22,6 +22,7 @@ const REQUIRED_PATHS = Object.freeze([
 	'docs/development/ENGINEERING_AND_RELEASE.md',
 	`skills/tracekeeper/${TRACEKEEPER_SKILL_RELEASE_PATH}`,
 	'skills/tracekeeper/SKILL.md',
+	'skills/tracekeeper/references/failure-recovery.md',
 	'skills/tracekeeper/references/closeout-fields.md',
 	'skills/tracekeeper/references/ingestion-workflow.md',
 	'skills/tracekeeper/manifest.json',
@@ -40,6 +41,7 @@ const REQUIRED_PATHS = Object.freeze([
 ]);
 
 const ALLOWED_SKILL_TOOL_NAMES = new Set([
+	'tracekeeper.status',
 	'tracekeeper.start_task',
 	'tracekeeper.recall',
 	'tracekeeper.memory',
@@ -103,15 +105,40 @@ function checkWorkflowSemantics(contract, skill, flattened, errors) {
 		);
 		requirePattern(
 			content,
-			/tracekeeper\.start_task[^\n]{0,100}exactly once/i,
-			`${owner} does not require start exactly once`,
+			/(?:live[\s\S]{0,180})?tracekeeper\.start_task[\s\S]{0,180}(?:exactly once|once with)/i,
+			`${owner} does not require live start exactly once`,
 			errors,
 		);
-		requirePattern(content, /real `task_id`/, `${owner} does not require the real task_id`, errors);
+		requirePattern(content, /real (?:returned )?`task_id`/, `${owner} does not require the real task_id`, errors);
 		requirePattern(
 			content,
 			/tracekeeper\.finish_task[^\n]{0,120}exactly once/i,
 			`${owner} does not require finish exactly once`,
+			errors,
+		);
+		requirePattern(content, /\bcloseout_only\b/, `${owner} does not define closeout_only recording`, errors);
+		requirePattern(
+			content,
+			/(?:closeout_only|closeout-only)[\s\S]{0,500}(?:default|ordinary default|默认)[\s\S]{0,500}(?:without|omit)[^\n]{0,100}`?task_id`?/i,
+			`${owner} does not default ordinary tracked tasks to finish without task_id`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/(?:cross-session|crosses sessions)[\s\S]{0,420}(?:interruption recovery|中断恢复)[\s\S]{0,420}(?:intermediate write|task-linked)/i,
+			`${owner} does not define live-tracking selection criteria`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/start_unavailable[\s\S]{0,360}start_idempotency_key/i,
+			`${owner} does not define start-unavailable reconciliation`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/(?:Never|never)[^\n]{0,100}(?:calculate|invent|infer)[^\n]{0,80}`?task_id`?/i,
+			`${owner} does not forbid Agent-generated task_id`,
 			errors,
 		);
 		requirePattern(content, /timing/i, `${owner} does not describe next_actions timing`, errors);
@@ -188,6 +215,40 @@ function checkWorkflowSemantics(contract, skill, flattened, errors) {
 		if (structuredIndex < 0 || compatibilityIndex < 0 || structuredIndex > compatibilityIndex) {
 			errors.push(`${owner} does not prioritize next_actions before next_actions_for_agent`);
 		}
+	}
+}
+
+function checkAvailabilityRecoverySemantics(contract, skill, failureRecovery, flattened, errors) {
+	for (const [content, owner] of [
+		[contract, 'contract'],
+		[skill, 'Skill'],
+		[failureRecovery, 'failure recovery guidance'],
+		[flattened, 'flattened Skill'],
+	]) {
+		requirePattern(
+			content,
+			/(?:tools? (?:are )?(?:not exposed|absent)|tool-exposure|tool-injection)[\s\S]{0,320}(?:does not prove|not prove)[\s\S]{0,180}(?:Runtime is down|local Runtime)/i,
+			`${owner} does not distinguish missing client tool exposure from Runtime failure`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/(?:transport layer|transport-unreachable)[\s\S]{0,240}(?:without a structured|structured result)[\s\S]{0,500}(?:Obsidian Vault window|Vault Renderer)[\s\S]{0,220}(?:may be closed|closed or reloading)/i,
+			`${owner} does not explain unstructured transport failure through the bounded Renderer-lifecycle hypothesis`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/structured (?:Tracekeeper )?failure[\s\S]{0,260}(?:exact (?:error )?code|code, message)[\s\S]{0,180}(?:recovery actions|retryability)/i,
+			`${owner} does not preserve structured Runtime failure evidence`,
+			errors,
+		);
+		requirePattern(
+			content,
+			/retry one[\s\S]{0,180}tracekeeper\.status[\s\S]{0,240}(?:user (?:reports|says)|tools? (?:again|exposure))/i,
+			`${owner} does not bound the post-reopen status retry`,
+			errors,
+		);
 	}
 }
 
@@ -389,6 +450,7 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	const flattenedPath = `skills/tracekeeper/${TRACEKEEPER_SKILL_FLATTENED_PATH}`;
 	const contract = contents.get(contractPath) ?? '';
 	const skill = contents.get(skillPath) ?? '';
+	const failureRecovery = contents.get('skills/tracekeeper/references/failure-recovery.md') ?? '';
 	const flattened = contents.get(flattenedPath) ?? '';
 	if (/\]\(references\//.test(flattened)) {
 		errors.push('flattened Skill must not depend on external reference files');
@@ -400,6 +462,7 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 	requirePattern(skill, /^---\nname: tracekeeper\ndescription: [^\n]+\n---\n/, 'Skill frontmatter must contain only compatible name and description fields', errors);
 	requirePattern(skill, /description: .*project continuity.*Do not use Tracekeeper/i, 'Skill description must contain positive and negative triggers', errors);
 	checkWorkflowSemantics(contract, skill, flattened, errors);
+	checkAvailabilityRecoverySemantics(contract, skill, failureRecovery, flattened, errors);
 	checkLocalTrustSemantics(contents, errors);
 	for (const [content, owner] of [[contract, 'contract'], [skill, 'Skill'], [flattened, 'flattened Skill']]) {
 		requirePattern(
@@ -434,8 +497,8 @@ export async function checkAgentEcosystem(repoRoot = process.cwd()) {
 		);
 		requirePattern(
 			content,
-			/tracked_task[\s\S]{0,180}start first[\s\S]{0,180}(?:next_actions|recommended_recall)/i,
-			`${owner} does not route tracked-task Recall from the start result`,
+			/(?:live `?tracked_task`?|live tracking)[\s\S]{0,240}start first[\s\S]{0,240}(?:next_actions|recommended_recall)/i,
+			`${owner} does not route live tracked-task Recall from the start result`,
 			errors,
 		);
 		requirePattern(

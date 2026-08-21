@@ -211,7 +211,7 @@ exports.toolContracts = [
     },
     {
         name: 'tracekeeper.start_task',
-        version: 3,
+        version: 4,
         visibility: 'public',
         capability: 'workflow.manage',
         risk: 'low-risk-write',
@@ -220,7 +220,7 @@ exports.toolContracts = [
         world: 'closed',
         workflowRole: 'task-start',
         useCase: 'start_task',
-        description: '[low-risk write] Call once when starting meaningful work when task tracking is enabled. Records a bounded task and returns the recommended recall step.',
+        description: '[low-risk write] Begin live task tracking when cross-session continuity, interruption recovery, in-progress visibility, explicit live tracking, or task-linked intermediate writes require a real task identity. Ordinary tracked work can use closeout-only finish_task instead.',
         inputSchema: withToolInput({
             goal: { type: 'string', description: 'Task goal statement.' },
             client: { type: 'string', description: 'Optional client context.' },
@@ -232,6 +232,10 @@ exports.toolContracts = [
             repo_path: {
                 type: 'string',
                 description: 'Optional repository/workspace path used to resolve and corroborate local project identity.',
+            },
+            started_at: {
+                type: 'string',
+                description: 'Optional client-claimed ISO start time when live tracking begins after the work itself started.',
             },
             idempotency_key: {
                 type: 'string',
@@ -647,7 +651,7 @@ exports.toolContracts = [
     },
     {
         name: 'tracekeeper.finish_task',
-        version: 5,
+        version: 6,
         visibility: 'public',
         capability: 'workflow.manage',
         risk: 'low-risk-write',
@@ -656,67 +660,110 @@ exports.toolContracts = [
         world: 'closed',
         workflowRole: 'task-finish',
         useCase: 'finish_task',
-        description: '[low-risk write] Complete the canonical Markdown task record without creating an implicit session note. If the start_task record is missing, reconstruct a complete task record at the canonical task path from the finish request and mark that provenance explicitly. Report durable Wiki/Memory output separately. The result includes direct proposals already linked to the task; a captured Source or Recall match does not prove that proposed knowledge was applied.',
-        inputSchema: withToolInput({
-            task_id: { type: 'string', description: 'Task id.' },
-            summary: { type: 'string', description: 'Task summary.' },
-            status: { type: 'string', enum: ['completed', 'partial', 'blocked'], description: 'Final task execution status only; inspect durable_output in the result for Wiki/Memory persistence state.' },
-            outcomes: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Optional outcomes.' },
-            decisions: {
-                oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-                description: 'Optional decisions.',
+        description: '[low-risk write] Complete an existing live task or atomically create one closeout-only canonical Markdown task record without creating an implicit session note. A closeout-only call omits task_id and supplies goal, started_at, summary, status, and an explicit idempotency key. If an explicit task_id is known but its start_task record is missing, reconstruct a complete task record under that same identity. Report durable Wiki/Memory output separately. The result includes direct proposals already linked to the task; a captured Source or Recall match does not prove that proposed knowledge was applied.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                task_id: { type: 'string', minLength: 1, description: 'Task id.' },
+                goal: { type: 'string', minLength: 1, description: 'Task goal. Required only when task_id is omitted.' },
+                started_at: { type: 'string', minLength: 1, description: 'Client-claimed ISO task start time. Required only when task_id is omitted.' },
+                recording_reason: {
+                    type: 'string',
+                    enum: ['ordinary_closeout', 'start_unavailable'],
+                    description: 'Closeout-only provenance. Defaults to ordinary_closeout.',
+                },
+                start_idempotency_key: {
+                    type: 'string',
+                    minLength: 1,
+                    description: 'Original start_task retry key, allowed only for start_unavailable closeout recovery.',
+                },
+                summary: { type: 'string', description: 'Task summary.' },
+                status: { type: 'string', enum: ['completed', 'partial', 'blocked'], description: 'Final task execution status only; inspect durable_output in the result for Wiki/Memory persistence state.' },
+                outcomes: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Optional outcomes.' },
+                decisions: {
+                    oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    description: 'Optional decisions.',
+                },
+                solution_changes: {
+                    oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    description: 'Optional solution changes.',
+                },
+                lessons: {
+                    oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    description: 'Optional lessons learned.',
+                },
+                preferences: {
+                    oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    description: 'Optional user preferences.',
+                },
+                memory_candidate_records: {
+                    type: 'array',
+                    description: 'Optional structured lifecycle-aware memory candidates.',
+                    items: FINISH_TASK_MEMORY_CANDIDATE_RECORD_SCHEMA,
+                },
+                next_actions: {
+                    oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    description: 'Optional next actions.',
+                },
+                client: { type: 'string', description: 'Optional client context.' },
+                project_hint: {
+                    type: 'string',
+                    description: 'Optional canonical project hint; inherited from the started task when omitted and rejected when conflicting.',
+                },
+                related_wiki: {
+                    oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    description: 'Optional verified local Vault Wiki note paths, conventionally under 01_knowledge/wiki/**.',
+                },
+                related_sources: {
+                    oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+                    description: 'Optional related sources.',
+                },
+                filename: {
+                    type: 'string',
+                    description: 'Deprecated compatibility input. Accepted for exact retries but does not create or select a separate finish note.',
+                },
+                project_id: {
+                    type: 'string',
+                    description: 'Optional project id; a value conflicting with the started task identity is rejected.',
+                },
+                repo_path: {
+                    type: 'string',
+                    description: 'Optional repository path; a value conflicting with the started task identity is rejected.',
+                },
+                idempotency_key: {
+                    type: 'string',
+                    minLength: 1,
+                    description: 'Optional stable retry key. Reusing it with different closeout content is rejected.',
+                },
             },
-            solution_changes: {
-                oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-                description: 'Optional solution changes.',
-            },
-            lessons: {
-                oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-                description: 'Optional lessons learned.',
-            },
-            preferences: {
-                oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-                description: 'Optional user preferences.',
-            },
-            memory_candidate_records: {
-                type: 'array',
-                description: 'Optional structured lifecycle-aware memory candidates.',
-                items: FINISH_TASK_MEMORY_CANDIDATE_RECORD_SCHEMA,
-            },
-            next_actions: {
-                oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-                description: 'Optional next actions.',
-            },
-            client: { type: 'string', description: 'Optional client context.' },
-            project_hint: {
-                type: 'string',
-                description: 'Optional canonical project hint; inherited from the started task when omitted and rejected when conflicting.',
-            },
-            related_wiki: {
-                oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-                description: 'Optional verified local Vault Wiki note paths, conventionally under 01_knowledge/wiki/**.',
-            },
-            related_sources: {
-                oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-                description: 'Optional related sources.',
-            },
-            filename: {
-                type: 'string',
-                description: 'Deprecated compatibility input. Accepted for exact retries but does not create or select a separate finish note.',
-            },
-            project_id: {
-                type: 'string',
-                description: 'Optional project id; a value conflicting with the started task identity is rejected.',
-            },
-            repo_path: {
-                type: 'string',
-                description: 'Optional repository path; a value conflicting with the started task identity is rejected.',
-            },
-            idempotency_key: {
-                type: 'string',
-                description: 'Optional stable retry key. Reusing it with different closeout content is rejected.',
-            },
-        }, ['task_id', 'summary', 'status']),
+            additionalProperties: false,
+            required: ['summary', 'status'],
+            oneOf: [
+                {
+                    required: ['task_id'],
+                    not: {
+                        anyOf: [
+                            { required: ['goal'] },
+                            { required: ['started_at'] },
+                            { required: ['recording_reason'] },
+                            { required: ['start_idempotency_key'] },
+                        ],
+                    },
+                },
+                {
+                    required: ['goal', 'started_at', 'idempotency_key'],
+                    not: { required: ['task_id'] },
+                    allOf: [{
+                            if: {
+                                required: ['recording_reason'],
+                                properties: { recording_reason: { const: 'start_unavailable' } },
+                            },
+                            then: { required: ['start_idempotency_key'] },
+                            else: { not: { required: ['start_idempotency_key'] } },
+                        }],
+                },
+            ],
+        },
         ...withResultSchema(result_schemas_1.FINISH_TASK_OUTPUT_SCHEMA),
     },
     {

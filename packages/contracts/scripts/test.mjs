@@ -226,7 +226,10 @@ assert.match(memoryContract.description, /metadata only/i);
 assert.match(memoryContract.description, /read_note/i);
 
 const finishContract = getContractByName('tracekeeper.finish_task');
-assert.equal(finishContract.version, 5);
+assert.equal(finishContract.version, 6);
+const startContract = getContractByName('tracekeeper.start_task');
+assert.equal(startContract.version, 4);
+assert.ok(startContract.inputSchema.properties.started_at);
 assert.equal(finishContract.inputSchema.properties.memory_candidates, undefined);
 assert.equal(finishContract.inputSchema.properties.review_proposal_mode, undefined);
 assert.equal(finishContract.inputSchema.properties.memory_scope, undefined);
@@ -240,6 +243,11 @@ assert.match(finishContract.description, /canonical Markdown task record/i);
 assert.match(finishContract.description, /without creating an implicit session note/i);
 assert.match(finishContract.description, /start_task record is missing/i);
 assert.match(finishContract.description, /reconstruct a complete task record/i);
+for (const property of ['goal', 'started_at', 'recording_reason', 'start_idempotency_key']) {
+	assert.ok(finishContract.inputSchema.properties[property]);
+}
+assert.deepEqual(finishContract.inputSchema.required, ['summary', 'status']);
+assert.equal(finishContract.inputSchema.oneOf.length, 2);
 assert.match(finishContract.inputSchema.properties.filename.description, /does not create/i);
 assert.match(
 	FINISH_TASK_OUTPUT_SCHEMA.oneOf[0].properties.task_path.description,

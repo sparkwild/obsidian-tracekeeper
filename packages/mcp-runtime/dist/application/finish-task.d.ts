@@ -7,6 +7,7 @@ export interface FinishTaskRunnerStep {
 export interface FinishTaskLifecycleState {
     status: string;
     finishOperationId: string;
+    finishRequestHash: string;
 }
 export interface FinishTaskApplicationDependencies<TRawArgs extends object, TPayload, TResult> {
     journal: OperationJournal;
@@ -19,6 +20,7 @@ export interface FinishTaskApplicationDependencies<TRawArgs extends object, TPay
     };
     loadExistingPayload(payload: unknown): boolean;
     storedRequestHash(payload: unknown): string;
+    recordBindingHash(payload: TPayload): string;
     validateExistingOperation?(record: OperationRecord, payload: TPayload): void;
     buildPayload(rawArgs: TRawArgs, operationId: string, requestHash: string, requestSnapshot: unknown): Promise<TPayload>;
     getTaskId(payload: TPayload): string;

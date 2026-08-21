@@ -47,8 +47,10 @@ test('FinishTaskApplicationService preserves lifecycle guards, step names, and r
 		}),
 		loadExistingPayload: (payload) => Boolean(payload?.requestHash),
 		storedRequestHash: (payload) => payload?.requestHash || '',
+		recordBindingHash: (payload) => payload.requestBindingHash,
 		buildPayload: async (_rawArgs, _operationId, requestHash) => ({
 			requestHash,
+			requestBindingHash: `binding:${requestHash}`,
 			taskId: 'task-direct',
 		}),
 		getTaskId: (payload) => payload.taskId,
@@ -85,6 +87,50 @@ test('FinishTaskApplicationService preserves lifecycle guards, step names, and r
 	]);
 	assert.deepEqual(await service.execute(request), result);
 	assert.equal(events.length, 3);
+});
+
+test('FinishTaskApplicationService rejects an unjournaled lifecycle without the matching request hash', async () => {
+	for (const finishRequestHash of ['', 'different-request-hash']) {
+		let marked = false;
+		const service = new FinishTaskApplicationService({
+			journal: createInMemoryJournal(),
+			requestSnapshot: (rawArgs) => ({ task_id: rawArgs.task_id, summary: rawArgs.summary }),
+			requestIdempotencyKey: (rawArgs) => rawArgs.idempotency_key || '',
+			createIdentity: (_hash, idempotencyKey) => ({
+				operationId: 'finish-task-direct',
+				idempotencyKey,
+			}),
+			loadExistingPayload: (payload) => Boolean(payload?.requestHash),
+			storedRequestHash: (payload) => payload?.requestHash || '',
+			recordBindingHash: (payload) => payload.requestBindingHash,
+			buildPayload: async (_rawArgs, _operationId, requestHash) => ({
+				requestHash,
+				requestBindingHash: `binding:${requestHash}`,
+				taskId: 'task-direct',
+			}),
+			getTaskId: (payload) => payload.taskId,
+			readLifecycle: async () => ({
+				status: 'closing',
+				finishOperationId: 'finish-task-direct',
+				finishRequestHash,
+			}),
+			markClosing: async () => {
+				marked = true;
+			},
+			buildSteps: () => [],
+			finalize: async () => ({ ok: true }),
+		});
+
+		await assert.rejects(
+			() => service.execute({
+				task_id: 'task-direct',
+				summary: 'completed',
+				idempotency_key: 'finish-direct',
+			}),
+			/different finish_task request hash/
+		);
+		assert.equal(marked, false);
+	}
 });
 
 test('DistillSessionApplicationService owns note, proposal, and task-reference flow', async () => {

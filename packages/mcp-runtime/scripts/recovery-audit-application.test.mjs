@@ -55,6 +55,7 @@ test('RuntimeRecoveryController separates recovered, failed, and skipped records
 		args: {
 			goal: 'recover this',
 			client: 'test',
+			started_at: undefined,
 			project_hint: undefined,
 			project_id: undefined,
 			repo_path: undefined,

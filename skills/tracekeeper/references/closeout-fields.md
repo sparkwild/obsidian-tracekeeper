@@ -1,10 +1,19 @@
 # Closeout Fields
 
-Closeout applies only to `tracked_task` after a successful start returned a real `task_id`.
+Closeout applies only to `tracked_task`. It either completes a live task with a
+real `task_id` or creates one closeout-only task without an Agent-supplied id.
 
 Provide accurate values for the fields exposed by the current `tracekeeper.finish_task` schema. At minimum preserve these meanings:
 
-- `task_id`: the exact identifier returned by `tracekeeper.start_task`.
+- Live `task_id`: the exact identifier returned by `tracekeeper.start_task`.
+  Never include one for closeout-only.
+- Closeout-only `goal`: the original goal retained when work began.
+- Closeout-only `started_at`: the original client-held ISO start time. Runtime
+  records `started_at_source: client_claim` and keeps server recording time
+  separate.
+- `recording_reason`: omit or use `ordinary_closeout` for an ordinary task. Use
+  `start_unavailable` only when a live start had no structured result, and then
+  include the unchanged original `start_idempotency_key`.
 - status: completed, partial, or blocked according to actual outcome.
 - Returned `durable_output.status`: the Runtime's separate snapshot of exact
   Wiki/Memory proposals linked to the task. Always report it when persistence
@@ -57,7 +66,12 @@ are never promoted automatically.
 
 Exactly-once rules:
 
-- Never call finish without a real `task_id` from the current start result.
+- Ordinary closeout-only intentionally calls finish without `task_id`; Runtime
+  derives a stable id from finish operation identity. Live closeout uses only
+  the real id returned by start.
+- Never calculate or guess `task_id`. For an unknown live-start result, provide
+  `start_unavailable` provenance and the original start key so Runtime performs
+  reconciliation.
 - Call finish once for the tracked task.
 - After a successful finish, ignore any stale suggestion to finish again.
 - If the outcome is unknown, follow the structured recovery action instead of changing the payload or idempotency key.

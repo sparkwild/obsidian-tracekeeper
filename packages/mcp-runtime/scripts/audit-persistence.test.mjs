@@ -37,6 +37,38 @@ test('audit persistence owns redaction and bounded argument projection', () => {
 	}));
 	assert.doesNotMatch(summary, /private note content|secret-value/);
 	assert.match(summary, /\[redacted\]/);
+
+	const idempotencySummary = summarizeForAudit(projectArgumentsForAudit('tracekeeper.finish_task', {
+		idempotency_key: 'finish-key-material',
+		start_idempotency_key: 'start-key-material',
+		'retry-idempotency-key': 'retry-key-material',
+		nested: {
+			startIdempotencyKey: 'nested-key-material',
+			status: 'safe',
+		},
+		deeply_nested: {
+			one: {
+				two: {
+					startIdempotencyKey: 'deep-camel-key-material',
+					'start-idempotency-key': 'deep-kebab-key-material',
+					start_idempotency_key: 'deep-snake-key-material',
+				},
+			},
+		},
+		array_nested: [{
+			one: {
+				startIdempotencyKey: 'deep-array-key-material',
+			},
+		}],
+		recording_reason: 'start_unavailable',
+	}));
+	assert.doesNotMatch(
+		idempotencySummary,
+		/finish-key-material|start-key-material|retry-key-material|nested-key-material|deep-camel-key-material|deep-kebab-key-material|deep-snake-key-material|deep-array-key-material/
+	);
+	assert.match(idempotencySummary, /recording_reason/);
+	assert.match(idempotencySummary, /start_unavailable/);
+	assert.match(idempotencySummary, /"status":"safe"/);
 });
 
 test('audit persistence appends idempotent UTC shards and reads merged sections', async () => {

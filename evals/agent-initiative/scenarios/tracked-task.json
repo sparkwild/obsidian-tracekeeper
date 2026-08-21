@@ -62,5 +62,29 @@
 		"prompt": "为下一个版本完成持续性的发布准备评估和行动计划。",
 		"project_hint": "obsidian-tracekeeper",
 		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": true, "allowed_statuses": ["recorded", "queued", "auto_saved", "ignored", "requires_user_action"], "match_finish_result": true } }
+	},
+	{
+		"id": "ordinary-closeout-only",
+		"class": "tracked_task",
+		"kind": "positive",
+		"prompt": "完成一个普通任务，并在结束时一次保存任务记录。",
+		"project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.start_task", "tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }, { "tool": "tracekeeper.finish_task", "required": ["goal", "started_at", "summary", "status", "idempotency_key"] }], "same_task_id": false, "finish_exactly_once": true, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": true, "allowed_statuses": ["recorded"], "match_finish_result": true } }
+	},
+	{
+		"id": "explicit-live-tracking",
+		"class": "tracked_task",
+		"kind": "positive",
+		"prompt": "为这个跨会话实现任务启用实时追踪，并在完成后收尾。",
+		"project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.recall", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal"] }, { "tool": "tracekeeper.recall", "required": ["query", "scope"], "equals": { "scope": "project" } }, { "tool": "tracekeeper.finish_task", "required": ["task_id", "summary"] }], "same_task_id": true, "finish_exactly_once": true, "forbidden_behaviors": [], "required_reports": [], "closeout_report": { "required": true, "allowed_statuses": ["recorded"], "match_finish_result": true } }
+	},
+	{
+		"id": "unknown-start-result-closeout",
+		"class": "tracked_task",
+		"kind": "failure_recovery",
+		"prompt": "实时任务的 start_task 响应丢失，结束时 Runtime 已恢复，请安全保存任务。",
+		"project_hint": "obsidian-tracekeeper",
+		"expected": { "required_tools": ["tracekeeper.start_task", "tracekeeper.finish_task"], "forbidden_tools": ["tracekeeper.apply_approved_writeback"], "ordered_subsequence": ["tracekeeper.start_task", "tracekeeper.finish_task"], "argument_rules": [{ "tool": "tracekeeper.start_task", "required": ["goal", "started_at", "idempotency_key"] }, { "tool": "tracekeeper.finish_task", "required": ["goal", "started_at", "recording_reason", "start_idempotency_key", "summary", "status", "idempotency_key"], "equals": { "recording_reason": "start_unavailable" } }], "same_task_id": false, "finish_exactly_once": true, "forbidden_behaviors": ["guess_task_id"], "required_reports": ["start_recovered"], "closeout_report": { "required": true, "allowed_statuses": ["recorded"], "match_finish_result": true } }
 	}
 ]
