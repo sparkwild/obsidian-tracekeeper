@@ -63,6 +63,13 @@ const SENSITIVE_KEY_PATTERNS = [
     /access[_-]?token/i,
     /refresh[_-]?token/i,
 ];
+function isIdempotencyKeyField(key) {
+    const normalized = key
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .replace(/-/g, '_')
+        .toLowerCase();
+    return normalized === 'idempotency_key' || normalized.endsWith('_idempotency_key');
+}
 exports.agentActivityPath = AGENT_ACTIVITY_HUB_PATH;
 function stripYamlQuotes(value) {
     if (value.length >= 2) {
@@ -230,7 +237,7 @@ function projectArgumentsForAudit(toolName, args) {
     }
     const projected = {};
     for (const [key, value] of Object.entries(args)) {
-        if (AUDIT_BODY_ARGUMENT_KEYS.has(key) || key === 'idempotency_key') {
+        if (AUDIT_BODY_ARGUMENT_KEYS.has(key) || isIdempotencyKeyField(key)) {
             projected[key] = '[redacted]';
             continue;
         }
@@ -260,7 +267,9 @@ function summarizeForAudit(args, limit = MAX_ARGS_SUMMARY_LENGTH) {
             }
             return '[object]';
         }
-        if (isSensitiveKey(keyHint) || (typeof value === 'string' && looksLikeSensitiveValue(value))) {
+        if (isIdempotencyKeyField(keyHint)
+            || isSensitiveKey(keyHint)
+            || (typeof value === 'string' && looksLikeSensitiveValue(value))) {
             return '[redacted]';
         }
         if (Array.isArray(value)) {

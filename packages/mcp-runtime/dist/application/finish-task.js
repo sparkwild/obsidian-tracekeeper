@@ -30,6 +30,12 @@ class FinishTaskApplicationService {
         else {
             operationPayload = await dependencies.buildPayload(rawArgs, identity.operationId, requestHash, requestSnapshot);
             const lifecycle = await dependencies.readLifecycle(dependencies.getTaskId(operationPayload));
+            if (lifecycle
+                && lifecycle.finishOperationId === identity.operationId
+                && (lifecycle.status === 'closing' || lifecycle.status === 'completed')
+                && lifecycle.finishRequestHash !== requestHash) {
+                throw new Error(`Idempotency key conflict for "${identity.idempotencyKey}" with different finish_task request hash`);
+            }
             if (lifecycle?.status === 'completed') {
                 throw new Error(`Task is already completed: ${dependencies.getTaskId(operationPayload)}`);
             }

@@ -37,6 +37,24 @@ test('audit persistence owns redaction and bounded argument projection', () => {
 	}));
 	assert.doesNotMatch(summary, /private note content|secret-value/);
 	assert.match(summary, /\[redacted\]/);
+
+	const idempotencySummary = summarizeForAudit(projectArgumentsForAudit('tracekeeper.finish_task', {
+		idempotency_key: 'finish-key-material',
+		start_idempotency_key: 'start-key-material',
+		'retry-idempotency-key': 'retry-key-material',
+		nested: {
+			startIdempotencyKey: 'nested-key-material',
+			status: 'safe',
+		},
+		recording_reason: 'start_unavailable',
+	}));
+	assert.doesNotMatch(
+		idempotencySummary,
+		/finish-key-material|start-key-material|retry-key-material|nested-key-material/
+	);
+	assert.match(idempotencySummary, /recording_reason/);
+	assert.match(idempotencySummary, /start_unavailable/);
+	assert.match(idempotencySummary, /"status":"safe"/);
 });
 
 test('audit persistence appends idempotent UTC shards and reads merged sections', async () => {

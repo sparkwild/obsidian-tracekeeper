@@ -118,6 +118,26 @@ const invoke = async (name, args, context) => {
 	return result.structuredContent;
 };
 
+const taskRepositoryWithPostWriteAction = (repository, action, mode) => {
+	let triggered = false;
+	return new Proxy(repository, {
+		get(target, property) {
+			if (property === mode) {
+				return async (...args) => {
+					const result = await target[property](...args);
+					if (!triggered && String(args[0]).startsWith('00_tracekeeper/work/tasks/')) {
+						triggered = true;
+						await action();
+					}
+					return result;
+				};
+			}
+			const value = Reflect.get(target, property, target);
+			return typeof value === 'function' ? value.bind(target) : value;
+		},
+	});
+};
+
 const startTask = async (fixture, suffix) => invoke('tracekeeper.start_task', {
 	goal: `Record lifecycle ${suffix}`,
 	project_hint: 'record-lifecycle',
@@ -177,6 +197,48 @@ test('concurrent exact live finish calls share one operation timestamp and resul
 	}
 });
 
+test('concurrent changed live finish payload cannot reuse the winning request binding', async () => {
+	const fixture = createFixture();
+	try {
+		const task = await startTask(fixture, 'concurrent-changed-live-finish');
+		const delayedRepository = taskRepositoryWithPostWriteAction(
+			fixture.repository,
+			() => new Promise((resolve) => setTimeout(resolve, 120)),
+			'replaceText'
+		);
+		const common = {
+			task_id: task.task_id,
+			status: 'completed',
+			idempotency_key: 'record-lifecycle-concurrent-changed-live-finish',
+		};
+		const firstPromise = callTool('tracekeeper.finish_task', {
+			...common,
+			summary: 'LIVE-WINNER-SUMMARY',
+			outcomes: ['LIVE-WINNER-OUTCOME'],
+		}, {
+			...fixture.context,
+			vaultRepository: delayedRepository,
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		const secondPromise = callTool('tracekeeper.finish_task', {
+			...common,
+			summary: 'LIVE-LOSER-SUMMARY',
+			outcomes: ['LIVE-LOSER-OUTCOME'],
+		}, fixture.context);
+		const [first, second] = await Promise.all([firstPromise, secondPromise]);
+		assert.notEqual(first.isError, true);
+		assert.equal(second.isError, true);
+		assert.match(second.structuredContent?.error || '', /different finish_task request hash/);
+		const taskText = fixture.read(first.structuredContent.task_path);
+		assert.match(taskText, /^finish_request_hash: "?[a-f0-9]{64}"?$/m);
+		assert.match(taskText, /LIVE-WINNER-SUMMARY/);
+		assert.match(taskText, /LIVE-WINNER-OUTCOME/);
+		assert.doesNotMatch(taskText, /LIVE-LOSER-SUMMARY|LIVE-LOSER-OUTCOME/);
+	} finally {
+		fixture.cleanup();
+	}
+});
+
 test('finish task atomically creates and exactly replays a closeout-only canonical record', async () => {
 	const fixture = createFixture();
 	try {
@@ -211,6 +273,7 @@ test('finish task atomically creates and exactly replays a closeout-only canonic
 		assert.match(taskText, /^started_at: "2026-08-21T01:00:00.000Z"$/m);
 		assert.match(taskText, /^started_at_source: "client_claim"$/m);
 		assert.match(taskText, /^tracking_started_at: null$/m);
+		assert.match(taskText, /^finish_request_hash: "?[a-f0-9]{64}"?$/m);
 		assert.doesNotMatch(taskText, /^start_operation_id:/m);
 		assert.doesNotMatch(taskText, /^start_record_missing:/m);
 		assert.match(taskText, /## Objective\nImplement closeout-only task recording/);
@@ -223,6 +286,119 @@ test('finish task atomically creates and exactly replays a closeout-only canonic
 		}, fixture.context);
 		assert.equal(changedPayload.isError, true);
 		assert.match(changedPayload.structuredContent?.error || '', /different finish_task request hash/);
+	} finally {
+		fixture.cleanup();
+	}
+});
+
+test('concurrent changed closeout-only payload leaves no losing task content', async () => {
+	const fixture = createFixture();
+	try {
+		const delayedRepository = taskRepositoryWithPostWriteAction(
+			fixture.repository,
+			() => new Promise((resolve) => setTimeout(resolve, 120)),
+			'createText'
+		);
+		const common = {
+			goal: 'Bind closeout content to one request hash',
+			started_at: '2026-08-21T01:10:00.000Z',
+			status: 'completed',
+			idempotency_key: 'record-lifecycle-concurrent-changed-closeout',
+		};
+		const firstPromise = callTool('tracekeeper.finish_task', {
+			...common,
+			summary: 'CLOSEOUT-WINNER-SUMMARY',
+			outcomes: ['CLOSEOUT-WINNER-OUTCOME'],
+		}, {
+			...fixture.context,
+			vaultRepository: delayedRepository,
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		const secondPromise = callTool('tracekeeper.finish_task', {
+			...common,
+			summary: 'CLOSEOUT-LOSER-SUMMARY',
+			outcomes: ['CLOSEOUT-LOSER-OUTCOME'],
+		}, fixture.context);
+		const [first, second] = await Promise.all([firstPromise, secondPromise]);
+		assert.notEqual(first.isError, true);
+		assert.equal(second.isError, true);
+		assert.match(second.structuredContent?.error || '', /different finish_task request hash/);
+		const taskText = fixture.read(first.structuredContent.task_path);
+		assert.match(taskText, /CLOSEOUT-WINNER-SUMMARY/);
+		assert.match(taskText, /CLOSEOUT-WINNER-OUTCOME/);
+		assert.doesNotMatch(taskText, /CLOSEOUT-LOSER-SUMMARY|CLOSEOUT-LOSER-OUTCOME/);
+		assert.match(taskText, /^finish_request_hash: "?[a-f0-9]{64}"?$/m);
+	} finally {
+		fixture.cleanup();
+	}
+});
+
+test('pre-journal closeout record accepts only the original request hash', async () => {
+	const fixture = createFixture();
+	try {
+		let taskCreated = false;
+		let interruptedRead = false;
+		const interruptedRepository = new Proxy(fixture.repository, {
+			get(target, property) {
+				if (property === 'createText') {
+					return async (...args) => {
+						const result = await target.createText(...args);
+						if (String(args[0]).startsWith('00_tracekeeper/work/tasks/')) {
+							taskCreated = true;
+						}
+						return result;
+					};
+				}
+				if (property === 'readText') {
+					return async (...args) => {
+						if (
+							taskCreated
+							&& !interruptedRead
+							&& String(args[0]).startsWith('00_tracekeeper/work/tasks/')
+						) {
+							interruptedRead = true;
+							throw new Error('interrupt after closeout task create');
+						}
+						return target.readText(...args);
+					};
+				}
+				const value = Reflect.get(target, property, target);
+				return typeof value === 'function' ? value.bind(target) : value;
+			},
+		});
+		const args = {
+			goal: 'Recover the exact pre-journal closeout request',
+			started_at: '2026-08-21T01:20:00.000Z',
+			status: 'partial',
+			summary: 'PRE-JOURNAL-ORIGINAL-SUMMARY',
+			outcomes: ['PRE-JOURNAL-ORIGINAL-OUTCOME'],
+			idempotency_key: 'record-lifecycle-pre-journal-closeout',
+		};
+		const interrupted = await callTool('tracekeeper.finish_task', args, {
+			...fixture.context,
+			vaultRepository: interruptedRepository,
+		});
+		assert.equal(interrupted.isError, true);
+		const taskDirectory = path.join(fixture.vaultRoot, '00_tracekeeper/work/tasks');
+		const [taskFile] = fs.readdirSync(taskDirectory);
+		const taskPath = `00_tracekeeper/work/tasks/${taskFile}`;
+		assert.match(fixture.read(taskPath), /^finish_request_hash: "?[a-f0-9]{64}"?$/m);
+
+		const changed = await callTool('tracekeeper.finish_task', {
+			...args,
+			summary: 'PRE-JOURNAL-CHANGED-SUMMARY',
+			outcomes: ['PRE-JOURNAL-CHANGED-OUTCOME'],
+		}, fixture.context);
+		assert.equal(changed.isError, true);
+		assert.match(changed.structuredContent?.error || '', /different finish_task request hash/);
+		assert.doesNotMatch(
+			fixture.read(taskPath),
+			/PRE-JOURNAL-CHANGED-SUMMARY|PRE-JOURNAL-CHANGED-OUTCOME/
+		);
+
+		const recovered = await invoke('tracekeeper.finish_task', args, fixture.context);
+		assert.equal(recovered.task_path, taskPath);
+		assert.match(fixture.read(taskPath), /PRE-JOURNAL-ORIGINAL-SUMMARY/);
 	} finally {
 		fixture.cleanup();
 	}
@@ -352,6 +528,55 @@ test('start-unavailable closeout falls back only when no start identity exists',
 		assert.match(taskText, /^recording_reason: "start_unavailable"$/m);
 		assert.match(taskText, /^start_recovery: "not_found"$/m);
 		assert.doesNotMatch(taskText, /^start_operation_id:/m);
+	} finally {
+		fixture.cleanup();
+	}
+});
+
+test('start recovery idempotency keys never enter Agent activity on success or failure', async () => {
+	const fixture = createFixture();
+	try {
+		const startKey = 'record-lifecycle-origin-key-visible-only-to-runtime';
+		const finishKey = 'record-lifecycle-finish-key-visible-only-to-runtime';
+		await invoke('tracekeeper.finish_task', {
+			goal: 'Redact the original start retry key from activity',
+			started_at: '2026-08-21T02:10:00.000Z',
+			recording_reason: 'start_unavailable',
+			start_idempotency_key: startKey,
+			status: 'completed',
+			summary: 'Record a safe closeout without exposing either retry key.',
+			idempotency_key: finishKey,
+		}, fixture.context);
+		const failed = await callTool('tracekeeper.finish_task', {
+			goal: 'x',
+			started_at: '2026-08-21T02:10:00.000Z',
+			recording_reason: 'start_unavailable',
+			start_idempotency_key: startKey,
+			status: 'completed',
+			summary: 'This invalid request must still redact keys.',
+			idempotency_key: 'record-lifecycle-invalid-redaction-finish-key',
+		}, fixture.context);
+		assert.equal(failed.isError, true);
+
+		const activityRoot = path.join(
+			fixture.vaultRoot,
+			'00_tracekeeper/control/agent_activity'
+		);
+		const activityText = fs.readdirSync(activityRoot, { recursive: true })
+			.filter((entry) => String(entry).endsWith('.md'))
+			.map((entry) => fs.readFileSync(path.join(activityRoot, String(entry)), 'utf8'))
+			.join('\n');
+		assert.doesNotMatch(activityText, new RegExp(`${startKey}|${finishKey}`));
+		assert.match(activityText, /start_unavailable/);
+
+		const recent = await invoke('tracekeeper.agent_activity_recent', {
+			max_items: 100,
+		}, {
+			...fixture.context,
+			principalId: 'record-lifecycle-read-only-principal',
+			credentialCapabilities: ['vault.read'],
+		});
+		assert.doesNotMatch(JSON.stringify(recent), new RegExp(`${startKey}|${finishKey}`));
 	} finally {
 		fixture.cleanup();
 	}
@@ -538,6 +763,11 @@ test('unfinished legacy finish operation keeps its original session-note recover
 		});
 		assert.equal(interrupted.isError, true);
 		assert.equal(injected, true);
+		fixture.write(
+			task.path,
+			fixture.read(task.path).replace(/^finish_request_hash:.*\n/m, '')
+		);
+		assert.doesNotMatch(fixture.read(task.path), /^finish_request_hash:/m);
 
 		const operationDirectory = path.join(
 			fixture.vaultRoot,
@@ -565,6 +795,7 @@ test('unfinished legacy finish operation keeps its original session-note recover
 		assert.notEqual(resumed.path, resumed.task_path);
 		const taskText = fixture.read(resumed.task_path);
 		assert.match(taskText, new RegExp(`^session_note: "?${resumed.path}"?$`, 'm'));
+		assert.match(taskText, /^finish_request_hash: "?[a-f0-9]{64}"?$/m);
 		assert.equal(fs.existsSync(path.join(fixture.vaultRoot, resumed.path)), true);
 	} finally {
 		fixture.cleanup();

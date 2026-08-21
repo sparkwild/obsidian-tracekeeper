@@ -7,6 +7,7 @@ export interface FinishTaskRunnerStep {
 export interface FinishTaskLifecycleState {
     status: string;
     finishOperationId: string;
+    finishRequestHash: string;
 }
 export interface FinishTaskApplicationDependencies<TRawArgs extends object, TPayload, TResult> {
     journal: OperationJournal;

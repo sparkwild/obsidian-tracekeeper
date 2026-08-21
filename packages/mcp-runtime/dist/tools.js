@@ -7837,11 +7837,12 @@ function buildFinishTaskCompletionBody(input, context, operationId) {
         `^finish-${operationId}`,
     ].join('\n');
 }
-function assertFinishTaskRecordBinding(taskPath, content, taskId, operationId, requireOperationBinding = false) {
+function assertFinishTaskRecordBinding(taskPath, content, taskId, operationId, expectedRequestHash, requireOperationBinding = false, requireRequestBinding = false) {
     const frontmatter = (0, core_1.parseMarkdown)(content).frontmatter.fields;
     const storedTaskId = stripYamlQuotes(readFrontmatterString(frontmatter, ['task_id']));
     const recordType = stripYamlQuotes(readFrontmatterString(frontmatter, ['type']));
     const finishOperationId = stripYamlQuotes(readFrontmatterString(frontmatter, ['finish_operation_id']));
+    const finishRequestHash = stripYamlQuotes(readFrontmatterString(frontmatter, ['finish_request_hash']));
     if (storedTaskId !== taskId || (recordType && recordType !== 'agent-task')) {
         throw new core_1.OperationConflictError(`Task path is not the canonical record for task ${taskId}: ${taskPath}`);
     }
@@ -7851,12 +7852,18 @@ function assertFinishTaskRecordBinding(taskPath, content, taskId, operationId, r
     if (requireOperationBinding && finishOperationId !== operationId) {
         throw new core_1.OperationConflictError(`Task record is not bound to the current finish-task operation: ${taskPath}`);
     }
+    if (finishRequestHash && finishRequestHash !== expectedRequestHash) {
+        throw new core_1.OperationConflictError(`Idempotency conflict: task record has a different finish_task request hash: ${taskPath}`);
+    }
+    if (requireRequestBinding && finishRequestHash !== expectedRequestHash) {
+        throw new core_1.OperationConflictError(`Idempotency conflict: task record is not bound to the current finish_task request hash: ${taskPath}`);
+    }
 }
 async function ensureFinishTaskRecordExists(input, context, operationId) {
     const taskPath = buildTaskNotePath(input.taskId);
     const current = await readCurrentVaultTextState(input.vaultRoot, taskPath, context);
     if (current) {
-        assertFinishTaskRecordBinding(taskPath, current.content, input.taskId, operationId);
+        assertFinishTaskRecordBinding(taskPath, current.content, input.taskId, operationId, input.requestHash || '', false, finishTaskTrackingMode(input) === 'closeout_only');
         return taskPath;
     }
     const projectIdentity = projectIdentityFromFinishPayload(input);
@@ -7922,6 +7929,7 @@ async function ensureFinishTaskRecordExists(input, context, operationId) {
         }),
         finish_recorded_at: reconstructedAt,
         finish_operation_id: operationId,
+        finish_request_hash: input.requestHash || null,
     }, body);
     try {
         if (context.vaultRepository) {
@@ -7938,7 +7946,7 @@ async function ensureFinishTaskRecordExists(input, context, operationId) {
         if (!racedRecord) {
             throw error;
         }
-        assertFinishTaskRecordBinding(taskPath, racedRecord.content, input.taskId, operationId);
+        assertFinishTaskRecordBinding(taskPath, racedRecord.content, input.taskId, operationId, input.requestHash || '', false, isCloseoutOnly);
         return taskPath;
     }
     await (0, audit_persistence_1.appendAuditEventAsync)(input.vaultRoot, {
@@ -7954,6 +7962,13 @@ async function ensureFinishTaskRecordExists(input, context, operationId) {
         },
     }, context);
     return taskPath;
+}
+function assertFinishTaskLifecycleRequestBinding(input, lifecycle, operationId) {
+    if (lifecycle?.finishOperationId === operationId
+        && (lifecycle.status === 'closing' || lifecycle.status === 'completed')
+        && lifecycle.finishRequestHash !== input.requestHash) {
+        throw new core_1.OperationConflictError(`Idempotency conflict: task lifecycle has a different finish_task request hash: ${input.taskId}`);
+    }
 }
 async function synchronizeFinishTaskTimestampFromRecord(input, context) {
     const current = await readCurrentVaultTextState(input.vaultRoot, buildTaskNotePath(input.taskId), context);
@@ -7978,6 +7993,7 @@ async function markFinishTaskRecordClosing(input, context, operationId) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
         await ensureFinishTaskRecordExists(input, context, operationId);
         const currentLifecycle = await readTaskLifecycleStateAsync(input.vaultRoot, input.taskId, context);
+        assertFinishTaskLifecycleRequestBinding(input, currentLifecycle, operationId);
         if (currentLifecycle?.finishOperationId === operationId
             && (currentLifecycle.status === 'closing' || currentLifecycle.status === 'completed')) {
             await synchronizeFinishTaskTimestampFromRecord(input, context);
@@ -7987,6 +8003,7 @@ async function markFinishTaskRecordClosing(input, context, operationId) {
             const taskPath = await updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, {
                 status: 'closing',
                 finish_operation_id: operationId,
+                finish_request_hash: input.requestHash || null,
                 ...(finishTaskTrackingMode(input) === 'live'
                     ? { finish_recorded_at: input.taskFinishedAt ?? new Date().toISOString() }
                     : {}),
@@ -7998,6 +8015,7 @@ async function markFinishTaskRecordClosing(input, context, operationId) {
         }
         catch (error) {
             const lifecycle = await readTaskLifecycleStateAsync(input.vaultRoot, input.taskId, context);
+            assertFinishTaskLifecycleRequestBinding(input, lifecycle, operationId);
             if (lifecycle?.finishOperationId === operationId
                 && (lifecycle.status === 'closing' || lifecycle.status === 'completed')) {
                 await synchronizeFinishTaskTimestampFromRecord(input, context);
@@ -8680,7 +8698,7 @@ async function findFinishTaskRecord(input, context, operationId) {
     if (!task) {
         throw new core_1.OperationConflictError(`Task record could not be reconstructed for finish-task operation: ${taskPath}`);
     }
-    assertFinishTaskRecordBinding(taskPath, task.content, input.taskId, operationId, true);
+    assertFinishTaskRecordBinding(taskPath, task.content, input.taskId, operationId, input.requestHash || '', true, finishTaskTrackingMode(input) === 'closeout_only');
     const audit = await (0, audit_persistence_1.appendAuditEventAsync)(input.vaultRoot, {
         operationId,
         tool: 'tracekeeper.finish_task',
@@ -8904,6 +8922,7 @@ async function updateFinishTaskRecord(input, context, operationId) {
     const taskFields = {
         status: input.status,
         finished_at: input.taskFinishedAt ?? new Date().toISOString(),
+        finish_request_hash: input.requestHash || null,
         ...(input.startRecovery === 'matched' ? { start_recovery: input.startRecovery } : {}),
         ...(input.startRecovery === 'matched' && input.recordingReason
             ? { recording_reason: input.recordingReason }
@@ -9053,6 +9072,7 @@ async function readTaskLifecycleStateAsync(vaultRoot, taskId, context) {
             return {
                 status: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['status'])).toLowerCase(),
                 finishOperationId: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['finish_operation_id'])),
+                finishRequestHash: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['finish_request_hash'])),
             };
         }
         const absolutePath = (0, safety_1.resolveSafeNotePath)(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
@@ -9060,6 +9080,7 @@ async function readTaskLifecycleStateAsync(vaultRoot, taskId, context) {
         return {
             status: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['status'])).toLowerCase(),
             finishOperationId: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['finish_operation_id'])),
+            finishRequestHash: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['finish_request_hash'])),
         };
     }
     catch (error) {
@@ -9093,6 +9114,7 @@ async function releaseIncompatibleFinishTaskBinding(vaultRoot, record, context) 
     const next = updateFrontmatterFields(current.content, {
         status: 'active',
         finish_operation_id: null,
+        finish_request_hash: null,
     });
     if (context.vaultRepository) {
         if (!current.version) {

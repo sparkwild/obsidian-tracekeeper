@@ -41,6 +41,14 @@ const SENSITIVE_KEY_PATTERNS = [
 	/refresh[_-]?token/i,
 ];
 
+function isIdempotencyKeyField(key: string): boolean {
+	const normalized = key
+		.replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+		.replace(/-/g, '_')
+		.toLowerCase();
+	return normalized === 'idempotency_key' || normalized.endsWith('_idempotency_key');
+}
+
 export interface AuditPersistenceContext {
 	vaultConfigDir?: string;
 	vaultRepository?: VaultRepository;
@@ -280,7 +288,7 @@ export function projectArgumentsForAudit(
 
 	const projected: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(args)) {
-		if (AUDIT_BODY_ARGUMENT_KEYS.has(key) || key === 'idempotency_key') {
+		if (AUDIT_BODY_ARGUMENT_KEYS.has(key) || isIdempotencyKeyField(key)) {
 			projected[key] = '[redacted]';
 			continue;
 		}
@@ -317,7 +325,11 @@ export function summarizeForAudit(
 			return '[object]';
 		}
 
-		if (isSensitiveKey(keyHint) || (typeof value === 'string' && looksLikeSensitiveValue(value))) {
+		if (
+			isIdempotencyKeyField(keyHint)
+			|| isSensitiveKey(keyHint)
+			|| (typeof value === 'string' && looksLikeSensitiveValue(value))
+		) {
 			return '[redacted]';
 		}
 
