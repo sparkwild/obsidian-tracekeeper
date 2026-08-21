@@ -1,5 +1,5 @@
 {
   "skill_version": "2.3.0",
   "workflow_contract_version": 5,
-  "minimum_tracekeeper_version": "0.3.4"
+  "minimum_tracekeeper_version": "0.3.5"
 }
