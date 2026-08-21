@@ -273,6 +273,27 @@ test('rejects a bundle that loses next_action timing semantics', async () => {
 	});
 });
 
+test('rejects tracked-task guidance that loses closeout-first or start recovery semantics', async () => {
+	await withFixture(async (root) => {
+		const skillPath = path.join(root, 'skills/tracekeeper/SKILL.md');
+		const skill = await readFile(skillPath, 'utf8');
+		await writeFile(
+			skillPath,
+			skill
+				.replace(/- `closeout_only`[\s\S]*?Runtime generates\n  and returns `task_id`\.\n/, '')
+				.replace(/If live start has no structured transport result[\s\S]*?Never\n  invent or infer identity\.\n/, ''),
+			'utf8',
+		);
+		await writeTracekeeperSkillBundle(root);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(
+			result.errors.join('\n'),
+			/(closeout_only recording|finish without task_id|start-unavailable reconciliation)/,
+		);
+	});
+});
+
 test('rejects missing, duplicate, unexpected, and unsafe manifest paths', async () => {
 	await withFixture(async (root) => {
 		const manifestPath = path.join(root, 'skills/tracekeeper/manifest.json');
@@ -328,6 +349,28 @@ test('rejects a bundle that loses complete immutable project-memory guidance', a
 		assert.match(
 			result.errors.join('\n'),
 			/(complete project-memory enumeration|relevance-ranked Recall|immutable project-memory operation entries)/
+		);
+	});
+});
+
+test('rejects generic MCP failure guidance that loses lifecycle-aware recovery', async () => {
+	await withFixture(async (root) => {
+		const recoveryPath = path.join(root, 'skills/tracekeeper/references/failure-recovery.md');
+		const recovery = await readFile(recoveryPath, 'utf8');
+		await writeFile(
+			recoveryPath,
+			recovery.replace(
+				/\| Tracekeeper tools not exposed[\s\S]*?\| Tool unavailable inside a structured result[^\n]*\n/,
+				'| MCP unavailable | Report an MCP error and stop using Tracekeeper | Retry later |\n',
+			),
+			'utf8',
+		);
+		await writeTracekeeperSkillBundle(root);
+		const result = await checkAgentEcosystem(root);
+		assert.equal(result.ok, false);
+		assert.match(
+			result.errors.join('\n'),
+			/(missing client tool exposure|Renderer-lifecycle hypothesis|structured Runtime failure evidence|post-reopen status retry)/,
 		);
 	});
 });
@@ -424,8 +467,8 @@ test('rejects a bundle that loses Recall routing and operation-specific idempote
 					'- `recall_only`: any scope is acceptable.',
 				)
 				.replace(
-					'- `tracked_task`: start first, then copy the returned `next_actions` or `recommended_recall` arguments for Recall.',
-					'- `tracked_task`: reconstruct Recall arguments.',
+					'- Live `tracked_task`: start first, then copy the returned `next_actions` or `recommended_recall` arguments for Recall. Closeout-only uses the same narrow project/global routing directly when Recall is needed.',
+					'- Live `tracked_task`: reconstruct Recall arguments.',
 				)
 				.replace(
 					'- Use `project_history` only after project identity is established and task or session continuity is specifically needed.',
@@ -447,7 +490,7 @@ test('rejects a bundle that loses Recall routing and operation-specific idempote
 		const errors = result.errors.join('\n');
 		assert.match(errors, /does not route the first known-project Recall to project scope with repo_path/);
 		assert.match(errors, /does not prohibit global and project_history as the first recall_only route/);
-		assert.match(errors, /does not route tracked-task Recall from the start result/);
+		assert.match(errors, /does not route live tracked-task Recall from the start result/);
 		assert.match(errors, /does not reserve project_history for established continuity/);
 		assert.match(errors, /does not constrain global Recall routing/);
 		assert.match(errors, /does not separate start and finish idempotency keys/);

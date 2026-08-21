@@ -1811,6 +1811,46 @@ async function main() {
 				}),
 				/Task is already completed/
 			);
+		const closeoutOnlyArgs = {
+			goal: 'Smoke ordinary closeout-only task',
+			started_at: '2026-08-21T00:00:00.000Z',
+			summary: 'Smoke closeout-only task saved with one finish call.',
+			status: 'completed',
+			outcomes: ['No start_task call was required.'],
+			project_hint: 'demo',
+			idempotency_key: 'smoke-finish-closeout-only',
+		};
+		const closeoutOnly = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: closeoutOnlyArgs,
+		}));
+		assert.equal(closeoutOnly.ok, true);
+		assert.equal(closeoutOnly.tracking_mode, 'closeout_only');
+		assert.equal(closeoutOnly.task_record_origin, 'finish_task_closeout_only');
+		assert.equal(closeoutOnly.started_at, closeoutOnlyArgs.started_at);
+		assert.equal(closeoutOnly.started_at_source, 'client_claim');
+		assert.equal(closeoutOnly.tracking_started_at, null);
+		assert.equal(closeoutOnly.start_recovery, 'not_requested');
+		assert.match(closeoutOnly.task_id, /^obs_task_[a-f0-9]{24}$/);
+		const closeoutOnlyText = fs.readFileSync(path.join(vaultRoot, closeoutOnly.task_path), 'utf8');
+		assert.match(closeoutOnlyText, /^tracking_mode: "closeout_only"$/m);
+		assert.match(closeoutOnlyText, /^task_record_origin: "finish_task_closeout_only"$/m);
+		assert.equal(/^start_operation_id:/m.test(closeoutOnlyText), false);
+		const replayedCloseoutOnly = buildStructured(await client.call('tools/call', {
+			name: 'tracekeeper.finish_task',
+			arguments: closeoutOnlyArgs,
+		}));
+		assert.deepEqual(replayedCloseoutOnly, closeoutOnly);
+		await assert.rejects(
+			() => client.call('tools/call', {
+				name: 'tracekeeper.finish_task',
+				arguments: {
+					...closeoutOnlyArgs,
+					summary: 'Changed closeout-only payload.',
+				},
+			}),
+			/Idempotency key conflict/
+		);
 		const artifactsBeforeFinishStartConflict = managedWorkflowArtifactSnapshot(vaultRoot);
 		const finishStartConflict = buildStructured(
 			await client.call(

@@ -45,6 +45,7 @@ export function recoveryRequestForRecord(
 			args: {
 				goal: payload.goal,
 				client: payload.client,
+				started_at: payload.clientStartedAt,
 				project_hint: payload.projectHint,
 				project_id: payload.projectId,
 				repo_path: payload.repoPath,

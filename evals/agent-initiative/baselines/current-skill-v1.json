@@ -4,7 +4,7 @@
 	"tracekeeper_version": "0.2.3",
 	"skill_path": "evals/agent-initiative/fixtures/skills/tracekeeper-v1/SKILL.md",
 	"skill_sha256": "ea6a5f1b14d992ab3ba41cfdc5a459292d3d875277d8f5a80eb0e530c105ef88",
-	"scenario_count": 37,
+	"scenario_count": 40,
 	"trace_generator": "evals/agent-initiative/evaluator/current-skill-v1.mjs",
 	"fixture_source": {
 		"metadata_path": "evals/agent-initiative/fixtures/skills/tracekeeper-v1/source.json",
@@ -23,11 +23,13 @@
 		"index-rebuilding recovery",
 		"lost task_id recovery",
 		"finish idempotency conflict guidance",
-		"explicit prompt-injection handling"
+		"explicit prompt-injection handling",
+		"closeout-only default recording",
+		"unknown live-start result recovery"
 	],
 	"expected_report": {
-		"average_score": 82.97,
-		"passed_count": 23,
+		"average_score": 83.25,
+		"passed_count": 24,
 		"failed_scenario_ids": [
 			"recall-zero-match",
 			"project-scope-uncertain",
@@ -42,8 +44,10 @@
 			"user-preference-lookup",
 			"knowledge-topic-query",
 			"compare-prior-proposals",
-			"find-related-sources"
+			"find-related-sources",
+			"ordinary-closeout-only",
+			"unknown-start-result-closeout"
 		],
-		"report_sha256": "43f9b377d3c5133de7dc22d294112f34bbf2fd735e326238ffd2e0b848fe537a"
+		"report_sha256": "999d2d86279b9b99eea061b46f1bcd5fb83050e4802beb228a9131ee23ef58ad"
 	}
 }

@@ -1019,6 +1019,24 @@ function coerceNonEmptyString(value, required = false, field = 'value') {
 function coerceOptionalString(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
+function coerceIsoTimestamp(value, required, field) {
+    const timestamp = coerceNonEmptyString(value, required, field);
+    if (!timestamp) {
+        return '';
+    }
+    const parsed = Date.parse(timestamp);
+    if (Number.isNaN(parsed)) {
+        throw new safety_1.ToolInputError(`${field} must be a valid ISO timestamp.`);
+    }
+    return new Date(parsed).toISOString();
+}
+function coerceRecordingReason(value) {
+    const normalized = coerceOptionalString(value) || 'ordinary_closeout';
+    if (normalized === 'ordinary_closeout' || normalized === 'start_unavailable') {
+        return normalized;
+    }
+    throw new safety_1.ToolInputError('recording_reason must be one of: ordinary_closeout, start_unavailable.');
+}
 function coerceFinishTaskStatus(value) {
     if (value === undefined || value === null || value === '') {
         return 'completed';
@@ -4504,6 +4522,14 @@ function emptyAgentTaskMetadata() {
         confidence: 'uncertain',
         warnings: [],
         client: '',
+        objective: '',
+        startOperationId: '',
+        trackingMode: '',
+        taskRecordOrigin: '',
+        startedAt: '',
+        startedAtSource: 'unknown',
+        trackingStartedAt: '',
+        recordedAt: '',
         proposalIds: [],
         proposalPaths: [],
         sourceCaptures: [],
@@ -4512,6 +4538,9 @@ function emptyAgentTaskMetadata() {
 function agentTaskMetadataFromFrontmatter(frontmatter) {
     const source = readFrontmatterString(frontmatter, ['project_identity_source']);
     const confidence = readFrontmatterString(frontmatter, ['project_identity_confidence']);
+    const trackingMode = stripYamlQuotes(readFrontmatterString(frontmatter, ['tracking_mode']));
+    const taskRecordOrigin = stripYamlQuotes(readFrontmatterString(frontmatter, ['task_record_origin']));
+    const startedAtSource = stripYamlQuotes(readFrontmatterString(frontmatter, ['started_at_source']));
     return {
         projectHint: readFrontmatterString(frontmatter, ['project_hint', 'related_project', 'project']),
         projectId: readFrontmatterString(frontmatter, ['project_id', 'projectId', 'project-id']),
@@ -4531,6 +4560,20 @@ function agentTaskMetadataFromFrontmatter(frontmatter) {
             : 'derived',
         warnings: readFrontmatterStringList(frontmatter, 'project_identity_warnings'),
         client: readFrontmatterString(frontmatter, ['client']),
+        objective: readFrontmatterString(frontmatter, ['objective']),
+        startOperationId: stripYamlQuotes(readFrontmatterString(frontmatter, ['start_operation_id'])),
+        trackingMode: trackingMode === 'live' || trackingMode === 'closeout_only' ? trackingMode : '',
+        taskRecordOrigin: [
+            'start_task',
+            'finish_task_closeout_only',
+            'finish_task_reconstruction',
+        ].includes(taskRecordOrigin) ? taskRecordOrigin : '',
+        startedAt: stripYamlQuotes(readFrontmatterString(frontmatter, ['started_at'])),
+        startedAtSource: ['server_observed', 'client_claim'].includes(startedAtSource)
+            ? startedAtSource
+            : 'unknown',
+        trackingStartedAt: stripYamlQuotes(readFrontmatterString(frontmatter, ['tracking_started_at'])),
+        recordedAt: stripYamlQuotes(readFrontmatterString(frontmatter, ['recorded_at'])),
         proposalIds: readFrontmatterStringList(frontmatter, 'proposal_ids'),
         proposalPaths: readFrontmatterStringList(frontmatter, 'proposal_paths'),
         sourceCaptures: readFrontmatterStringList(frontmatter, 'source_captures'),
@@ -5046,7 +5089,24 @@ async function createAgentTaskRecord(vaultRoot, input) {
         target_type: 'agent_task',
         task_stage: 'start',
     };
-    const returnExistingTask = async () => {
+    const trackingMetadataFromContent = (content) => {
+        const fields = (0, core_1.parseMarkdown)(content).frontmatter.fields;
+        const startedAt = stripYamlQuotes(readFrontmatterString(fields, ['started_at']));
+        const trackingStartedAt = stripYamlQuotes(readFrontmatterString(fields, ['tracking_started_at'])) || startedAt;
+        const recordedAt = stripYamlQuotes(readFrontmatterString(fields, ['recorded_at']))
+            || trackingStartedAt;
+        const startedAtSource = stripYamlQuotes(readFrontmatterString(fields, ['started_at_source'])) === 'client_claim' ? 'client_claim' : 'server_observed';
+        return {
+            tracking_mode: 'live',
+            task_record_origin: 'start_task',
+            started_at: startedAt,
+            started_at_source: startedAtSource,
+            tracking_started_at: trackingStartedAt,
+            recorded_at: recordedAt,
+            start_recovery: 'not_requested',
+        };
+    };
+    const returnExistingTask = async (content) => {
         const audit = await (0, audit_persistence_1.appendAuditEventAsync)(vaultRoot, {
             operationId: input.operationId,
             tool: 'tracekeeper.start_task',
@@ -5055,7 +5115,13 @@ async function createAgentTaskRecord(vaultRoot, input) {
             taskId: input.taskId,
             metadata: taskAuditMetadata,
         }, input.context);
-        return { path: taskPath, activity_path: audit.path, status: 'skipped', warnings: [] };
+        return {
+            path: taskPath,
+            activity_path: audit.path,
+            status: 'skipped',
+            warnings: [],
+            ...trackingMetadataFromContent(content),
+        };
     };
     const existingTask = input.context.vaultRepository
         ? await input.context.vaultRepository.readText(taskPath)
@@ -5065,10 +5131,11 @@ async function createAgentTaskRecord(vaultRoot, input) {
         (0, safety_1.relativeFromAbsolute)(vaultRoot, taskAbsolute);
         (0, safety_1.assertNoSymlinkSegments)(vaultRoot, taskAbsolute);
         if (fs.existsSync(taskAbsolute)) {
-            const existing = (0, core_1.parseMarkdown)(fs.readFileSync(taskAbsolute, 'utf8'));
+            const existingContent = fs.readFileSync(taskAbsolute, 'utf8');
+            const existing = (0, core_1.parseMarkdown)(existingContent);
             const existingOperationId = stripYamlQuotes(readFrontmatterString(existing.frontmatter.fields, ['start_operation_id']));
             if (existingOperationId === input.operationId) {
-                return returnExistingTask();
+                return returnExistingTask(existingContent);
             }
             throw new core_1.OperationConflictError(`Task path already exists for another operation: ${taskPath}`);
         }
@@ -5076,11 +5143,13 @@ async function createAgentTaskRecord(vaultRoot, input) {
     if (existingTask) {
         const existingOperationId = stripYamlQuotes(readFrontmatterString((0, core_1.parseMarkdown)(existingTask.content).frontmatter.fields, ['start_operation_id']));
         if (existingOperationId === input.operationId) {
-            return returnExistingTask();
+            return returnExistingTask(existingTask.content);
         }
         throw new core_1.OperationConflictError(`Task path already exists for another operation: ${taskPath}`);
     }
     const now = new Date().toISOString();
+    const startedAt = input.clientStartedAt || now;
+    const startedAtSource = input.clientStartedAt ? 'client_claim' : 'server_observed';
     const clientName = input.client || input.context.clientName || '';
     const body = [
         contentText(input.context, '# Agent 任务', '# Agent Task'),
@@ -5095,7 +5164,7 @@ async function createAgentTaskRecord(vaultRoot, input) {
         `- source_candidates: ${input.contextPack.sourceCandidates.length}`,
         `- gaps: ${input.contextPack.gaps.length}`,
     ].join('\n');
-    return buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.start_task', AGENT_TASK_DIR, taskPath.slice(`${AGENT_TASK_DIR}/`.length), {
+    const note = await buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.start_task', AGENT_TASK_DIR, taskPath.slice(`${AGENT_TASK_DIR}/`.length), {
         tool: 'tracekeeper.start_task',
         type: 'agent-task',
         title: `Task ${input.taskId}`,
@@ -5112,9 +5181,25 @@ async function createAgentTaskRecord(vaultRoot, input) {
         project_identity_source: input.projectIdentitySource,
         project_identity_confidence: input.projectIdentityConfidence,
         project_identity_warnings: input.projectIdentityWarnings,
-        started_at: now,
+        tracking_mode: 'live',
+        task_record_origin: 'start_task',
+        started_at: startedAt,
+        started_at_source: startedAtSource,
+        tracking_started_at: now,
+        recorded_at: now,
+        start_recovery: 'not_requested',
         start_operation_id: input.operationId,
     }, body, input.taskId, input.context, taskAuditMetadata, input.operationId);
+    return {
+        ...note,
+        tracking_mode: 'live',
+        task_record_origin: 'start_task',
+        started_at: startedAt,
+        started_at_source: startedAtSource,
+        tracking_started_at: now,
+        recorded_at: now,
+        start_recovery: 'not_requested',
+    };
 }
 function toSourceRequestRow(note) {
     return {
@@ -5420,7 +5505,7 @@ function toolPrompts() {
         {
             name: 'Tracekeeper Start Task',
             title: 'Tracekeeper Start Task',
-            description: 'Start a task with a bounded context summary.',
+            description: 'Start live tracking for a task that needs intermediate identity or recovery.',
             arguments: [
                 {
                     name: 'goal',
@@ -5456,12 +5541,19 @@ function toolPrompts() {
         {
             name: 'Tracekeeper Task Closeout',
             title: 'Tracekeeper Task Closeout',
-            description: 'Close a previously started tracked task exactly once.',
+            description: 'Close a live task or create an ordinary closeout-only task exactly once.',
             arguments: [
                 {
                     name: 'task_id',
-                    description: 'The real task id returned by tracekeeper.start_task.',
-                    required: true,
+                    description: 'The real task id returned by tracekeeper.start_task for live tracking.',
+                },
+                {
+                    name: 'goal',
+                    description: 'Original goal when creating a closeout-only task.',
+                },
+                {
+                    name: 'started_at',
+                    description: 'Original client-held ISO start time for closeout-only recording.',
                 },
                 {
                     name: 'summary',
@@ -5745,6 +5837,14 @@ function operationJournalForVault(vaultRoot) {
     (0, safety_1.assertNoSymlinkSegments)(vaultRoot, operationDirectory);
     return new core_1.NodeFileOperationJournal({ directory: operationDirectory });
 }
+function buildOperationIdFromIdempotencyKey(tool, idempotencyKey) {
+    const identity = crypto
+        .createHash('sha256')
+        .update(`${tool}\0${idempotencyKey}`)
+        .digest('hex')
+        .slice(0, 24);
+    return `${tool}-${identity}`;
+}
 function buildToolOperationIdentity(tool, rawIdempotencyKey, payload, context) {
     const providedKey = coerceOptionalString(rawIdempotencyKey);
     if (providedKey.length > 512) {
@@ -5753,13 +5853,8 @@ function buildToolOperationIdentity(tool, rawIdempotencyKey, payload, context) {
     const payloadHash = (0, core_1.computePayloadHash)(payload);
     const sessionScope = context.sessionId || context.agentId || 'legacy-client';
     const idempotencyKey = providedKey || `legacy:${tool}:${sessionScope}:${payloadHash}`;
-    const identity = crypto
-        .createHash('sha256')
-        .update(`${tool}\0${idempotencyKey}`)
-        .digest('hex')
-        .slice(0, 24);
     return {
-        operationId: `${tool}-${identity}`,
+        operationId: buildOperationIdFromIdempotencyKey(tool, idempotencyKey),
         idempotencyKey,
     };
 }
@@ -5770,6 +5865,7 @@ async function handleStartTask(rawArgs, context) {
     }
     const goal = coerceNonEmptyString(rawArgs.goal, true, 'goal');
     const client = coerceNonEmptyString(rawArgs.client);
+    const clientStartedAt = coerceIsoTimestamp(rawArgs.started_at, false, 'started_at');
     const view = await knowledgeReadViewForContext(vaultRoot, context);
     const scan = lightweightScanFromReadView(vaultRoot, view);
     const projectIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs, scan.notes);
@@ -5783,6 +5879,7 @@ async function handleStartTask(rawArgs, context) {
         projectHint,
         projectId: projectIdentity.projectId,
         repoPath: projectIdentity.repoPath,
+        clientStartedAt: clientStartedAt || null,
         contentLanguage: contentLanguageFromContext(context),
     };
     const operationIdentity = buildToolOperationIdentity('start-task', rawArgs.idempotency_key, operationPayload, context);
@@ -5820,6 +5917,7 @@ async function handleStartTask(rawArgs, context) {
                 projectIdentitySource: projectIdentity.source,
                 projectIdentityConfidence: projectIdentity.confidence,
                 projectIdentityWarnings: projectIdentity.warnings,
+                clientStartedAt,
                 context,
                 contextPack,
                 operationId: operationIdentity.operationId,
@@ -5832,6 +5930,13 @@ async function handleStartTask(rawArgs, context) {
                 task_id: taskId,
                 path: task.path,
                 activity_path: task.activity_path,
+                tracking_mode: task.tracking_mode,
+                task_record_origin: task.task_record_origin,
+                started_at: task.started_at,
+                started_at_source: task.started_at_source,
+                tracking_started_at: task.tracking_started_at,
+                recorded_at: task.recorded_at,
+                start_recovery: task.start_recovery,
                 client: client || null,
                 project_hint: projectHint || null,
                 vault_root: vaultRoot,
@@ -7635,7 +7740,24 @@ function isFinishTaskOperationPayload(payload) {
     if (typeof payload.requestHash !== 'string' || !payload.requestHash) {
         return false;
     }
-    if (!(0, protocol_1.isRecord)(payload.requestSnapshot) || typeof payload.requestSnapshot.task_id !== 'string') {
+    if (!(0, protocol_1.isRecord)(payload.requestSnapshot)
+        || (typeof payload.requestSnapshot.task_id !== 'string'
+            && payload.requestSnapshot.task_id !== null)) {
+        return false;
+    }
+    if (payload.trackingMode !== undefined && payload.trackingMode !== 'live' && payload.trackingMode !== 'closeout_only') {
+        return false;
+    }
+    if (payload.taskRecordOrigin !== undefined
+        && payload.taskRecordOrigin !== 'start_task'
+        && payload.taskRecordOrigin !== 'finish_task_closeout_only'
+        && payload.taskRecordOrigin !== 'finish_task_reconstruction') {
+        return false;
+    }
+    if (payload.startRecovery !== undefined
+        && payload.startRecovery !== 'not_requested'
+        && payload.startRecovery !== 'matched'
+        && payload.startRecovery !== 'not_found') {
         return false;
     }
     if (payload.memoryRecordWriteVersion !== undefined
@@ -7673,6 +7795,17 @@ function isFinishTaskOperationPayload(payload) {
 }
 function finishTaskUsesSingleTaskRecord(input) {
     return input.taskRecordCloseoutVersion === 1;
+}
+function finishTaskTrackingMode(input) {
+    return input.trackingMode === 'closeout_only' ? 'closeout_only' : 'live';
+}
+function finishTaskRecordOrigin(input) {
+    if (input.taskRecordOrigin === 'start_task'
+        || input.taskRecordOrigin === 'finish_task_closeout_only'
+        || input.taskRecordOrigin === 'finish_task_reconstruction') {
+        return input.taskRecordOrigin;
+    }
+    return 'finish_task_reconstruction';
 }
 function buildFinishTaskCompletionBody(input, context, operationId) {
     return [
@@ -7729,20 +7862,33 @@ async function ensureFinishTaskRecordExists(input, context, operationId) {
     const projectIdentity = projectIdentityFromFinishPayload(input);
     const reconstructedAt = input.taskFinishedAt ?? new Date().toISOString();
     const clientName = input.client;
-    const body = [
-        contentText(context, '# Agent 任务', '# Agent Task'),
-        '',
-        contentText(context, '## 目标', '## Objective'),
-        input.summary,
-        '',
-        contentText(context, '## 重建说明', '## Reconstruction'),
-        '- start_record: missing',
-        '- reconstructed_by: tracekeeper.finish_task',
-        `- reconstructed_at: ${reconstructedAt}`,
-        '- objective_source: finish_summary',
-        '',
-        buildFinishTaskCompletionBody(input, context, operationId),
-    ].join('\n');
+    const trackingMode = finishTaskTrackingMode(input);
+    const taskRecordOrigin = finishTaskRecordOrigin(input);
+    const isCloseoutOnly = trackingMode === 'closeout_only';
+    const objective = input.goal || input.summary;
+    const body = isCloseoutOnly
+        ? [
+            contentText(context, '# Agent 任务', '# Agent Task'),
+            '',
+            contentText(context, '## 目标', '## Objective'),
+            objective,
+            '',
+            buildFinishTaskCompletionBody(input, context, operationId),
+        ].join('\n')
+        : [
+            contentText(context, '# Agent 任务', '# Agent Task'),
+            '',
+            contentText(context, '## 目标', '## Objective'),
+            objective,
+            '',
+            contentText(context, '## 重建说明', '## Reconstruction'),
+            '- start_record: missing',
+            '- reconstructed_by: tracekeeper.finish_task',
+            `- reconstructed_at: ${reconstructedAt}`,
+            `- objective_source: ${input.goal ? 'recovered_start_payload' : 'finish_summary'}`,
+            '',
+            buildFinishTaskCompletionBody(input, context, operationId),
+        ].join('\n');
     const markdown = buildMarkdownNote({
         tool: 'tracekeeper.finish_task',
         type: 'agent-task',
@@ -7752,8 +7898,8 @@ async function ensureFinishTaskRecordExists(input, context, operationId) {
         agent: clientName || 'unknown',
         client: clientName || null,
         session_id: null,
-        objective: input.summary,
-        objective_source: 'finish_summary',
+        objective,
+        objective_source: isCloseoutOnly ? 'finish_task_goal' : input.goal ? 'recovered_start_payload' : 'finish_summary',
         project_hint: input.projectHint || null,
         related_project: input.projectHint || null,
         project_id: input.projectId || null,
@@ -7761,11 +7907,20 @@ async function ensureFinishTaskRecordExists(input, context, operationId) {
         project_identity_source: projectIdentity.source,
         project_identity_confidence: projectIdentity.confidence,
         project_identity_warnings: projectIdentity.warnings,
-        started_at: null,
-        start_operation_id: null,
-        start_record_missing: true,
-        task_record_origin: 'finish_task_reconstruction',
-        reconstructed_at: reconstructedAt,
+        tracking_mode: trackingMode,
+        task_record_origin: taskRecordOrigin,
+        started_at: input.startedAt || null,
+        started_at_source: input.startedAtSource || 'unknown',
+        tracking_started_at: input.trackingStartedAt || null,
+        recorded_at: input.recordedAt || reconstructedAt,
+        start_recovery: input.startRecovery || 'not_requested',
+        ...(input.recordingReason ? { recording_reason: input.recordingReason } : {}),
+        ...(input.startOperationId ? { start_operation_id: input.startOperationId } : {}),
+        ...(isCloseoutOnly ? {} : {
+            start_record_missing: true,
+            reconstructed_at: reconstructedAt,
+        }),
+        finish_recorded_at: reconstructedAt,
         finish_operation_id: operationId,
     }, body);
     try {
@@ -7795,20 +7950,62 @@ async function ensureFinishTaskRecordExists(input, context, operationId) {
         timestamp: reconstructedAt,
         metadata: {
             target_type: 'agent_task',
-            task_stage: 'finish',
+            task_stage: isCloseoutOnly ? 'closeout' : 'finish',
         },
     }, context);
     return taskPath;
 }
+async function synchronizeFinishTaskTimestampFromRecord(input, context) {
+    const current = await readCurrentVaultTextState(input.vaultRoot, buildTaskNotePath(input.taskId), context);
+    if (!current) {
+        return;
+    }
+    const fields = (0, core_1.parseMarkdown)(current.content).frontmatter.fields;
+    const recordedAt = stripYamlQuotes(readFrontmatterString(fields, ['finish_recorded_at'])) || (finishTaskTrackingMode(input) === 'closeout_only'
+        ? stripYamlQuotes(readFrontmatterString(fields, ['recorded_at']))
+        : '');
+    if (!recordedAt || Number.isNaN(Date.parse(recordedAt))) {
+        return;
+    }
+    const normalized = new Date(Date.parse(recordedAt)).toISOString();
+    input.taskFinishedAt = normalized;
+    input.projectMemoryCreatedAt = normalized;
+    if (finishTaskTrackingMode(input) === 'closeout_only') {
+        input.recordedAt = normalized;
+    }
+}
 async function markFinishTaskRecordClosing(input, context, operationId) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
         await ensureFinishTaskRecordExists(input, context, operationId);
-        const taskPath = await updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, {
-            status: 'closing',
-            finish_operation_id: operationId,
-        }, context);
-        if (taskPath) {
+        const currentLifecycle = await readTaskLifecycleStateAsync(input.vaultRoot, input.taskId, context);
+        if (currentLifecycle?.finishOperationId === operationId
+            && (currentLifecycle.status === 'closing' || currentLifecycle.status === 'completed')) {
+            await synchronizeFinishTaskTimestampFromRecord(input, context);
             return;
+        }
+        try {
+            const taskPath = await updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, {
+                status: 'closing',
+                finish_operation_id: operationId,
+                ...(finishTaskTrackingMode(input) === 'live'
+                    ? { finish_recorded_at: input.taskFinishedAt ?? new Date().toISOString() }
+                    : {}),
+            }, context);
+            if (taskPath) {
+                await synchronizeFinishTaskTimestampFromRecord(input, context);
+                return;
+            }
+        }
+        catch (error) {
+            const lifecycle = await readTaskLifecycleStateAsync(input.vaultRoot, input.taskId, context);
+            if (lifecycle?.finishOperationId === operationId
+                && (lifecycle.status === 'closing' || lifecycle.status === 'completed')) {
+                await synchronizeFinishTaskTimestampFromRecord(input, context);
+                return;
+            }
+            if (attempt === 1) {
+                throw error;
+            }
         }
     }
     throw new core_1.OperationConflictError(`Task record could not be reconstructed for finish-task operation: ${buildTaskNotePath(input.taskId)}`);
@@ -8168,8 +8365,44 @@ async function updateManagedRecordFields(vaultRoot, recordPath, fields, context)
 }
 function buildFinishTaskRequestSnapshot(rawArgs) {
     const explicitIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs);
+    const taskId = coerceOptionalString(rawArgs.task_id);
+    const hasCloseoutOnlyField = [
+        rawArgs.goal,
+        rawArgs.started_at,
+        rawArgs.recording_reason,
+        rawArgs.start_idempotency_key,
+    ].some((value) => value !== undefined && value !== null && value !== '');
+    if (taskId && hasCloseoutOnlyField) {
+        throw new safety_1.ToolInputError('goal, started_at, recording_reason, and start_idempotency_key must be omitted when task_id is provided.');
+    }
+    const goal = taskId ? '' : coerceNonEmptyString(rawArgs.goal, true, 'goal');
+    if (!taskId && goal.length < 3) {
+        throw new safety_1.ToolInputError('goal must have at least 3 characters.');
+    }
+    const startedAt = taskId ? '' : coerceIsoTimestamp(rawArgs.started_at, true, 'started_at');
+    const recordingReason = taskId ? null : coerceRecordingReason(rawArgs.recording_reason);
+    const startIdempotencyKey = taskId ? '' : coerceOptionalString(rawArgs.start_idempotency_key);
+    if (recordingReason === 'start_unavailable' && !startIdempotencyKey) {
+        throw new safety_1.ToolInputError('start_idempotency_key is required when recording_reason is start_unavailable.');
+    }
+    if (recordingReason === 'ordinary_closeout' && startIdempotencyKey) {
+        throw new safety_1.ToolInputError('start_idempotency_key is allowed only when recording_reason is start_unavailable.');
+    }
+    if (startIdempotencyKey.length > 512) {
+        throw new safety_1.ToolInputError('start_idempotency_key must be at most 512 characters.');
+    }
+    if (!taskId && !coerceOptionalString(rawArgs.idempotency_key)) {
+        throw new safety_1.ToolInputError('idempotency_key is required when task_id is omitted.');
+    }
+    if (!taskId && (rawArgs.status === undefined || rawArgs.status === null || rawArgs.status === '')) {
+        throw new safety_1.ToolInputError('status is required when task_id is omitted.');
+    }
     return {
-        task_id: coerceNonEmptyString(rawArgs.task_id, true, 'task_id'),
+        task_id: taskId || null,
+        goal: goal || null,
+        started_at: startedAt || null,
+        recording_reason: recordingReason,
+        start_idempotency_key: startIdempotencyKey || null,
         summary: coerceNonEmptyString(rawArgs.summary, true, 'summary'),
         status: coerceFinishTaskStatus(rawArgs.status),
         outcomes: coerceStringOrStringArray(rawArgs.outcomes, 'outcomes'),
@@ -8188,9 +8421,156 @@ function buildFinishTaskRequestSnapshot(rawArgs) {
         filename: coerceOptionalString(rawArgs.filename) || null,
     };
 }
+function assertRecoveredStartPayloadMatches(payload, goal, startedAt, client, explicitIdentity) {
+    if (coerceOptionalString(payload.goal) !== goal) {
+        throw new core_1.OperationConflictError('Original start_task goal does not match the closeout goal.');
+    }
+    const startClient = coerceOptionalString(payload.client);
+    if (startClient && client && startClient !== client) {
+        throw new core_1.OperationConflictError('Original start_task client does not match the closeout client.');
+    }
+    const originalStartedAt = coerceOptionalString(payload.clientStartedAt);
+    if (originalStartedAt && coerceIsoTimestamp(originalStartedAt, true, 'started_at') !== startedAt) {
+        throw new core_1.OperationConflictError('Original start_task started_at does not match the closeout started_at.');
+    }
+    for (const [field, startValue, finishValue] of [
+        ['project_hint', coerceOptionalString(payload.projectHint), explicitIdentity.projectHint],
+        ['project_id', coerceOptionalString(payload.projectId), explicitIdentity.projectId],
+        ['repo_path', coerceOptionalString(payload.repoPath), explicitIdentity.repoPath],
+    ]) {
+        if (!projectIdentityValueMatches(field, startValue, finishValue)) {
+            throw new core_1.OperationConflictError(`Original start_task ${field} does not match the closeout request.`);
+        }
+    }
+}
+function finishRecordingFromTaskMetadata(taskId, metadata, projectIdentity, client, startRecovery, fallback) {
+    const hasStartRecord = metadata.startOperationId.length > 0;
+    return {
+        taskId,
+        goal: metadata.objective || fallback.goal,
+        taskMetadata: metadata,
+        projectIdentity,
+        client: client || metadata.client,
+        trackingMode: 'live',
+        taskRecordOrigin: hasStartRecord ? 'start_task' : 'finish_task_reconstruction',
+        startedAt: metadata.startedAt || fallback.startedAt,
+        startedAtSource: metadata.startedAtSource !== 'unknown'
+            ? metadata.startedAtSource
+            : fallback.startedAtSource,
+        trackingStartedAt: metadata.trackingStartedAt || fallback.trackingStartedAt,
+        recordedAt: metadata.recordedAt || fallback.recordedAt,
+        startRecovery,
+        recordingReason: startRecovery === 'matched' ? 'start_unavailable' : null,
+        startOperationId: metadata.startOperationId || fallback.startOperationId,
+    };
+}
+async function resolveFinishTaskRecording(rawArgs, context, operationId, explicitIdentity, finishedAt) {
+    const vaultRoot = configuredVaultRoot(context);
+    const explicitTaskId = coerceOptionalString(rawArgs.task_id);
+    const requestedClient = coerceOptionalString(rawArgs.client);
+    if (explicitTaskId) {
+        const metadata = await readAgentTaskMetadataAsync(vaultRoot, explicitTaskId, context);
+        const projectIdentity = mergeTaskProjectIdentity(explicitTaskId, metadata, explicitIdentity);
+        return finishRecordingFromTaskMetadata(explicitTaskId, metadata, projectIdentity, requestedClient, 'not_requested', {
+            goal: '',
+            startedAt: '',
+            startedAtSource: 'unknown',
+            trackingStartedAt: '',
+            recordedAt: finishedAt,
+            startOperationId: '',
+        });
+    }
+    const goal = coerceNonEmptyString(rawArgs.goal, true, 'goal');
+    const startedAt = coerceIsoTimestamp(rawArgs.started_at, true, 'started_at');
+    const recordingReason = coerceRecordingReason(rawArgs.recording_reason);
+    if (recordingReason === 'start_unavailable') {
+        const startIdempotencyKey = coerceNonEmptyString(rawArgs.start_idempotency_key, true, 'start_idempotency_key');
+        const startOperationId = buildOperationIdFromIdempotencyKey('start-task', startIdempotencyKey);
+        const expectedTaskId = `obs_task_${startOperationId.slice('start-task-'.length)}`;
+        let taskState = await readCurrentVaultTextState(vaultRoot, buildTaskNotePath(expectedTaskId), context);
+        let startRecord = await operationJournalForVault(vaultRoot).loadById(startOperationId);
+        if (taskState) {
+            const metadata = agentTaskMetadataFromFrontmatter((0, core_1.parseMarkdown)(taskState.content).frontmatter.fields);
+            if (metadata.startOperationId !== startOperationId) {
+                throw new core_1.OperationConflictError('Recovered task is not bound to the supplied start_idempotency_key.');
+            }
+            if (metadata.objective && metadata.objective !== goal) {
+                throw new core_1.OperationConflictError('Recovered task goal does not match the closeout goal.');
+            }
+            if (metadata.client && requestedClient && metadata.client !== requestedClient) {
+                throw new core_1.OperationConflictError('Recovered task client does not match the closeout client.');
+            }
+            if (metadata.startedAt
+                && metadata.startedAtSource === 'client_claim'
+                && coerceIsoTimestamp(metadata.startedAt, true, 'started_at') !== startedAt) {
+                throw new core_1.OperationConflictError('Recovered task started_at does not match the closeout started_at.');
+            }
+            const projectIdentity = mergeTaskProjectIdentity(expectedTaskId, metadata, explicitIdentity);
+            return finishRecordingFromTaskMetadata(expectedTaskId, metadata, projectIdentity, requestedClient, 'matched', {
+                goal,
+                startedAt,
+                startedAtSource: 'client_claim',
+                trackingStartedAt: metadata.trackingStartedAt,
+                recordedAt: metadata.recordedAt || finishedAt,
+                startOperationId,
+            });
+        }
+        if (startRecord) {
+            if (startRecord.idempotency_key !== startIdempotencyKey || !(0, protocol_1.isRecord)(startRecord.payload)) {
+                throw new core_1.OperationConflictError('Original start_task journal binding is incompatible.');
+            }
+            assertRecoveredStartPayloadMatches(startRecord.payload, goal, startedAt, requestedClient, explicitIdentity);
+            await handleStartTask({
+                goal: startRecord.payload.goal,
+                client: startRecord.payload.client,
+                started_at: startRecord.payload.clientStartedAt,
+                project_hint: startRecord.payload.projectHint,
+                project_id: startRecord.payload.projectId,
+                repo_path: startRecord.payload.repoPath,
+                idempotency_key: startIdempotencyKey,
+            }, context);
+            taskState = await readCurrentVaultTextState(vaultRoot, buildTaskNotePath(expectedTaskId), context);
+            startRecord = await operationJournalForVault(vaultRoot).loadById(startOperationId);
+            const metadata = taskState
+                ? agentTaskMetadataFromFrontmatter((0, core_1.parseMarkdown)(taskState.content).frontmatter.fields)
+                : emptyAgentTaskMetadata();
+            const startPayload = (0, protocol_1.isRecord)(startRecord?.payload) ? startRecord.payload : {};
+            const originalClientStartedAt = coerceOptionalString(startPayload.clientStartedAt);
+            const projectIdentity = taskState
+                ? mergeTaskProjectIdentity(expectedTaskId, metadata, explicitIdentity)
+                : explicitIdentity;
+            return finishRecordingFromTaskMetadata(expectedTaskId, metadata, projectIdentity, requestedClient || coerceOptionalString(startPayload.client), 'matched', {
+                goal,
+                startedAt: originalClientStartedAt
+                    ? coerceIsoTimestamp(originalClientStartedAt, true, 'started_at')
+                    : startRecord?.created_at || startedAt,
+                startedAtSource: originalClientStartedAt ? 'client_claim' : 'server_observed',
+                trackingStartedAt: startRecord?.created_at || finishedAt,
+                recordedAt: startRecord?.created_at || finishedAt,
+                startOperationId,
+            });
+        }
+    }
+    const taskId = `obs_task_${operationId.slice('finish-task-'.length)}`;
+    return {
+        taskId,
+        goal,
+        taskMetadata: emptyAgentTaskMetadata(),
+        projectIdentity: explicitIdentity,
+        client: requestedClient,
+        trackingMode: 'closeout_only',
+        taskRecordOrigin: 'finish_task_closeout_only',
+        startedAt,
+        startedAtSource: 'client_claim',
+        trackingStartedAt: '',
+        recordedAt: finishedAt,
+        startRecovery: recordingReason === 'start_unavailable' ? 'not_found' : 'not_requested',
+        recordingReason,
+        startOperationId: '',
+    };
+}
 async function buildFinishTaskOperationPayload(rawArgs, context, operationId, requestHash, requestSnapshot) {
     const vaultRoot = configuredVaultRoot(context);
-    const taskId = coerceNonEmptyString(rawArgs.task_id, true, 'task_id');
     const summary = coerceNonEmptyString(rawArgs.summary, true, 'summary');
     const status = coerceFinishTaskStatus(rawArgs.status);
     const outcomes = coerceStringOrStringArray(rawArgs.outcomes, 'outcomes');
@@ -8202,12 +8582,15 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
     const memoryCandidates = [];
     const memoryCandidateRecords = normalizeFinishTaskMemoryCandidateRecords(rawArgs.memory_candidate_records);
     const reviewProposalMode = DEFAULT_FINISH_TASK_REVIEW_MODE;
-    const taskMetadata = await readAgentTaskMetadataAsync(vaultRoot, taskId, context);
-    const durableOutputSnapshot = await snapshotTaskDurableOutput(vaultRoot, taskId, taskMetadata, context);
+    const taskFinishedAt = new Date().toISOString();
     const identityScan = scanVaultForContext(vaultRoot, context);
     const explicitIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs, identityScan.notes);
-    const projectIdentity = mergeTaskProjectIdentity(taskId, taskMetadata, explicitIdentity);
-    const client = coerceOptionalString(rawArgs.client) || taskMetadata.client;
+    const recording = await resolveFinishTaskRecording(rawArgs, context, operationId, explicitIdentity, taskFinishedAt);
+    const taskId = recording.taskId;
+    const taskMetadata = recording.taskMetadata;
+    const durableOutputSnapshot = await snapshotTaskDurableOutput(vaultRoot, taskId, taskMetadata, context);
+    const projectIdentity = recording.projectIdentity;
+    const client = recording.client;
     const projectHint = projectIdentity.projectHint;
     const memoryScope = '';
     const relatedWiki = normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki');
@@ -8221,13 +8604,23 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
         requestSnapshot,
         memoryRecordWriteVersion: 2,
         taskRecordCloseoutVersion: 1,
-        taskFinishedAt: new Date().toISOString(),
-        projectMemoryCreatedAt: new Date().toISOString(),
+        taskFinishedAt,
+        projectMemoryCreatedAt: taskFinishedAt,
         projectMemoryAgentType: (() => {
             const observed = context.observedClientType ?? (0, observed_client_1.normalizeObservedClientType)(client);
             return observed === 'unknown' ? 'custom' : observed;
         })(),
         taskId,
+        goal: recording.goal,
+        trackingMode: recording.trackingMode,
+        taskRecordOrigin: recording.taskRecordOrigin,
+        startedAt: recording.startedAt,
+        startedAtSource: recording.startedAtSource,
+        trackingStartedAt: recording.trackingStartedAt,
+        recordedAt: recording.recordedAt,
+        startRecovery: recording.startRecovery,
+        recordingReason: recording.recordingReason,
+        startOperationId: recording.startOperationId,
         summary,
         status,
         outcomes,
@@ -8511,6 +8904,10 @@ async function updateFinishTaskRecord(input, context, operationId) {
     const taskFields = {
         status: input.status,
         finished_at: input.taskFinishedAt ?? new Date().toISOString(),
+        ...(input.startRecovery === 'matched' ? { start_recovery: input.startRecovery } : {}),
+        ...(input.startRecovery === 'matched' && input.recordingReason
+            ? { recording_reason: input.recordingReason }
+            : {}),
         summary: input.summary,
         ...(finishTaskUsesSingleTaskRecord(input)
             ? {}
@@ -8585,6 +8982,13 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         path: finishRecord.path,
         session_path: finishRecord.path,
         activity_path: finishRecord.activity_path,
+        tracking_mode: finishTaskTrackingMode(input),
+        task_record_origin: finishTaskRecordOrigin(input),
+        started_at: input.startedAt || null,
+        started_at_source: input.startedAtSource || 'unknown',
+        tracking_started_at: input.trackingStartedAt || null,
+        recorded_at: input.recordedAt || input.taskFinishedAt || new Date().toISOString(),
+        start_recovery: input.startRecovery || 'not_requested',
         status: input.status,
         content_language: input.contentLanguage,
         content_language_source: contentLanguageSourceFromContext(context),
@@ -8768,7 +9172,29 @@ async function handleFinishTask(rawArgs, context) {
         },
         finalize: (operationPayload, operationId, idempotencyKey) => executeFinishTaskOperation(operationPayload, context, operationId, idempotencyKey),
     });
-    return application.execute(rawArgs);
+    const result = await application.execute(rawArgs);
+    const resultRecord = result;
+    if (typeof resultRecord.tracking_mode === 'string') {
+        return result;
+    }
+    const taskId = coerceOptionalString(resultRecord.task_id) || coerceOptionalString(rawArgs.task_id);
+    const metadata = taskId
+        ? await readAgentTaskMetadataAsync(vaultRoot, taskId, context)
+        : emptyAgentTaskMetadata();
+    const fallbackStartedAt = metadata.startedAt || null;
+    return {
+        ...result,
+        tracking_mode: metadata.trackingMode || 'live',
+        task_record_origin: metadata.taskRecordOrigin
+            || (metadata.startOperationId ? 'start_task' : 'finish_task_reconstruction'),
+        started_at: fallbackStartedAt,
+        started_at_source: metadata.startedAtSource !== 'unknown'
+            ? metadata.startedAtSource
+            : fallbackStartedAt ? 'server_observed' : 'unknown',
+        tracking_started_at: metadata.trackingStartedAt || fallbackStartedAt,
+        recorded_at: metadata.recordedAt || fallbackStartedAt || new Date().toISOString(),
+        start_recovery: 'not_requested',
+    };
 }
 async function handleDistillSession(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);

@@ -77,7 +77,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.start_task";
-    readonly version: 3;
+    readonly version: 4;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -86,7 +86,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "task-start";
     readonly useCase: "start_task";
-    readonly description: "[low-risk write] Call once when starting meaningful work when task tracking is enabled. Records a bounded task and returns the recommended recall step.";
+    readonly description: "[low-risk write] Begin live task tracking when cross-session continuity, interruption recovery, in-progress visibility, explicit live tracking, or task-linked intermediate writes require a real task identity. Ordinary tracked work can use closeout-only finish_task instead.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly outputSchema: ToolOutputSchema;
@@ -354,7 +354,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.finish_task";
-    readonly version: 5;
+    readonly version: 6;
     readonly visibility: "public";
     readonly capability: "workflow.manage";
     readonly risk: "low-risk-write";
@@ -363,8 +363,328 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "task-finish";
     readonly useCase: "finish_task";
-    readonly description: "[low-risk write] Complete the canonical Markdown task record without creating an implicit session note. If the start_task record is missing, reconstruct a complete task record at the canonical task path from the finish request and mark that provenance explicitly. Report durable Wiki/Memory output separately. The result includes direct proposals already linked to the task; a captured Source or Recall match does not prove that proposed knowledge was applied.";
-    readonly inputSchema: ToolInputSchema;
+    readonly description: "[low-risk write] Complete an existing live task or atomically create one closeout-only canonical Markdown task record without creating an implicit session note. A closeout-only call omits task_id and supplies goal, started_at, summary, status, and an explicit idempotency key. If an explicit task_id is known but its start_task record is missing, reconstruct a complete task record under that same identity. Report durable Wiki/Memory output separately. The result includes direct proposals already linked to the task; a captured Source or Recall match does not prove that proposed knowledge was applied.";
+    readonly inputSchema: {
+        readonly type: "object";
+        readonly properties: {
+            readonly task_id: {
+                readonly type: "string";
+                readonly minLength: 1;
+                readonly description: "Task id.";
+            };
+            readonly goal: {
+                readonly type: "string";
+                readonly minLength: 1;
+                readonly description: "Task goal. Required only when task_id is omitted.";
+            };
+            readonly started_at: {
+                readonly type: "string";
+                readonly minLength: 1;
+                readonly description: "Client-claimed ISO task start time. Required only when task_id is omitted.";
+            };
+            readonly recording_reason: {
+                readonly type: "string";
+                readonly enum: readonly ["ordinary_closeout", "start_unavailable"];
+                readonly description: "Closeout-only provenance. Defaults to ordinary_closeout.";
+            };
+            readonly start_idempotency_key: {
+                readonly type: "string";
+                readonly minLength: 1;
+                readonly description: "Original start_task retry key, allowed only for start_unavailable closeout recovery.";
+            };
+            readonly summary: {
+                readonly type: "string";
+                readonly description: "Task summary.";
+            };
+            readonly status: {
+                readonly type: "string";
+                readonly enum: readonly ["completed", "partial", "blocked"];
+                readonly description: "Final task execution status only; inspect durable_output in the result for Wiki/Memory persistence state.";
+            };
+            readonly outcomes: {
+                readonly oneOf: readonly [{
+                    readonly type: "string";
+                }, {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                }];
+                readonly description: "Optional outcomes.";
+            };
+            readonly decisions: {
+                readonly oneOf: readonly [{
+                    readonly type: "string";
+                }, {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                }];
+                readonly description: "Optional decisions.";
+            };
+            readonly solution_changes: {
+                readonly oneOf: readonly [{
+                    readonly type: "string";
+                }, {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                }];
+                readonly description: "Optional solution changes.";
+            };
+            readonly lessons: {
+                readonly oneOf: readonly [{
+                    readonly type: "string";
+                }, {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                }];
+                readonly description: "Optional lessons learned.";
+            };
+            readonly preferences: {
+                readonly oneOf: readonly [{
+                    readonly type: "string";
+                }, {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                }];
+                readonly description: "Optional user preferences.";
+            };
+            readonly memory_candidate_records: {
+                readonly type: "array";
+                readonly description: "Optional structured lifecycle-aware memory candidates.";
+                readonly items: {
+                    type: string;
+                    required: string[];
+                    properties: {
+                        proposal_kind: {
+                            type: string;
+                            description: string;
+                        };
+                        content: {
+                            type: string;
+                            description: string;
+                        };
+                        scope: {
+                            type: string;
+                            enum: string[];
+                            description: string;
+                        };
+                        project_hint: {
+                            type: string;
+                            description: string;
+                        };
+                        project_id: {
+                            type: string;
+                            description: string;
+                        };
+                        repo_path: {
+                            type: string;
+                            description: string;
+                        };
+                        related_wiki: {
+                            oneOf: ({
+                                type: string;
+                                items?: undefined;
+                            } | {
+                                type: string;
+                                items: {
+                                    type: string;
+                                };
+                            })[];
+                            description: string;
+                        };
+                        related_sources: {
+                            oneOf: ({
+                                type: string;
+                                items?: undefined;
+                            } | {
+                                type: string;
+                                items: {
+                                    type: string;
+                                };
+                            })[];
+                            description: string;
+                        };
+                        evidence: {
+                            oneOf: ({
+                                type: string;
+                                items?: undefined;
+                            } | {
+                                type: string;
+                                items: {
+                                    type: string;
+                                };
+                            })[];
+                            description: string;
+                        };
+                        target_note: {
+                            type: string;
+                            description: string;
+                        };
+                        claim_key: {
+                            type: string;
+                            minLength: number;
+                            description: string;
+                        };
+                        proposed_authority: {
+                            type: string;
+                            enum: string[];
+                            description: string;
+                        };
+                        proposed_confidence: {
+                            type: string;
+                            enum: string[];
+                            description: string;
+                        };
+                        declared_state: {
+                            type: string;
+                            enum: string[];
+                            description: string;
+                        };
+                        observed_at: {
+                            type: string;
+                            minLength: number;
+                            description: string;
+                        };
+                        valid_from: {
+                            type: string;
+                            minLength: number;
+                            description: string;
+                        };
+                        valid_to: {
+                            type: string;
+                            minLength: number;
+                            description: string;
+                        };
+                        last_verified_at: {
+                            type: string;
+                            minLength: number;
+                            description: string;
+                        };
+                        supersedes: {
+                            type: string;
+                            items: {
+                                type: string;
+                            };
+                            description: string;
+                        };
+                        contradicts: {
+                            type: string;
+                            items: {
+                                type: string;
+                            };
+                            description: string;
+                        };
+                    };
+                    additionalProperties: boolean;
+                };
+            };
+            readonly next_actions: {
+                readonly oneOf: readonly [{
+                    readonly type: "string";
+                }, {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                }];
+                readonly description: "Optional next actions.";
+            };
+            readonly client: {
+                readonly type: "string";
+                readonly description: "Optional client context.";
+            };
+            readonly project_hint: {
+                readonly type: "string";
+                readonly description: "Optional canonical project hint; inherited from the started task when omitted and rejected when conflicting.";
+            };
+            readonly related_wiki: {
+                readonly oneOf: readonly [{
+                    readonly type: "string";
+                }, {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                }];
+                readonly description: "Optional verified local Vault Wiki note paths, conventionally under 01_knowledge/wiki/**.";
+            };
+            readonly related_sources: {
+                readonly oneOf: readonly [{
+                    readonly type: "string";
+                }, {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                }];
+                readonly description: "Optional related sources.";
+            };
+            readonly filename: {
+                readonly type: "string";
+                readonly description: "Deprecated compatibility input. Accepted for exact retries but does not create or select a separate finish note.";
+            };
+            readonly project_id: {
+                readonly type: "string";
+                readonly description: "Optional project id; a value conflicting with the started task identity is rejected.";
+            };
+            readonly repo_path: {
+                readonly type: "string";
+                readonly description: "Optional repository path; a value conflicting with the started task identity is rejected.";
+            };
+            readonly idempotency_key: {
+                readonly type: "string";
+                readonly minLength: 1;
+                readonly description: "Optional stable retry key. Reusing it with different closeout content is rejected.";
+            };
+        };
+        readonly additionalProperties: false;
+        readonly required: readonly ["summary", "status"];
+        readonly oneOf: readonly [{
+            readonly required: readonly ["task_id"];
+            readonly not: {
+                readonly anyOf: readonly [{
+                    readonly required: readonly ["goal"];
+                }, {
+                    readonly required: readonly ["started_at"];
+                }, {
+                    readonly required: readonly ["recording_reason"];
+                }, {
+                    readonly required: readonly ["start_idempotency_key"];
+                }];
+            };
+        }, {
+            readonly required: readonly ["goal", "started_at", "idempotency_key"];
+            readonly not: {
+                readonly required: readonly ["task_id"];
+            };
+            readonly allOf: readonly [{
+                readonly if: {
+                    readonly required: readonly ["recording_reason"];
+                    readonly properties: {
+                        readonly recording_reason: {
+                            readonly const: "start_unavailable";
+                        };
+                    };
+                };
+                readonly then: {
+                    readonly required: readonly ["start_idempotency_key"];
+                };
+                readonly else: {
+                    readonly not: {
+                        readonly required: readonly ["start_idempotency_key"];
+                    };
+                };
+            }];
+        }];
+    };
 }, {
     readonly deprecated: {
         readonly replacement: "tracekeeper.finish_task";

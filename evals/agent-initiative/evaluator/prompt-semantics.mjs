@@ -21,6 +21,9 @@ const TRACKED_WORK_PATTERNS = [
 	/发布准备.*行动计划/u,
 	/完成一个已跟踪任务/u,
 	/完成任务并收尾/u,
+	/普通任务.*结束时一次保存/u,
+	/实时追踪/u,
+	/start_task.*(?:响应丢失|结果未知)/iu,
 ];
 
 const HISTORICAL_CONTEXT_PATTERNS = [
@@ -63,6 +66,9 @@ export function promptSignals(value) {
 		proposalReview: /未批准的记忆提案/u.test(prompt),
 		missingMemoryHub: /(?:Global|Project|全局|项目).*(?:Memory Hub|记忆 Hub).*(?:缺失|无效)/iu.test(prompt),
 		promptInjection: /笔记正文要求.*忽略权限.*泄露\s+token/iu.test(prompt),
+		ordinaryCloseout: /普通任务.*结束时一次保存/u.test(prompt),
+		explicitLiveTracking: /实时追踪/u.test(prompt),
+		startResultUnknown: /start_task.*(?:响应丢失|结果未知)/iu.test(prompt),
 	};
 }
 

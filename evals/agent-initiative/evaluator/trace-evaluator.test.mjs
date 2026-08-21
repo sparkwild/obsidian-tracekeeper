@@ -25,7 +25,7 @@ async function loadSourceDocuments(baselineName) {
 
 test('loads the complete deterministic Phase 0 scenario matrix', async () => {
 	const scenarios = await loadScenarios(path.join(evalRoot, 'scenarios'));
-	assert.equal(scenarios.length, 37);
+	assert.equal(scenarios.length, 40);
 	assert.ok(scenarios.some((scenario) => scenario.class === 'no_track'));
 	assert.ok(scenarios.some((scenario) => scenario.class === 'recall_only'));
 	assert.ok(scenarios.some((scenario) => scenario.class === 'tracked_task'));
@@ -46,12 +46,14 @@ test('frozen Skill v1 characterization remains deterministic with known recall_o
 	const first = evaluateTraces(scenarios, buildCurrentSkillV1Traces(scenarios, sources));
 	const second = evaluateTraces(scenarios, buildCurrentSkillV1Traces(scenarios, sources));
 	assert.deepEqual(first, second);
-	assert.equal(first.scenario_count, 37);
+	assert.equal(first.scenario_count, 40);
 	assert.equal(first.class_summary.no_track.classification_accuracy, 1);
 	assert.equal(first.class_summary.tracked_task.classification_accuracy, 1);
 	assert.ok(first.class_summary.recall_only.classification_accuracy < 1);
 	assert.ok(first.failed_scenario_ids.includes('why-architecture-choice'));
 	assert.ok(first.failed_scenario_ids.includes('recall-zero-match'));
+	assert.ok(first.failed_scenario_ids.includes('ordinary-closeout-only'));
+	assert.ok(first.failed_scenario_ids.includes('unknown-start-result-closeout'));
 });
 
 test('Skill v2 semantic adapter passes all scenarios without depending on scenario ids', async () => {
@@ -59,9 +61,9 @@ test('Skill v2 semantic adapter passes all scenarios without depending on scenar
 	const renamed = scenarios.map((scenario, index) => ({ ...scenario, id: `renamed-${index + 1}` }));
 	const sources = await loadSourceDocuments('current-skill-v2.json');
 	const report = evaluateTraces(renamed, buildCurrentSkillV2Traces(renamed, sources));
-	assert.equal(report.scenario_count, 37);
+	assert.equal(report.scenario_count, 40);
 	assert.equal(report.average_score, 100);
-	assert.equal(report.passed_count, 37);
+	assert.equal(report.passed_count, 40);
 	assert.deepEqual(report.failed_scenario_ids, []);
 });
 
