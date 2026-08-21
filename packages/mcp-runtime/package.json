@@ -1,6 +1,6 @@
 {
 	"name": "@tracekeeper/mcp-runtime",
-	"version": "0.3.5",
+	"version": "0.3.6",
 	"description": "Tracekeeper local MCP transport, tool adapter, and application runtime.",
 	"private": true,
 	"type": "commonjs",

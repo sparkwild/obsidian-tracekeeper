@@ -4,6 +4,23 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.6] - Closeout-first Task Recording
+
+### Added
+
+- Added closeout-only task recording so ordinary tracked work can create one canonical terminal task record with a single `finish_task` call and a Runtime-generated stable task identity.
+- Added client-claimed start-time provenance for tasks promoted to live tracking after work has already begun.
+
+### Changed
+
+- Upgraded `start_task` to v4 and `finish_task` to v6 while preserving existing live `start_task` → `finish_task` clients and records.
+- Updated the companion Skill to 2.3.0 / workflow contract 5 so ordinary tasks default to closeout-only and cross-session, recovery, visibility, and task-linked intermediate-write workflows continue to use live tracking.
+
+### Fixed
+
+- Reconciled transport-unknown starts by retrying the original start identity before safely falling back, with conflict-closed metadata binding, concurrent exact-retry convergence, and no duplicate task records.
+- Distinguished intentional closeout-only records from known-task reconstruction and retained separate server/client time provenance throughout task history and structured results.
+
 ## [0.3.5] - Review Proposal Integrity
 
 ### Fixed

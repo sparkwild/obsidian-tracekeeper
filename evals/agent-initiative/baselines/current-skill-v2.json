@@ -1,7 +1,7 @@
 {
 	"baseline_id": "current-skill-v2-static-characterization",
 	"kind": "static_skill_characterization",
-	"tracekeeper_version": "0.3.4",
+	"tracekeeper_version": "0.3.6",
 	"skill_path": "skills/tracekeeper/SKILL.md",
 	"skill_sha256": "258dec29f7cc9d57d321a21af738ac298ff854e40669c1e4bcc8b75e9e5ea89f",
 	"skill_sources": [
