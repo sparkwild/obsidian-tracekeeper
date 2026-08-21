@@ -29,6 +29,7 @@ export interface FinishTaskApplicationDependencies<TRawArgs extends object, TPay
 	};
 	loadExistingPayload(payload: unknown): boolean;
 	storedRequestHash(payload: unknown): string;
+	recordBindingHash(payload: TPayload): string;
 	validateExistingOperation?(record: OperationRecord, payload: TPayload): void;
 	buildPayload(
 		rawArgs: TRawArgs,
@@ -89,11 +90,12 @@ export class FinishTaskApplicationService<TRawArgs extends object, TPayload, TRe
 				requestSnapshot
 			);
 			const lifecycle = await dependencies.readLifecycle(dependencies.getTaskId(operationPayload));
+			const recordBindingHash = dependencies.recordBindingHash(operationPayload);
 			if (
 				lifecycle
 				&& lifecycle.finishOperationId === identity.operationId
 				&& (lifecycle.status === 'closing' || lifecycle.status === 'completed')
-				&& lifecycle.finishRequestHash !== requestHash
+				&& lifecycle.finishRequestHash !== recordBindingHash
 			) {
 				throw new Error(
 					`Idempotency key conflict for "${identity.idempotencyKey}" with different finish_task request hash`

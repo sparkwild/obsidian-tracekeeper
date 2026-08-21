@@ -47,8 +47,10 @@ test('FinishTaskApplicationService preserves lifecycle guards, step names, and r
 		}),
 		loadExistingPayload: (payload) => Boolean(payload?.requestHash),
 		storedRequestHash: (payload) => payload?.requestHash || '',
+		recordBindingHash: (payload) => payload.requestBindingHash,
 		buildPayload: async (_rawArgs, _operationId, requestHash) => ({
 			requestHash,
+			requestBindingHash: `binding:${requestHash}`,
 			taskId: 'task-direct',
 		}),
 		getTaskId: (payload) => payload.taskId,
@@ -100,8 +102,10 @@ test('FinishTaskApplicationService rejects an unjournaled lifecycle without the 
 			}),
 			loadExistingPayload: (payload) => Boolean(payload?.requestHash),
 			storedRequestHash: (payload) => payload?.requestHash || '',
+			recordBindingHash: (payload) => payload.requestBindingHash,
 			buildPayload: async (_rawArgs, _operationId, requestHash) => ({
 				requestHash,
+				requestBindingHash: `binding:${requestHash}`,
 				taskId: 'task-direct',
 			}),
 			getTaskId: (payload) => payload.taskId,

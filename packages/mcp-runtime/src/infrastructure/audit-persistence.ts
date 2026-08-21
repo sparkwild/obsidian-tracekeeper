@@ -312,6 +312,14 @@ export function summarizeForAudit(
 	const summary: Record<string, unknown> = {};
 
 	function summarize(value: unknown, keyHint = '', depth = 0): unknown {
+		if (
+			isIdempotencyKeyField(keyHint)
+			|| isSensitiveKey(keyHint)
+			|| (typeof value === 'string' && looksLikeSensitiveValue(value))
+		) {
+			return '[redacted]';
+		}
+
 		if (depth > 2) {
 			if (value === null || value === undefined) {
 				return value;
@@ -323,14 +331,6 @@ export function summarizeForAudit(
 				return value;
 			}
 			return '[object]';
-		}
-
-		if (
-			isIdempotencyKeyField(keyHint)
-			|| isSensitiveKey(keyHint)
-			|| (typeof value === 'string' && looksLikeSensitiveValue(value))
-		) {
-			return '[redacted]';
 		}
 
 		if (Array.isArray(value)) {

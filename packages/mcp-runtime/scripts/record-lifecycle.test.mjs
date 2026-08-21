@@ -511,11 +511,12 @@ test('finish_task rejects ambiguous live and closeout-only field combinations', 
 test('start-unavailable closeout falls back only when no start identity exists', async () => {
 	const fixture = createFixture();
 	try {
+		const startKey = 'record-lifecycle-never-arrived-start';
 		const finished = await invoke('tracekeeper.finish_task', {
 			goal: 'Preserve work after start transport failure',
 			started_at: '2026-08-21T02:00:00.000Z',
 			recording_reason: 'start_unavailable',
-			start_idempotency_key: 'record-lifecycle-never-arrived-start',
+			start_idempotency_key: startKey,
 			status: 'partial',
 			summary: 'The start request never reached Tracekeeper, so closeout recovered the task history.',
 			project_hint: 'record-lifecycle',
@@ -528,6 +529,25 @@ test('start-unavailable closeout falls back only when no start identity exists',
 		assert.match(taskText, /^recording_reason: "start_unavailable"$/m);
 		assert.match(taskText, /^start_recovery: "not_found"$/m);
 		assert.doesNotMatch(taskText, /^start_operation_id:/m);
+		const storedBindingHash = taskText.match(/^finish_request_hash: "?([a-f0-9]{64})"?$/m)?.[1];
+		assert.ok(storedBindingHash);
+		const operationDirectory = path.join(
+			fixture.vaultRoot,
+			'00_tracekeeper/control/operations'
+		);
+		const operation = await new NodeFileOperationJournal({ directory: operationDirectory })
+			.loadById(finished.operation_id);
+		assert.ok(operation);
+		assert.equal(operation.payload.requestSnapshot.start_idempotency_key, startKey);
+		assert.equal(storedBindingHash, operation.payload.requestBindingHash);
+		assert.notEqual(storedBindingHash, operation.payload.requestHash);
+		assert.doesNotMatch(taskText, new RegExp(operation.payload.requestHash));
+		for (const guessedStartKey of ['recovery-0', startKey, 'recovery-2']) {
+			assert.notEqual(storedBindingHash, computePayloadHash({
+				...operation.payload.requestSnapshot,
+				start_idempotency_key: guessedStartKey,
+			}));
+		}
 	} finally {
 		fixture.cleanup();
 	}
@@ -783,6 +803,7 @@ test('unfinished legacy finish operation keeps its original session-note recover
 		assert.ok(operation);
 		delete operation.payload.taskRecordCloseoutVersion;
 		delete operation.payload.taskFinishedAt;
+		delete operation.payload.requestBindingHash;
 		operation.payload_hash = computePayloadHash(operation.payload);
 		fs.writeFileSync(operationPath, `${JSON.stringify(operation, null, 2)}\n`, 'utf8');
 		fs.rmSync(

@@ -46,11 +46,25 @@ test('audit persistence owns redaction and bounded argument projection', () => {
 			startIdempotencyKey: 'nested-key-material',
 			status: 'safe',
 		},
+		deeply_nested: {
+			one: {
+				two: {
+					startIdempotencyKey: 'deep-camel-key-material',
+					'start-idempotency-key': 'deep-kebab-key-material',
+					start_idempotency_key: 'deep-snake-key-material',
+				},
+			},
+		},
+		array_nested: [{
+			one: {
+				startIdempotencyKey: 'deep-array-key-material',
+			},
+		}],
 		recording_reason: 'start_unavailable',
 	}));
 	assert.doesNotMatch(
 		idempotencySummary,
-		/finish-key-material|start-key-material|retry-key-material|nested-key-material/
+		/finish-key-material|start-key-material|retry-key-material|nested-key-material|deep-camel-key-material|deep-kebab-key-material|deep-snake-key-material|deep-array-key-material/
 	);
 	assert.match(idempotencySummary, /recording_reason/);
 	assert.match(idempotencySummary, /start_unavailable/);

@@ -2924,6 +2924,12 @@ function writebackConfirmationSecret(context) {
     }
     return secret;
 }
+function buildFinishTaskRequestBindingHash(requestHash, context) {
+    return crypto
+        .createHmac('sha256', writebackConfirmationSecret(context))
+        .update(`tracekeeper.finish_task.request_binding\n${requestHash}`)
+        .digest('hex');
+}
 function isWritebackConfirmationBinding(value) {
     if (!(0, protocol_1.isRecord)(value)) {
         return false;
@@ -7740,6 +7746,11 @@ function isFinishTaskOperationPayload(payload) {
     if (typeof payload.requestHash !== 'string' || !payload.requestHash) {
         return false;
     }
+    if (payload.taskRecordCloseoutVersion === 1
+        && (typeof payload.requestBindingHash !== 'string'
+            || !/^[a-f0-9]{64}$/.test(payload.requestBindingHash))) {
+        return false;
+    }
     if (!(0, protocol_1.isRecord)(payload.requestSnapshot)
         || (typeof payload.requestSnapshot.task_id !== 'string'
             && payload.requestSnapshot.task_id !== null)) {
@@ -7859,11 +7870,14 @@ function assertFinishTaskRecordBinding(taskPath, content, taskId, operationId, e
         throw new core_1.OperationConflictError(`Idempotency conflict: task record is not bound to the current finish_task request hash: ${taskPath}`);
     }
 }
+function finishTaskRecordBindingHash(input) {
+    return input.requestBindingHash || input.requestHash || '';
+}
 async function ensureFinishTaskRecordExists(input, context, operationId) {
     const taskPath = buildTaskNotePath(input.taskId);
     const current = await readCurrentVaultTextState(input.vaultRoot, taskPath, context);
     if (current) {
-        assertFinishTaskRecordBinding(taskPath, current.content, input.taskId, operationId, input.requestHash || '', false, finishTaskTrackingMode(input) === 'closeout_only');
+        assertFinishTaskRecordBinding(taskPath, current.content, input.taskId, operationId, finishTaskRecordBindingHash(input), false, finishTaskTrackingMode(input) === 'closeout_only');
         return taskPath;
     }
     const projectIdentity = projectIdentityFromFinishPayload(input);
@@ -7929,7 +7943,7 @@ async function ensureFinishTaskRecordExists(input, context, operationId) {
         }),
         finish_recorded_at: reconstructedAt,
         finish_operation_id: operationId,
-        finish_request_hash: input.requestHash || null,
+        finish_request_hash: finishTaskRecordBindingHash(input) || null,
     }, body);
     try {
         if (context.vaultRepository) {
@@ -7946,7 +7960,7 @@ async function ensureFinishTaskRecordExists(input, context, operationId) {
         if (!racedRecord) {
             throw error;
         }
-        assertFinishTaskRecordBinding(taskPath, racedRecord.content, input.taskId, operationId, input.requestHash || '', false, isCloseoutOnly);
+        assertFinishTaskRecordBinding(taskPath, racedRecord.content, input.taskId, operationId, finishTaskRecordBindingHash(input), false, isCloseoutOnly);
         return taskPath;
     }
     await (0, audit_persistence_1.appendAuditEventAsync)(input.vaultRoot, {
@@ -7966,7 +7980,7 @@ async function ensureFinishTaskRecordExists(input, context, operationId) {
 function assertFinishTaskLifecycleRequestBinding(input, lifecycle, operationId) {
     if (lifecycle?.finishOperationId === operationId
         && (lifecycle.status === 'closing' || lifecycle.status === 'completed')
-        && lifecycle.finishRequestHash !== input.requestHash) {
+        && lifecycle.finishRequestHash !== finishTaskRecordBindingHash(input)) {
         throw new core_1.OperationConflictError(`Idempotency conflict: task lifecycle has a different finish_task request hash: ${input.taskId}`);
     }
 }
@@ -8003,7 +8017,7 @@ async function markFinishTaskRecordClosing(input, context, operationId) {
             const taskPath = await updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, {
                 status: 'closing',
                 finish_operation_id: operationId,
-                finish_request_hash: input.requestHash || null,
+                finish_request_hash: finishTaskRecordBindingHash(input) || null,
                 ...(finishTaskTrackingMode(input) === 'live'
                     ? { finish_recorded_at: input.taskFinishedAt ?? new Date().toISOString() }
                     : {}),
@@ -8619,6 +8633,7 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
     const closeoutGroups = [];
     return {
         requestHash,
+        requestBindingHash: buildFinishTaskRequestBindingHash(requestHash, context),
         requestSnapshot,
         memoryRecordWriteVersion: 2,
         taskRecordCloseoutVersion: 1,
@@ -8698,7 +8713,7 @@ async function findFinishTaskRecord(input, context, operationId) {
     if (!task) {
         throw new core_1.OperationConflictError(`Task record could not be reconstructed for finish-task operation: ${taskPath}`);
     }
-    assertFinishTaskRecordBinding(taskPath, task.content, input.taskId, operationId, input.requestHash || '', true, finishTaskTrackingMode(input) === 'closeout_only');
+    assertFinishTaskRecordBinding(taskPath, task.content, input.taskId, operationId, finishTaskRecordBindingHash(input), true, finishTaskTrackingMode(input) === 'closeout_only');
     const audit = await (0, audit_persistence_1.appendAuditEventAsync)(input.vaultRoot, {
         operationId,
         tool: 'tracekeeper.finish_task',
@@ -8922,7 +8937,7 @@ async function updateFinishTaskRecord(input, context, operationId) {
     const taskFields = {
         status: input.status,
         finished_at: input.taskFinishedAt ?? new Date().toISOString(),
-        finish_request_hash: input.requestHash || null,
+        finish_request_hash: finishTaskRecordBindingHash(input) || null,
         ...(input.startRecovery === 'matched' ? { start_recovery: input.startRecovery } : {}),
         ...(input.startRecovery === 'matched' && input.recordingReason
             ? { recording_reason: input.recordingReason }
@@ -9146,6 +9161,7 @@ async function handleFinishTask(rawArgs, context) {
         storedRequestHash: (payload) => (0, protocol_1.isRecord)(payload) && typeof payload.requestHash === 'string'
             ? payload.requestHash
             : '',
+        recordBindingHash: (payload) => finishTaskRecordBindingHash(payload),
         validateExistingOperation: (record, payload) => {
             if (record.status !== 'completed'
                 && payload.memoryRecordWriteVersion !== 2) {

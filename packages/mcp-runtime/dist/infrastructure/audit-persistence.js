@@ -255,6 +255,11 @@ function looksLikeSensitiveValue(value) {
 function summarizeForAudit(args, limit = MAX_ARGS_SUMMARY_LENGTH) {
     const summary = {};
     function summarize(value, keyHint = '', depth = 0) {
+        if (isIdempotencyKeyField(keyHint)
+            || isSensitiveKey(keyHint)
+            || (typeof value === 'string' && looksLikeSensitiveValue(value))) {
+            return '[redacted]';
+        }
         if (depth > 2) {
             if (value === null || value === undefined) {
                 return value;
@@ -266,11 +271,6 @@ function summarizeForAudit(args, limit = MAX_ARGS_SUMMARY_LENGTH) {
                 return value;
             }
             return '[object]';
-        }
-        if (isIdempotencyKeyField(keyHint)
-            || isSensitiveKey(keyHint)
-            || (typeof value === 'string' && looksLikeSensitiveValue(value))) {
-            return '[redacted]';
         }
         if (Array.isArray(value)) {
             return value.slice(0, 10).map((entry, entryIndex) => summarize(entry, `${keyHint}[${entryIndex}]`, depth + 1));

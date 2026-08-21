@@ -4269,6 +4269,16 @@ function writebackConfirmationSecret(context: ToolInvocationContext): Buffer {
 	return secret;
 }
 
+function buildFinishTaskRequestBindingHash(
+	requestHash: string,
+	context: ToolInvocationContext
+): string {
+	return crypto
+		.createHmac('sha256', writebackConfirmationSecret(context))
+		.update(`tracekeeper.finish_task.request_binding\n${requestHash}`)
+		.digest('hex');
+}
+
 function isWritebackConfirmationBinding(value: unknown): value is WritebackConfirmationBinding {
 	if (!isRecord(value)) {
 		return false;
@@ -10464,6 +10474,7 @@ async function createDistillProposal(
 
 interface FinishTaskOperationPayload {
 	requestHash?: string;
+	requestBindingHash?: string;
 	requestSnapshot?: ReturnType<typeof buildFinishTaskRequestSnapshot>;
 	memoryRecordWriteVersion?: 2;
 	taskRecordCloseoutVersion?: 1;
@@ -10581,6 +10592,15 @@ function isFinishTaskOperationPayload(payload: unknown): payload is FinishTaskOp
 		return false;
 	}
 	if (typeof payload.requestHash !== 'string' || !payload.requestHash) {
+		return false;
+	}
+	if (
+		payload.taskRecordCloseoutVersion === 1
+		&& (
+			typeof payload.requestBindingHash !== 'string'
+			|| !/^[a-f0-9]{64}$/.test(payload.requestBindingHash)
+		)
+	) {
 		return false;
 	}
 	if (
@@ -10760,6 +10780,10 @@ function assertFinishTaskRecordBinding(
 	}
 }
 
+function finishTaskRecordBindingHash(input: FinishTaskOperationPayload): string {
+	return input.requestBindingHash || input.requestHash || '';
+}
+
 async function ensureFinishTaskRecordExists(
 	input: FinishTaskOperationPayload,
 	context: ToolContext,
@@ -10773,7 +10797,7 @@ async function ensureFinishTaskRecordExists(
 			current.content,
 			input.taskId,
 			operationId,
-			input.requestHash || '',
+			finishTaskRecordBindingHash(input),
 			false,
 			finishTaskTrackingMode(input) === 'closeout_only'
 		);
@@ -10844,7 +10868,7 @@ async function ensureFinishTaskRecordExists(
 			}),
 			finish_recorded_at: reconstructedAt,
 			finish_operation_id: operationId,
-			finish_request_hash: input.requestHash || null,
+			finish_request_hash: finishTaskRecordBindingHash(input) || null,
 		},
 		body
 	);
@@ -10872,7 +10896,7 @@ async function ensureFinishTaskRecordExists(
 			racedRecord.content,
 			input.taskId,
 			operationId,
-			input.requestHash || '',
+			finishTaskRecordBindingHash(input),
 			false,
 			isCloseoutOnly
 		);
@@ -10902,7 +10926,7 @@ function assertFinishTaskLifecycleRequestBinding(
 	if (
 		lifecycle?.finishOperationId === operationId
 		&& (lifecycle.status === 'closing' || lifecycle.status === 'completed')
-		&& lifecycle.finishRequestHash !== input.requestHash
+		&& lifecycle.finishRequestHash !== finishTaskRecordBindingHash(input)
 	) {
 		throw new OperationConflictError(
 			`Idempotency conflict: task lifecycle has a different finish_task request hash: ${input.taskId}`
@@ -10963,7 +10987,7 @@ async function markFinishTaskRecordClosing(
 			const taskPath = await updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, {
 				status: 'closing',
 				finish_operation_id: operationId,
-				finish_request_hash: input.requestHash || null,
+				finish_request_hash: finishTaskRecordBindingHash(input) || null,
 				...(finishTaskTrackingMode(input) === 'live'
 					? { finish_recorded_at: input.taskFinishedAt ?? new Date().toISOString() }
 					: {}),
@@ -11797,6 +11821,7 @@ async function buildFinishTaskOperationPayload(
 
 	return {
 		requestHash,
+		requestBindingHash: buildFinishTaskRequestBindingHash(requestHash, context),
 		requestSnapshot,
 		memoryRecordWriteVersion: 2,
 		taskRecordCloseoutVersion: 1,
@@ -11906,7 +11931,7 @@ async function findFinishTaskRecord(
 		task.content,
 		input.taskId,
 		operationId,
-		input.requestHash || '',
+		finishTaskRecordBindingHash(input),
 		true,
 		finishTaskTrackingMode(input) === 'closeout_only'
 	);
@@ -12315,7 +12340,7 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 	const taskFields = {
 		status: input.status,
 		finished_at: input.taskFinishedAt ?? new Date().toISOString(),
-		finish_request_hash: input.requestHash || null,
+		finish_request_hash: finishTaskRecordBindingHash(input) || null,
 		...(input.startRecovery === 'matched' ? { start_recovery: input.startRecovery } : {}),
 		...(input.startRecovery === 'matched' && input.recordingReason
 			? { recording_reason: input.recordingReason }
@@ -12682,6 +12707,7 @@ async function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolInvocation
 			isRecord(payload) && typeof payload.requestHash === 'string'
 				? payload.requestHash
 				: '',
+		recordBindingHash: (payload) => finishTaskRecordBindingHash(payload),
 		validateExistingOperation: (record, payload) => {
 			if (
 				record.status !== 'completed'
