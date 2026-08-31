@@ -14,6 +14,7 @@ import {
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const FIXED_TIME_BASE_MS = Date.parse('2026-01-01T00:00:00.000Z');
 const EVENT_TIME_BASE_MS = Date.parse('2027-01-01T00:00:00.000Z');
+const FIXTURE_IO_CONCURRENCY = 32;
 
 function yamlString(value) {
 	return JSON.stringify(String(value));
@@ -40,6 +41,16 @@ async function writeDurable(filePath, content) {
 	} finally {
 		await handle.close();
 	}
+}
+
+async function flushFixtureWrites(pendingWrites) {
+	if (pendingWrites.length === 0) return;
+	const writes = pendingWrites.splice(0, pendingWrites.length);
+	await Promise.all(writes.map(async ({ absolutePath, content, modifiedAt }) => {
+		await writeDurable(absolutePath, content);
+		const modifiedDate = new Date(modifiedAt);
+		await fs.utimes(absolutePath, modifiedDate, modifiedDate);
+	}));
 }
 
 function paddedContent(lines, targetBytes, token) {
@@ -427,6 +438,7 @@ export async function generateFixture(options) {
 	});
 	const sourcePaths = notePaths.filter((_, index) => rootDefinitions[index].type === 'captured-source');
 	const noteRecords = [];
+	const pendingWrites = [];
 
 	await fs.mkdir(fixtureRoot, { recursive: true });
 	for (let index = 0; index < config.note_count; index += 1) {
@@ -491,9 +503,10 @@ export async function generateFixture(options) {
 		const content = paddedContent(body, dimensions.bodyTargets[index], String(index + 1));
 		const relativePath = notePaths[index];
 		const absolutePath = path.join(fixtureRoot, ...relativePath.split('/'));
-		await writeDurable(absolutePath, content);
-		const modifiedDate = new Date(modifiedAt);
-		await fs.utimes(absolutePath, modifiedDate, modifiedDate);
+		pendingWrites.push({ absolutePath, content, modifiedAt });
+		if (pendingWrites.length >= FIXTURE_IO_CONCURRENCY) {
+			await flushFixtureWrites(pendingWrites);
+		}
 		const size = Buffer.byteLength(content, 'utf8');
 		noteRecords.push({
 			content_id: `note-${String(index + 1).padStart(6, '0')}:base`,
@@ -513,6 +526,7 @@ export async function generateFixture(options) {
 			isolated: isolated.has(index),
 		});
 	}
+	await flushFixtureWrites(pendingWrites);
 
 	const incrementalEvents = buildIncrementalEvents(config, noteRecords);
 	const replayEvents = buildReplayEvents();
@@ -568,19 +582,27 @@ export async function generateFixture(options) {
 
 export async function verifyFixture(fixture) {
 	const failures = [];
-	for (const note of fixture.manifest.notes) {
-		const absolutePath = path.join(fixture.fixtureRoot, ...note.relative_path.split('/'));
-		const content = await fs.readFile(absolutePath);
-		const stat = await fs.stat(absolutePath);
-		if (content.length !== note.size) {
-			failures.push(`${note.relative_path}: size mismatch`);
-		}
-		if (sha256(content) !== note.content_sha256) {
-			failures.push(`${note.relative_path}: content hash mismatch`);
-		}
-		if (fileVersion(stat.size, stat.mtime.toISOString()) !== note.file_version) {
-			failures.push(`${note.relative_path}: file version mismatch`);
-		}
+	for (let offset = 0; offset < fixture.manifest.notes.length; offset += FIXTURE_IO_CONCURRENCY) {
+		const notes = fixture.manifest.notes.slice(offset, offset + FIXTURE_IO_CONCURRENCY);
+		const rows = await Promise.all(notes.map(async (note) => {
+			const noteFailures = [];
+			const absolutePath = path.join(fixture.fixtureRoot, ...note.relative_path.split('/'));
+			const [content, stat] = await Promise.all([
+				fs.readFile(absolutePath),
+				fs.stat(absolutePath),
+			]);
+			if (content.length !== note.size) {
+				noteFailures.push(`${note.relative_path}: size mismatch`);
+			}
+			if (sha256(content) !== note.content_sha256) {
+				noteFailures.push(`${note.relative_path}: content hash mismatch`);
+			}
+			if (fileVersion(stat.size, stat.mtime.toISOString()) !== note.file_version) {
+				noteFailures.push(`${note.relative_path}: file version mismatch`);
+			}
+			return noteFailures;
+		}));
+		for (const row of rows) failures.push(...row);
 	}
 	const manifestWithoutHash = { ...fixture.manifest };
 	delete manifestWithoutHash.manifest_sha256;
