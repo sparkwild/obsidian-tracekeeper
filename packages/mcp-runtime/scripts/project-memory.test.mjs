@@ -14,6 +14,7 @@ import {
 	computeProposalRevision,
 	deriveProjectMemoryHubBindingFromRepoPath,
 	parseMarkdown,
+	renderManagedRelationsBlock,
 	scanVault,
 	transitionProposal,
 } from '@tracekeeper/core';
@@ -343,6 +344,7 @@ function createFixture(t, { generation = 41 } = {}) {
 			memoryRules: {
 				globalMemoryRule: 'review_queue',
 				projectMemoryRule: 'auto_write',
+				wikiChangeRule: 'review_batch',
 				taskTrackingEnabled: true,
 			},
 		};
@@ -2215,7 +2217,7 @@ test('non-Wiki propose_memory without memory_scope fails closed before persisten
 	assert.equal(fixture.exists('00_tracekeeper/inbox/review_queue'), false);
 });
 
-test('explicit Wiki target is review-gated without memory_scope even when Memory is disabled', async (t) => {
+test('explicit existing Wiki target is individually review-gated as high risk', async (t) => {
 	const fixture = createFixture(t);
 	const before = fixture.read(WIKI_PATH);
 	const context = fixture.context();
@@ -2234,9 +2236,168 @@ test('explicit Wiki target is review-gated without memory_scope even when Memory
 	assert.equal(result.proposal_destination, 'wiki');
 	assert.equal(result.memory_scope, null);
 	assert.equal(result.memory_rule, null);
-	assert.equal(result.review_reason, 'wiki_change_requires_human_review');
+	assert.equal(result.review_reason, 'wiki_high_risk_change_requires_individual_review');
+	assert.equal(result.effective_wiki_rule, 'review_batch');
+	assert.equal(result.effective_risk, 'high');
 	assert.equal(result.target_note, undefined);
 	assert.equal(fixture.read(WIKI_PATH), before);
+});
+
+test('Wiki disabled and auto-managed policies remain independent from Memory rules', async (t) => {
+	const fixture = createFixture(t);
+	fixture.write('01_knowledge/wiki/index.md', '# Wiki\n');
+	const sourceIndexPath = '01_knowledge/sources/files/auto-policy-source.md';
+	fixture.write(sourceIndexPath, '# Source index\n');
+	const disabledContext = fixture.context();
+	disabledContext.memoryRules.wikiChangeRule = 'disabled';
+	const disabled = expectSuccess(await callTool('tracekeeper.propose_memory', {
+		proposal_kind: 'wiki_update',
+		content: 'Ignored Wiki candidate.',
+		target_note: WIKI_PATH,
+		idempotency_key: 'wiki-disabled-policy',
+	}, disabledContext), 'disabled Wiki candidate');
+	assert.equal(disabled.status, 'ignored');
+	assert.equal(disabled.proposal_id, null);
+
+	const autoContext = fixture.context();
+	autoContext.memoryRules.wikiChangeRule = 'auto_managed';
+	const target = '01_knowledge/wiki/auto-created-topic.md';
+	const created = expectSuccess(await callTool('tracekeeper.propose_memory', {
+		proposal_kind: 'wiki_topic',
+		content: '# Auto-created topic\n\nDurable Wiki content.',
+		target_note: target,
+		wiki_role: 'topic',
+		parent_wiki: WIKI_PATH,
+		related_sources: [sourceIndexPath],
+		idempotency_key: 'wiki-auto-managed-create',
+	}, autoContext), 'auto-managed Wiki create');
+	assert.equal(created.auto_applied, true);
+	assert.equal(created.effective_risk, 'low');
+	assert.match(fixture.read(target), /tracekeeper:relations:start/);
+	assert.match(fixture.read(target), /project-memory-fixture/);
+	assert.match(fixture.read(target), /01_knowledge\/sources\/files\/auto-policy-source/);
+
+	fixture.write(WIKI_PATH, [
+		'# User Wiki',
+		'',
+		'Keep user body.',
+		'',
+		renderManagedRelationsBlock({ parent: '01_knowledge/wiki/index.md' }),
+	].join('\n'));
+	const updated = expectSuccess(await callTool('tracekeeper.propose_memory', {
+		proposal_kind: 'wiki_relations',
+		content: 'Managed relation projection.',
+		target_note: WIKI_PATH,
+		parent_wiki: '01_knowledge/wiki/index.md',
+		idempotency_key: 'wiki-auto-managed-update',
+	}, autoContext), 'auto-managed Wiki relation update');
+	assert.equal(updated.auto_applied, true);
+	assert.match(fixture.read(WIKI_PATH), /Keep user body\./);
+	assert.match(fixture.read(WIKI_PATH), /01_knowledge\/wiki\/index/);
+});
+
+test('auto-managed Wiki recovery preserves a later valid user relation edit', async (t) => {
+	const fixture = createFixture(t);
+	const indexPath = '01_knowledge/wiki/index.md';
+	const desiredPath = '01_knowledge/wiki/desired.md';
+	const userPath = '01_knowledge/wiki/user-edited.md';
+	fixture.write(indexPath, '# Wiki\n');
+	fixture.write(desiredPath, '# Desired\n');
+	fixture.write(userPath, '# User edited\n');
+	fixture.write(WIKI_PATH, [
+		'# User Wiki',
+		'',
+		'Keep user body.',
+		'',
+		renderManagedRelationsBlock({ parent: indexPath }),
+	].join('\n'));
+	let injected = false;
+	const context = fixture.context();
+	context.memoryRules.wikiChangeRule = 'auto_managed';
+	const args = {
+		proposal_kind: 'wiki_relations',
+		content: 'Managed relation projection.',
+		target_note: WIKI_PATH,
+		parent_wiki: indexPath,
+		related_wiki: [desiredPath],
+		idempotency_key: 'wiki-auto-managed-recovery-preserves-user-edit',
+	};
+	const interrupted = await callTool('tracekeeper.propose_memory', args, {
+		...context,
+		operationFailureInjection(injection) {
+			if (!injected && injection.phase === 'before_finalize') {
+				injected = true;
+				throw new Error('interrupt auto-managed Wiki before finalize');
+			}
+		},
+	});
+	assert.equal(interrupted.isError, true);
+	assert.equal(injected, true);
+	const userEdited = [
+		'# User Wiki',
+		'',
+		'Keep user body.',
+		'',
+		renderManagedRelationsBlock({ parent: indexPath, related: [userPath] }),
+	].join('\n');
+	fixture.write(WIKI_PATH, userEdited);
+	const recovery = await recoverPendingOperations(fixture.vaultRoot, context);
+	assert.equal(recovery.recovered.length, 0);
+	assert.equal(recovery.failed.length, 1);
+	assert.match(recovery.failed[0].error, /relation block changed after authorization/i);
+	assert.equal(fixture.read(WIKI_PATH), userEdited);
+});
+
+test('auto-managed Wiki keeps unresolved relation evidence out of automatic writes', async (t) => {
+	const fixture = createFixture(t);
+	const context = fixture.context();
+	context.memoryRules.wikiChangeRule = 'auto_managed';
+	const target = '01_knowledge/wiki/unresolved-topic.md';
+	const result = expectSuccess(await callTool('tracekeeper.propose_memory', {
+		proposal_kind: 'wiki_topic',
+		content: '# Unresolved topic',
+		target_note: target,
+		parent_wiki: '01_knowledge/wiki/missing-parent.md',
+		idempotency_key: 'wiki-auto-managed-unresolved-relation',
+	}, context), 'auto-managed unresolved Wiki relation');
+	assert.equal(result.auto_applied, false);
+	assert.equal(result.effective_risk, 'blocked');
+	assert.ok(result.proposal_id);
+	assert.equal(fixture.exists(target), false);
+});
+
+test('same-task Wiki proposals may reference one uniquely planned target', async (t) => {
+	const fixture = createFixture(t);
+	fixture.write('01_knowledge/wiki/index.md', '# Wiki\n');
+	const context = fixture.context();
+	const task = expectSuccess(await callTool('tracekeeper.start_task', {
+		goal: 'Create one planned Wiki batch.',
+		idempotency_key: 'planned-wiki-batch-task',
+	}, context), 'planned Wiki batch task');
+	const taskId = task.task_id;
+	const mapPath = '01_knowledge/wiki/programming-map.md';
+	const map = expectSuccess(await callTool('tracekeeper.propose_memory', {
+		proposal_kind: 'wiki_topic_map',
+		content: '# Programming map',
+		target_note: mapPath,
+		wiki_role: 'topic_map',
+		parent_wiki: '01_knowledge/wiki/index.md',
+		task_id: taskId,
+		idempotency_key: 'planned-wiki-map',
+	}, context), 'planned Wiki map');
+	assert.equal(map.effective_risk, 'low');
+	const topic = expectSuccess(await callTool('tracekeeper.propose_memory', {
+		proposal_kind: 'wiki_topic',
+		content: '# TypeScript',
+		target_note: '01_knowledge/wiki/typescript.md',
+		wiki_role: 'topic',
+		parent_wiki: mapPath,
+		task_id: taskId,
+		idempotency_key: 'planned-wiki-topic',
+	}, fixture.context()), 'planned Wiki topic');
+	assert.equal(topic.effective_risk, 'low');
+	assert.equal(topic.review_batch_id, `task:${taskId}`);
+	assert.match(fixture.read(topic.proposal_path), /01_knowledge\/wiki\/programming-map/);
 });
 
 test('disabled Memory scope ignores a candidate without proposal or durable record', async (t) => {

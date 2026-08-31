@@ -1,4 +1,4 @@
-import { type OperationFailureInjection, type OperationJournal } from '@tracekeeper/core';
+import { type WikiChangeRule, type WikiEffectiveRisk, type WikiRole, type OperationFailureInjection, type OperationJournal } from '@tracekeeper/core';
 export type ProposeMemoryScope = 'global' | 'project';
 export type ProposeMemoryRule = 'review_queue' | 'auto_write' | 'disabled';
 export type ProposeMemoryAgentType = string;
@@ -19,6 +19,8 @@ export interface ProposeMemoryRawRequest {
     memory_scope?: unknown;
     related_wiki?: unknown;
     related_sources?: unknown;
+    wiki_role?: unknown;
+    parent_wiki?: unknown;
     claim_key?: unknown;
     proposed_authority?: unknown;
     proposed_confidence?: unknown;
@@ -48,6 +50,8 @@ export interface ProposeMemoryRequestSnapshot {
     memory_scope: string | null;
     related_wiki: string[];
     related_sources: string[];
+    wiki_role: WikiRole | null;
+    parent_wiki: string | null;
     claim_key: string | null;
     proposed_authority: string | null;
     proposed_confidence: string | null;
@@ -159,6 +163,16 @@ export interface ProposeMemoryWriteInput {
     metadata: Record<string, unknown>;
     operationId: string;
 }
+export interface ProposeMemoryAutoWikiWriteInput {
+    targetNote: string;
+    content: string;
+    taskId: string | null;
+    operationId: string;
+    proposalKind: string;
+    reviewBatchId: string;
+    effect: 'create_wiki_note' | 'update_managed_relations';
+    expectedManagedRelationsHash?: string;
+}
 export interface ProposeMemoryApplicationDependencies {
     journal: OperationJournal;
     failureInjection?: OperationFailureInjection;
@@ -171,10 +185,11 @@ export interface ProposeMemoryApplicationDependencies {
     buildFilename(rawFilename: string | null, fallbackPrefix: string): string;
     resolveMemoryScope(proposalKind: string, targetNote: string, projectHint: string, memoryScope: string | null): ProposeMemoryScope;
     buildArchitectureStatus(): ProposeMemoryArchitectureStatus;
-    resolveBridgeMetadata(memoryScope: ProposeMemoryScope, projectHint: string, relatedWiki: string[], relatedSources: string[]): ProposeMemoryBridgeMetadata;
+    resolveBridgeMetadata(memoryScope: ProposeMemoryScope, projectHint: string, relatedWiki: string[], relatedSources: string[], taskId?: string | null): ProposeMemoryBridgeMetadata;
     resolveProjectIdentity(snapshot: ProposeMemoryRequestSnapshot): ProposeMemoryProjectIdentity | null;
     assertAllowed(proposalKind: string, targetNote: string, projectHint: string, memoryScope: ProposeMemoryScope): void;
     memoryRule(proposalKind: string, targetNote: string, projectHint: string, memoryScope: ProposeMemoryScope): ProposeMemoryRule;
+    wikiRule?(): WikiChangeRule;
     writeImmutableMemoryRecord(input: ProposeMemoryImmutableWriteInput): Promise<ProposeMemoryImmutableWriteResult>;
     resolveMemoryRecordTarget?(input: {
         scope: ProposeMemoryScope;
@@ -186,6 +201,7 @@ export interface ProposeMemoryApplicationDependencies {
     }): Promise<string | null>;
     findOwnedProposalNote(filename: string, operationId: string): Promise<ProposeMemoryNote | null>;
     writeProposalNote(input: ProposeMemoryWriteInput): Promise<ProposeMemoryNote>;
+    writeAutoWiki?(input: ProposeMemoryAutoWikiWriteInput): Promise<ProposeMemoryNote>;
     ensureOwnedProposalIdentity(path: string, proposalId: string, operationId: string): Promise<void>;
     updateTaskMemoryWrite(taskId: string | null, path: string): Promise<void>;
     updateTaskProposalReference(taskId: string, proposal: {
@@ -199,6 +215,7 @@ export interface ProposeMemoryApplicationDependencies {
     }>): void;
     renderText(zh: string, en: string): string;
     isTargetNoteMissing?(targetNote: string): Promise<boolean>;
+    readTargetNote?(targetNote: string): Promise<string | null>;
 }
 export interface ProposeMemoryApplicationRequest {
     rawArgs: ProposeMemoryRawRequest;
@@ -225,6 +242,30 @@ export declare class ProposeMemoryApplicationService {
         review_reason: null;
         review_warnings: never[];
     } | {
+        ok: boolean;
+        tool: "tracekeeper.propose_memory";
+        operation_id: string;
+        idempotency_key: string;
+        status: "ignored";
+        persisted: false;
+        auto_applied: false;
+        duplicate: boolean;
+        proposal_destination: "wiki";
+        memory_rule: null;
+        memory_scope: null;
+        project_hint: string | null;
+        target_note: string | null;
+        warnings: string[];
+        proposal_id: null;
+        proposal_path: null;
+        review_reason: null;
+        review_warnings: never[];
+        review_batch_id: null;
+        wiki_role: WikiRole | null;
+        parent_wiki: string | null;
+        effective_wiki_rule: "disabled";
+        effective_risk: null;
+    } | {
         proposal_transition_preview: {
             operation_id: string;
             kind: string;
@@ -237,6 +278,11 @@ export declare class ProposeMemoryApplicationService {
         };
         review_reason: string | null;
         review_warnings: string[];
+        review_batch_id: string | null;
+        wiki_role: WikiRole | null;
+        parent_wiki: string | null;
+        effective_wiki_rule: WikiChangeRule | null;
+        effective_risk: WikiEffectiveRisk | null;
         predicted_record?: {
             scope: ProposeMemoryScope;
             project_id: string | null;
@@ -353,6 +399,55 @@ export declare class ProposeMemoryApplicationService {
         missing_wiki_bridge: boolean;
         proposal_id: null;
         proposal_path: null;
+        persisted?: undefined;
+        review_reason?: undefined;
+        review_warnings?: undefined;
+        review_batch_id?: undefined;
+        wiki_role?: undefined;
+        parent_wiki?: undefined;
+        effective_wiki_rule?: undefined;
+        effective_risk?: undefined;
+    } | {
+        ok: boolean;
+        tool: "tracekeeper.propose_memory";
+        operation_id: string;
+        idempotency_key: string;
+        status: string;
+        path: string;
+        target_note: string;
+        activity_path: string;
+        warnings: string[];
+        persisted: boolean;
+        auto_applied: boolean;
+        duplicate: boolean;
+        proposal_destination: "wiki";
+        memory_rule: null;
+        memory_scope: null;
+        project_hint: string | null;
+        related_wiki: string[];
+        related_sources: string[];
+        missing_related_sources: string[];
+        architecture_status: "healthy" | "needs_attention";
+        missing_graph_bridges: string[];
+        missing_wiki_bridge: boolean;
+        proposal_id: null;
+        proposal_path: null;
+        review_reason: null;
+        review_warnings: never[];
+        review_batch_id: string | null;
+        wiki_role: WikiRole | null;
+        parent_wiki: string | null;
+        effective_wiki_rule: "auto_managed";
+        effective_risk: "low";
+        project_id?: undefined;
+        project_hub?: undefined;
+        global_hub?: undefined;
+        agent_type?: undefined;
+        operation_hash?: undefined;
+        record_identity?: undefined;
+        predicted_record?: undefined;
+        predicted_state?: undefined;
+        proposal_transition_preview?: undefined;
     }>;
     private finalize;
 }

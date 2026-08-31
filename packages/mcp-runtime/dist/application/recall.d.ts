@@ -75,6 +75,7 @@ export interface RecallEntry {
     instruction_trust: 'data_only';
     graph_links: string[];
     relation_evidence: RecallRelationEvidence;
+    supporting_paths?: string[];
 }
 export interface ProjectHistoryEntry {
     path: string;

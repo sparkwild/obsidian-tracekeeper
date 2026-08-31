@@ -24,6 +24,13 @@ Body wikilinks are the graph contract. Relationship fields such as
 `related_wiki` and `related_sources` are mirrored in note bodies so Obsidian,
 Recall, and graph inspection share the same relationships.
 
+Wiki hierarchy is role-based, not folder-based. `wiki/index.md` is the stable
+root; Topic Maps and topics link upward with canonical Vault-relative
+wikilinks. `wiki/hubs/` remains readable compatibility content but is absent
+from required structure and recommended-hub checks. Tracekeeper writes existing
+Wiki relations only inside a versioned, hash-bound managed region and preserves
+all text outside that region.
+
 The read model preserves every physical frontmatter and body-link observation,
 but graph-health relationship totals are semantic: the same source-to-target
 relation mirrored in both locations counts once. `edge_observation_count`
@@ -83,6 +90,17 @@ Source candidates are durable provenance, not approved synthesis. Their
 presence in Recall or `read_note` does not imply that any linked Wiki/Memory
 proposal has been approved or applied; the finish-task durable-output summary
 owns that closeout distinction.
+
+Source-part text remains lexically searchable, but a part hit folds to its
+Source index before Recall returns results. The top-level match reports the
+index path and carries the exact part in `supporting_paths`; parts do not become
+top-level Recall knowledge or semantic graph-health nodes.
+
+Graph health evaluates the semantic knowledge subgraph under `01_knowledge/`,
+excluding Source parts and operational or archived records from component and
+isolation counts. The plugin only offers a copyable filter for Obsidian's
+official Graph View and never writes `.obsidian/graph.json` or uses a private
+graph renderer.
 
 A Source note's `source` metadata, capture structure, part links, and incidental
 body links remain visible in the raw Vault graph but do not become Recall

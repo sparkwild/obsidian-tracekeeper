@@ -301,7 +301,9 @@ material in its established task location.
 
 The release workflow is `.github/workflows/release.yml`. Its build job checks
 out a pushed strict version tag with full history, runs the full verification
-and package flow under read-only repository permission, generates artifact
+and package flow under read-only repository permission, runs the formal 20k
+knowledge-index benchmark on the GitHub-hosted candidate machine and retains
+its sanitized report artifact, generates release-asset
 attestations, and transfers one exact Actions artifact named by version and
 checked commit. A separate write-enabled job revalidates the tag and default
 branch before creating an unpublished GitHub Draft Release containing exactly

@@ -144,6 +144,26 @@ const parseLegacyWriteback = (body: string): BodyWritebackResult => {
 		if (!heading || !SUPPORTED_WRITEBACK_HEADINGS.has(heading)) {
 			continue;
 		}
+		const managedCandidate = lines.slice(index + 1).join('\n').trim();
+		const managedStarts = managedCandidate.match(/<!--\s*tracekeeper:relations:start\s+schema="1"\s+hash="sha256:[a-f0-9]{64}"\s*-->/g) ?? [];
+		const managedEnds = managedCandidate.match(/<!--\s*tracekeeper:relations:end\s*-->/g) ?? [];
+		if (
+			managedStarts.length === 1
+			&& managedEnds.length === 1
+			&& managedCandidate.startsWith(managedStarts[0])
+			&& managedCandidate.endsWith(managedEnds[0])
+		) {
+			return {
+				content: managedCandidate,
+				format: 'legacy_heading',
+				source: 'body',
+				ambiguous: false,
+				error: null,
+				contentStart: offset,
+				contentEnd: normalized.length,
+				headingStart: lineStart,
+			};
+		}
 		const content: string[] = [];
 		let contentEnd = normalized.length;
 		let ambiguous = false;

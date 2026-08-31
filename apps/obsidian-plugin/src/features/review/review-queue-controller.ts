@@ -5,6 +5,9 @@ import {
 	TRACEKEEPER_TASKS_DIR,
 	computePayloadHash,
 	hashVaultContent,
+	isKnowledgeWikiPath,
+	WIKI_REVIEW_BATCH_MAX_BYTES,
+	WIKI_REVIEW_BATCH_MAX_ITEMS,
 	type ProposalTransitionDecision,
 } from '@tracekeeper/core';
 import type { ActivityRecordRepository } from '../activity/activity-record-repository';
@@ -35,6 +38,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const ARCHIVE_PREVIEW_TTL_MS = 10 * 60 * 1000;
+const WIKI_BATCH_PREVIEW_TTL_MS = 5 * 60 * 1000;
 const ARCHIVE_MAX_ITEMS = 64;
 const ARCHIVE_MAX_MANAGED_REFERENCE_PATHS = 256;
 const ARCHIVE_PREVIEW_MAX_LENGTH = 256 * 1024;
@@ -361,11 +365,45 @@ export interface ApprovedWritebackPreview {
 	proposal_id: string;
 	proposal_path: string;
 	target_note: string;
+	target_content_hash: string;
 	touched_notes: string[];
 	writeback_preview: string;
-	writeback_effect: 'append' | 'create_wiki_note' | 'create_memory_record';
+	writeback_effect: 'append' | 'create_wiki_note' | 'create_memory_record' | 'update_managed_relations';
 	confirmation_token: string;
 	confirmation_expires_at: string;
+}
+
+export interface WikiReviewBatchPreviewItem {
+	proposalId: string;
+	proposalPath: string;
+	proposalRevision: string;
+	proposalContentHash: string;
+	proposalFileHash: string;
+	targetPath: string;
+	targetExists: boolean;
+	targetContentHash: string;
+	taskId: string;
+	effectiveRisk: string;
+	writebackPreview: string;
+}
+
+export interface WikiReviewBatchPreview {
+	schemaVersion: 1;
+	operationId: string;
+	reviewBatchId: string;
+	issuedAt: string;
+	expiresAt: string;
+	items: WikiReviewBatchPreviewItem[];
+	confirmationToken: string;
+}
+
+export interface WikiReviewBatchReceipt {
+	schemaVersion: 1;
+	operationId: string;
+	status: 'completed' | 'partial' | 'conflict';
+	applied: string[];
+	conflicts: Array<{ proposalPath: string; message: string }>;
+	completedAt: string;
 }
 
 export interface ReviewQueueControllerHost {
@@ -444,11 +482,14 @@ private isApprovedWritebackPreview(value: unknown): value is ApprovedWritebackPr
 		return typeof value.proposal_id === 'string'
 			&& typeof value.proposal_path === 'string'
 			&& typeof value.target_note === 'string'
+			&& typeof value.target_content_hash === 'string'
+			&& value.target_content_hash.length > 0
 			&& typeof value.writeback_preview === 'string'
 			&& (
 				value.writeback_effect === 'append'
 				|| value.writeback_effect === 'create_wiki_note'
 				|| value.writeback_effect === 'create_memory_record'
+				|| value.writeback_effect === 'update_managed_relations'
 			)
 			&& typeof value.confirmation_token === 'string'
 			&& value.confirmation_token.length > 0
@@ -486,6 +527,165 @@ async applyApprovedWriteback(
 		}
 		await this.host.executeLocalTool('tracekeeper.apply_approved_writeback', args);
 		await this.host.refreshGovernanceViews();
+	}
+
+	async previewWikiReviewBatch(proposals: readonly MemoryProposalRecord[]): Promise<WikiReviewBatchPreview> {
+		if (proposals.length === 0 || proposals.length > WIKI_REVIEW_BATCH_MAX_ITEMS) {
+			throw new Error('Wiki review batch count is outside the bounded range.');
+		}
+		const reviewBatchIds = new Set(proposals.map((proposal) => proposal.reviewBatchId || `proposal:${proposal.proposalId}`));
+		if (reviewBatchIds.size !== 1) {
+			throw new Error('Wiki review batch contains proposals from different trusted batches.');
+		}
+		const highRiskCount = proposals.filter((proposal) => (proposal.effectiveRisk || proposal.riskLevel) === 'high').length;
+		if (highRiskCount > 0 && proposals.length !== 1) {
+			throw new Error('High-risk Wiki changes must be reviewed individually.');
+		}
+		const items: WikiReviewBatchPreviewItem[] = [];
+		let totalBytes = 0;
+		for (const proposal of proposals) {
+			const current = await this.readCurrentProposal(proposal.path);
+			if (
+				current.proposalId !== proposal.proposalId
+				|| current.revision !== proposal.revision
+				|| current.contentHash !== proposal.contentHash
+				|| current.fileContentHash !== proposal.fileContentHash
+			) throw new Error(`Wiki proposal changed before batch preview: ${proposal.path}.`);
+			if (!isKnowledgeWikiPath(current.targetNote)) {
+				throw new Error(`Batch review accepts only Wiki targets: ${current.targetNote}.`);
+			}
+			if (current.approvalStatus !== 'pending' && current.approvalStatus !== 'approved') {
+				throw new Error(`Wiki proposal is not reviewable: ${current.path}.`);
+			}
+			const target = this.app.vault.getAbstractFileByPath(current.targetNote);
+			if (target && !(target instanceof TFile)) {
+				throw new Error(`Wiki target path is occupied by a non-file entry: ${current.targetNote}.`);
+			}
+			const targetContent = target instanceof TFile ? await this.app.vault.read(target) : '';
+			totalBytes += new TextEncoder().encode(current.writebackContent).byteLength;
+			if (totalBytes > WIKI_REVIEW_BATCH_MAX_BYTES) {
+				throw new Error('Wiki review batch exceeds the bounded content size.');
+			}
+			items.push({
+				proposalId: current.proposalId,
+				proposalPath: current.path,
+				proposalRevision: current.revision,
+				proposalContentHash: current.contentHash,
+				proposalFileHash: current.fileContentHash,
+				targetPath: current.targetNote,
+				targetExists: target instanceof TFile,
+				targetContentHash: target instanceof TFile ? hashVaultContent(targetContent) : 'absent',
+				taskId: current.taskId,
+				effectiveRisk: current.effectiveRisk || current.riskLevel,
+				writebackPreview: current.writebackContent,
+			});
+		}
+		const issuedAt = this.nowFactory();
+		const unsigned = {
+			schemaVersion: 1 as const,
+			operationId: `review-batch-${this.operationIdFactory().replace(/^review-/, '')}`,
+			reviewBatchId: [...reviewBatchIds][0] || '',
+			issuedAt: issuedAt.toISOString(),
+			expiresAt: new Date(issuedAt.getTime() + WIKI_BATCH_PREVIEW_TTL_MS).toISOString(),
+			items,
+		};
+		return { ...unsigned, confirmationToken: hashVaultContent(JSON.stringify(unsigned)) };
+	}
+
+	async confirmWikiReviewBatch(
+		preview: WikiReviewBatchPreview,
+		confirmationToken: string
+	): Promise<WikiReviewBatchReceipt> {
+		const { confirmationToken: _stored, ...unsigned } = preview;
+		if (
+			!confirmationToken
+			|| confirmationToken !== preview.confirmationToken
+			|| confirmationToken !== hashVaultContent(JSON.stringify(unsigned))
+		) throw new Error('Wiki batch confirmation does not match the displayed preview.');
+		if (this.nowFactory().getTime() > Date.parse(preview.expiresAt)) {
+			throw new Error('Wiki batch preview expired; generate a fresh preview.');
+		}
+		const paths = preview.items.flatMap((item) => [item.proposalPath, item.targetPath]);
+		return withObsidianVaultPathLocks(this.app.vault, paths, async () => {
+			const currentRecords: MemoryProposalRecord[] = [];
+			for (const item of preview.items) {
+				const current = await this.readCurrentProposal(item.proposalPath);
+				const target = this.app.vault.getAbstractFileByPath(item.targetPath);
+				const targetContent = target instanceof TFile ? await this.app.vault.read(target) : '';
+				if (
+					current.proposalId !== item.proposalId
+					|| current.revision !== item.proposalRevision
+					|| current.contentHash !== item.proposalContentHash
+					|| current.fileContentHash !== item.proposalFileHash
+					|| (target instanceof TFile) !== item.targetExists
+					|| (target instanceof TFile ? hashVaultContent(targetContent) : 'absent') !== item.targetContentHash
+				) throw new Error(`Wiki batch preview is stale: ${item.proposalPath}.`);
+				currentRecords.push(current);
+			}
+
+			const applied: string[] = [];
+			const conflicts: Array<{ proposalPath: string; message: string }> = [];
+			for (let index = 0; index < currentRecords.length; index += 1) {
+				let current = currentRecords[index];
+				try {
+					const batchItem = preview.items[index];
+					const latestTarget = this.app.vault.getAbstractFileByPath(batchItem.targetPath);
+					const latestTargetContent = latestTarget instanceof TFile ? await this.app.vault.read(latestTarget) : '';
+					const latestTargetHash = latestTarget instanceof TFile
+						? hashVaultContent(latestTargetContent)
+						: 'absent';
+					if (latestTargetHash !== batchItem.targetContentHash) {
+						throw new Error(`Wiki batch target changed before item approval: ${batchItem.targetPath}.`);
+					}
+					if (current.approvalStatus === 'pending') {
+						const decision = await this.transitions.transition({
+							proposalPath: current.path,
+							expectedRevision: current.revision,
+							expectedContentHash: current.contentHash,
+							operationId: `${preview.operationId}-approve-${index + 1}`,
+							action: { kind: 'status', nextStatus: 'approved' },
+							now: this.nowFactory().toISOString(),
+							actor: 'user',
+						});
+						await this.appendProposalTransitionAuditEvent(decision, 'memory.proposal.approved');
+						current = await this.readCurrentProposal(current.path);
+					}
+					const applyPreview = await this.previewApprovedWriteback(current);
+					if (applyPreview.target_content_hash !== batchItem.targetContentHash) {
+						throw new Error(`Wiki batch target changed before item apply: ${batchItem.targetPath}.`);
+					}
+					await this.host.executeLocalTool('tracekeeper.apply_approved_writeback', {
+						proposal_path: current.path,
+						confirmation_token: applyPreview.confirmation_token,
+						...(current.taskId ? { task_id: current.taskId } : {}),
+					});
+					applied.push(current.path);
+				} catch (error) {
+					conflicts.push({
+						proposalPath: current.path,
+						message: error instanceof Error ? error.message : String(error),
+					});
+					break;
+				}
+			}
+			await this.host.refreshGovernanceViews();
+			return {
+				schemaVersion: 1,
+				operationId: preview.operationId,
+				status: conflicts.length === 0 ? 'completed' : applied.length > 0 ? 'partial' : 'conflict',
+				applied,
+				conflicts,
+				completedAt: this.nowFactory().toISOString(),
+			};
+		});
+	}
+
+	private async readCurrentProposal(path: string): Promise<MemoryProposalRecord> {
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) throw new Error(`Review proposal is unavailable: ${path}.`);
+		const record = await this.records.readMemoryProposalFile(file);
+		if (!record) throw new Error(`Review proposal is invalid: ${path}.`);
+		return record;
 	}
 
 	async loadMemoryReviewQueueSnapshot(offset = 0): Promise<MemoryReviewQueueSnapshot> {

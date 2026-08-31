@@ -66,8 +66,17 @@ Memory and Wiki proposals have independent routing. Every MemoryRecord
 candidate declares global or project scope; for direct `propose_memory` calls,
 `memory_scope` is mandatory and `project_hint` supplies identity rather than
 scope authority. An explicit target under `01_knowledge/wiki/**` is a Wiki
-change, does not require `memory_scope`, and always enters Knowledge Change
-Review regardless of either Memory policy.
+change and does not require `memory_scope`. Wiki routing follows the independent
+user-selected rule: review each, review by task batch, auto-manage eligible
+create-only or intact managed-relation changes, or ignore. Fresh installs and
+upgrades without a stored Wiki rule default to batch review. Agent-supplied risk
+labels and user-intent claims do not select or expand this policy.
+
+Wiki roles are semantic rather than directory-owned. `wiki/index.md` is the
+root entry, while Topic Maps and topics may live anywhere under the Wiki root.
+The `wiki/hubs/` directory is optional compatibility content: initialization,
+Doctor, and write routing neither create nor require it, and upgrades never
+move or delete an existing directory.
 
 An incomplete proposal is a remediation item, not a review-ready change. An
 append proposal must resolve an existing Vault-local Memory/Wiki target before
@@ -88,9 +97,12 @@ must be resubmitted, while terminal history is never rewritten or reopened.
 
 The review detail presents the available task and source evidence, current or
 absent target state, and a projected append or create diff from the reviewed
-proposal. Approval still does not write. Apply generates the authoritative,
-operation-bound preview and requires a separate confirmation whose binding
-includes the concrete effect and target state. A Wiki or lifecycle target is
+proposal. Memory and legacy approval remain separate from apply. For Wiki
+review, the human-facing batch or single-item modal presents one authoritative
+preview; its final confirmation authorizes both the exact approval receipts and
+their governed applies. The internal coordinator commits approval before target
+write, and public MCP still cannot approve a pending proposal. The operation-
+bound confirmation includes the concrete effect and target state. A Wiki or lifecycle target is
 created atomically only during that explicit apply step. Creation never
 overwrites an occupied path, and interruption compensation may remove only the
 exact file owned by the confirmed operation. A project proposal whose Hub is
@@ -112,6 +124,19 @@ touched-note set, and the bounded activity context. A token cannot be reused for
 different proposal or after any bound content changes. The token is an
 implementation credential for the confirmed preview and must not be displayed,
 logged, or stored in review notes.
+
+Task-linked v2 Wiki proposals carry a Runtime-derived `review_batch_id`; an
+unlinked or legacy proposal remains a singleton. A batch contains at most 100
+proposals and 2 MiB of writeback content. High-risk user-body changes are split
+into individual review. Applied items leave the working queue but are not moved
+to Archive implicitly.
+
+Tracekeeper-managed Wiki relations use one hash-bound Markdown region. New
+notes may include it during creation; existing notes are changed only inside a
+valid region, while a missing region requires review and a modified region
+fails closed. Topic links point to their Topic Map and Source index, Topic Maps
+point toward `wiki/index.md`, and Source-part paths are never durable Wiki
+relations.
 
 Editing and revision flows use optimistic replacement. If a proposal changes
 while a modal is open, Tracekeeper preserves the current file and the user's

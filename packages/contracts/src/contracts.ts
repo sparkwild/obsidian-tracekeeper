@@ -513,7 +513,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.review_queue',
-		version: 2,
+		version: 3,
 		visibility: 'public',
 		capability: 'memory.review',
 		risk: 'read-only',
@@ -523,7 +523,7 @@ export const toolContracts = [
 		workflowRole: 'review',
 		useCase: 'review_queue',
 		description:
-			'[read-only] Inspect pending local Vault proposals or approved writeback candidates. Does not approve or apply changes.',
+			'[read-only] Inspect pending local Vault proposals, trusted Wiki task batches, or approved writeback candidates. Does not approve or apply changes.',
 		inputSchema: withToolInput({
 			action: {
 				type: 'string',
@@ -699,7 +699,7 @@ export const toolContracts = [
 		workflowRole: 'review',
 		useCase: 'apply_approved_writeback',
 		description:
-			'[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content to an existing local Vault target or creates the explicitly approved missing Wiki/MemoryRecord target after a fresh confirmation preview.',
+			'[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content, updates a bounded managed Wiki relation region, or creates the explicitly approved missing Wiki/MemoryRecord target after a fresh confirmation preview.',
 		inputSchema: withToolInput({
 			proposal_id: { type: 'string', description: 'Proposal id to apply.' },
 			proposal_path: { type: 'string', description: 'Vault-relative proposal note path.' },
@@ -1019,7 +1019,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.propose_memory',
-		version: 4,
+		version: 5,
 		visibility: 'public',
 		capability: 'memory.propose',
 		risk: 'low-risk-write',
@@ -1105,6 +1105,15 @@ export const toolContracts = [
 					type: 'string',
 					enum: ['global', 'project'],
 					description: 'Required for a MemoryRecord candidate. Omit for an explicit 01_knowledge/wiki/** target.',
+				},
+				wiki_role: {
+					type: 'string',
+					enum: ['topic', 'topic_map'],
+					description: 'Optional Wiki role for an explicit Wiki target.',
+				},
+				parent_wiki: {
+					type: 'string',
+					description: 'Optional parent Topic Map or Wiki index path for an explicit Wiki target.',
 				},
 				related_wiki: {
 					oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],

@@ -29,6 +29,7 @@ __exportStar(require("./legacy-structure"), exports);
 __exportStar(require("./operation-journal"), exports);
 __exportStar(require("./proposal-transition"), exports);
 __exportStar(require("./proposal-writeback"), exports);
+__exportStar(require("./wiki-governance"), exports);
 __exportStar(require("./record-lifecycle"), exports);
 __exportStar(require("./knowledge-index"), exports);
 __exportStar(require("./vault-repository"), exports);

@@ -62,7 +62,7 @@ export interface ProposalTransitionSnapshot {
 	status: ProposalTransitionStatus;
 	targetPath: string;
 	writebackContent: string;
-	writebackEffect?: 'append' | 'create_wiki_note' | 'create_memory_record';
+	writebackEffect?: 'append' | 'create_wiki_note' | 'create_memory_record' | 'update_managed_relations';
 	revisionComment: string;
 	revisionRequestedAt: string;
 	revisionRequestedBy: string;
@@ -221,6 +221,9 @@ const normalizeWritebackEffect = (
 	}
 	if (normalized === 'create_memory_record') {
 		return 'create_memory_record';
+	}
+	if (normalized === 'update_managed_relations') {
+		return 'update_managed_relations';
 	}
 	throw new ProposalTransitionValidationError('Proposal writeback effect is not supported.');
 };
@@ -411,6 +414,9 @@ const supportsWritebackCreationForTarget = (
 	if (snapshot.writebackEffect === 'create_wiki_note') {
 		return startsWithPathPrefix(targetPath, KNOWLEDGE_WIKI_DIR);
 	}
+	if (snapshot.writebackEffect === 'update_managed_relations') {
+		return false;
+	}
 	// Legacy records are treated as wiki-create capable when target is a wiki note,
 	// so existing review proposals can continue to pass without explicit writeback_effect.
 	return snapshot.writebackEffect === undefined && startsWithPathPrefix(targetPath, KNOWLEDGE_WIKI_DIR);
@@ -468,6 +474,10 @@ const ensureCompleteMemoryProposal = (
 	) {
 		throw new ProposalTransitionValidationError('Proposal writeback target already exists.');
 	}
+	if (
+		snapshot.writebackEffect === 'update_managed_relations'
+		&& !startsWithPathPrefix(targetPath, KNOWLEDGE_WIKI_DIR)
+	) throw new ProposalTransitionValidationError('Managed relations target must be a Wiki note.');
 	if (!isMeaningfulProposalText(snapshot.writebackContent)) {
 		throw new ProposalTransitionValidationError('Proposal writeback content is required.');
 	}

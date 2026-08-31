@@ -15,9 +15,11 @@ import {
 	AUTO_REFRESH_INTERVAL_OPTIONS,
 	MEMORY_PROPOSAL_RULES,
 	NOTE_CONTENT_LANGUAGES,
+	WIKI_CHANGE_RULES,
 	memoryProposalRuleLabel,
 	normalizeGraphProfileValue,
 	noteContentLanguageLabel,
+	wikiChangeRuleLabel,
 } from './settings-model';
 import { ui } from '../../ui/localization';
 import { renderClientSkillPrompt } from '../skill-installation/client-skill-prompt';
@@ -726,10 +728,21 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		group.addSetting((setting) => {
 			setting
 				.setName(ui('Wiki 变更', 'Wiki changes'))
-				.setDesc(ui(
-					'Wiki 提案始终进入知识变更审核，不受全局或项目记忆规则影响。MemoryRecord 的 Wiki 与 Source 关系均为可选，不会因为缺少 Wiki 而阻止保存。',
-					'Wiki proposals always enter Knowledge Change Review and are not governed by global or project memory rules. Wiki and Source relations on a MemoryRecord are optional; missing Wiki context does not block persistence.'
-				));
+				.setDesc(this.wikiChangeRuleDescription())
+				.addDropdown((dropdown) => {
+					for (const rule of WIKI_CHANGE_RULES) {
+						dropdown.addOption(rule, wikiChangeRuleLabel(rule));
+					}
+					dropdown
+						.setValue(this.plugin.settings.wikiChangeRule)
+						.onChange((value: string) => {
+							void this.plugin.setWikiChangeRule(value)
+								.then(() => this.refreshSettings())
+								.catch((error) => {
+									console.error('tracekeeper failed to update Wiki change rule', error);
+								});
+						});
+				});
 		});
 		group.addSetting((setting) => {
 			setting
@@ -832,6 +845,26 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 				return ui(
 					'全局 MemoryRecord 保存前进入知识变更审核；这是新安装的默认设置。',
 					'Review Global MemoryRecords before persistence. This is the default for new installations.'
+				);
+		}
+	}
+
+	private wikiChangeRuleDescription(): string {
+		switch (this.plugin.settings.wikiChangeRule) {
+			case 'review_each':
+				return ui('逐项预览并确认每个 Wiki 变更。', 'Preview and confirm each Wiki change separately.');
+			case 'auto_managed':
+				return ui(
+					'自动创建新 Wiki，并自动更新完整的 Tracekeeper 关系区块；用户正文和首次关系区块插入仍需审核。',
+					'Automatically create new Wiki notes and update intact Tracekeeper relation blocks; user-authored content and first-time relation blocks still require review.'
+				);
+			case 'disabled':
+				return ui('不接收新的 Wiki 变更。', 'Do not accept new Wiki changes.');
+			case 'review_batch':
+			default:
+				return ui(
+					'按任务汇总低、中风险 Wiki 变更，一次预览并确认整批写入；高风险正文变更仍逐项审核。',
+					'Group low- and medium-risk Wiki changes by task for one preview and confirmation; high-risk body changes remain individual.'
 				);
 		}
 	}

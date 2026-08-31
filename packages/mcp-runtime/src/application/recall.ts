@@ -6,8 +6,10 @@ import {
 	TRACEKEEPER_TASKS_DIR,
 	isKnowledgeSourcePath,
 	isKnowledgeWikiPath,
+	isSourcePartPath,
 	isOrdinaryRecallPathEligible,
 	recallNotes,
+	sourceIndexPathForPart,
 	type KnowledgeCatalogEntry,
 	type KnowledgeReadView,
 	type ScanResult,
@@ -125,6 +127,7 @@ export interface RecallEntry {
 	instruction_trust: 'data_only';
 	graph_links: string[];
 	relation_evidence: RecallRelationEvidence;
+	supporting_paths?: string[];
 }
 
 export interface ProjectHistoryEntry {
@@ -1166,6 +1169,79 @@ function buildReadViewEntry(
 	};
 }
 
+function mergeFoldedSourceEntries(entries: RecallEntry[]): RecallEntry[] {
+	const merged = new Map<string, RecallEntry>();
+	for (const entry of entries) {
+		const existing = merged.get(entry.path);
+		if (!existing) {
+			merged.set(entry.path, entry);
+			continue;
+		}
+		const supportingPaths = [...new Set([
+			...(existing.supporting_paths ?? []),
+			...(entry.supporting_paths ?? []),
+		])].sort((left, right) => left.localeCompare(right));
+		if (entry.score > existing.score) {
+			merged.set(entry.path, { ...entry, supporting_paths: supportingPaths });
+		} else {
+			merged.set(entry.path, { ...existing, supporting_paths: supportingPaths });
+		}
+	}
+	return [...merged.values()].sort((left, right) => right.score - left.score || left.path.localeCompare(right.path));
+}
+
+function foldScanSourcePartEntries(
+	entries: RecallEntry[],
+	allNotes: ScannedNote[],
+	dependencies: RecallApplicationDependencies
+): RecallEntry[] {
+	const notes = new Map(allNotes.map((note) => [note.relativePath, note]));
+	return mergeFoldedSourceEntries(entries.flatMap((entry) => {
+		if (!isSourcePartPath(entry.path)) return [entry];
+		const indexPath = sourceIndexPathForPart(entry.path);
+		const parent = indexPath ? notes.get(indexPath) : undefined;
+		if (!indexPath || !parent) return [];
+		const relationEvidence = dependencies.buildRelationEvidence(parent, allNotes);
+		return [{
+			...entry,
+			path: indexPath,
+			title: parent.title,
+			type: parent.type,
+			note_type: parent.type ?? null,
+			why_matched: `${entry.why_matched} - supporting source part: ${entry.path}`,
+			content_origin: dependencies.contentOrigin(indexPath, parent.type),
+			graph_links: buildRecallGraphLinks(parent, relationEvidence),
+			relation_evidence: relationEvidence,
+			supporting_paths: [entry.path],
+		}];
+	}));
+}
+
+function foldReadViewSourcePartEntries(
+	entries: RecallEntry[],
+	view: KnowledgeReadView,
+	dependencies: RecallApplicationDependencies
+): RecallEntry[] {
+	return mergeFoldedSourceEntries(entries.flatMap((entry) => {
+		if (!isSourcePartPath(entry.path)) return [entry];
+		const indexPath = sourceIndexPathForPart(entry.path);
+		const parent = indexPath ? view.catalog.get(indexPath) : undefined;
+		if (!indexPath || !parent) return [];
+		return [{
+			...entry,
+			path: indexPath,
+			title: parent.title,
+			type: parent.type ?? undefined,
+			note_type: parent.type,
+			why_matched: `${entry.why_matched} - supporting source part: ${entry.path}`,
+			content_origin: dependencies.contentOrigin(indexPath, parent.type ?? undefined),
+			graph_links: buildKnowledgeGraphLinksFromReadView(parent, view),
+			relation_evidence: buildKnowledgeRelationEvidenceFromReadView(parent, view),
+			supporting_paths: [entry.path],
+		}];
+	}));
+}
+
 function selectCatalogRecallMatches(matches: RankedCatalogMatch[], maxItems: number): RankedCatalogMatch[] {
 	const hasDurableKnowledge = matches.some((match) =>
 		!isGeneratedWorkRecord(catalogMetadataProjection(match.entry)) && match.raw_score > 0
@@ -1326,6 +1402,11 @@ export class RecallApplicationService {
 			}, this.dependencies.nowMs());
 			this.dependencies.onReadViewDiagnostics?.(ranked.diagnostics);
 			const matches = selectCatalogRecallMatches(ranked.matches, request.maxItems);
+			const foldedMatches = foldReadViewSourcePartEntries(
+				matches.map((match) => buildReadViewEntry(match, 'global', view, this.dependencies)),
+				view,
+				this.dependencies
+			);
 			return {
 				ok: true,
 				read_only: true,
@@ -1333,9 +1414,9 @@ export class RecallApplicationService {
 				query: request.query,
 				vault_root: request.vaultRoot,
 				max_items: request.maxItems,
-				matched_count: matches.length,
+				matched_count: foldedMatches.length,
 				...readViewProvenance(view),
-				matches: matches.map((match) => buildReadViewEntry(match, 'global', view, this.dependencies)),
+				matches: foldedMatches,
 			};
 		}
 
@@ -1362,6 +1443,11 @@ export class RecallApplicationService {
 			const ranked = boundedReadViewMatches(view, currentEntries, request.query, identity, this.dependencies.nowMs());
 			this.dependencies.onReadViewDiagnostics?.(ranked.diagnostics);
 			const matches = selectCatalogRecallMatches(ranked.matches, request.maxItems);
+			const foldedEntries = foldReadViewSourcePartEntries(
+				matches.map((match) => buildReadViewEntry(match, 'project', view, this.dependencies)),
+				view,
+				this.dependencies
+			);
 			return {
 				ok: true,
 				read_only: true,
@@ -1371,13 +1457,13 @@ export class RecallApplicationService {
 				scope: projectIdentityResult(identity),
 				project_identity: projectIdentityResult(identity),
 				max_items: request.maxItems,
-				matched_count: matches.length,
+				matched_count: foldedEntries.length,
 				...readViewProvenance(view),
 				candidates: candidateNotes.map((candidate) => candidate.path),
 				candidate_notes: candidateNotes,
 				scope_evidence: buildProjectRecallRelationEvidence(identity),
 				scope_mode: 'project',
-				entries: matches.map((match) => buildReadViewEntry(match, 'project', view, this.dependencies)),
+				entries: foldedEntries,
 			};
 		}
 
@@ -1440,6 +1526,11 @@ export class RecallApplicationService {
 			}, this.dependencies.nowMs()),
 			request.maxItems
 		);
+		const foldedMatches = foldScanSourcePartEntries(
+			matches.map((match) => buildRecallEntry(match, 'global', scan.notes, this.dependencies)),
+			scan.notes,
+			this.dependencies
+		);
 		return {
 			ok: true,
 			read_only: true,
@@ -1447,11 +1538,9 @@ export class RecallApplicationService {
 			query: request.query,
 			vault_root: request.vaultRoot,
 			max_items: request.maxItems,
-			matched_count: matches.length,
+			matched_count: foldedMatches.length,
 			...scanProvenance(scan),
-			matches: matches.map((match) =>
-				buildRecallEntry(match, 'global', scan.notes, this.dependencies)
-			),
+			matches: foldedMatches,
 		};
 	}
 
@@ -1485,6 +1574,11 @@ export class RecallApplicationService {
 			),
 			request.maxItems
 		);
+		const foldedEntries = foldScanSourcePartEntries(
+			matches.map((match) => buildRecallEntry(match, 'project', scan.notes, this.dependencies)),
+			scan.notes,
+			this.dependencies
+		);
 		const uncertain = !hasProjectScope(scope) ||
 			scope.confidence === 'uncertain';
 		const candidateNotes = collectProjectCandidates(
@@ -1502,15 +1596,13 @@ export class RecallApplicationService {
 			scope: projectIdentityResult(scope),
 			project_identity: projectIdentityResult(scope),
 			max_items: request.maxItems,
-			matched_count: matches.length,
+			matched_count: foldedEntries.length,
 			...scanProvenance(scan),
 			candidates: candidateNotes.map((candidate) => candidate.path),
 			candidate_notes: candidateNotes,
 			scope_evidence: buildProjectRecallRelationEvidence(scope),
 			scope_mode: 'project',
-			entries: matches.map((match) =>
-				buildRecallEntry(match, 'project', scan.notes, this.dependencies)
-			),
+			entries: foldedEntries,
 		};
 	}
 

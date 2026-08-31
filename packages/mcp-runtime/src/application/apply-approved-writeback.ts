@@ -39,7 +39,7 @@ export interface ApplyApprovedWritebackPayload {
 	activityAgentId: string;
 	activitySessionId: string;
 	activityClientName: string;
-	effectKind?: 'append' | 'create_memory_record' | 'create_wiki_note';
+	effectKind?: 'append' | 'create_memory_record' | 'create_wiki_note' | 'update_managed_relations';
 }
 
 export interface ApplyApprovedWritebackCommand {
@@ -150,7 +150,8 @@ function boundedWritebackPayload(
 		|| (payload.effectKind !== undefined
 			&& payload.effectKind !== 'append'
 			&& payload.effectKind !== 'create_memory_record'
-			&& payload.effectKind !== 'create_wiki_note')
+			&& payload.effectKind !== 'create_wiki_note'
+			&& payload.effectKind !== 'update_managed_relations')
 		|| (hasPartialStableProposalReferenceFlags && !hasStableProposalReferenceFlags)
 		|| (payload.taskHadAppliedProposalReference !== undefined
 			&& !hasAppliedProposalReferenceFlag)

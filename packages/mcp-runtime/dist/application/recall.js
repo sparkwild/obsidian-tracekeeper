@@ -828,6 +828,73 @@ function buildReadViewEntry(match, scope, view, dependencies) {
         relation_evidence: buildKnowledgeRelationEvidenceFromReadView(match.entry, view),
     };
 }
+function mergeFoldedSourceEntries(entries) {
+    const merged = new Map();
+    for (const entry of entries) {
+        const existing = merged.get(entry.path);
+        if (!existing) {
+            merged.set(entry.path, entry);
+            continue;
+        }
+        const supportingPaths = [...new Set([
+                ...(existing.supporting_paths ?? []),
+                ...(entry.supporting_paths ?? []),
+            ])].sort((left, right) => left.localeCompare(right));
+        if (entry.score > existing.score) {
+            merged.set(entry.path, { ...entry, supporting_paths: supportingPaths });
+        }
+        else {
+            merged.set(entry.path, { ...existing, supporting_paths: supportingPaths });
+        }
+    }
+    return [...merged.values()].sort((left, right) => right.score - left.score || left.path.localeCompare(right.path));
+}
+function foldScanSourcePartEntries(entries, allNotes, dependencies) {
+    const notes = new Map(allNotes.map((note) => [note.relativePath, note]));
+    return mergeFoldedSourceEntries(entries.flatMap((entry) => {
+        if (!(0, core_1.isSourcePartPath)(entry.path))
+            return [entry];
+        const indexPath = (0, core_1.sourceIndexPathForPart)(entry.path);
+        const parent = indexPath ? notes.get(indexPath) : undefined;
+        if (!indexPath || !parent)
+            return [];
+        const relationEvidence = dependencies.buildRelationEvidence(parent, allNotes);
+        return [{
+                ...entry,
+                path: indexPath,
+                title: parent.title,
+                type: parent.type,
+                note_type: parent.type ?? null,
+                why_matched: `${entry.why_matched} - supporting source part: ${entry.path}`,
+                content_origin: dependencies.contentOrigin(indexPath, parent.type),
+                graph_links: buildRecallGraphLinks(parent, relationEvidence),
+                relation_evidence: relationEvidence,
+                supporting_paths: [entry.path],
+            }];
+    }));
+}
+function foldReadViewSourcePartEntries(entries, view, dependencies) {
+    return mergeFoldedSourceEntries(entries.flatMap((entry) => {
+        if (!(0, core_1.isSourcePartPath)(entry.path))
+            return [entry];
+        const indexPath = (0, core_1.sourceIndexPathForPart)(entry.path);
+        const parent = indexPath ? view.catalog.get(indexPath) : undefined;
+        if (!indexPath || !parent)
+            return [];
+        return [{
+                ...entry,
+                path: indexPath,
+                title: parent.title,
+                type: parent.type ?? undefined,
+                note_type: parent.type,
+                why_matched: `${entry.why_matched} - supporting source part: ${entry.path}`,
+                content_origin: dependencies.contentOrigin(indexPath, parent.type ?? undefined),
+                graph_links: buildKnowledgeGraphLinksFromReadView(parent, view),
+                relation_evidence: buildKnowledgeRelationEvidenceFromReadView(parent, view),
+                supporting_paths: [entry.path],
+            }];
+    }));
+}
 function selectCatalogRecallMatches(matches, maxItems) {
     const hasDurableKnowledge = matches.some((match) => !isGeneratedWorkRecord(catalogMetadataProjection(match.entry)) && match.raw_score > 0);
     if (!hasDurableKnowledge)
@@ -955,6 +1022,7 @@ class RecallApplicationService {
             }, this.dependencies.nowMs());
             this.dependencies.onReadViewDiagnostics?.(ranked.diagnostics);
             const matches = selectCatalogRecallMatches(ranked.matches, request.maxItems);
+            const foldedMatches = foldReadViewSourcePartEntries(matches.map((match) => buildReadViewEntry(match, 'global', view, this.dependencies)), view, this.dependencies);
             return {
                 ok: true,
                 read_only: true,
@@ -962,9 +1030,9 @@ class RecallApplicationService {
                 query: request.query,
                 vault_root: request.vaultRoot,
                 max_items: request.maxItems,
-                matched_count: matches.length,
+                matched_count: foldedMatches.length,
                 ...readViewProvenance(view),
-                matches: matches.map((match) => buildReadViewEntry(match, 'global', view, this.dependencies)),
+                matches: foldedMatches,
             };
         }
         const identity = this.dependencies.resolveProjectIdentity(request.projectIdentityInput, metadataNotes);
@@ -982,6 +1050,7 @@ class RecallApplicationService {
             const ranked = boundedReadViewMatches(view, currentEntries, request.query, identity, this.dependencies.nowMs());
             this.dependencies.onReadViewDiagnostics?.(ranked.diagnostics);
             const matches = selectCatalogRecallMatches(ranked.matches, request.maxItems);
+            const foldedEntries = foldReadViewSourcePartEntries(matches.map((match) => buildReadViewEntry(match, 'project', view, this.dependencies)), view, this.dependencies);
             return {
                 ok: true,
                 read_only: true,
@@ -991,13 +1060,13 @@ class RecallApplicationService {
                 scope: projectIdentityResult(identity),
                 project_identity: projectIdentityResult(identity),
                 max_items: request.maxItems,
-                matched_count: matches.length,
+                matched_count: foldedEntries.length,
                 ...readViewProvenance(view),
                 candidates: candidateNotes.map((candidate) => candidate.path),
                 candidate_notes: candidateNotes,
                 scope_evidence: buildProjectRecallRelationEvidence(identity),
                 scope_mode: 'project',
-                entries: matches.map((match) => buildReadViewEntry(match, 'project', view, this.dependencies)),
+                entries: foldedEntries,
             };
         }
         const queryTerms = tokenizeReadViewQuery(request.query);
@@ -1052,6 +1121,7 @@ class RecallApplicationService {
             confidence: 'uncertain',
             warnings: [],
         }, this.dependencies.nowMs()), request.maxItems);
+        const foldedMatches = foldScanSourcePartEntries(matches.map((match) => buildRecallEntry(match, 'global', scan.notes, this.dependencies)), scan.notes, this.dependencies);
         return {
             ok: true,
             read_only: true,
@@ -1059,9 +1129,9 @@ class RecallApplicationService {
             query: request.query,
             vault_root: request.vaultRoot,
             max_items: request.maxItems,
-            matched_count: matches.length,
+            matched_count: foldedMatches.length,
             ...scanProvenance(scan),
-            matches: matches.map((match) => buildRecallEntry(match, 'global', scan.notes, this.dependencies)),
+            matches: foldedMatches,
         };
     }
     executeProject(request, scan) {
@@ -1077,6 +1147,7 @@ class RecallApplicationService {
             ...buildProjectMemoryAnchors(scopedNotes, new Set(initialMatches.map((match) => match.note.relativePath))),
         ];
         const matches = selectRecallMatches(rankRecallMatches(anchoredMatches, request.query, scope, this.dependencies.nowMs()), request.maxItems);
+        const foldedEntries = foldScanSourcePartEntries(matches.map((match) => buildRecallEntry(match, 'project', scan.notes, this.dependencies)), scan.notes, this.dependencies);
         const uncertain = !hasProjectScope(scope) ||
             scope.confidence === 'uncertain';
         const candidateNotes = collectProjectCandidates(unresolved ? scan.notes : scopedNotes, scope, MAX_PROJECT_SCOPE_CANDIDATES);
@@ -1089,13 +1160,13 @@ class RecallApplicationService {
             scope: projectIdentityResult(scope),
             project_identity: projectIdentityResult(scope),
             max_items: request.maxItems,
-            matched_count: matches.length,
+            matched_count: foldedEntries.length,
             ...scanProvenance(scan),
             candidates: candidateNotes.map((candidate) => candidate.path),
             candidate_notes: candidateNotes,
             scope_evidence: buildProjectRecallRelationEvidence(scope),
             scope_mode: 'project',
-            entries: matches.map((match) => buildRecallEntry(match, 'project', scan.notes, this.dependencies)),
+            entries: foldedEntries,
         };
     }
     executeProjectHistory(request, scan) {

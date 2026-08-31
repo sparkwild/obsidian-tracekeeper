@@ -1,8 +1,10 @@
 import {
 	GRAPH_RECOMMENDED_ENTRY,
 	GRAPH_RECOMMENDED_HUBS,
+	KNOWLEDGE_ROOT,
 	normalizeKnowledgePath as normalizeVaultPath,
 } from './knowledge-architecture';
+import { isSourcePartPath } from './wiki-governance';
 import {
 	normalizeVaultRelativePath,
 	resolveNormalizedVaultEdges,
@@ -11,6 +13,7 @@ import { ScannedNote } from './scan';
 
 export interface GraphHealthOptions {
 	maxItems?: number;
+	semanticOnly?: boolean;
 }
 
 export type GraphProfile = 'off' | 'advisory' | 'strict';
@@ -81,7 +84,12 @@ export const DEFAULT_GRAPH_PROFILE: GraphProfile = 'advisory';
 
 export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOptions = {}): GraphHealthReport {
 	const maxItems = normalizeMaxItems(options.maxItems);
-	const notePaths = notes.map((note) => normalizeRelativePath(note.relativePath)).filter(Boolean);
+	const allNotePathSet = new Set(notes.map((note) => normalizeRelativePath(note.relativePath)).filter(Boolean));
+	const semanticNotes = options.semanticOnly === true ? notes.filter((note) => {
+		const path = normalizeRelativePath(note.relativePath);
+		return path.startsWith(`${KNOWLEDGE_ROOT}/`) && !isSourcePartPath(path);
+	}) : notes;
+	const notePaths = semanticNotes.map((note) => normalizeRelativePath(note.relativePath)).filter(Boolean);
 	const notePathSet = new Set(notePaths);
 	const resolvedEdges = resolveNormalizedVaultEdges(
 		notes.map((note) => ({
@@ -113,7 +121,7 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 		declaredVia: Set<'frontmatter' | 'body_wikilink'>;
 	}>();
 
-	for (const note of notes) {
+	for (const note of semanticNotes) {
 		const sourcePath = normalizeRelativePath(note.relativePath);
 		if (!sourcePath) {
 			continue;
@@ -158,6 +166,9 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 		}
 		const target = link.resolution.path;
 		if (!notePathSet.has(target)) {
+			if (allNotePathSet.has(target)) {
+				continue;
+			}
 			if (isNativeAttachmentResolution(link.resolution)) {
 				resolvedEdgeCount += 1;
 				continue;
@@ -271,7 +282,7 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 	const sortedMissingRecommendedHubs = missingRecommendedHubs.sort();
 
 	return {
-		note_count: notes.length,
+		note_count: semanticNotes.length,
 		edge_observation_count: edgeObservationCount,
 		wikilink_edge_count: wikilinkEdgeCount,
 		unresolved_edges: unresolvedEdges.slice(0, maxItems),

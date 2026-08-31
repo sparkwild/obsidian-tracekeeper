@@ -1,4 +1,9 @@
-import { TRACEKEEPER_REVIEW_QUEUE_DIR } from '@tracekeeper/core';
+import {
+	TRACEKEEPER_REVIEW_QUEUE_DIR,
+	buildWikiReviewBatches,
+	isKnowledgeWikiPath,
+	type WikiChangeRule,
+} from '@tracekeeper/core';
 import type {
 	MemoryProposalRecord,
 	MemoryProposalStatus,
@@ -79,6 +84,72 @@ export interface ReviewQueueQueryResult {
 	page: ReviewQueuePage;
 	query: ReviewQueueQuery;
 }
+
+export interface ReviewQueueBatchGroup {
+	id: string;
+	segment: number;
+	proposals: MemoryProposalRecord[];
+	totalBytes: number;
+	batchEligible: boolean;
+	highRiskCount: number;
+	blockedCount: number;
+}
+
+export const buildReviewQueueBatchGroups = (
+	proposals: readonly MemoryProposalRecord[],
+	wikiChangeRule: WikiChangeRule
+): ReviewQueueBatchGroup[] => {
+	const byPath = new Map(proposals.map((proposal) => [proposal.path, proposal]));
+	const batchCandidates = proposals.filter((proposal) => {
+		const risk = proposal.effectiveRisk || proposal.riskLevel;
+		return wikiChangeRule !== 'review_each'
+			&& proposal.proposalSchemaVersion >= 2
+			&& isKnowledgeWikiPath(proposal.targetNote)
+			&& (risk === 'low' || risk === 'medium');
+	});
+	const batchedPaths = new Set(batchCandidates.map((proposal) => proposal.path));
+	const groups = buildWikiReviewBatches(batchCandidates.map((proposal) => ({
+		proposalPath: proposal.path,
+		proposalId: proposal.proposalId,
+		taskId: proposal.taskId,
+		createdAt: proposal.created,
+		writebackBytes: new TextEncoder().encode(proposal.writebackContent).byteLength,
+		effectiveRisk: (proposal.effectiveRisk || proposal.riskLevel) as 'low' | 'medium',
+	}))).map((batch): ReviewQueueBatchGroup => ({
+		id: batch.reviewBatchId,
+		segment: batch.segment,
+		proposals: batch.items
+			.map((item) => byPath.get(item.proposalPath))
+			.filter((item): item is MemoryProposalRecord => Boolean(item))
+			.sort((left, right) => {
+				const leftRank = left.wikiRole === 'topic_map' ? 0 : 1;
+				const rightRank = right.wikiRole === 'topic_map' ? 0 : 1;
+				return leftRank - rightRank || left.targetNote.localeCompare(right.targetNote);
+			}),
+		totalBytes: batch.totalBytes,
+		batchEligible: true,
+		highRiskCount: 0,
+		blockedCount: 0,
+	}));
+	for (const proposal of proposals) {
+		if (batchedPaths.has(proposal.path)) continue;
+		const risk = proposal.effectiveRisk || proposal.riskLevel;
+		groups.push({
+			id: `proposal:${proposal.proposalId || proposal.path}`,
+			segment: 1,
+			proposals: [proposal],
+			totalBytes: new TextEncoder().encode(proposal.writebackContent).byteLength,
+			batchEligible: false,
+			highRiskCount: risk === 'high' ? 1 : 0,
+			blockedCount: risk === 'blocked' ? 1 : 0,
+		});
+	}
+	return groups.sort((left, right) => {
+		const leftTime = left.proposals[0]?.sortTimestamp ?? 0;
+		const rightTime = right.proposals[0]?.sortTimestamp ?? 0;
+		return rightTime - leftTime || left.id.localeCompare(right.id);
+	});
+};
 
 export interface MemoryReviewQueueSnapshot {
 	proposals: MemoryProposalRecord[];

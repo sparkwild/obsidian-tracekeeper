@@ -32,7 +32,7 @@ export interface ProposalTransitionSnapshot {
     status: ProposalTransitionStatus;
     targetPath: string;
     writebackContent: string;
-    writebackEffect?: 'append' | 'create_wiki_note' | 'create_memory_record';
+    writebackEffect?: 'append' | 'create_wiki_note' | 'create_memory_record' | 'update_managed_relations';
     revisionComment: string;
     revisionRequestedAt: string;
     revisionRequestedBy: string;

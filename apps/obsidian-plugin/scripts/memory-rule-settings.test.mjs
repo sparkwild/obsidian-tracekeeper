@@ -38,6 +38,7 @@ try {
 
 	assert.deepEqual(settings.normalizeMemoryRuleSettings({}, defaults), {
 		memoryRulesVersion: settings.MEMORY_RULES_VERSION,
+		wikiChangeRule: 'review_batch',
 		...defaults,
 	});
 
@@ -50,6 +51,7 @@ try {
 		}, defaults);
 		assert.equal(migrated.globalMemoryRule, projectMemoryRule);
 		assert.equal(migrated.projectMemoryRule, projectMemoryRule);
+		assert.equal(migrated.wikiChangeRule, 'review_batch');
 		assert.equal(migrated.memoryRulesVersion, settings.MEMORY_RULES_VERSION);
 	}
 
@@ -62,8 +64,12 @@ try {
 		assert.equal(migrated.taskTrackingEnabled, taskTrackingEnabled);
 	}
 
-	assert.ok(settingsSource.includes('Wiki 提案始终进入知识变更审核，不受全局或项目记忆规则影响。'));
-	assert.ok(settingsSource.includes('MemoryRecord 的 Wiki 与 Source 关系均为可选，不会因为缺少 Wiki 而阻止保存。'));
+	for (const rule of ['review_each', 'review_batch', 'auto_managed', 'disabled']) {
+		assert.equal(settings.normalizeWikiChangeRule(rule), rule);
+	}
+	assert.equal(settings.normalizeWikiChangeRule('legacy'), 'review_batch');
+	assert.ok(settingsSource.includes('按任务汇总低、中风险 Wiki 变更'));
+	assert.ok(settingsSource.includes('高风险正文变更仍逐项审核'));
 	assert.ok(settingsSource.includes('自动创建符合条件的不可变 Global MemoryRecord v2'));
 	assert.ok(settingsSource.includes('这是新安装的默认设置。'));
 	assert.ok(settingsSource.includes('对可精确识别的新项目，以仅创建方式安全初始化 canonical 项目 Hub'));
@@ -76,8 +82,9 @@ try {
 	assert.ok(settingsSource.includes('全局记忆建议可以进入审核，但在修复前不会被描述为已持久化'));
 	assert.ok(settingsSource.includes('openInitializeMemoryStructureModal'));
 	assert.ok(mainSource.includes("globalMemoryRule: 'review_queue'"));
+	assert.ok(mainSource.includes("wikiChangeRule: 'review_batch'"));
 	assert.ok(mainSource.includes('全局 MemoryRecord 默认进入审核；全局与项目写入遵循 Obsidian 中的记忆规则。'));
-	assert.ok(mainSource.includes('Wiki 变更始终需要用户审核。'));
+	assert.ok(mainSource.includes('Wiki 变更'));
 	assert.ok(mainSource.includes('getGlobalMemoryHubStatus()'));
 	assert.ok(mainSource.includes("state: entry === null ? 'missing' : entry instanceof TFile ? 'ready' : 'invalid'"));
 	assert.ok(structureModalSource.includes('基础结构修复已阻断'));
@@ -89,7 +96,7 @@ try {
 	assert.equal(settingsSource.includes('旧版共享记忆笔记不会被改写'), false);
 	assert.equal(settingsSource.includes("ui('任务结束记忆提案', 'Task closeout memory proposals')"), false);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 36 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 43 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }
