@@ -6,6 +6,8 @@ import { ui } from '../../ui/localization';
 import { reportUiFailure } from '../../ui/user-facing-error';
 import { TRACEKEEPER_GRAPH_HEALTH_VIEW } from '../../ui/view-types';
 
+const OFFICIAL_GRAPH_KNOWLEDGE_FILTER = 'path:01_knowledge';
+
 interface GraphRecommendationDisplay {
 	text: string;
 	paths?: string[];
@@ -77,6 +79,17 @@ export class TracekeeperGraphHealthView extends ItemView {
 		proposalButton.disabled = !this.hasActionableGraphWork(snapshot);
 		proposalButton.addEventListener('click', () => {
 			void this.handleCreateProposalClick(snapshot, proposalButton);
+		});
+		const copyFilter = actions.createEl('button', {
+			text: ui('复制官方图谱筛选', 'Copy official Graph filter'),
+		});
+		copyFilter.addEventListener('click', () => {
+			void navigator.clipboard.writeText(OFFICIAL_GRAPH_KNOWLEDGE_FILTER)
+				.then(() => new Notice(ui('已复制：path:01_knowledge', 'Copied: path:01_knowledge')))
+				.catch((error) => {
+					console.error('tracekeeper failed to copy official Graph filter', error);
+					new Notice(ui('复制失败，请手动输入 path:01_knowledge。', 'Copy failed. Enter path:01_knowledge manually.'));
+				});
 		});
 
 		if (!snapshot.ok) {

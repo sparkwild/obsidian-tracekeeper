@@ -16,7 +16,7 @@ type ParsedRecordValue = string | string[];
 
 type ParsedRecord = Record<string, ParsedRecordValue>;
 
-export type ProposalWritebackEffect = 'append' | 'create_memory_record' | 'create_wiki_note';
+export type ProposalWritebackEffect = 'append' | 'create_memory_record' | 'create_wiki_note' | 'update_managed_relations';
 
 export type MemoryProposalStatus =
 	| 'pending'
@@ -72,9 +72,16 @@ export interface MemoryProposalRecord {
 	supersedes: string[];
 	contradicts: string[];
 	taskId: string;
+	proposalSchemaVersion: number;
+	reviewBatchId: string;
+	wikiRole: string;
+	parentWiki: string;
+	effectiveWikiRule: string;
+	effectiveRisk: string;
 	sourceSessionNote: string;
 	targetNote: string;
 	evidence: string[];
+	relatedWiki: string[];
 	relatedSources: string[];
 	rationale: string;
 	riskLevel: string;
@@ -366,6 +373,9 @@ const parseProposalWritebackEffect = (
 		if (value === 'create_wiki_note') {
 			return 'create_wiki_note';
 		}
+		if (value === 'update_managed_relations') {
+			return 'update_managed_relations';
+		}
 		return undefined;
 	};
 
@@ -428,6 +438,7 @@ export const getReviewProposalValidity = (
 	const effectTargetMismatch = hasTargetNote && (
 		(effect === 'create_wiki_note' && !targetIsWiki)
 		|| (effect === 'create_memory_record' && !targetIsMemory)
+		|| (effect === 'update_managed_relations' && !targetIsWiki)
 	);
 	const canCreateMemoryForLegacy = effect === undefined
 		&& targetIsMemory
@@ -705,9 +716,16 @@ export const parseMemoryProposalRecord = ({
 		supersedes: readStringList(fields, ['supersedes']),
 		contradicts: readStringList(fields, ['contradicts']),
 		taskId: firstString(fields, ['task_id', 'taskId']) || '',
+		proposalSchemaVersion: Number.parseInt(firstString(fields, ['proposal_schema_version', 'proposalSchemaVersion']) || '1', 10),
+		reviewBatchId: firstString(fields, ['review_batch_id', 'reviewBatchId']) || '',
+		wikiRole: firstString(fields, ['wiki_role', 'wikiRole']) || '',
+		parentWiki: firstString(fields, ['parent_wiki', 'parentWiki']) || '',
+		effectiveWikiRule: firstString(fields, ['effective_wiki_rule', 'effectiveWikiRule']) || '',
+		effectiveRisk: firstString(fields, ['effective_risk', 'effectiveRisk']) || '',
 		sourceSessionNote: firstString(fields, ['proposal_source_session_note', 'proposalSourceSessionNote', 'session_note', 'sessionNote']) || '',
 		targetNote: firstString(fields, ['target_note', 'targetNote', 'target_path', 'targetPath']) || '',
 		evidence: readStringList(fields, ['evidence']),
+		relatedWiki: readStringList(fields, ['related_wiki', 'relatedWiki']),
 		relatedSources: readStringList(fields, ['related_sources', 'relatedSources']),
 		rationale,
 		riskLevel: firstString(fields, ['risk_level', 'riskLevel', 'risk']) || 'unknown',

@@ -255,7 +255,9 @@ assert.match(
 );
 
 const proposeMemoryContract = getContractByName('tracekeeper.propose_memory');
-assert.equal(proposeMemoryContract.version, 4);
+assert.equal(proposeMemoryContract.version, 5);
+assert.deepEqual(proposeMemoryContract.inputSchema.properties.wiki_role.enum, ['topic', 'topic_map']);
+assert.match(proposeMemoryContract.inputSchema.properties.parent_wiki.description, /parent Topic Map/i);
 const captureSourceContract = getContractByName('tracekeeper.capture_source');
 assert.match(proposeMemoryContract.description, /active local Obsidian Vault/i, 'propose_memory should identify its local destination');
 assert.match(proposeMemoryContract.description, /does not write to an external Wiki service/i, 'propose_memory should reject external-Wiki ambiguity');

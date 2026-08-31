@@ -15,6 +15,7 @@ import {
 } from './review-view-model';
 import {
 	filterReviewQueueItems,
+	buildReviewQueueBatchGroups,
 	isReviewQueueArchiveCandidate,
 	memoryProposalStatusLabel,
 	reviewInboxFilterLabel,
@@ -24,6 +25,7 @@ import {
 } from './review-queue-model';
 import {
 	ApprovedWritebackApplyModal,
+	WikiReviewBatchApplyModal,
 	ReviewQueueArchiveModal,
 	ReviewQueueConfirmModal,
 	ReviewQueueEditProposalModal,
@@ -155,8 +157,8 @@ export class TracekeeperReviewQueueView extends ItemView {
 		const heading = header.createDiv();
 		heading.createEl('p', {
 			text: ui(
-				'集中查看并决定哪些候选变更可以进入知识库。通过审核后，仍需预览并确认写入。',
-				'Review proposed knowledge changes before they enter the vault. Approved changes still require a preview and explicit apply confirmation.'
+				'按任务集中审查 Wiki 变更；一次最终确认同时完成批准和写入。高风险正文变更仍逐项处理。',
+				'Review Wiki changes by task. One final confirmation approves and applies the batch; high-risk body changes remain individual.'
 			),
 			cls: 'tracekeeper-view__description',
 		});
@@ -502,8 +504,12 @@ export class TracekeeperReviewQueueView extends ItemView {
 		const listHeader = container.createDiv({ cls: 'tracekeeper-review-inbox__list-header' });
 		const listHeading = listHeader.createDiv({ cls: 'tracekeeper-review-inbox__list-heading' });
 		listHeading.createEl('strong', { text: ui('审核列表', 'Review list') });
+		const batchGroups = buildReviewQueueBatchGroups(
+			proposals,
+			this.plugin.settings?.wikiChangeRule ?? 'review_batch'
+		);
 		listHeading.createSpan({
-			text: ui(`共 ${totalItems} 条`, `${totalItems} items`),
+			text: ui(`${batchGroups.length} 批 / ${totalItems} 条`, `${batchGroups.length} batch(es) / ${totalItems} items`),
 			cls: 'tracekeeper-badge tracekeeper-badge--muted',
 		});
 		listHeader.createEl('small', {
@@ -519,7 +525,48 @@ export class TracekeeperReviewQueueView extends ItemView {
 		}
 
 		const rows = container.createDiv({ cls: 'tracekeeper-review-inbox__rows' });
+		const batchPaths = new Set<string>();
+		for (const group of batchGroups.filter((candidate) => candidate.batchEligible && candidate.proposals.length > 1)) {
+			for (const proposal of group.proposals) batchPaths.add(proposal.path);
+			const card = rows.createDiv({ cls: 'tracekeeper-card tracekeeper-review-batch-card' });
+			const heading = card.createDiv({ cls: 'tracekeeper-review-inbox__row-title' });
+			heading.createEl('strong', {
+				text: ui(
+					`Wiki 批次 · ${group.proposals.length} 项`,
+					`Wiki batch · ${group.proposals.length} items`
+				),
+			});
+			heading.createSpan({
+				text: group.id,
+				cls: 'tracekeeper-badge tracekeeper-badge--muted',
+			});
+			card.createEl('p', {
+				text: group.proposals.map((proposal) => this.noteNameFromPath(proposal.targetNote)).join('、'),
+			});
+			const actions = card.createDiv({ cls: 'tracekeeper-action-row' });
+			const review = actions.createEl('button', {
+				text: ui(`审查并写入 ${group.proposals.length} 项`, `Review and apply ${group.proposals.length}`),
+				cls: 'mod-cta',
+			});
+			review.addEventListener('click', () => {
+				new WikiReviewBatchApplyModal(
+					this.app,
+					this.plugin,
+					group.proposals,
+					() => void this.refresh()
+				).open();
+			});
+			for (const proposal of group.proposals) {
+				const open = actions.createEl('button', { text: this.noteNameFromPath(proposal.targetNote) });
+				open.addEventListener('click', () => {
+					this.selectedProposalPath = proposal.path;
+					this.showingDetail = true;
+					void this.render(snapshot);
+				});
+			}
+		}
 		for (const proposal of proposals) {
+			if (batchPaths.has(proposal.path)) continue;
 			const isLastViewed = selected?.path === proposal.path;
 			const isBatchSelected = this.selectionMode && this.selectedProposalPaths.has(proposal.path);
 			const rowClass = [
@@ -1115,7 +1162,21 @@ export class TracekeeperReviewQueueView extends ItemView {
 			this.addEditAction(container, proposal, context, ui('编辑变更', 'Edit change'));
 			this.addRevisionAction(container, proposal);
 			this.addStatusAction(container, proposal, 'rejected', ui('不采纳', 'Do not accept'), 'mod-warning');
-			this.addStatusAction(container, proposal, 'approved', ui('通过审核', 'Approve'), 'mod-cta', 'ready_to_apply');
+			if (startsWithPathPrefix(proposal.targetNote, KNOWLEDGE_WIKI_DIR)) {
+				const reviewAndApply = container.createEl('button', {
+					text: ui('审查并写入', 'Review and apply'),
+					cls: 'mod-cta',
+				});
+				reviewAndApply.addEventListener('click', () => {
+					new WikiReviewBatchApplyModal(this.app, this.plugin, [proposal], () => {
+						this.selectedProposalPath = '';
+						this.showingDetail = false;
+						void this.refresh();
+					}).open();
+				});
+			} else {
+				this.addStatusAction(container, proposal, 'approved', ui('通过审核', 'Approve'), 'mod-cta', 'ready_to_apply');
+			}
 			return;
 		}
 		if (status === 'awaiting_revision') {
@@ -1519,6 +1580,12 @@ export class TracekeeperReviewQueueView extends ItemView {
 		switch (reason) {
 			case 'wiki_change_requires_human_review':
 				return ui('显式 Wiki 变更始终需要人工审核。', 'Explicit Wiki changes always require human review.');
+			case 'wiki_change_requires_individual_review':
+				return ui('当前 Wiki 规则要求逐项审查并确认写入。', 'The current Wiki rule requires individual review and apply confirmation.');
+			case 'wiki_high_risk_change_requires_individual_review':
+				return ui('这项变更会修改用户正文，必须逐项审查并确认。', 'This change modifies user-authored content and requires individual review.');
+			case 'wiki_batch_review_required':
+				return ui('这项 Wiki 变更已进入任务批次，可在一次预览后统一确认写入。', 'This Wiki change is grouped by task for one preview and apply confirmation.');
 			case 'memory_rule_requires_human_review':
 				return ui('当前记忆规则要求写入前由你确认。', 'The current memory rule requires your confirmation before writeback.');
 			case 'explicit_memory_target_requires_human_review':

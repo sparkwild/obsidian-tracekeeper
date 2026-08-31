@@ -60,6 +60,7 @@ test('ProposeMemoryApplicationService owns normalization, journaling, and propos
 		resolveProjectIdentity: () => null,
 		assertAllowed: () => undefined,
 		memoryRule: () => 'review_queue',
+		wikiRule: () => 'review_batch',
 		writeImmutableMemoryRecord: async () => ({
 			status: 'review_required',
 			reason: 'test_review_required',
@@ -195,6 +196,8 @@ test('ProposeMemoryApplicationService marks missing wiki target as create_wiki_n
 			task_id: 'direct-task',
 			filename: 'direct-proposal',
 			target_note: '01_knowledge/wiki/new-missing-note.md',
+			wiki_role: 'topic',
+			parent_wiki: '01_knowledge/wiki/index.md',
 			related_wiki: ['01_knowledge/wiki/related.md'],
 			related_sources: ['01_knowledge/sources/source.md'],
 			idempotency_key: 'direct-proposal-idempotency-wiki-missing',
@@ -205,7 +208,16 @@ test('ProposeMemoryApplicationService marks missing wiki target as create_wiki_n
 	assert.equal(result.ok, true);
 	assert.equal(writes.length, 1);
 	assert.equal(writes[0].frontmatter.writeback_effect, 'create_wiki_note');
+	assert.equal(writes[0].frontmatter.proposal_schema_version, 2);
+	assert.equal(writes[0].frontmatter.review_batch_id, 'task:direct-task');
+	assert.equal(writes[0].frontmatter.effective_risk, 'low');
+	assert.equal(writes[0].frontmatter.wiki_role, 'topic');
+	assert.equal(writes[0].frontmatter.parent_wiki, '01_knowledge/wiki/index.md');
+	assert.equal(result.review_batch_id, 'task:direct-task');
+	assert.equal(result.effective_wiki_rule, 'review_batch');
+	assert.equal(result.effective_risk, 'low');
 	assert.match(writes[0].body, /^- writeback_effect: create_wiki_note$/m);
+	assert.match(writes[0].body, /tracekeeper:relations:start/);
 });
 
 test('ProposeMemoryApplicationService keeps append effect for existing Wiki and Memory targets', async () => {

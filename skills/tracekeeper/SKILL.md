@@ -89,8 +89,10 @@ Use this `tracked_task` subroute only when the active user explicitly asks to bo
 - Synthesize only from captured paths and verified Recall evidence, then call
   `tracekeeper.propose_memory`. A MemoryRecord candidate declares
   `memory_scope: "global"` or `memory_scope: "project"`; an explicit Wiki
-  target does not. Wiki changes always enter review, while the selected Memory
-  scope's policy decides review, Auto, or ignore.
+  target does not. Wiki changes follow the independently selected Wiki rule:
+  individual review, task-batch review, eligible auto-managed writes, or
+  ignore. The selected Memory scope's policy separately decides review, Auto,
+  or ignore for MemoryRecord candidates.
 - Finish once with no duplicate `memory_candidate_records` after a direct proposal.
 - A captured Source remains readable evidence. Do not use Source Recall or
   `read_note` as proof that the synthesized Wiki/Memory proposal was applied;

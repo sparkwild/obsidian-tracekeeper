@@ -49,7 +49,8 @@ function boundedWritebackPayload(payload) {
         || (payload.effectKind !== undefined
             && payload.effectKind !== 'append'
             && payload.effectKind !== 'create_memory_record'
-            && payload.effectKind !== 'create_wiki_note')
+            && payload.effectKind !== 'create_wiki_note'
+            && payload.effectKind !== 'update_managed_relations')
         || (hasPartialStableProposalReferenceFlags && !hasStableProposalReferenceFlags)
         || (payload.taskHadAppliedProposalReference !== undefined
             && !hasAppliedProposalReferenceFlag)

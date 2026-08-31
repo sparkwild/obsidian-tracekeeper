@@ -162,7 +162,7 @@ const multilineField = (
 
 const parseWritebackEffect = (
 	frontmatter: Readonly<Record<string, unknown>>
-): 'append' | 'create_wiki_note' | 'create_memory_record' | undefined => {
+): 'append' | 'create_wiki_note' | 'create_memory_record' | 'update_managed_relations' | undefined => {
 	const value = scalarField(frontmatter, ['writeback_effect', 'writebackEffect'], 'Proposal writeback effect');
 	if (!value) {
 		return undefined;
@@ -176,6 +176,9 @@ const parseWritebackEffect = (
 	}
 	if (normalized === 'create_memory_record') {
 		return 'create_memory_record';
+	}
+	if (normalized === 'update_managed_relations') {
+		return 'update_managed_relations';
 	}
 	throw new ProposalTransitionValidationError('Proposal writeback effect is not supported.');
 };
@@ -423,7 +426,7 @@ export class ObsidianProposalTransitionAdapter {
 		const writebackEffect = parseWritebackEffect(frontmatter);
 		const isOwnedCreateTarget = (relativePath: string): boolean =>
 			isApply
-				&& writebackEffect !== 'append'
+				&& (writebackEffect === 'create_wiki_note' || writebackEffect === 'create_memory_record')
 				&& ownedCreateProof !== null
 				&& ownedCreateProof.path === relativePath;
 		return {

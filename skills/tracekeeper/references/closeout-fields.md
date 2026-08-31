@@ -43,10 +43,11 @@ Review semantics:
   duplicate finish candidate as instructed, then use the returned
   `durable_output` summary instead of accepting `no_candidates` as persistence
   success.
-- Apply an approved proposal only when the user explicitly requests the apply action.
+- Apply an already approved proposal through public MCP only when the user explicitly requests the apply action; Obsidian's internal human Wiki batch confirmation is separate.
 - Direct `propose_memory` MemoryRecord candidates declare `memory_scope`;
   `project_hint` is identity evidence, not scope authority. Explicit Wiki
-  targets do not require `memory_scope` and always enter review.
+  targets do not require `memory_scope` and follow the independently selected
+  Wiki rule.
 - Global and Project Auto use the same immutable MemoryRecord v2 semantics.
   Global defaults to Review; its fully supported Auto mode writes under the
   canonical Global Memory Hub with `project_id: null`.

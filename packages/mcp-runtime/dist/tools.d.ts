@@ -9,6 +9,7 @@ export declare const LOCAL_TRUST_CAPABILITIES: readonly ["vault.read", "workflow
 interface MemoryRulesContext {
     globalMemoryRule?: unknown;
     projectMemoryRule?: unknown;
+    wikiChangeRule?: unknown;
     taskTrackingEnabled?: unknown;
 }
 interface ToolContext {

@@ -16,6 +16,7 @@ const {
 	NodeFileOperationJournal,
 	OperationConflictError,
 	parseMarkdown,
+	renderManagedRelationsBlock,
 	transitionProposal,
 } = require('@tracekeeper/core');
 
@@ -709,6 +710,32 @@ function assertRejectedWithoutWrite(fixture, result, targetPaths = [fixture.targ
 function countOccurrences(content, needle) {
 	return content.split(needle).length - 1;
 }
+
+test('approved managed relations update preserves user-authored Wiki content', async (t) => {
+	const previousBlock = renderManagedRelationsBlock({
+		parent: '01_knowledge/wiki/old-map.md',
+	});
+	const nextBlock = renderManagedRelationsBlock({
+		parent: '01_knowledge/wiki/new-map.md',
+		related: ['01_knowledge/wiki/related.md'],
+	});
+	const fixture = createFixture(t, {
+		targetPath: '01_knowledge/wiki/managed-topic.md',
+		targetText: `# User-authored topic\n\nKeep this paragraph.\n\n${previousBlock}\n`,
+		proposalFields: { writeback_effect: 'update_managed_relations' },
+		writeback: nextBlock,
+	});
+	const dryRun = await preview(fixture);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assert.equal(dryRun.structuredContent.writeback_effect, 'update_managed_relations');
+	const applied = await apply(fixture, tokenFrom(dryRun));
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	const target = fixture.read(fixture.targetPath);
+	assert.match(target, /Keep this paragraph\./);
+	assert.match(target, /01_knowledge\/wiki\/new-map/);
+	assert.match(target, /01_knowledge\/wiki\/related/);
+	assert.equal(target.includes('01_knowledge/wiki/old-map'), false);
+});
 
 function taskAppliedProposalIds(fixture) {
 	const value = parseMarkdown(fixture.read(TASK_PATH)).frontmatter.fields

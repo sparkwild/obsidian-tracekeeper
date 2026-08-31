@@ -1,4 +1,5 @@
 import { ui } from '../../ui/localization';
+import type { WikiChangeRule } from '@tracekeeper/core';
 
 export const AUTO_REFRESH_INTERVAL_OPTIONS = [10, 15, 30, 60] as const;
 
@@ -14,9 +15,10 @@ const GRAPH_PROFILES: GraphProfile[] = ['off', 'advisory', 'strict'];
 
 export type MemoryProposalRule = 'review_queue' | 'auto_write' | 'disabled';
 
-export const MEMORY_RULES_VERSION = 5;
+export const MEMORY_RULES_VERSION = 6;
 
 export const MEMORY_PROPOSAL_RULES: MemoryProposalRule[] = ['review_queue', 'auto_write', 'disabled'];
+export const WIKI_CHANGE_RULES: WikiChangeRule[] = ['review_each', 'review_batch', 'auto_managed', 'disabled'];
 
 export const NOTE_CONTENT_LANGUAGES: NoteContentLanguageSetting[] = ['auto', 'zh-CN', 'en'];
 
@@ -58,10 +60,32 @@ export const memoryProposalRuleLabel = (rule: MemoryProposalRule): string => {
 	}
 };
 
+export const normalizeWikiChangeRule = (value: unknown): WikiChangeRule => {
+	const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+	return WIKI_CHANGE_RULES.includes(normalized as WikiChangeRule)
+		? normalized as WikiChangeRule
+		: 'review_batch';
+};
+
+export const wikiChangeRuleLabel = (rule: WikiChangeRule): string => {
+	switch (rule) {
+		case 'review_each':
+			return ui('逐项审核', 'Review each');
+		case 'auto_managed':
+			return ui('自动托管', 'Auto managed');
+		case 'disabled':
+			return ui('忽略', 'Ignore');
+		case 'review_batch':
+		default:
+			return ui('批次审核', 'Batch review');
+	}
+};
+
 export interface MemoryRuleSettings {
 	memoryRulesVersion: number;
 	globalMemoryRule: MemoryProposalRule;
 	projectMemoryRule: MemoryProposalRule;
+	wikiChangeRule: WikiChangeRule;
 	taskTrackingEnabled: boolean;
 }
 
@@ -74,6 +98,7 @@ export const normalizeMemoryRuleSettings = (
 		memoryRulesVersion: MEMORY_RULES_VERSION,
 		globalMemoryRule: normalizeMemoryProposalRule(source.globalMemoryRule, defaults.globalMemoryRule),
 		projectMemoryRule: normalizeMemoryProposalRule(source.projectMemoryRule, defaults.projectMemoryRule),
+		wikiChangeRule: normalizeWikiChangeRule(source.wikiChangeRule),
 		taskTrackingEnabled: typeof source.taskTrackingEnabled === 'boolean'
 			? source.taskTrackingEnabled
 			: defaults.taskTrackingEnabled,

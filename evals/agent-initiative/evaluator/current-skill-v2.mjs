@@ -38,7 +38,11 @@ export function buildSkillV2Profile(sourceDocuments) {
 		trackedRecallRouting: requires(text, /(?:live `?tracked_task`?|live tracking)[\s\S]*start first[\s\S]*(?:next_actions|recommended_recall)/iu, 'live tracked-task Recall routing'),
 		operationSpecificKeys: requires(text, /One idempotency key replays only the same logical operation/iu, 'operation-specific idempotency keys'),
 		explicitMemoryScope: requires(text, /MemoryRecord candidate declares\s*`memory_scope/iu, 'explicit MemoryRecord scope'),
-		wikiReviewOnly: requires(text, /Wiki changes always enter review/iu, 'review-only Wiki routing'),
+		wikiGovernance: requires(
+			text,
+			/Wiki changes follow the independently selected Wiki rule[^]{0,220}(?:batch|auto-managed|ignore)/iu,
+			'independent Wiki governance routing'
+		),
 		scopeAuto: requires(text, /Global and Project Auto are fully supported/iu, 'Global and Project Auto support'),
 		optionalRelations: requires(text, /Wiki and Source relations are optional/iu, 'optional Wiki and Source relations'),
 		globalHubRepair: requires(text, /missing or invalid canonical Global Memory Hub[\s\S]*structure-repair/iu, 'Global Memory Hub repair recovery'),

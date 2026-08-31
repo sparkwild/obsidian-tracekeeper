@@ -18,9 +18,16 @@ const makeProposal = (overrides = {}) => ({
 	relatedProject: overrides.relatedProject || '',
 	memoryScope: overrides.memoryScope || '',
 	taskId: overrides.taskId || '',
+	proposalSchemaVersion: overrides.proposalSchemaVersion || 1,
+	reviewBatchId: overrides.reviewBatchId || '',
+	wikiRole: overrides.wikiRole || '',
+	parentWiki: overrides.parentWiki || '',
+	effectiveWikiRule: overrides.effectiveWikiRule || '',
+	effectiveRisk: overrides.effectiveRisk || '',
 	sourceSessionNote: overrides.sourceSessionNote || '',
 	targetNote: overrides.targetNote || '',
 	evidence: [],
+	relatedWiki: [],
 	relatedSources: [],
 	rationale: overrides.rationale || '',
 	riskLevel: overrides.riskLevel || 'unknown',
@@ -180,6 +187,17 @@ try {
 								const normalizedPrefix = normalizeKnowledgePath(prefix).replace(/\\/+$/, '');
 								return normalized === normalizedPrefix || normalized.startsWith(normalizedPrefix + '/');
 							};
+							export const isKnowledgeWikiPath = (value) => startsWithPathPrefix(value, KNOWLEDGE_WIKI_DIR);
+							export const buildWikiReviewBatches = (items) => {
+								const groups = new Map();
+								for (const item of items) {
+									const id = item.taskId ? 'task:' + item.taskId : 'proposal:' + item.proposalId;
+									const values = groups.get(id) || [];
+									values.push(item);
+									groups.set(id, values);
+								}
+								return [...groups].map(([reviewBatchId, values]) => ({ reviewBatchId, segment: 1, items: values, totalBytes: values.reduce((sum, item) => sum + item.writebackBytes, 0) }));
+							};
 							export const computeProposalContentHash = (value) => 'content:' + JSON.stringify(value);
 							export const computeProposalRevision = (value) => {
 								const copy = { ...value, writebackContent: '' };
@@ -322,7 +340,24 @@ try {
 	assert.equal(pageTwo.page.pageIndex, 1);
 	assert.equal(pageTwo.page.hasPrevious, true);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 24 })}\n`);
+	const wikiBatch = [0, 1, 2].map((index) => makeProposal({
+		proposalId: `wiki-batch-${index}`,
+		proposalSchemaVersion: 2,
+		reviewBatchId: 'task:task-wiki',
+		taskId: 'task-wiki',
+		targetNote: `01_knowledge/wiki/topic-${index}.md`,
+		writebackContent: `# Topic ${index}`,
+		effectiveRisk: 'low',
+	}));
+	const groups = queueModule.buildReviewQueueBatchGroups(wikiBatch, 'review_batch');
+	assert.equal(groups.length, 1);
+	assert.equal(groups[0].batchEligible, true);
+	assert.equal(groups[0].proposals.length, 3);
+	const strictGroups = queueModule.buildReviewQueueBatchGroups(wikiBatch, 'review_each');
+	assert.equal(strictGroups.length, 3);
+	assert.equal(strictGroups.every((group) => !group.batchEligible), true);
+
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 29 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

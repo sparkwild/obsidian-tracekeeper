@@ -89,8 +89,10 @@ Use this `tracked_task` subroute only when the active user explicitly asks to bo
 - Synthesize only from captured paths and verified Recall evidence, then call
   `tracekeeper.propose_memory`. A MemoryRecord candidate declares
   `memory_scope: "global"` or `memory_scope: "project"`; an explicit Wiki
-  target does not. Wiki changes always enter review, while the selected Memory
-  scope's policy decides review, Auto, or ignore.
+  target does not. Wiki changes follow the independently selected Wiki rule:
+  individual review, task-batch review, eligible auto-managed writes, or
+  ignore. The selected Memory scope's policy separately decides review, Auto,
+  or ignore for MemoryRecord candidates.
 - Finish once with no duplicate `memory_candidate_records` after a direct proposal.
 - A captured Source remains readable evidence. Do not use Source Recall or
   `read_note` as proof that the synthesized Wiki/Memory proposal was applied;
@@ -305,8 +307,9 @@ applied Wiki/Memory result.
 An explicit request to research and save is a workflow trigger, not a permission grant. `capture_source` still requires `vault.write`; `propose_memory` still requires `memory.propose`; MCP policy still controls the target, review queue, and scope-specific Auto decision. If a capability is missing, report which capability was unavailable and leave that step undone.
 
 Global Memory defaults to Review, while Global and Project Auto are both fully
-supported when the user's selected policy permits them. Wiki changes always
-enter review. Wiki and Source relations are optional; missing Wiki context does
+supported when the user's selected policy permits them. Wiki changes follow
+the independent review-each, batch-review, auto-managed, or disabled rule.
+Wiki and Source relations are optional; missing Wiki context does
 not block an otherwise eligible Memory Auto write. A supplied unverifiable
 relation enters review. Missing or invalid canonical Global Memory Hubs block
 persistence and require the explicit structure-repair flow. Project Auto may
@@ -428,10 +431,11 @@ Review semantics:
   duplicate finish candidate as instructed, then use the returned
   `durable_output` summary instead of accepting `no_candidates` as persistence
   success.
-- Apply an approved proposal only when the user explicitly requests the apply action.
+- Apply an already approved proposal through public MCP only when the user explicitly requests the apply action; Obsidian's internal human Wiki batch confirmation is separate.
 - Direct `propose_memory` MemoryRecord candidates declare `memory_scope`;
   `project_hint` is identity evidence, not scope authority. Explicit Wiki
-  targets do not require `memory_scope` and always enter review.
+  targets do not require `memory_scope` and follow the independently selected
+  Wiki rule.
 - Global and Project Auto use the same immutable MemoryRecord v2 semantics.
   Global defaults to Review; its fully supported Auto mode writes under the
   canonical Global Memory Hub with `project_id: null`.

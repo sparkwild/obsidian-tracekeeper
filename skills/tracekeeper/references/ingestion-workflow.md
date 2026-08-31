@@ -26,8 +26,9 @@ applied Wiki/Memory result.
 An explicit request to research and save is a workflow trigger, not a permission grant. `capture_source` still requires `vault.write`; `propose_memory` still requires `memory.propose`; MCP policy still controls the target, review queue, and scope-specific Auto decision. If a capability is missing, report which capability was unavailable and leave that step undone.
 
 Global Memory defaults to Review, while Global and Project Auto are both fully
-supported when the user's selected policy permits them. Wiki changes always
-enter review. Wiki and Source relations are optional; missing Wiki context does
+supported when the user's selected policy permits them. Wiki changes follow
+the independent review-each, batch-review, auto-managed, or disabled rule.
+Wiki and Source relations are optional; missing Wiki context does
 not block an otherwise eligible Memory Auto write. A supplied unverifiable
 relation enters review. Missing or invalid canonical Global Memory Hubs block
 persistence and require the explicit structure-repair flow. Project Auto may

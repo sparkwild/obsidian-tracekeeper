@@ -4,6 +4,7 @@ import type {
 	ApprovedWritebackPreview,
 	ArchiveMemoryProposalPreview,
 	ArchiveMemoryProposalReceipt,
+	WikiReviewBatchPreview,
 } from './review-queue-controller';
 import type { MemoryProposalRecord } from './review-view-model';
 import type { ReviewProposalContext, ReviewTargetCandidate } from './review-context-model';
@@ -52,7 +53,7 @@ const targetReasonLabel = (candidate: ReviewTargetCandidate): string => {
 const targetDisplayName = (candidate: ReviewTargetCandidate): string =>
 	candidate.title || noteNameFromPath(candidate.path);
 
-type ProposalWritebackEffect = 'append' | 'create_memory_record' | 'create_wiki_note';
+type ProposalWritebackEffect = 'append' | 'create_memory_record' | 'create_wiki_note' | 'update_managed_relations';
 
 const normalizeWritebackEffect = (value: unknown): ProposalWritebackEffect | undefined => {
 	if (typeof value !== 'string') {
@@ -68,6 +69,9 @@ const normalizeWritebackEffect = (value: unknown): ProposalWritebackEffect | und
 	if (normalized === 'create_wiki_note') {
 		return 'create_wiki_note';
 	}
+	if (normalized === 'update_managed_relations') {
+		return 'update_managed_relations';
+	}
 	return undefined;
 };
 
@@ -75,30 +79,35 @@ const writebackEffectLabel = (effect: ProposalWritebackEffect): string => ({
 	append: ui('追加写入', 'Append'),
 	create_memory_record: ui('新增记忆', 'Add memory'),
 	create_wiki_note: ui('新建知识笔记', 'Create knowledge note'),
+	update_managed_relations: ui('更新托管关系', 'Update managed relations'),
 }[effect]);
 
 const writebackActionLabel = (effect: ProposalWritebackEffect): string => ({
 	append: ui('确认追加写入', 'Confirm append'),
 	create_memory_record: ui('确认新增记忆', 'Confirm memory addition'),
 	create_wiki_note: ui('确认新建知识笔记', 'Confirm knowledge note creation'),
+	update_managed_relations: ui('确认更新关系', 'Confirm relation update'),
 }[effect]);
 
 const writebackIntroLabel = (effect: ProposalWritebackEffect): string => ({
 	append: ui('请确认以下内容将写入目标笔记。', 'Confirm the content that will be written to the target note.'),
 	create_memory_record: ui('请确认以下内容将新增为记忆。', 'Confirm the content that will be added as memory.'),
 	create_wiki_note: ui('请确认以下内容将新建为知识笔记。', 'Confirm the knowledge note content to be created.'),
+	update_managed_relations: ui('请确认以下托管关系将被更新，用户正文不会改动。', 'Confirm the managed relation update. User-authored content is not changed.'),
 }[effect]);
 
 const writebackProgressLabel = (effect: ProposalWritebackEffect): string => ({
 	append: ui('正在写入目标笔记。', 'Applying change to the target note.'),
 	create_memory_record: ui('正在新增记忆。', 'Adding memory.'),
 	create_wiki_note: ui('正在新建知识笔记。', 'Creating a knowledge note.'),
+	update_managed_relations: ui('正在更新托管关系。', 'Updating managed relations.'),
 }[effect]);
 
 const writebackSuccessLabel = (effect: ProposalWritebackEffect): string => ({
 	append: ui('已写入目标笔记。', 'Change applied to the target note.'),
 	create_memory_record: ui('记忆已新增。', 'Memory added.'),
 	create_wiki_note: ui('知识笔记已新建。', 'Knowledge note created.'),
+	update_managed_relations: ui('托管关系已更新。', 'Managed relations updated.'),
 }[effect]);
 
 export class ReviewQueueRequestRevisionModal extends Modal {
@@ -725,6 +734,136 @@ export class ReviewQueueArchiveModal extends Modal {
 				)
 			);
 		}
+	}
+}
+
+export class WikiReviewBatchApplyModal extends Modal {
+	private readonly selectedPaths: Set<string>;
+
+	constructor(
+		app: App,
+		private plugin: TracekeeperPlugin,
+		private proposals: readonly MemoryProposalRecord[],
+		private onApplied: () => void
+	) {
+		super(app);
+		this.selectedPaths = new Set(proposals.map((proposal) => proposal.path));
+	}
+
+	onOpen(): void {
+		void super.onOpen();
+		this.titleEl.setText(ui('审查并写入 Wiki 批次', 'Review and apply Wiki batch'));
+		void this.renderPreview();
+	}
+
+	private async renderPreview(): Promise<void> {
+		this.contentEl.empty();
+		const selected = this.proposals.filter((proposal) => this.selectedPaths.has(proposal.path));
+		if (selected.length === 0) {
+			this.contentEl.createEl('p', { text: ui('至少选择一项 Wiki 变更。', 'Select at least one Wiki change.') });
+			const close = this.contentEl.createEl('button', { text: ui('关闭', 'Close') });
+			close.addEventListener('click', () => this.close());
+			close.focus();
+			return;
+		}
+		const loading = this.contentEl.createEl('p', {
+			text: ui('正在生成批次预览...', 'Generating batch preview...'),
+		});
+		configureLiveStatus(loading);
+		try {
+			this.renderReady(await this.plugin.previewWikiReviewBatch(selected));
+		} catch (error) {
+			console.error('tracekeeper failed to preview Wiki review batch', error);
+			this.contentEl.empty();
+			const failure = this.contentEl.createEl('p', {
+				text: ui('无法生成批次预览；提案或目标可能已经变化。', 'Unable to generate the batch preview; a proposal or target may have changed.'),
+			});
+			configureLiveStatus(failure);
+			const close = this.contentEl.createEl('button', { text: ui('关闭', 'Close') });
+			close.addEventListener('click', () => this.close());
+			close.focus();
+		}
+	}
+
+	private renderReady(preview: WikiReviewBatchPreview): void {
+		this.contentEl.empty();
+		this.contentEl.createEl('p', {
+			text: ui(
+				`本次确认将批准并写入 ${preview.items.length} 项 Wiki 变更。`,
+				`This confirmation approves and applies ${preview.items.length} Wiki change(s).`
+			),
+		});
+		const summary = this.contentEl.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderDetail(summary, ui('批次', 'Batch'), preview.reviewBatchId);
+		this.renderDetail(summary, ui('变更数量', 'Changes'), String(preview.items.length));
+		this.renderDetail(summary, ui('有效至', 'Expires'), new Date(preview.expiresAt).toLocaleString());
+
+		for (const item of preview.items) {
+			const details = this.contentEl.createEl('details', {
+				cls: 'tracekeeper-advanced-details tracekeeper-review-batch-modal__item',
+			});
+			const summaryRow = details.createEl('summary', { cls: 'tracekeeper-advanced-summary' });
+			const checkbox = summaryRow.createEl('input', { type: 'checkbox' });
+			checkbox.checked = this.selectedPaths.has(item.proposalPath);
+			checkbox.setAttribute('aria-label', ui(`包含 ${noteNameFromPath(item.targetPath)}`, `Include ${noteNameFromPath(item.targetPath)}`));
+			checkbox.addEventListener('click', (event) => event.stopPropagation());
+			checkbox.addEventListener('change', () => {
+				if (checkbox.checked) this.selectedPaths.add(item.proposalPath);
+				else this.selectedPaths.delete(item.proposalPath);
+				void this.renderPreview();
+			});
+			summaryRow.createSpan({ text: `${noteNameFromPath(item.targetPath)} · ${item.effectiveRisk}` });
+			const facts = details.createDiv({ cls: 'tracekeeper-detail-grid' });
+			this.renderDetail(facts, ui('目标路径', 'Target path'), item.targetPath);
+			this.renderDetail(facts, ui('记录 ID', 'Record ID'), item.proposalId);
+			details.createEl('pre').setText(item.writebackPreview);
+		}
+
+		const status = this.contentEl.createEl('p', { cls: 'tracekeeper-view__description' });
+		configureLiveStatus(status);
+		const actions = this.contentEl.createDiv({ cls: 'modal-button-container' });
+		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel'), cls: 'mod-warning' });
+		cancel.addEventListener('click', () => this.close());
+		const confirm = actions.createEl('button', {
+			text: ui(`确认并写入 ${preview.items.length} 项`, `Confirm and apply ${preview.items.length}`),
+			cls: 'mod-cta',
+		});
+		confirm.addEventListener('click', () => {
+			void (async () => {
+				confirm.disabled = true;
+				cancel.disabled = true;
+				status.setText(ui('正在应用批次...', 'Applying batch...'));
+				try {
+					const receipt = await this.plugin.confirmWikiReviewBatch(preview, preview.confirmationToken);
+					if (receipt.status !== 'completed') {
+						status.setText(ui(
+							`批次部分完成：已写入 ${receipt.applied.length} 项，剩余冲突 ${receipt.conflicts.length} 项。`,
+							`Batch partially completed: ${receipt.applied.length} applied, ${receipt.conflicts.length} conflict(s) remain.`
+						));
+						confirm.disabled = false;
+						cancel.disabled = false;
+						confirm.focus();
+						return;
+					}
+					new Notice(ui('Wiki 批次已写入。', 'Wiki batch applied.'));
+					this.onApplied();
+					this.close();
+				} catch (error) {
+					console.error('tracekeeper failed to apply Wiki review batch', error);
+					status.setText(ui('批次写入失败，请刷新后重新预览。', 'Batch apply failed. Refresh and generate a new preview.'));
+					confirm.disabled = false;
+					cancel.disabled = false;
+					confirm.focus();
+				}
+			})();
+		});
+		cancel.focus();
+	}
+
+	private renderDetail(container: HTMLElement, label: string, value: string): void {
+		const item = container.createDiv({ cls: 'tracekeeper-detail' });
+		item.createSpan({ text: label });
+		item.createEl('strong', { text: value || ui('未指定', 'Not specified') });
 	}
 }
 

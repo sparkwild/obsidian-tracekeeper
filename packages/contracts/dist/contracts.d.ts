@@ -192,7 +192,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.review_queue";
-    readonly version: 2;
+    readonly version: 3;
     readonly visibility: "public";
     readonly capability: "memory.review";
     readonly risk: "read-only";
@@ -201,7 +201,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "review";
     readonly useCase: "review_queue";
-    readonly description: "[read-only] Inspect pending local Vault proposals or approved writeback candidates. Does not approve or apply changes.";
+    readonly description: "[read-only] Inspect pending local Vault proposals, trusted Wiki task batches, or approved writeback candidates. Does not approve or apply changes.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly deprecated: {
@@ -318,7 +318,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "review";
     readonly useCase: "apply_approved_writeback";
-    readonly description: "[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content to an existing local Vault target or creates the explicitly approved missing Wiki/MemoryRecord target after a fresh confirmation preview.";
+    readonly description: "[review-gated apply] Use only after the user approves a Knowledge Change Review proposal. Appends approved content, updates a bounded managed Wiki relation region, or creates the explicitly approved missing Wiki/MemoryRecord target after a fresh confirmation preview.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly outputSchema: ToolOutputSchema;
@@ -758,7 +758,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.propose_memory";
-    readonly version: 4;
+    readonly version: 5;
     readonly visibility: "public";
     readonly capability: "memory.propose";
     readonly risk: "low-risk-write";

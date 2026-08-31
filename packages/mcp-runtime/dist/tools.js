@@ -1162,7 +1162,7 @@ function normalizeMemoryScope(proposalKind, targetNote, projectHint, memoryScope
 }
 function buildArchitectureStatus(vaultRoot, context) {
     const scan = scanVaultForContext(vaultRoot, context);
-    const graphHealth = (0, core_1.analyzeGraphHealth)(scan.notes, { maxItems: 20 });
+    const graphHealth = (0, core_1.analyzeGraphHealth)(scan.notes, { maxItems: 20, semanticOnly: true });
     const missingGraphBridges = [
         ...graphHealth.missing_recommended_hubs,
         graphHealth.missing_recommended_entry,
@@ -1175,10 +1175,35 @@ function buildArchitectureStatus(vaultRoot, context) {
         missing_graph_bridges: dedupeAndNormalizeList(missingGraphBridges),
     };
 }
-function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint, relatedWikiRaw, relatedSourcesRaw, context) {
+function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint, relatedWikiRaw, relatedSourcesRaw, context, taskId) {
     const options = pathSafetyOptions(context);
     const scan = scanVaultForContext(vaultRoot, context);
     const scannedPathByLowercase = new Map(scan.notes.map((note) => [note.relativePath.toLowerCase(), note.relativePath]));
+    const plannedWikiTargetCounts = new Map();
+    if (taskId) {
+        for (const note of scan.notes) {
+            if (!(0, core_1.startsWithPathPrefix)(note.relativePath, MEMORY_PROPOSAL_DIR))
+                continue;
+            if (readFrontmatterString(note.frontmatter, ['task_id', 'taskId']) !== taskId)
+                continue;
+            const status = readProposalApprovalStatus(note.frontmatter);
+            if (status !== 'pending' && status !== 'approved')
+                continue;
+            const rawTarget = readFrontmatterString(note.frontmatter, ['target_note', 'targetNote']);
+            let target;
+            try {
+                target = (0, safety_1.normalizeNotePath)(rawTarget, options);
+            }
+            catch {
+                continue;
+            }
+            if (!(0, core_1.isKnowledgeWikiPath)(target))
+                continue;
+            const key = target.toLowerCase();
+            const current = plannedWikiTargetCounts.get(key);
+            plannedWikiTargetCounts.set(key, { path: target, count: (current?.count ?? 0) + 1 });
+        }
+    }
     if (projectHint && !projectHint.trim()) {
         projectHint = '';
     }
@@ -1213,6 +1238,10 @@ function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint,
             const scannedPath = scannedPathByLowercase.get(lowerPath);
             if (scannedPath && isValid(scannedPath)) {
                 return scannedPath;
+            }
+            const planned = plannedWikiTargetCounts.get(lowerPath);
+            if (planned?.count === 1 && isValid(planned.path)) {
+                return planned.path;
             }
         }
         const title = rawReference.toLowerCase().replace(/\.md$/i, '');
@@ -1378,6 +1407,17 @@ function normalizeMemoryProposalRule(value, fallback = 'review_queue') {
         return 'review_queue';
     }
     return fallback;
+}
+function wikiChangeRuleFor(context) {
+    const normalized = typeof context.memoryRules?.wikiChangeRule === 'string'
+        ? context.memoryRules.wikiChangeRule.trim().toLowerCase()
+        : '';
+    if (normalized === 'review_each'
+        || normalized === 'review_batch'
+        || normalized === 'auto_managed'
+        || normalized === 'disabled')
+        return normalized;
+    return 'review_batch';
 }
 function isProjectMemoryProposal(proposalKind, targetNote, projectHint) {
     const normalizedKind = proposalKind.trim().toLowerCase();
@@ -2587,6 +2627,8 @@ function normalizeWritebackPlanEffect(effectValue) {
             return 'create_memory_record';
         case 'create_wiki_note':
             return CREATE_WIKI_NOTE_EFFECT;
+        case 'update_managed_relations':
+            return 'update_managed_relations';
         default:
             return null;
     }
@@ -3016,7 +3058,8 @@ function isWritebackConfirmationBinding(value) {
         && (value.effectKind === undefined
             || value.effectKind === 'append'
             || value.effectKind === 'create_memory_record'
-            || value.effectKind === 'create_wiki_note');
+            || value.effectKind === 'create_wiki_note'
+            || value.effectKind === 'update_managed_relations');
 }
 function createWritebackConfirmationToken(binding, context) {
     const payload = Buffer.from(JSON.stringify(binding), 'utf8').toString('base64url');
@@ -3336,6 +3379,14 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
     else if (!target && plan.effectKind !== 'create_memory_record') {
         throw new safety_1.ToolInputError(`Writeback target does not exist: ${targetPath}`);
     }
+    if (plan.effectKind === 'update_managed_relations' && target) {
+        try {
+            (0, core_1.applyManagedRelationsBlock)(target.content, snapshot.writebackContent);
+        }
+        catch (error) {
+            throw new safety_1.ToolInputError(error instanceof Error ? error.message : 'Managed relations writeback is invalid.');
+        }
+    }
     const taskPath = taskId ? buildTaskNotePath(taskId) : null;
     const task = taskPath
         ? await readCurrentVaultTextState(vaultRoot, taskPath, context)
@@ -3393,7 +3444,12 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
         }
         : plan.effectKind === CREATE_WIKI_NOTE_EFFECT
             ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, identity.operationId)
-            : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
+            : plan.effectKind === 'update_managed_relations'
+                ? {
+                    block: snapshot.writebackContent,
+                    marker: `managed-relations:${snapshot.proposalId}`,
+                }
+                : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
     const touchedNotes = [
         targetPath,
         proposal.path,
@@ -3562,7 +3618,8 @@ function isApplyApprovedWritebackPayload(value) {
         && (value.effectKind === undefined
             || value.effectKind === 'append'
             || value.effectKind === 'create_memory_record'
-            || value.effectKind === 'create_wiki_note');
+            || value.effectKind === 'create_wiki_note'
+            || value.effectKind === 'update_managed_relations');
 }
 function formatFrontmatterUpdateValue(value) {
     if (Array.isArray(value)) {
@@ -5823,6 +5880,7 @@ async function handleGraphHealth(rawArgs, context) {
     const view = await knowledgeReadViewForContext(vaultRoot, context);
     const graphHealth = (0, core_1.analyzeGraphHealth)(materializeLightweightNotes(view), {
         maxItems,
+        semanticOnly: true,
     });
     const profileEvaluation = (0, core_1.evaluateGraphProfile)(graphHealth, profile);
     return {
@@ -6381,7 +6439,26 @@ async function handleReviewQueue(rawArgs, context) {
         status: readProposalApprovalStatus(note.frontmatter),
         proposal_kind: readFrontmatterString(note.frontmatter, ['proposal_kind', 'proposalKind']) || null,
         risk_level: readFrontmatterString(note.frontmatter, ['risk_level', 'riskLevel']) || null,
+        review_batch_id: readFrontmatterString(note.frontmatter, ['review_batch_id', 'reviewBatchId']) || null,
+        effective_risk: readFrontmatterString(note.frontmatter, ['effective_risk', 'effectiveRisk']) || null,
+        effective_wiki_rule: readFrontmatterString(note.frontmatter, ['effective_wiki_rule', 'effectiveWikiRule']) || null,
+        wiki_role: readFrontmatterString(note.frontmatter, ['wiki_role', 'wikiRole']) || null,
+        parent_wiki: readFrontmatterString(note.frontmatter, ['parent_wiki', 'parentWiki']) || null,
         ...proposalGovernanceProjection(note.frontmatter, view),
+    }));
+    const batchMap = new Map();
+    for (const entry of pending) {
+        const id = entry.review_batch_id || `proposal:${entry.path}`;
+        const items = batchMap.get(id) ?? [];
+        items.push(entry);
+        batchMap.set(id, items);
+    }
+    const batches = [...batchMap.entries()].map(([review_batch_id, items]) => ({
+        review_batch_id,
+        item_count: items.length,
+        high_risk_count: items.filter((item) => item.effective_risk === 'high').length,
+        blocked_count: items.filter((item) => item.effective_risk === 'blocked').length,
+        proposal_paths: items.map((item) => item.path),
     }));
     return {
         ok: true,
@@ -6389,6 +6466,7 @@ async function handleReviewQueue(rawArgs, context) {
         vault_root: vaultRoot,
         count: pending.length,
         entries: pending,
+        batches,
     };
 }
 async function handleListApprovedWritebacks(rawArgs, context) {
@@ -6429,6 +6507,9 @@ async function handleListApprovedWritebacks(rawArgs, context) {
         task_id: plan.proposal.taskId || null,
         ready_to_apply: plan.ready,
         blocker: plan.ready ? null : plan.reason || 'not ready',
+        review_batch_id: readFrontmatterString(plan.proposal.frontmatter, ['review_batch_id', 'reviewBatchId']) || null,
+        effective_risk: readFrontmatterString(plan.proposal.frontmatter, ['effective_risk', 'effectiveRisk']) || null,
+        effective_wiki_rule: readFrontmatterString(plan.proposal.frontmatter, ['effective_wiki_rule', 'effectiveWikiRule']) || null,
         ...proposalGovernanceProjection(plan.proposal.frontmatter, view),
     }));
     return {
@@ -6623,7 +6704,12 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
         }
         : createsWikiNote
             ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, operationId)
-            : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
+            : payload.effectKind === 'update_managed_relations'
+                ? {
+                    block: snapshot.writebackContent,
+                    marker: `managed-relations:${snapshot.proposalId}`,
+                }
+                : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
     const currentTaskPath = payload.taskId ? buildTaskNotePath(payload.taskId) : null;
     const currentTask = currentTaskPath
         ? await readCurrentVaultTextState(vaultRoot, currentTaskPath, context)
@@ -6677,6 +6763,16 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
     }
     if (!target) {
         throw new core_1.OperationConflictError(`Writeback target does not exist: ${payload.targetPath}`);
+    }
+    if (payload.effectKind === 'update_managed_relations') {
+        const updated = (0, core_1.applyManagedRelationsBlock)(target.content, writeback.block);
+        if (updated === target.content) {
+            return { target, writebackBlock: writeback.block, alreadyApplied: true };
+        }
+        if (target.contentHash !== payload.targetContentHash) {
+            throw new core_1.OperationConflictError('Writeback confirmation is stale because the managed relations target changed.');
+        }
+        return { target, writebackBlock: writeback.block, alreadyApplied: false };
     }
     if (reversibleWritebackTargetPrefix(target.content, payload) !== null) {
         return {
@@ -6742,6 +6838,12 @@ async function rollbackRuntimeWritebackTarget(vaultRoot, payload, context) {
             throw error;
         }
         return;
+    }
+    if (payload.effectKind === 'update_managed_relations') {
+        const target = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
+        if (!target || target.contentHash === payload.targetContentHash)
+            return;
+        throw new core_1.OperationConflictError('Managed relations update cannot be rolled back without overwriting a later user edit; resume or review the partial operation.');
     }
     const target = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
     if (!target || target.contentHash === payload.targetContentHash) {
@@ -6886,6 +6988,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
             proposal_id: proposal.proposalId,
             proposal_path: proposal.path,
             target_note: prepared.binding.targetPath,
+            target_content_hash: prepared.binding.targetContentHash,
             touched_notes: prepared.binding.touchedNotes,
             writeback_effect: prepared.binding.effectKind || 'append',
             writeback_preview: prepared.writebackBlock,
@@ -7048,6 +7151,19 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
                     if (!effect.target) {
                         throw new core_1.OperationConflictError('Writeback target is unavailable.');
                     }
+                    if (currentPayload.effectKind === 'update_managed_relations') {
+                        const updated = (0, core_1.applyManagedRelationsBlock)(effect.target.content, effect.writebackBlock);
+                        if (context.vaultRepository) {
+                            if (!effect.target.version) {
+                                throw new core_1.OperationConflictError('Managed relations target version is unavailable.');
+                            }
+                            await context.vaultRepository.replaceText(currentPayload.targetPath, effect.target.version, updated);
+                            return;
+                        }
+                        const targetAbsolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, currentPayload.targetPath, pathSafetyOptions(context));
+                        fs.writeFileSync(targetAbsolute, updated, 'utf8');
+                        return;
+                    }
                     const targetWithWriteback = `${effect.target.content}${writebackTargetFrame(effect.writebackBlock)}`;
                     if (context.vaultRepository) {
                         if (!effect.target.version) {
@@ -7102,7 +7218,9 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
                             ? 'wiki_note.create'
                             : currentPayload.effectKind === 'create_memory_record'
                                 ? 'memory_record.apply'
-                                : 'writeback.apply',
+                                : currentPayload.effectKind === 'update_managed_relations'
+                                    ? 'wiki_relations.update'
+                                    : 'writeback.apply',
                         proposal_id: currentPayload.proposalId,
                         proposal_path: currentPayload.proposalPath,
                         permission_level: 'review-gated apply',
@@ -7254,7 +7372,7 @@ async function handleProposeMemory(rawArgs, context) {
             : buildSafeFilename(fallbackPrefix, 'proposal', context),
         resolveMemoryScope: (proposalKind, targetNote, projectHint, memoryScope) => resolveMemoryScope(proposalKind, targetNote, projectHint, memoryScope),
         buildArchitectureStatus: () => buildArchitectureStatus(vaultRoot, context),
-        resolveBridgeMetadata: (memoryScope, projectHint, relatedWiki, relatedSources) => resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint, relatedWiki, relatedSources, context),
+        resolveBridgeMetadata: (memoryScope, projectHint, relatedWiki, relatedSources, taskId) => resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint, relatedWiki, relatedSources, context, taskId),
         resolveProjectIdentity: (snapshot) => {
             const resolved = (0, project_identity_1.resolveProjectIdentity)({
                 project_hint: snapshot.project_hint,
@@ -7267,6 +7385,7 @@ async function handleProposeMemory(rawArgs, context) {
         },
         assertAllowed: (proposalKind, targetNote, projectHint, memoryScope) => assertMemoryProposalAllowed(proposalKind, targetNote, projectHint, context, memoryScope),
         memoryRule: (proposalKind, targetNote, projectHint, memoryScope) => memoryProposalRuleFor(proposalKind, targetNote, projectHint, context, memoryScope),
+        wikiRule: () => wikiChangeRuleFor(context),
         writeImmutableMemoryRecord: (input) => writeImmutableMemoryRecord(vaultRoot, {
             ...input,
             toolName: 'tracekeeper.propose_memory',
@@ -7301,12 +7420,85 @@ async function handleProposeMemory(rawArgs, context) {
             const state = await readCurrentVaultTextState(vaultRoot, targetNote, context);
             return !state;
         },
+        readTargetNote: async (targetNote) => {
+            const repository = projectMemoryRepository(vaultRoot, context);
+            return (await repository.readText(targetNote))?.content ?? null;
+        },
         writeProposalNote: (input) => buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.propose_memory', MEMORY_PROPOSAL_DIR, input.filename, {
             ...input.frontmatter,
             ...(input.frontmatter.memory_scope === 'project' && proposalRepoPath
                 ? { repo_path: proposalRepoPath }
                 : {}),
         }, input.body, input.taskId, context, input.metadata, input.operationId),
+        writeAutoWiki: async (input) => {
+            const repository = projectMemoryRepository(vaultRoot, context);
+            const targetPath = (0, safety_1.normalizeNotePath)(input.targetNote, pathSafetyOptions(context));
+            if (!(0, core_1.isKnowledgeWikiPath)(targetPath) || !targetPath.endsWith('.md')) {
+                throw new safety_1.ToolInputError('Auto-managed Wiki target must remain inside the Wiki root.');
+            }
+            const marker = `<!-- tracekeeper:wiki:auto operation_id="${input.operationId}" -->`;
+            const markdown = `${marker}\n${input.content.trim()}\n`;
+            const existingTarget = await repository.readText(targetPath);
+            let duplicate = false;
+            if (input.effect === 'create_wiki_note') {
+                if (existingTarget) {
+                    if (existingTarget.content !== markdown) {
+                        throw new core_1.OperationConflictError(`Auto-managed Wiki target is already occupied: ${targetPath}`);
+                    }
+                    duplicate = true;
+                }
+                else {
+                    await repository.createText(targetPath, markdown);
+                }
+            }
+            else {
+                if (!existingTarget)
+                    throw new core_1.OperationConflictError(`Managed Wiki target is missing: ${targetPath}`);
+                const proposedRelations = (0, core_1.parseManagedRelationsBlock)(input.content.trim());
+                const currentRelations = (0, core_1.parseManagedRelationsBlock)(existingTarget.content);
+                if (proposedRelations.status !== 'valid') {
+                    throw new core_1.OperationConflictError(`Managed Wiki proposal is invalid: ${targetPath}`);
+                }
+                if (currentRelations.status !== 'valid') {
+                    throw new core_1.OperationConflictError(`Managed Wiki target no longer has an intact relation block: ${targetPath}`);
+                }
+                if (currentRelations.hash !== proposedRelations.hash) {
+                    if (!input.expectedManagedRelationsHash || currentRelations.hash !== input.expectedManagedRelationsHash) {
+                        throw new core_1.OperationConflictError(`Managed Wiki relation block changed after authorization: ${targetPath}`);
+                    }
+                }
+                const updated = (0, core_1.applyManagedRelationsBlock)(existingTarget.content, input.content);
+                if (updated === existingTarget.content) {
+                    duplicate = true;
+                }
+                else {
+                    await repository.replaceText(targetPath, existingTarget.version, updated);
+                }
+            }
+            const audit = await (0, audit_persistence_1.appendAuditEventAsync)(vaultRoot, {
+                tool: 'tracekeeper.propose_memory',
+                targetPath,
+                status: duplicate ? 'skipped' : 'written',
+                operationId: input.operationId,
+                taskId: input.taskId,
+                metadata: {
+                    action: duplicate
+                        ? 'wiki.auto_managed.duplicate'
+                        : input.effect === 'create_wiki_note'
+                            ? 'wiki.auto_managed.created'
+                            : 'wiki.auto_managed.relations_updated',
+                    proposal_kind: input.proposalKind,
+                    review_batch_id: input.reviewBatchId,
+                },
+            }, context);
+            return {
+                path: targetPath,
+                activity_path: audit.path,
+                status: duplicate ? 'skipped' : 'written',
+                warnings: [],
+                duplicate,
+            };
+        },
         ensureOwnedProposalIdentity: (proposalPath, proposalId, operationId) => ensureOperationOwnedProposalIdentity(vaultRoot, proposalPath, proposalId, 'proposal_operation_id', operationId, context),
         updateTaskMemoryWrite: async (taskId, memoryPath) => {
             await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
@@ -7441,7 +7633,7 @@ async function handleLint(rawArgs, context) {
     const profile = graphProfileFromArgs(rawArgs.graph_profile, context);
     const view = await knowledgeReadViewForContext(vaultRoot, context);
     const notes = materializeLightweightNotes(view);
-    const graphHealth = profile === 'off' ? undefined : (0, core_1.analyzeGraphHealth)(notes, { maxItems });
+    const graphHealth = profile === 'off' ? undefined : (0, core_1.analyzeGraphHealth)(notes, { maxItems, semanticOnly: true });
     const profileEvaluation = graphHealth
         ? (0, core_1.evaluateGraphProfile)(graphHealth, profile)
         : { profile, disabled: true, profile_issues: [] };

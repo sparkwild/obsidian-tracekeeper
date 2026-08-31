@@ -5,10 +5,19 @@ import {
 	buildProjectMemoryEntryPath,
 	deriveProjectMemoryHubBindingFromRepoPath,
 	isKnowledgeWikiPath,
+	isSourcePartPath,
 	normalizeProjectAgentType,
 	OperationConflictError,
 	RecoverableOperationRunner,
+	WIKI_PROPOSAL_SCHEMA_VERSION,
+	buildWikiReviewBatchId,
+	computeWikiEffectiveRisk,
+	parseManagedRelationsBlock,
+	renderManagedRelationsBlock,
 	renderProposalWritebackSection,
+	type WikiChangeRule,
+	type WikiEffectiveRisk,
+	type WikiRole,
 	type OperationFailureInjection,
 	type OperationJournal,
 } from '@tracekeeper/core';
@@ -34,6 +43,8 @@ export interface ProposeMemoryRawRequest {
 	memory_scope?: unknown;
 	related_wiki?: unknown;
 	related_sources?: unknown;
+	wiki_role?: unknown;
+	parent_wiki?: unknown;
 	claim_key?: unknown;
 	proposed_authority?: unknown;
 	proposed_confidence?: unknown;
@@ -64,6 +75,8 @@ export interface ProposeMemoryRequestSnapshot {
 	memory_scope: string | null;
 	related_wiki: string[];
 	related_sources: string[];
+	wiki_role: WikiRole | null;
+	parent_wiki: string | null;
 	claim_key: string | null;
 	proposed_authority: string | null;
 	proposed_confidence: string | null;
@@ -79,15 +92,24 @@ export interface ProposeMemoryRequestSnapshot {
 interface ProposeMemoryOperationPayload {
 	requestHash: string;
 	requestSnapshot: ProposeMemoryRequestSnapshot;
-	writebackEffect?: 'append' | 'create_wiki_note' | 'create_memory_record';
+	writebackEffect?: 'append' | 'create_wiki_note' | 'create_memory_record' | 'update_managed_relations';
 	memoryRecordWriteVersion?: 2;
 	memoryRule?: ProposeMemoryRule;
+	wikiRule?: WikiChangeRule;
+	effectiveRisk?: WikiEffectiveRisk;
+	expectedManagedRelationsHash?: string;
+	resolvedWikiParent?: string | null;
+	resolvedWikiRelated?: string[];
+	resolvedWikiSources?: string[];
+	unresolvedWikiRelations?: string[];
+	missingWikiRelations?: string[];
+	missingSourceRelations?: string[];
 	policyOutcome?: 'disabled';
 	projectMemoryCreatedAt: string;
 	projectMemoryAgentType: ProposeMemoryAgentType;
 }
 
-type ProposeMemoryWritebackEffect = 'append' | 'create_wiki_note' | 'create_memory_record';
+type ProposeMemoryWritebackEffect = 'append' | 'create_wiki_note' | 'create_memory_record' | 'update_managed_relations';
 
 export interface ProposeMemoryArchitectureStatus {
 	architecture_status: 'healthy' | 'needs_attention';
@@ -199,6 +221,17 @@ export interface ProposeMemoryWriteInput {
 	operationId: string;
 }
 
+export interface ProposeMemoryAutoWikiWriteInput {
+	targetNote: string;
+	content: string;
+	taskId: string | null;
+	operationId: string;
+	proposalKind: string;
+	reviewBatchId: string;
+	effect: 'create_wiki_note' | 'update_managed_relations';
+	expectedManagedRelationsHash?: string;
+}
+
 export interface ProposeMemoryApplicationDependencies {
 	journal: OperationJournal;
 	failureInjection?: OperationFailureInjection;
@@ -220,7 +253,8 @@ export interface ProposeMemoryApplicationDependencies {
 		memoryScope: ProposeMemoryScope,
 		projectHint: string,
 		relatedWiki: string[],
-		relatedSources: string[]
+		relatedSources: string[],
+		taskId?: string | null
 	): ProposeMemoryBridgeMetadata;
 	resolveProjectIdentity(snapshot: ProposeMemoryRequestSnapshot): ProposeMemoryProjectIdentity | null;
 	assertAllowed(
@@ -235,6 +269,7 @@ export interface ProposeMemoryApplicationDependencies {
 		projectHint: string,
 		memoryScope: ProposeMemoryScope
 	): ProposeMemoryRule;
+	wikiRule?(): WikiChangeRule;
 	writeImmutableMemoryRecord(
 		input: ProposeMemoryImmutableWriteInput
 	): Promise<ProposeMemoryImmutableWriteResult>;
@@ -248,6 +283,7 @@ export interface ProposeMemoryApplicationDependencies {
 	}): Promise<string | null>;
 	findOwnedProposalNote(filename: string, operationId: string): Promise<ProposeMemoryNote | null>;
 	writeProposalNote(input: ProposeMemoryWriteInput): Promise<ProposeMemoryNote>;
+	writeAutoWiki?(input: ProposeMemoryAutoWikiWriteInput): Promise<ProposeMemoryNote>;
 	ensureOwnedProposalIdentity(
 		path: string,
 		proposalId: string,
@@ -261,6 +297,7 @@ export interface ProposeMemoryApplicationDependencies {
 	assertSafeText(values: Array<{ label: string; value: string }>): void;
 	renderText(zh: string, en: string): string;
 	isTargetNoteMissing?(targetNote: string): Promise<boolean>;
+	readTargetNote?(targetNote: string): Promise<string | null>;
 }
 
 export interface ProposeMemoryApplicationRequest {
@@ -358,6 +395,8 @@ function requestSnapshot(rawArgs: ProposeMemoryRawRequest): ProposeMemoryRequest
 		memory_scope: optionalString(rawArgs.memory_scope) || null,
 		related_wiki: normalizeMultiValueList(rawArgs.related_wiki, 'related_wiki'),
 		related_sources: normalizeMultiValueList(rawArgs.related_sources, 'related_sources'),
+		wiki_role: optionalEnum(rawArgs.wiki_role, 'wiki_role', ['topic', 'topic_map']),
+		parent_wiki: optionalString(rawArgs.parent_wiki) || null,
 		claim_key: optionalString(rawArgs.claim_key) || null,
 		proposed_authority: optionalEnum(rawArgs.proposed_authority, 'proposed_authority', ['agent', 'source', 'user']),
 		proposed_confidence: optionalEnum(rawArgs.proposed_confidence, 'proposed_confidence', ['uncertain', 'inferred', 'supported', 'verified']),
@@ -392,7 +431,8 @@ function validOperationPayload(payload: unknown): payload is ProposeMemoryOperat
 		&& (value.writebackEffect === undefined
 			|| value.writebackEffect === 'append'
 			|| value.writebackEffect === 'create_wiki_note'
-			|| value.writebackEffect === 'create_memory_record')
+			|| value.writebackEffect === 'create_memory_record'
+			|| value.writebackEffect === 'update_managed_relations')
 		&& typeof request.proposal_kind === 'string'
 		&& request.proposal_kind.length > 0
 		&& typeof request.content === 'string'
@@ -401,6 +441,33 @@ function validOperationPayload(payload: unknown): payload is ProposeMemoryOperat
 		&& request.related_wiki.every((entry) => typeof entry === 'string')
 		&& Array.isArray(request.related_sources)
 		&& request.related_sources.every((entry) => typeof entry === 'string')
+		&& (request.wiki_role === null || request.wiki_role === 'topic' || request.wiki_role === 'topic_map')
+		&& (request.parent_wiki === null || typeof request.parent_wiki === 'string')
+		&& (value.wikiRule === undefined
+			|| value.wikiRule === 'review_each'
+			|| value.wikiRule === 'review_batch'
+			|| value.wikiRule === 'auto_managed'
+			|| value.wikiRule === 'disabled')
+			&& (value.effectiveRisk === undefined
+			|| value.effectiveRisk === 'low'
+			|| value.effectiveRisk === 'medium'
+			|| value.effectiveRisk === 'high'
+				|| value.effectiveRisk === 'blocked')
+			&& (value.expectedManagedRelationsHash === undefined
+				|| /^sha256:[a-f0-9]{64}$/.test(String(value.expectedManagedRelationsHash)))
+			&& (value.resolvedWikiParent === undefined
+				|| value.resolvedWikiParent === null
+				|| typeof value.resolvedWikiParent === 'string')
+			&& (value.resolvedWikiRelated === undefined
+				|| (Array.isArray(value.resolvedWikiRelated) && value.resolvedWikiRelated.every((entry) => typeof entry === 'string')))
+			&& (value.resolvedWikiSources === undefined
+				|| (Array.isArray(value.resolvedWikiSources) && value.resolvedWikiSources.every((entry) => typeof entry === 'string')))
+			&& (value.unresolvedWikiRelations === undefined
+				|| (Array.isArray(value.unresolvedWikiRelations) && value.unresolvedWikiRelations.every((entry) => typeof entry === 'string')))
+			&& (value.missingWikiRelations === undefined
+				|| (Array.isArray(value.missingWikiRelations) && value.missingWikiRelations.every((entry) => typeof entry === 'string')))
+			&& (value.missingSourceRelations === undefined
+				|| (Array.isArray(value.missingSourceRelations) && value.missingSourceRelations.every((entry) => typeof entry === 'string')))
 		&& typeof value.projectMemoryCreatedAt === 'string'
 		&& !Number.isNaN(Date.parse(value.projectMemoryCreatedAt))
 		&& typeof value.projectMemoryAgentType === 'string'
@@ -410,9 +477,13 @@ function validOperationPayload(payload: unknown): payload is ProposeMemoryOperat
 function buildWritebackEffect(
 	targetNote: string,
 	claimKey: string,
-	targetMissing: boolean
+	targetMissing: boolean,
+	managedRelationsOnly = false
 ): ProposeMemoryWritebackEffect {
 	if (targetNote) {
+		if (managedRelationsOnly && !targetMissing && isKnowledgeWikiPath(targetNote)) {
+			return 'update_managed_relations';
+		}
 		if (!targetMissing) {
 			return 'append';
 		}
@@ -459,6 +530,59 @@ function disabledMemoryResult(
 	};
 }
 
+function disabledWikiResult(
+	snapshot: ProposeMemoryRequestSnapshot,
+	identity: { operationId: string; idempotencyKey: string }
+) {
+	return {
+		ok: true,
+		tool: 'tracekeeper.propose_memory' as const,
+		operation_id: identity.operationId,
+		idempotency_key: identity.idempotencyKey,
+		status: 'ignored' as const,
+		persisted: false as const,
+		auto_applied: false as const,
+		duplicate: false,
+		proposal_destination: 'wiki' as const,
+		memory_rule: null,
+		memory_scope: null,
+		project_hint: snapshot.project_hint,
+		target_note: snapshot.target_note,
+		warnings: ['Wiki changes are disabled; the candidate was ignored and no review proposal was created.'],
+		proposal_id: null,
+		proposal_path: null,
+		review_reason: null,
+		review_warnings: [],
+		review_batch_id: null,
+		wiki_role: snapshot.wiki_role,
+		parent_wiki: snapshot.parent_wiki,
+		effective_wiki_rule: 'disabled' as const,
+		effective_risk: null,
+	};
+}
+
+function wikiReviewRequirement(
+	rule: WikiChangeRule,
+	risk: WikiEffectiveRisk | null
+): { reason: string; warnings: readonly string[] } {
+	if (rule === 'review_each') {
+		return {
+			reason: 'wiki_change_requires_individual_review',
+			warnings: ['This Wiki change requires individual human review.'],
+		};
+	}
+	if (risk === 'high') {
+		return {
+			reason: 'wiki_high_risk_change_requires_individual_review',
+			warnings: ['This Wiki body change requires individual human review.'],
+		};
+	}
+	return {
+		reason: 'wiki_batch_review_required',
+		warnings: ['This Wiki change is grouped for one human batch review.'],
+	};
+}
+
 export class ProposeMemoryApplicationService {
 	private readonly dependencies: ProposeMemoryApplicationDependencies;
 
@@ -468,6 +592,16 @@ export class ProposeMemoryApplicationService {
 
 	async execute(request: ProposeMemoryApplicationRequest) {
 		const snapshot = requestSnapshot(request.rawArgs);
+		const requestedWikiTarget = isKnowledgeWikiPath(snapshot.target_note || '');
+		if ((snapshot.wiki_role || snapshot.parent_wiki) && !requestedWikiTarget) {
+			throw new Error('wiki_role and parent_wiki are valid only for an explicit Wiki target.');
+		}
+		if (snapshot.parent_wiki && !isKnowledgeWikiPath(snapshot.parent_wiki)) {
+			throw new Error('parent_wiki must be a Vault-relative Wiki path.');
+		}
+		if (requestedWikiTarget && snapshot.related_wiki.some((path) => !isKnowledgeWikiPath(path))) {
+			throw new Error('Wiki related_wiki values must remain inside the Wiki root.');
+		}
 		const requestHash = computePayloadHash(snapshot);
 		const idempotencyKey = optionalString(request.rawArgs.idempotency_key);
 		const identity = this.dependencies.createIdentity(requestHash, idempotencyKey);
@@ -540,11 +674,72 @@ export class ProposeMemoryApplicationService {
 			const targetMissing = targetNote && this.dependencies.isTargetNoteMissing
 				? await this.dependencies.isTargetNoteMissing(targetNote)
 				: false;
+			const managedRelationsOnly = wikiTarget && [
+				'wiki_relations',
+				'wiki_relation_update',
+			].includes(proposalKind.trim().toLowerCase());
+			if (managedRelationsOnly && targetMissing) {
+				throw new Error('Managed Wiki relation updates require an existing target note.');
+			}
 			operationPayload.writebackEffect = buildWritebackEffect(
 				targetNote,
 				claimKey,
-				targetMissing
+				targetMissing,
+				managedRelationsOnly
 			);
+				if (wikiTarget) {
+					const targetContent = !targetMissing && this.dependencies.readTargetNote
+						? await this.dependencies.readTargetNote(targetNote)
+						: null;
+					const parentMetadata = this.dependencies.resolveBridgeMetadata(
+						'global',
+						projectHint,
+						snapshot.parent_wiki ? [snapshot.parent_wiki] : [],
+						[],
+						snapshot.task_id
+					);
+					const relationMetadata = this.dependencies.resolveBridgeMetadata(
+						'global',
+						projectHint,
+						snapshot.related_wiki,
+						snapshot.related_sources,
+						snapshot.task_id
+					);
+					const unresolvedRelations = [
+						...parentMetadata.missing_related_wiki,
+						...relationMetadata.missing_related_wiki,
+						...relationMetadata.missing_related_sources,
+						...relationMetadata.related_sources.filter(isSourcePartPath),
+					];
+					const parsedRelations = parseManagedRelationsBlock(targetContent || '');
+					operationPayload.wikiRule = this.dependencies.wikiRule?.() ?? 'review_batch';
+					operationPayload.resolvedWikiParent = parentMetadata.related_wiki[0] ?? null;
+					operationPayload.resolvedWikiRelated = relationMetadata.related_wiki;
+					operationPayload.resolvedWikiSources = relationMetadata.related_sources.filter((path) => !isSourcePartPath(path));
+					operationPayload.unresolvedWikiRelations = unresolvedRelations;
+					operationPayload.missingWikiRelations = [
+						...parentMetadata.missing_related_wiki,
+						...relationMetadata.missing_related_wiki,
+					];
+					operationPayload.missingSourceRelations = [
+						...relationMetadata.missing_related_sources,
+						...relationMetadata.related_sources.filter(isSourcePartPath),
+					];
+					if (parsedRelations.status === 'valid') {
+						operationPayload.expectedManagedRelationsHash = parsedRelations.hash;
+					}
+					operationPayload.effectiveRisk = computeWikiEffectiveRisk({
+					targetExists: !targetMissing,
+					writebackEffect: managedRelationsOnly
+						? 'update_managed_relations'
+						: targetMissing ? 'create_wiki_note' : 'append',
+					targetPathAllowed: true,
+					...(managedRelationsOnly
+							? { relationsStatus: parsedRelations.status }
+							: {}),
+						hasUnresolvedRelations: unresolvedRelations.length > 0,
+					});
+			}
 		}
 
 		const runner = new RecoverableOperationRunner({
@@ -584,6 +779,20 @@ export class ProposeMemoryApplicationService {
 		const proposalId = buildStableProposalId(`${identity.operationId}\0${proposalKind}`);
 		const claimKey = snapshot.claim_key || deriveReviewQueueClaimKey(proposalKind, content);
 		const wikiTarget = isKnowledgeWikiPath(targetNote);
+		const writebackEffect = operationPayload.writebackEffect;
+		const wikiRule = wikiTarget ? operationPayload.wikiRule ?? dependencies.wikiRule?.() ?? 'review_batch' : null;
+		const effectiveRisk = wikiTarget
+			? operationPayload.effectiveRisk ?? (
+				writebackEffect === 'create_wiki_note' ? 'low'
+					: writebackEffect === 'update_managed_relations' ? 'medium'
+						: 'high'
+			)
+			: null;
+		const reviewBatchId = wikiTarget ? buildWikiReviewBatchId(taskId, proposalId) : null;
+		const displayRiskLevel = wikiTarget ? effectiveRisk || 'blocked' : riskLevel;
+		if (wikiTarget && wikiRule === 'disabled') {
+			return disabledWikiResult(snapshot, identity);
+		}
 		if (!wikiTarget && !snapshot.memory_scope) {
 			throw new Error('memory_scope is required for a MemoryRecord candidate.');
 		}
@@ -604,11 +813,18 @@ export class ProposeMemoryApplicationService {
 			return disabledMemoryResult(snapshot, identity, memoryScope);
 		}
 		const architectureStatus = dependencies.buildArchitectureStatus();
-		const bridgeMetadata = dependencies.resolveBridgeMetadata(
+		const bridgeMetadata = wikiTarget ? {
+			missing_wiki_bridge: false,
+			related_wiki: operationPayload.resolvedWikiRelated ?? [],
+			missing_related_wiki: operationPayload.missingWikiRelations ?? [],
+			related_sources: operationPayload.resolvedWikiSources ?? [],
+			missing_related_sources: operationPayload.missingSourceRelations ?? [],
+		} : dependencies.resolveBridgeMetadata(
 			memoryScope,
 			projectHint,
 			snapshot.related_wiki,
-			snapshot.related_sources
+			snapshot.related_sources,
+			taskId
 		);
 		const verifiedRecordEvidence = [
 			...new Set([
@@ -616,18 +832,35 @@ export class ProposeMemoryApplicationService {
 				...bridgeMetadata.related_wiki,
 			]),
 		];
+		const managedRelationsBlock = wikiTarget ? renderManagedRelationsBlock({
+			parent: operationPayload.resolvedWikiParent,
+			related: operationPayload.resolvedWikiRelated ?? [],
+			sources: bridgeMetadata.related_sources.filter((path) => !isSourcePartPath(path)),
+		}) : '';
+		const proposedWritebackContent = writebackEffect === 'update_managed_relations'
+			? managedRelationsBlock
+			: wikiTarget && (
+			snapshot.parent_wiki
+			|| snapshot.related_wiki.length > 0
+			|| bridgeMetadata.related_sources.length > 0
+		)
+			? [
+				content.trimEnd(),
+				managedRelationsBlock,
+			].filter(Boolean).join('\n\n')
+			: content;
 		const resolvedProjectIdentity = !wikiTarget && memoryScope === 'project'
 			? dependencies.resolveProjectIdentity(snapshot)
 			: null;
 		const now = dependencies.now();
-		const writebackEffect = operationPayload.writebackEffect;
 		dependencies.assertSafeText([
 			{ label: 'content', value: content },
 			{ label: 'evidence', value: evidence.join('\n') },
 			{ label: 'target_note', value: targetNote },
 			{ label: 'title', value: title },
 			{ label: 'project_hint', value: projectHint },
-			{ label: 'related_wiki', value: snapshot.related_wiki.join('\n') },
+				{ label: 'related_wiki', value: snapshot.related_wiki.join('\n') },
+				{ label: 'parent_wiki', value: snapshot.parent_wiki || '' },
 			{ label: 'related_sources', value: snapshot.related_sources.join('\n') },
 			{ label: 'claim_key', value: snapshot.claim_key || '' },
 			{ label: 'supersedes', value: snapshot.supersedes.join('\n') },
@@ -638,10 +871,7 @@ export class ProposeMemoryApplicationService {
 			dependencies.assertAllowed(proposalKind, targetNote, projectHint, memoryScope);
 		}
 		let reviewRequirement: { reason: string; warnings: readonly string[] } | null = wikiTarget
-			? {
-				reason: 'wiki_change_requires_human_review',
-				warnings: ['Explicit Wiki changes always require human review.'],
-			}
+			? wikiReviewRequirement(wikiRule || 'review_batch', effectiveRisk)
 			: memoryRule === 'review_queue'
 				? {
 					reason: 'memory_rule_requires_human_review',
@@ -769,6 +999,58 @@ export class ProposeMemoryApplicationService {
 				reviewRequirement = immutable;
 			}
 		}
+		if (
+			wikiTarget
+			&& wikiRule === 'auto_managed'
+			&& effectiveRisk === 'low'
+			&& (writebackEffect === 'create_wiki_note' || writebackEffect === 'update_managed_relations')
+			&& dependencies.writeAutoWiki
+		) {
+			const written = await dependencies.writeAutoWiki({
+				targetNote,
+				content: proposedWritebackContent,
+				taskId,
+				operationId: identity.operationId,
+				proposalKind,
+				reviewBatchId: reviewBatchId || buildWikiReviewBatchId(taskId, proposalId),
+					effect: writebackEffect,
+					expectedManagedRelationsHash: operationPayload.expectedManagedRelationsHash,
+				});
+			await dependencies.updateTaskMemoryWrite(taskId, written.path);
+			return {
+				ok: true,
+				tool: 'tracekeeper.propose_memory' as const,
+				operation_id: identity.operationId,
+				idempotency_key: identity.idempotencyKey,
+				status: written.status,
+				path: written.path,
+				target_note: written.path,
+				activity_path: written.activity_path,
+				warnings: written.warnings,
+				persisted: true,
+				auto_applied: true,
+				duplicate: written.duplicate ?? false,
+				proposal_destination: 'wiki' as const,
+				memory_rule: null,
+				memory_scope: null,
+				project_hint: projectHint || null,
+				related_wiki: snapshot.related_wiki,
+				related_sources: bridgeMetadata.related_sources,
+				missing_related_sources: bridgeMetadata.missing_related_sources,
+				architecture_status: architectureStatus.architecture_status,
+				missing_graph_bridges: architectureStatus.missing_graph_bridges,
+				missing_wiki_bridge: bridgeMetadata.missing_wiki_bridge,
+				proposal_id: null,
+				proposal_path: null,
+				review_reason: null,
+				review_warnings: [],
+				review_batch_id: reviewBatchId,
+				wiki_role: snapshot.wiki_role,
+				parent_wiki: snapshot.parent_wiki,
+				effective_wiki_rule: wikiRule,
+				effective_risk: effectiveRisk,
+			};
+		}
 
 		let governedRecordTarget = '';
 		if (lifecycleClaimKey && !targetNote) {
@@ -810,6 +1092,10 @@ export class ProposeMemoryApplicationService {
 			`- proposal_kind: ${proposalKind}`,
 			evidence.length ? `- evidence: ${JSON.stringify(evidence)}` : '',
 			proposalTargetNote ? `- target_note: ${proposalTargetNote}` : '',
+			reviewBatchId ? `- review_batch_id: ${reviewBatchId}` : '',
+			snapshot.wiki_role ? `- wiki_role: ${snapshot.wiki_role}` : '',
+			snapshot.parent_wiki ? `- parent_wiki: ${snapshot.parent_wiki}` : '',
+			effectiveRisk ? `- effective_risk: ${effectiveRisk}` : '',
 			!wikiTarget ? `- memory_scope: ${memoryScope}` : '',
 			projectHint ? `- project_hint: ${projectHint}` : '',
 			bridgeMetadata.related_wiki.length ? `- related_wiki: ${JSON.stringify(bridgeMetadata.related_wiki)}` : '',
@@ -825,7 +1111,7 @@ export class ProposeMemoryApplicationService {
 			snapshot.last_verified_at ? `- last_verified_at: ${snapshot.last_verified_at}` : '',
 			snapshot.supersedes.length ? `- supersedes: ${JSON.stringify(snapshot.supersedes)}` : '',
 			snapshot.contradicts.length ? `- contradicts: ${JSON.stringify(snapshot.contradicts)}` : '',
-			riskLevel ? `- risk_level: ${riskLevel}` : '',
+			displayRiskLevel ? `- risk_level: ${displayRiskLevel}` : '',
 			`- architecture_status: ${architectureStatus.architecture_status}`,
 			`- missing_graph_bridges: ${JSON.stringify(architectureStatus.missing_graph_bridges)}`,
 			bridgeMetadata.missing_wiki_bridge ? '- missing_wiki_bridge: true' : '',
@@ -834,10 +1120,10 @@ export class ProposeMemoryApplicationService {
 			reviewRequirement ? `- review_reason: ${reviewRequirement.reason}` : '',
 			reviewRequirement?.warnings.length ? `- review_warnings: ${JSON.stringify(reviewRequirement.warnings)}` : '',
 			'',
-			renderProposalWritebackSection(
+				renderProposalWritebackSection(
 				dependencies.renderText('## 写回内容', '## Writeback'),
 				proposalId,
-				content
+				proposedWritebackContent
 			),
 		].filter(Boolean).join('\n');
 
@@ -854,9 +1140,15 @@ export class ProposeMemoryApplicationService {
 				proposal_id: proposalId,
 				title: title || dependencies.renderText(`记忆提案：${proposalKind}`, `Memory proposal: ${proposalKind}`),
 				proposal_kind: proposalKind,
+				proposal_schema_version: wikiTarget ? WIKI_PROPOSAL_SCHEMA_VERSION : null,
 				status: 'pending',
 				target_note: proposalTargetNote || null,
-				risk_level: riskLevel || null,
+				risk_level: displayRiskLevel || null,
+				review_batch_id: reviewBatchId,
+				wiki_role: snapshot.wiki_role,
+				parent_wiki: snapshot.parent_wiki,
+				effective_risk: effectiveRisk,
+				effective_wiki_rule: wikiRule,
 				project_hint: projectHint || null,
 				memory_scope: wikiTarget ? null : memoryScope,
 				related_wiki: bridgeMetadata.related_wiki,
@@ -890,7 +1182,7 @@ export class ProposeMemoryApplicationService {
 				action: 'memory.proposal.created',
 				target_type: 'memory_proposal',
 				proposal_kind: proposalKind,
-				risk_level: riskLevel || null,
+				risk_level: displayRiskLevel || null,
 			},
 			operationId: identity.operationId,
 		});
@@ -970,6 +1262,11 @@ export class ProposeMemoryApplicationService {
 			proposal_transition_preview: proposalTransitionPreview,
 			review_reason: reviewRequirement?.reason || null,
 			review_warnings: reviewRequirement ? [...reviewRequirement.warnings] : [],
+			review_batch_id: reviewBatchId,
+			wiki_role: snapshot.wiki_role,
+			parent_wiki: snapshot.parent_wiki,
+			effective_wiki_rule: wikiRule,
+			effective_risk: effectiveRisk,
 		};
 		return response;
 	}

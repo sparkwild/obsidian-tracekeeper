@@ -20,6 +20,7 @@ globalThis.window = globalThis;
 const hashContent = (value) => createHash('sha256').update(value, 'utf8').digest('hex');
 const proposalPath = '00_tracekeeper/inbox/review_queue/proposal.md';
 const targetPath = '01_knowledge/wiki/stale-target.md';
+const targetContentHash = hashContent('# Stale target\n');
 let computeProposalContentHashForTest;
 let computeProposalRevisionForTest;
 let proposalTransitionReceiptFromFrontmatterForTest;
@@ -217,9 +218,16 @@ const makeProposalRecord = (overrides = {}) => {
 		supersedes: overrides.supersedes || [],
 		contradicts: overrides.contradicts || [],
 		taskId: overrides.taskId || 'task-1',
+		proposalSchemaVersion: overrides.proposalSchemaVersion || 2,
+		reviewBatchId: overrides.reviewBatchId || 'task:task-1',
+		wikiRole: overrides.wikiRole || 'topic',
+		parentWiki: overrides.parentWiki || '',
+		effectiveWikiRule: overrides.effectiveWikiRule || 'review_batch',
+		effectiveRisk: overrides.effectiveRisk || 'high',
 		sourceSessionNote: overrides.sourceSessionNote || '',
 		targetNote: overrides.targetNote === undefined ? targetPath : overrides.targetNote,
 		evidence: overrides.evidence || [],
+		relatedWiki: overrides.relatedWiki || [],
 		relatedSources: overrides.relatedSources || [],
 		rationale: overrides.rationale || 'keep the target note updated',
 		riskLevel: overrides.riskLevel || 'unknown',
@@ -784,19 +792,23 @@ try {
 			...[...toolsSource.slice(immutableStart, immutableEnd).matchAll(/reason:\s*'([a-z_]+)'/g)]
 				.map((match) => match[1]),
 		]);
-		assert.equal(reasonCodes.size, 16);
+		assert.equal(reasonCodes.size, 18);
 
 		const view = new TracekeeperReviewQueueView({ app: {} }, {});
 		const rawDiagnostic = 'RAW RUNTIME DIAGNOSTIC';
 		const expectedNewMappings = {
 			'zh-CN': {
-				wiki_change_requires_human_review: '显式 Wiki 变更始终需要人工审核。',
+				wiki_change_requires_individual_review: '当前 Wiki 规则要求逐项审查并确认写入。',
+				wiki_high_risk_change_requires_individual_review: '这项变更会修改用户正文，必须逐项审查并确认。',
+				wiki_batch_review_required: '这项 Wiki 变更已进入任务批次，可在一次预览后统一确认写入。',
 				explicit_memory_target_requires_human_review: '显式指定 MemoryRecord 目标路径的变更需要人工审核。',
 				unresolved_relation_evidence: '一个或多个显式声明的 Wiki 或资料关系无法在当前 Vault 中验证，需要人工核对。',
 				memory_snapshot_incomplete: 'MemoryRecord 生命周期数据无效或不完整；请先修复结构，再继续自动写入。',
 			},
 			en: {
-				wiki_change_requires_human_review: 'Explicit Wiki changes always require human review.',
+				wiki_change_requires_individual_review: 'The current Wiki rule requires individual review and apply confirmation.',
+				wiki_high_risk_change_requires_individual_review: 'This change modifies user-authored content and requires individual review.',
+				wiki_batch_review_required: 'This Wiki change is grouped by task for one preview and apply confirmation.',
 				explicit_memory_target_requires_human_review: 'Explicit MemoryRecord target paths require human review.',
 				unresolved_relation_evidence: 'One or more explicitly declared Wiki or Source relations could not be verified in the active Vault.',
 				memory_snapshot_incomplete: 'MemoryRecord lifecycle data is invalid or incomplete; repair the structure before automatic writeback.',
@@ -1534,6 +1546,7 @@ try {
 					proposal_id: 'proposal-1',
 					proposal_path: proposalPath,
 					target_note: targetPath,
+					target_content_hash: targetContentHash,
 					touched_notes: [targetPath, proposalPath],
 					writeback_preview: 'preview',
 					writeback_effect: 'append',
@@ -1559,6 +1572,7 @@ try {
 					proposal_id: 'proposal-1',
 					proposal_path: proposalPath,
 					target_note: targetPath,
+					target_content_hash: targetContentHash,
 					touched_notes: [targetPath, proposalPath],
 					writeback_preview: 'preview',
 					confirmation_token: 'opaque-confirmation-token',
@@ -1582,6 +1596,7 @@ try {
 					proposal_id: 'proposal-1',
 					proposal_path: proposalPath,
 					target_note: targetPath,
+					target_content_hash: targetContentHash,
 					touched_notes: [targetPath, proposalPath],
 					writeback_preview: 'preview',
 					writeback_effect: 'create-wiki-note',
@@ -1620,6 +1635,7 @@ try {
 			proposal_id: 'proposal-1',
 			proposal_path: proposalPath,
 			target_note: targetPath,
+			target_content_hash: targetContentHash,
 			touched_notes: [targetPath, proposalPath],
 			writeback_preview: 'preview',
 			writeback_effect: 'append',
@@ -1629,6 +1645,87 @@ try {
 		await controller.applyApprovedWriteback(harness.staleSnapshot, preview);
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0].args.confirmation_token, preview.confirmation_token);
+	});
+
+	test('one Wiki batch confirmation approves and invokes governed apply', async () => {
+		const calls = [];
+		const harness = createHarness({
+			async executeLocalTool(name, args) {
+				calls.push({ name, args });
+				if (args.dry_run === true) {
+					return {
+						proposal_id: 'proposal-1',
+						proposal_path: proposalPath,
+						target_note: targetPath,
+						target_content_hash: targetContentHash,
+						touched_notes: [targetPath, proposalPath, 'activity.md'],
+						writeback_preview: 'preview',
+						writeback_effect: 'append',
+						confirmation_token: 'opaque-confirmation-token',
+						confirmation_expires_at: '2026-07-30T00:05:00.000Z',
+					};
+				}
+				return { ok: true };
+			},
+		});
+		const now = new Date('2026-07-30T00:00:00.000Z');
+		const controller = new ReviewQueueController(
+			harness.app,
+			harness.records,
+			harness.host,
+			harness.transitionOwner,
+			() => 'review-fixed-batch',
+			() => new Date(now)
+		);
+		const preview = await controller.previewWikiReviewBatch([harness.staleSnapshot]);
+		assert.equal(preview.items.length, 1);
+		const receipt = await controller.confirmWikiReviewBatch(preview, preview.confirmationToken);
+		assert.equal(receipt.status, 'completed');
+		assert.deepEqual(receipt.applied, [proposalPath]);
+		assert.equal(calls.length, 2);
+		assert.equal(calls[0].args.dry_run, true);
+		assert.equal(calls[1].args.confirmation_token, 'opaque-confirmation-token');
+		assert.equal(harness.initialFile.frontmatter.approval_status, 'approved');
+	});
+
+	test('Wiki batch stops when the per-item target hash no longer matches the human preview', async () => {
+		const calls = [];
+		let harness;
+		harness = createHarness({
+			async executeLocalTool(name, args) {
+				calls.push({ name, args });
+				if (args.dry_run === true) {
+					const target = harness.files.get(targetPath);
+					target.content = '# Changed after batch confirmation\n';
+					return {
+						proposal_id: 'proposal-1',
+						proposal_path: proposalPath,
+						target_note: targetPath,
+						target_content_hash: hashContent(target.content),
+						touched_notes: [targetPath, proposalPath, 'activity.md'],
+						writeback_preview: 'preview',
+						writeback_effect: 'append',
+						confirmation_token: 'opaque-confirmation-token',
+						confirmation_expires_at: '2026-07-30T00:05:00.000Z',
+					};
+				}
+				return { ok: true };
+			},
+		});
+		const controller = new ReviewQueueController(
+			harness.app,
+			harness.records,
+			harness.host,
+			harness.transitionOwner,
+			() => 'review-target-drift',
+			() => new Date('2026-07-30T00:00:00.000Z')
+		);
+		const preview = await controller.previewWikiReviewBatch([harness.staleSnapshot]);
+		const receipt = await controller.confirmWikiReviewBatch(preview, preview.confirmationToken);
+		assert.equal(receipt.status, 'conflict');
+		assert.equal(receipt.applied.length, 0);
+		assert.match(receipt.conflicts[0].message, /target changed before item apply/i);
+		assert.equal(calls.length, 1);
 	});
 
 	test('apply modal passes its displayed preview to the apply action', async () => {
@@ -1642,6 +1739,7 @@ try {
 			proposal_id: 'proposal-1',
 			proposal_path: proposalPath,
 			target_note: targetPath,
+			target_content_hash: targetContentHash,
 			touched_notes: [targetPath, proposalPath],
 			writeback_preview: 'preview',
 			writeback_effect: 'append',
@@ -1679,6 +1777,7 @@ try {
 			proposal_id: 'proposal-1',
 			proposal_path: proposalPath,
 			target_note: targetPath,
+			target_content_hash: targetContentHash,
 			touched_notes: [targetPath, proposalPath],
 			writeback_preview: 'preview',
 			writeback_effect: 'create_wiki_note',
@@ -1706,6 +1805,7 @@ try {
 			proposal_id: 'proposal-1',
 			proposal_path: proposalPath,
 			target_note: targetPath,
+			target_content_hash: targetContentHash,
 			touched_notes: [targetPath, proposalPath],
 			writeback_preview: 'preview',
 			writeback_effect: 'append',
@@ -1742,6 +1842,7 @@ try {
 			proposal_id: 'proposal-1',
 			proposal_path: proposalPath,
 			target_note: targetPath,
+			target_content_hash: targetContentHash,
 			touched_notes: [targetPath, proposalPath],
 			writeback_preview: 'preview',
 			writeback_effect: 'create_wiki_note',
@@ -1767,6 +1868,7 @@ try {
 			proposal_id: 'proposal-1',
 			proposal_path: proposalPath,
 			target_note: '01_knowledge/wiki/new-note.md',
+			target_content_hash: targetContentHash,
 			touched_notes: [proposalPath],
 			writeback_preview: 'preview',
 			writeback_effect: 'create_wiki_note',

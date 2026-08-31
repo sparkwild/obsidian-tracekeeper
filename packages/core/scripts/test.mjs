@@ -25,9 +25,76 @@ import memoryLifecycleModule from '../dist/memory-lifecycle.js';
 import sourceRecordModule from '../dist/source-record.js';
 import lifecycleDiagnosticsModule from '../dist/lifecycle-diagnostics.js';
 import knowledgeArchitectureModule from '../dist/knowledge-architecture.js';
+import wikiGovernanceModule from '../dist/wiki-governance.js';
 
 const KNOWLEDGE_DIR = '01_knowledge';
 const CONFIG_DIR = 'vault-config';
+
+function runWikiGovernanceTests() {
+	const relations = {
+		parent: '01_knowledge/wiki/programming/index.md',
+		sources: ['01_knowledge/sources/files/reference.md'],
+		related: ['01_knowledge/wiki/programming/typescript.md'],
+	};
+	const block = wikiGovernanceModule.renderManagedRelationsBlock(relations);
+	const parsed = wikiGovernanceModule.parseManagedRelationsBlock(block);
+	assert.equal(parsed.status, 'valid');
+	assert.match(block, /parent: \[\[01_knowledge\/wiki\/programming\/index\]\]/);
+	assert.match(block, /source: \[\[01_knowledge\/sources\/files\/reference\]\]/);
+	const inserted = wikiGovernanceModule.upsertManagedRelationsBlock('# Topic\n', relations);
+	assert.match(inserted, /^# Topic\n\n<!-- tracekeeper:relations:start/);
+	const replaced = wikiGovernanceModule.upsertManagedRelationsBlock(inserted, {
+		...relations,
+		related: ['01_knowledge/wiki/programming/node.md'],
+	});
+	assert.equal((replaced.match(/tracekeeper:relations:start/g) || []).length, 1);
+	assert.match(replaced, /programming\/node/);
+	assert.equal(
+		wikiGovernanceModule.parseManagedRelationsBlock(block.replace('## Relations', '## Changed')).status,
+		'invalid'
+	);
+	assert.throws(() => wikiGovernanceModule.renderManagedRelationsBlock({
+		sources: ['01_knowledge/sources/files/reference.parts/part-0001.md'],
+	}));
+	assert.throws(() => wikiGovernanceModule.renderManagedRelationsBlock({
+		parent: '01_knowledge/wiki/index.md]]\n- related: [[01_knowledge/wiki/injected.md',
+	}));
+	assert.equal(
+		wikiGovernanceModule.sourceIndexPathForPart('01_knowledge/sources/files/reference.parts/part-0001.md'),
+		'01_knowledge/sources/files/reference.md'
+	);
+	assert.equal(wikiGovernanceModule.computeWikiEffectiveRisk({
+		targetExists: false,
+		writebackEffect: 'create_wiki_note',
+		targetPathAllowed: true,
+	}), 'low');
+	assert.equal(wikiGovernanceModule.computeWikiEffectiveRisk({
+		targetExists: true,
+		writebackEffect: 'update_managed_relations',
+		targetPathAllowed: true,
+		relationsStatus: 'missing',
+	}), 'medium');
+	assert.equal(wikiGovernanceModule.computeWikiEffectiveRisk({
+		targetExists: true,
+		writebackEffect: 'append',
+		targetPathAllowed: true,
+	}), 'high');
+	const candidates = Array.from({ length: 101 }, (_, index) => ({
+		proposalPath: `00_tracekeeper/inbox/review_queue/${String(index).padStart(3, '0')}.md`,
+		proposalId: `proposal-${index}`,
+		taskId: 'task-batch',
+		createdAt: `2026-08-31T00:${String(index % 60).padStart(2, '0')}:00.000Z`,
+		writebackBytes: 32,
+		effectiveRisk: 'low',
+	}));
+	const batches = wikiGovernanceModule.buildWikiReviewBatches(candidates);
+	assert.equal(batches.length, 2);
+	assert.equal(batches[0].items.length, 100);
+	assert.equal(batches[1].items.length, 1);
+	assert.equal(batches[0].reviewBatchId, 'task:task-batch');
+
+	console.log(JSON.stringify({ suite: 'core-wiki-governance', result: 'pass', checks: 18 }));
+}
 
 function runProposalWritebackTests() {
 	const proposalId = 'proposal-nested-markdown';
@@ -4343,7 +4410,6 @@ function runKnowledgeArchitectureContractTests() {
 		'01_knowledge/memory/global',
 		'01_knowledge/memory/projects',
 		'01_knowledge/wiki',
-		'01_knowledge/wiki/hubs',
 		'01_knowledge/sources',
 		'02_archive',
 	];
@@ -5097,7 +5163,7 @@ async function runKnowledgeReadIndexTests() {
 	}));
 }
 
-run().then(runProposalWritebackTests).then(runMemoryRecordV2Tests).then(runMemoryLifecycleTests).then(runSourceRecordTests).then(runLifecycleGraphFixtureTests).then(runLifecycleDiagnosticTests).then(runKnowledgeReadIndexTests).catch((error) => {
+run().then(runProposalWritebackTests).then(runWikiGovernanceTests).then(runMemoryRecordV2Tests).then(runMemoryLifecycleTests).then(runSourceRecordTests).then(runLifecycleGraphFixtureTests).then(runLifecycleDiagnosticTests).then(runKnowledgeReadIndexTests).catch((error) => {
 	console.error(error);
 	process.exitCode = 1;
 });

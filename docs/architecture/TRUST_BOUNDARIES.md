@@ -138,7 +138,12 @@ authority, lifecycle transitions, unresolved claim conflicts, uncertain
 project identity, and explicitly supplied but unverifiable relations remain
 human-review boundaries.
 
-An explicit Wiki target remains review-gated regardless of Memory policy. A
+An explicit Wiki target follows its independent, user-selected Wiki rule and is
+never governed by Global or Project Memory policy. Review-each and batch-review
+remain human-confirmed; auto-managed is an explicit opt-in restricted to
+create-only Wiki notes and hash-valid managed relation regions. User-authored
+body changes, first-time relation-region insertion, ambiguity, and conflicts
+remain review-gated. A
 missing or invalid Global Memory Hub blocks persistence and returns a
 structure-repair action. Project Auto may create a missing canonical project
 Hub only from an exact repository identity and only through exclusive,
@@ -153,8 +158,9 @@ higher-priority instructions.
 ## Human Review Invariants
 
 - Proposal creation is not approval.
-- Approval is not application.
-- Only approved proposals are eligible for durable target writeback.
+- Public MCP proposal creation is not approval, and MCP cannot approve its own proposal.
+- A human Wiki preview may authorize approval and application with one final confirmation; internally, exact approval receipts still commit before target writeback.
+- Only proposals covered by those committed approval receipts are eligible for durable target writeback.
 - Approval commits a bounded receipt for the exact proposal revision and
   content hash reviewed by the user.
 - Apply requires a fresh opaque confirmation token that is authenticated,

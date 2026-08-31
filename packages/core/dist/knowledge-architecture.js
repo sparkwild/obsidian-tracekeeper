@@ -100,7 +100,6 @@ exports.BASE_STRUCTURE_DIRECTORIES = [
     exports.KNOWLEDGE_GLOBAL_MEMORY_DIR,
     exports.KNOWLEDGE_PROJECTS_MEMORY_DIR,
     exports.KNOWLEDGE_WIKI_DIR,
-    exports.KNOWLEDGE_WIKI_HUBS_DIR,
     exports.KNOWLEDGE_SOURCES_DIR,
     exports.ARCHIVE_ROOT,
 ];
@@ -128,7 +127,6 @@ exports.REQUIRED_KNOWLEDGE_FILES = [
     exports.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
     exports.KNOWLEDGE_PROJECTS_INDEX_PATH,
     exports.KNOWLEDGE_WIKI_INDEX_PATH,
-    exports.KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
     exports.KNOWLEDGE_SOURCES_INDEX_PATH,
 ];
 exports.GRAPH_RECOMMENDED_ENTRY = exports.KNOWLEDGE_INDEX_PATH;
@@ -137,7 +135,6 @@ exports.GRAPH_RECOMMENDED_HUBS = [
     exports.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH,
     exports.KNOWLEDGE_PROJECTS_INDEX_PATH,
     exports.KNOWLEDGE_WIKI_INDEX_PATH,
-    exports.KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
     exports.KNOWLEDGE_SOURCES_INDEX_PATH,
 ];
 exports.KNW_RELATED_WIKI_KEYS = ['related_wiki', 'related_wiki_notes', 'wiki_topics'];
@@ -169,9 +166,6 @@ exports.REQUIRED_ARCHITECTURE_ENTRIES = [
     },
     {
         path: exports.KNOWLEDGE_WIKI_INDEX_PATH,
-    },
-    {
-        path: exports.KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
     },
     {
         path: exports.KNOWLEDGE_SOURCES_INDEX_PATH,

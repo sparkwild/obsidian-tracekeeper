@@ -106,6 +106,14 @@ function buildNotes(vaultRoot) {
 		atlasMemory,
 		...wikiNotes,
 		...sourceNotes,
+		note(vaultRoot, '01_knowledge/sources/files/large-reference.md', {
+			frontmatter: { type: 'captured-source' },
+			content: '# Large reference\nBounded source index.',
+		}),
+		note(vaultRoot, '01_knowledge/sources/files/large-reference.parts/part-0001.md', {
+			frontmatter: { type: 'source_part' },
+			content: '# Source part\nsourcepartfoldfixture exact evidence.',
+		}),
 		note(vaultRoot, '00_tracekeeper/work/tasks/atlas-task.md', {
 			frontmatter: {
 				...atlasIdentity,
@@ -328,6 +336,24 @@ test('application owner: injected dependencies execute global, project, and hist
 	assert.equal(loadCalls, 5);
 	assert.equal(resolveCalls, 2);
 	assert.equal(filterCalls, 2);
+});
+
+test('source-part lexical matches fold to the Source index with supporting evidence', (t) => {
+	const { scan, vaultRoot } = createFixture(t);
+	const service = new RecallApplicationService(directApplicationDependencies(scan));
+	const result = service.execute({
+		scope: 'global',
+		query: 'sourcepartfoldfixture',
+		maxItems: 5,
+		vaultRoot,
+		projectIdentityInput: {},
+	});
+	assert.equal(result.matches.length, 1);
+	assert.equal(result.matches[0].path, '01_knowledge/sources/files/large-reference.md');
+	assert.deepEqual(result.matches[0].supporting_paths, [
+		'01_knowledge/sources/files/large-reference.parts/part-0001.md',
+	]);
+	assert.equal(result.matches.some((entry) => entry.path.includes('.parts/')), false);
 });
 
 test('read view owner: bounded catalog recall never reads bodies and excludes archive and superseded memory by default', async (t) => {

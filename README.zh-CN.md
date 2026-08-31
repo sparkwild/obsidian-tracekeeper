@@ -8,7 +8,7 @@ Tracekeeper 是一套基于 Obsidian 的本地优先知识与 AI 记忆系统。
 
 - 在桌面端 Obsidian 运行时，通过本机 MCP Runtime 将 AI 工具连接到当前 Vault。
 - 召回选定范围内的 Vault 上下文并构建有限的 context pack，不开放不受限制的文件系统访问。
-- Wiki 变更始终经过人工审核，审核通过后仍需写入预览与明确确认。
+- 普通 Wiki 变更按任务组成批次，一次预览并确认；涉及用户正文的高风险变更仍逐项审核。
 - 按用户为 Global 或 Project 选择的策略，将记忆保存为受治理的不可变 Markdown 记录，并用稳定操作身份保证重试安全。
 - 将持久知识保留在普通 Vault 文件中，不依赖 Tracekeeper 托管后端或外部数据库。
 
@@ -36,17 +36,17 @@ AI 很擅长发现模式、总结长对话、把散落材料整理成结构化�
 Tracekeeper 的核心想法是把边界划清楚：
 
 - Memory 记录任务、会话、决策、偏好和项目连续性。
-- Wiki 组织可复用主题、hub、来源和图谱入口。
+- Wiki 组织可复用主题、Topic Map、来源和图谱入口，不强制要求 `wiki/hubs/` 目录。
 - 当存在已验证关系时，Memory 可以链接 Wiki 或 Source，让 Obsidian 图谱和 Agent Recall 使用同一结构，但并不要求每条记忆都必须有 Wiki。
 - 不需要外部数据库，也不需要自动同步其他 App 数据。
 
-AI 可以帮助回忆上下文、草拟提案、整理长期记忆。持久化策略由你选择：Review 保留最终写入决定，Auto 只允许受治理的不可变 MemoryRecord v2 写入。
+AI 可以帮助回忆上下文、草拟提案、整理长期记忆。Memory 与 Wiki 使用独立策略；Wiki 默认按任务批次审核，可选的自动托管仅允许新建笔记和更新完整的 Tracekeeper 关系区块。
 
 ## 背景
 
 个人知识库经常卡在两个极端：有价值的内容停留在一次性对话里，无法沉淀；或者自动化写入太积极，把 vault 变得混乱。Tracekeeper 选择站在中间。
 
-Tracekeeper 会按明确策略路由 AI 的持久化输出。Wiki 变更和 Review 记忆保持可检查并需要人工审核；符合 Auto 条件的记忆仍必须经过相同的验证、身份、生命周期和冲突控制，之后才能创建不可变记录。
+Tracekeeper 会按明确策略路由 AI 的持久化输出。普通 Wiki 变更以任务批次保持可检查，用户正文变更仍逐项处理；符合 Auto 条件的操作仍必须经过验证、身份和冲突控制。
 
 ## 首次使用
 
@@ -57,7 +57,7 @@ Tracekeeper 会按明确策略路由 AI 的持久化输出。Wiki 变更和 Revi
 5. 支持 OAuth 的客户端默认使用 OAuth：浏览器只等待，Obsidian 显示 Allow/Deny 审批；不能安全完成 OAuth 的客户端可显式选择手工 Bearer，明文凭据只在当前弹窗显示一次。配置、授权、连接、使用和 Skill 状态彼此独立。
 6. 从 Agent 卡片中选择 Skills 目录安装配套 Skill，或打开 AI 辅助安装面板，把使用本地导出 bundle 的提示词交给 Agent。复制提示词不代表已经安装；Tracekeeper 会在最终目录验证完整 bundle 和哈希后才标记已安装。卡片在首次调用前已经存在，成功工具调用只更新使用状态。
 7. 在 **知识变更审核** 中查看需要处理的记忆、Wiki、图谱或迁移候选变更。
-8. 逐条编辑提案、通过审核、退回修改或不采纳；通过审核后仍需预览并明确确认写入。
+8. 对 Wiki 任务查看一个批次，并用一次最终确认完成批准和写入；高风险正文变更仍逐项处理。Memory 与旧版提案继续使用各自受治理的审核/写入流程。
 
 ## Agent 与 MCP 连接
 
@@ -81,9 +81,9 @@ Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选
 
 ## 知识变更审核
 
-全局长期记忆默认先进入知识变更审核。选择 Global Review 时，AI 助手提出的全局 durable memory 更新会先成为变更提案；Wiki 变更、图谱健康建议和结构迁移冲突也会进入同一个审核界面等待你确认。你可以决定通过审核、退回修改或不采纳。Global Auto 必须由用户明确选择，并且只能写入受治理的 MemoryRecord v2 条目。
+全局长期记忆默认先进入知识变更审核。Wiki 使用独立规则：逐项审核、按任务批次审核、自动托管符合条件的新笔记及完整关系区块，或忽略。新安装和没有保存 Wiki 规则的升级默认使用批次审核；高风险用户正文变更始终拆成逐项审核。
 
-审核通过和写入是两个独立动作。只有提案通过审核、完成预览并经你明确确认后，Tracekeeper 才会把内容写入对应目标笔记。
+Wiki 批次弹窗中的一次最终确认会授权精确的批准收据及其受治理写入；公共 MCP 仍不能批准待审提案。已经批准的 Memory 或旧版提案继续要求明确写入确认。
 
 项目记忆默认自动保存为 `01_knowledge/memory/projects/<project-key>/agents/<agent-type>/` 下的只创建条目。首次写入可精确识别的仓库时，Tracekeeper 会以排他、只创建语义安全创建缺失的 canonical 项目 Hub；身份不明确、路径被占用或现有 Hub 无效时仍会 fail-closed。稳定操作身份会让完全相同的重试复用同一条目，并拒绝使用已存在身份覆盖不同载荷。每个新条目都会连接稳定项目 Hub，并在存在关系时通过 Obsidian 原生链接连接已验证的 Wiki 或 Source 笔记；Wiki 和 Source 关系都是可选的。现有项目 `memory.md` 仍可读取并列入目录，但不会被自动改写、拆分或迁移。
 
@@ -95,7 +95,7 @@ Codex、Claude、Cursor 等 MCP 客户端共用一套配套 Skill。Skill 先选
 - 将反复出现的偏好、决策和经验沉淀为长期记忆。
 - 在 AI 生成内容写入 vault 前进行人工审核。
 - 让 AI 协作始终围绕自己的 Obsidian 知识库展开。
-- 使用稳定的 Memory + Wiki 结构，让不可变项目记忆条目持续连接项目 Hub 与主题 Hub。
+- 使用稳定的 Memory + Wiki 结构，让不可变项目记忆条目持续连接项目 Hub 与 Wiki Topic Map。
 - 建立一种“AI 提议，人来决定”的个人知识工作流。
 
 ## 知识图谱健康
@@ -108,7 +108,7 @@ Tracekeeper 通过只读的 `tracekeeper.lint` 统一检查 Obsidian wikilink �
 - `advisory`：图谱问题只作为 warning 和建议。
 - `strict`：缺少入口、缺少推荐 hub、孤立节点和未解析图谱链接会成为 lint error。
 
-图谱健康不会自动创建笔记或改写链接。你可以在插件的图谱健康视图中查看结果，并显式创建知识变更提案，再决定是否补全全库入口、主题 hub 或 `Graph links` 段落。
+图谱健康只评估 `01_knowledge/` 的语义子图，操作记录和 Source part 不参与孤立节点与连通分量统计。它不会替代官方图谱；视图可复制 `path:01_knowledge` 筛选条件，也不会写入 `.obsidian/graph.json`。
 
 ## 设计原则
 

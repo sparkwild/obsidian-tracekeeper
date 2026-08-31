@@ -155,11 +155,14 @@ paths.
 - MCP cannot read outside the active Vault or inside its Obsidian configuration.
 - Agent guidance cannot expand Runtime permissions.
 - Global durable memory remains review-gated by default.
+- Wiki changes use an independent user-selected rule; task-batch review is the
+  default, public MCP cannot approve pending proposals, and auto-managed writes
+  are restricted to create-only notes or intact managed relation regions.
 - MemoryRecord v2 preserves claim identity, authority, confidence, evidence,
   and current/history/conflict lifecycle projections without overwriting
   history.
 - Typed Source index notes own bounded part manifests; Source parts never
-  become independent relation targets.
+  become independent relation targets or top-level Recall matches.
 - Automatic and approved writes are attributable and recoverable in proportion
   to their risk.
 - Compatibility code may read old layouts, but new content uses the current

@@ -19,6 +19,7 @@ export interface LocalToolExecutorContext {
 	memoryRules: {
 		globalMemoryRule: string;
 		projectMemoryRule: string;
+		wikiChangeRule: string;
 		taskTrackingEnabled: boolean;
 	};
 	contentLanguage: RuntimeContentLanguage;
@@ -66,7 +67,7 @@ export class LocalToolExecutor {
 	private readonly sessionId = randomUUID();
 
 	constructor(private readonly options: LocalToolExecutorOptions) {
-		this.runtimeVersion = options.runtimeVersion?.trim() || '0.3.7';
+		this.runtimeVersion = options.runtimeVersion?.trim() || '0.4.0';
 	}
 
 	async executeLocalTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {

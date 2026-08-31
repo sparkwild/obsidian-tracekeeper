@@ -1,6 +1,7 @@
 import { ScannedNote } from './scan';
 export interface GraphHealthOptions {
     maxItems?: number;
+    semanticOnly?: boolean;
 }
 export type GraphProfile = 'off' | 'advisory' | 'strict';
 export interface GraphProfileIssue {

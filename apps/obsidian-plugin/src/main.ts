@@ -31,7 +31,6 @@ import {
 	KNOWLEDGE_PROJECTS_INDEX_PATH,
 	KNOWLEDGE_SOURCES_DIR,
 	KNOWLEDGE_SOURCES_INDEX_PATH,
-	KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
 	KNOWLEDGE_WIKI_INDEX_PATH,
 	TRACEKEEPER_AGENT_REQUESTS_DIR,
 	TRACEKEEPER_AGENT_ACTIVITY_DIR,
@@ -44,6 +43,7 @@ import {
 	TRACEKEEPER_ROOT,
 	TRACEKEEPER_SYSTEM_PATH,
 	renderAgentActivityHub,
+	type WikiChangeRule,
 } from '@tracekeeper/core';
 import {
 	type MemoryProposalRecord,
@@ -178,6 +178,7 @@ import {
 	normalizeGraphProfileValue,
 	normalizeMemoryRuleSettings,
 	normalizeMemoryProposalRule,
+	normalizeWikiChangeRule,
 	normalizeNoteContentLanguage,
 	type GraphProfile,
 	type MemoryProposalRule,
@@ -260,6 +261,8 @@ import {
 	ARCHIVE_RECEIPT_MAX_LENGTH,
 	ARCHIVE_TARGET_CLAIM_MAX_LENGTH,
 	type ApprovedWritebackPreview,
+	type WikiReviewBatchPreview,
+	type WikiReviewBatchReceipt,
 	type ArchiveMemoryProposalPreview,
 	type ArchiveMemoryProposalReceipt,
 	type ArchiveMemoryProposalTargetClaim,
@@ -331,8 +334,8 @@ function buildControlFiles(language: ResolvedNoteContentLanguage): BaseStructure
 			path: TRACEKEEPER_PERMISSIONS_PATH,
 			content: noteContentText(
 				language,
-				'# 权限\n\n- 全局 MemoryRecord 默认进入审核；全局与项目写入遵循 Obsidian 中的记忆规则。\n- Wiki 变更始终需要用户审核。\n- Wiki 与 Source 关系均为可选。\n',
-				'# Permissions\n\n- Global MemoryRecords enter review by default; global and project writes follow the memory rules in Obsidian.\n- Wiki changes always require user review.\n- Wiki and Source relations are optional.\n'
+				'# 权限\n\n- 全局 MemoryRecord 默认进入审核；全局与项目写入遵循 Obsidian 中的记忆规则。\n- Wiki 变更遵循 Obsidian 中独立选择的逐项、批次、自动托管或忽略规则。\n- Wiki 与 Source 关系均为可选。\n',
+				'# Permissions\n\n- Global MemoryRecords enter review by default; global and project writes follow the memory rules in Obsidian.\n- Wiki changes follow the separately selected review-each, batch-review, auto-managed, or ignore rule in Obsidian.\n- Wiki and Source relations are optional.\n'
 			),
 		},
 	];
@@ -376,16 +379,8 @@ function buildKnowledgeEntryFiles(language: ResolvedNoteContentLanguage): BaseSt
 			path: KNOWLEDGE_WIKI_INDEX_PATH,
 			content: noteContentText(
 				language,
-				'# Wiki 入口\n\n- [[hubs/index|主题中心]]\n',
-				'# Wiki Index\n\n- [[hubs/index|Hubs]]\n'
-			),
-		},
-		{
-			path: KNOWLEDGE_WIKI_HUBS_INDEX_PATH,
-			content: noteContentText(
-				language,
-				'# 主题中心\n\n在这里创建主题 hub，并从每个 hub 链接相关记忆。\n',
-				'# Wiki Hubs\n\nCreate topic hubs here and link related memory from each hub.\n'
+				'# Wiki 入口\n\n主题地图和知识条目通过反向链接聚合到这里。\n',
+				'# Wiki Index\n\nTopic maps and knowledge notes aggregate here through Backlinks.\n'
 			),
 		},
 		{
@@ -449,6 +444,7 @@ type StreamableHttpRuntimeOptionsWithGraphProfile = ConstructorParameters<typeof
 	memoryRules?: {
 		globalMemoryRule: MemoryProposalRule;
 		projectMemoryRule: MemoryProposalRule;
+		wikiChangeRule: WikiChangeRule;
 		taskTrackingEnabled: boolean;
 	};
 };
@@ -466,6 +462,7 @@ interface TracekeeperSettings {
 	graphProfile: GraphProfile;
 	globalMemoryRule: MemoryProposalRule;
 	projectMemoryRule: MemoryProposalRule;
+	wikiChangeRule: WikiChangeRule;
 	taskTrackingEnabled: boolean;
 	noteContentLanguage: NoteContentLanguageSetting;
 	autoRefreshEnabled: boolean;
@@ -491,6 +488,7 @@ const DEFAULT_SETTINGS: TracekeeperSettings = {
 	graphProfile: 'advisory',
 	globalMemoryRule: 'review_queue',
 	projectMemoryRule: 'auto_write',
+	wikiChangeRule: 'review_batch',
 	taskTrackingEnabled: true,
 	noteContentLanguage: 'auto',
 	autoRefreshEnabled: true,
@@ -866,6 +864,7 @@ export default class TracekeeperPlugin extends Plugin {
 		next.memoryRulesVersion = memoryRules.memoryRulesVersion;
 		next.globalMemoryRule = memoryRules.globalMemoryRule;
 		next.projectMemoryRule = memoryRules.projectMemoryRule;
+		next.wikiChangeRule = memoryRules.wikiChangeRule;
 		next.taskTrackingEnabled = memoryRules.taskTrackingEnabled;
 		next.noteContentLanguage = normalizeNoteContentLanguage(saved.noteContentLanguage);
 		next.autoRefreshEnabled = typeof saved.autoRefreshEnabled === 'boolean'
@@ -1268,6 +1267,7 @@ export default class TracekeeperPlugin extends Plugin {
 			memoryRules: {
 				globalMemoryRule: this.settings.globalMemoryRule,
 				projectMemoryRule: this.settings.projectMemoryRule,
+				wikiChangeRule: this.settings.wikiChangeRule,
 				taskTrackingEnabled: this.settings.taskTrackingEnabled,
 			},
 		};
@@ -2598,6 +2598,11 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.persistExplicitMemoryPolicySelection();
 	}
 
+	async setWikiChangeRule(value: unknown): Promise<void> {
+		this.settings.wikiChangeRule = normalizeWikiChangeRule(value);
+		await this.persistExplicitMemoryPolicySelection();
+	}
+
 	async setTaskTrackingEnabled(value: unknown): Promise<void> {
 		this.settings.taskTrackingEnabled = value === true;
 		await this.saveSettings();
@@ -2823,6 +2828,7 @@ export default class TracekeeperPlugin extends Plugin {
 			memoryRules: {
 				globalMemoryRule: this.settings.globalMemoryRule,
 				projectMemoryRule: this.settings.projectMemoryRule,
+				wikiChangeRule: this.settings.wikiChangeRule,
 				taskTrackingEnabled: this.settings.taskTrackingEnabled,
 			},
 			contentLanguage: noteContentLanguage.language,
@@ -2851,6 +2857,17 @@ export default class TracekeeperPlugin extends Plugin {
 		preview: ApprovedWritebackPreview
 	): Promise<void> {
 		return this.reviewQueueController.applyApprovedWriteback(proposal, preview);
+	}
+
+	async previewWikiReviewBatch(proposals: readonly MemoryProposalRecord[]): Promise<WikiReviewBatchPreview> {
+		return this.reviewQueueController.previewWikiReviewBatch(proposals);
+	}
+
+	async confirmWikiReviewBatch(
+		preview: WikiReviewBatchPreview,
+		confirmationToken: string
+	): Promise<WikiReviewBatchReceipt> {
+		return this.reviewQueueController.confirmWikiReviewBatch(preview, confirmationToken);
 	}
 
 	async runMemoryRecall(input: MemoryRecallInput): Promise<MemoryRecallResult> {
