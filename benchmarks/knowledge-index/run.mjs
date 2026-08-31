@@ -143,6 +143,7 @@ async function runWorker(options) {
 		throw new Error('Worker requires --result, --adapter-bundle, and --run-id.');
 	}
 	const fixtureRoot = await createFixtureRoot();
+	const progressPath = `${options.resultPath}.progress.json`;
 	const result = await runSingleRepetition({
 		fixtureRoot,
 		adapterBundlePath: options.adapterBundlePath,
@@ -152,6 +153,12 @@ async function runWorker(options) {
 		warmup: options.warmup,
 		runId: options.runId,
 		retainFixture: options.retainFixtures,
+		onProgress: (progress) => writeWorkerResult(progressPath, {
+			schema: 'tracekeeper-index-benchmark-progress/v1',
+			run_id: options.runId,
+			updated_at: new Date().toISOString(),
+			...progress,
+		}),
 	});
 	if (options.retainFixtures) {
 		result.retainedFixturePath = fixtureRoot;
@@ -208,10 +215,19 @@ async function executeWorker(options, input) {
 	try {
 		payload = JSON.parse(await fs.readFile(input.resultPath, 'utf8'));
 	} catch {
+		let progress = null;
+		try {
+			progress = JSON.parse(await fs.readFile(`${input.resultPath}.progress.json`, 'utf8'));
+		} catch {
+			progress = null;
+		}
 		const diagnostic = [
 			result.error instanceof Error ? result.error.message : '',
 			String(result.stderr ?? '').trim(),
 			result.signal ? `signal ${result.signal}` : '',
+			progress
+				? `last checkpoint ${progress.phase} ${progress.completed ?? ''}/${progress.total ?? ''}`.trim()
+				: 'no worker checkpoint',
 		].filter(Boolean).join('; ').slice(0, 300);
 		throw new Error(
 			`Benchmark worker did not produce a result${diagnostic ? `: ${diagnostic}` : '.'}`

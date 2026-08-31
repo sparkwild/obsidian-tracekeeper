@@ -506,6 +506,11 @@ export async function generateFixture(options) {
 		pendingWrites.push({ absolutePath, content, modifiedAt });
 		if (pendingWrites.length >= FIXTURE_IO_CONCURRENCY) {
 			await flushFixtureWrites(pendingWrites);
+			await options.onProgress?.({
+				phase: 'fixture_generate',
+				completed: index + 1,
+				total: config.note_count,
+			});
 		}
 		const size = Buffer.byteLength(content, 'utf8');
 		noteRecords.push({
@@ -527,6 +532,11 @@ export async function generateFixture(options) {
 		});
 	}
 	await flushFixtureWrites(pendingWrites);
+	await options.onProgress?.({
+		phase: 'fixture_generate',
+		completed: config.note_count,
+		total: config.note_count,
+	});
 
 	const incrementalEvents = buildIncrementalEvents(config, noteRecords);
 	const replayEvents = buildReplayEvents();
@@ -580,7 +590,7 @@ export async function generateFixture(options) {
 	};
 }
 
-export async function verifyFixture(fixture) {
+export async function verifyFixture(fixture, options = {}) {
 	const failures = [];
 	for (let offset = 0; offset < fixture.manifest.notes.length; offset += FIXTURE_IO_CONCURRENCY) {
 		const notes = fixture.manifest.notes.slice(offset, offset + FIXTURE_IO_CONCURRENCY);
@@ -603,6 +613,11 @@ export async function verifyFixture(fixture) {
 			return noteFailures;
 		}));
 		for (const row of rows) failures.push(...row);
+		await options.onProgress?.({
+			phase: 'fixture_verify',
+			completed: Math.min(offset + notes.length, fixture.manifest.notes.length),
+			total: fixture.manifest.notes.length,
+		});
 	}
 	const manifestWithoutHash = { ...fixture.manifest };
 	delete manifestWithoutHash.manifest_sha256;
