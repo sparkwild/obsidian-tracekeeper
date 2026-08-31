@@ -301,13 +301,18 @@ material in its established task location.
 
 The release workflow is `.github/workflows/release.yml`. Its build job checks
 out a pushed strict version tag with full history, runs the full verification
-and package flow under read-only repository permission, runs the formal 20k
-knowledge-index benchmark on the GitHub-hosted candidate machine and retains
+and package flow under read-only repository permission, runs the release-scale
+1k knowledge-index benchmark on the GitHub-hosted candidate machine and retains
 its sanitized report artifact, generates release-asset
 attestations, and transfers one exact Actions artifact named by version and
 checked commit. A separate write-enabled job revalidates the tag and default
 branch before creating an unpublished GitHub Draft Release containing exactly
 `main.js`, `manifest.json`, and `styles.css`.
+
+Formal 20k diagnostics remain a separate manually dispatched workflow on a
+qualified runner. They do not block an ordinary release because a standard
+GitHub-hosted runner does not represent the dedicated-machine performance
+boundary and may hit the worker timeout before returning a sample.
 
 The Draft Release is the qualification boundary: install and smoke checks use
 those attached files. An explicit manual workflow dispatch accepts only the

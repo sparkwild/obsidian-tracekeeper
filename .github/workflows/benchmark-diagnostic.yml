@@ -1,0 +1,47 @@
+name: Knowledge Benchmark Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: Synthetic fixture tier.
+        required: true
+        default: 20k
+        type: choice
+        options:
+          - 5k
+          - 20k
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout default-branch candidate
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run one diagnostic sample
+        run: npm run benchmark:index -- --tier "${{ inputs.tier }}" --allow-scale --warmups 0 --repetitions 1
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: knowledge-index-${{ inputs.tier }}-diagnostic-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: true
+          path: .specs/runtime-modularization/audits/index-benchmark-reports/**

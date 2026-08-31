@@ -957,24 +957,37 @@ export async function runSingleRepetition(options) {
 	const fixtureRoot = path.resolve(options.fixtureRoot);
 	let fixture = null;
 	try {
+		const checkpoint = async (phase, details = {}) => {
+			await options.onProgress?.({ phase, ...details });
+		};
+		await checkpoint('worker_started');
 		const fixturePhase = await measurePhase(async () => {
 			fixture = await generateFixture({
 				fixtureRoot,
 				tier: options.tier,
 				seed: options.seed,
 				eventCounts: options.eventCounts,
+				onProgress: options.onProgress,
 			});
 			return fixture;
 		});
-		const fixtureCheck = await verifyFixture(fixture);
+		await checkpoint('fixture_generate_complete', {
+			duration_ns: fixturePhase.measurement.duration_ns,
+		});
+		const fixtureCheck = await verifyFixture(fixture, { onProgress: options.onProgress });
 		if (!fixtureCheck.ok) {
 			throw new Error(`Fixture verification failed: ${fixtureCheck.failures.join('; ')}`);
 		}
+		await checkpoint('fixture_verify_complete');
 
 		const scanPhase = await measurePhase(
 			async () => core.scanVault(fixtureRoot)
 		);
 		const scan = scanPhase.result;
+		await checkpoint('scan_complete', {
+			duration_ns: scanPhase.measurement.duration_ns,
+			note_count: scan.notes.length,
+		});
 		if (scan.notes.length !== fixture.manifest.note_count || scan.errors.length !== 0) {
 			throw new Error(
 				`Scan mismatch: expected ${fixture.manifest.note_count} notes, got ${scan.notes.length} with ${scan.errors.length} errors.`
@@ -986,22 +999,34 @@ export async function runSingleRepetition(options) {
 			const report = await index.rebuild(scan);
 			return { index, report, snapshot: await index.snapshot() };
 		});
+		await checkpoint('core_rebuild_complete', {
+			duration_ns: coreRebuildPhase.measurement.duration_ns,
+		});
 		const coreFirstReadyPhase = await measurePhase(async () => {
 			const index = new core.InMemoryKnowledgeIndex({ vaultRoot: fixtureRoot });
 			await index.rebuild(scan);
 			return index.snapshot();
+		});
+		await checkpoint('core_first_ready_complete', {
+			duration_ns: coreFirstReadyPhase.measurement.duration_ns,
 		});
 
 		const adapterPhase = await measurePhase(
 			async () => createReadyAdapter(options.adapterBundlePath, fixtureRoot)
 		);
 		const adapter = adapterPhase.result.adapter;
+		await checkpoint('adapter_first_ready_complete', {
+			duration_ns: adapterPhase.measurement.duration_ns,
+		});
 		const incrementalEvents = await applyIncrementalEvents(
 			adapter,
 			adapterPhase.result.fileCatalog,
 			fixtureRoot,
 			fixture.incrementalEvents
 		);
+		await checkpoint('incremental_events_complete', {
+			event_count: incrementalEvents.length,
+		});
 		const incrementalSnapshot = await adapter.knowledgeSnapshot();
 		const incrementalDigest = snapshotDigests(incrementalSnapshot);
 
@@ -1011,6 +1036,9 @@ export async function runSingleRepetition(options) {
 		const freshAdapter = rebuildAfterEventsPhase.result.adapter;
 		const freshSnapshot = await freshAdapter.knowledgeSnapshot();
 		const freshDigest = snapshotDigests(freshSnapshot);
+		await checkpoint('rebuild_after_events_complete', {
+			duration_ns: rebuildAfterEventsPhase.measurement.duration_ns,
+		});
 		const convergence = incrementalDigest.content_sha256 === freshDigest.content_sha256;
 		if (!convergence) {
 			throw new Error('Incremental index did not converge with a fresh full rebuild.');
@@ -1021,6 +1049,9 @@ export async function runSingleRepetition(options) {
 			freshAdapter.scanSnapshot(fixtureRoot),
 			fixtureRoot
 		);
+		await checkpoint('recall_complete', {
+			query_count: recallResults.length,
+		});
 		const endedAt = options.now?.() ?? new Date().toISOString();
 		const sample = {
 			schema: 'tracekeeper-index-benchmark-sample/v1',
