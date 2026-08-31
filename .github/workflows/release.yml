@@ -94,6 +94,19 @@ jobs:
       - name: Verify and package
         run: npm run verify
 
+      - name: Run formal 20k knowledge benchmark
+        run: npm run benchmark:index -- --tier 20k --allow-scale --warmups 1 --repetitions 5
+
+      - name: Upload formal 20k benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: knowledge-index-20k-${{ steps.semver.outputs.version }}-${{ steps.checkout.outputs.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: true
+          path: .specs/runtime-modularization/audits/index-benchmark-reports/**
+
       - name: Check generated package artifacts
         run: git diff --exit-code -- apps/mcp-server/dist packages/core/dist packages/contracts/dist packages/mcp-runtime/dist
 
