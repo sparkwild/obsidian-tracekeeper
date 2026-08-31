@@ -4,6 +4,19 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.7] - Review Stability And Localization
+
+### Fixed
+
+- Kept active Knowledge Change Review details stable during automatic refresh while refreshing the latest list state after the reviewer returns.
+- Completed Chinese and English mappings for review reasons, task and proposal states, Recall ranking reasons, graph health, Memory lifecycle, Source status, Agent activity, and migration previews.
+- Replaced arbitrary Runtime, Agent configuration, OAuth, Skill, index, and graph error text in primary UI with localized, operation-specific recovery guidance.
+- Distinguished committed operations from follow-up view refresh failures so successful credential issuance, access revocation, Agent configuration, Runtime recovery, and proposal creation are not reported as failed or retried unnecessarily.
+
+### Changed
+
+- Kept raw reason codes, warnings, and Runtime diagnostics available only in collapsed technical details, recovery evidence, or the developer console instead of exposing them as primary user-facing copy.
+
 ## [0.3.6] - Closeout-first Task Recording
 
 ### Added

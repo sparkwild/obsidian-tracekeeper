@@ -1,11 +1,13 @@
-import { App, Modal, Setting } from 'obsidian';
+import { App, getLanguage, Modal, Setting } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import {
 	MEMORY_RECALL_SCOPES,
+	localizeMemoryRecallScoreReasons,
 	type MemoryRecallResult,
+	type MemoryRecallResultEntry,
 	type TracekeeperRecallScope,
 } from './recall-view-model';
-import { ui } from '../../ui/localization';
+import { isChineseLanguage, ui } from '../../ui/localization';
 
 export class MemoryRecallPreviewModal extends Modal {
 	private query = '';
@@ -96,6 +98,15 @@ export class MemoryRecallPreviewModal extends Modal {
 		if (!this.resultsContainer || !this.statusEl) {
 			return;
 		}
+		if (
+			!this.query.trim()
+			&& this.recallScope !== 'project_history'
+			&& this.recallScope !== 'task_history'
+		) {
+			this.statusEl.setText(ui('请输入检索文本。', 'Please enter a query.'));
+			this.resultsContainer.empty();
+			return;
+		}
 		button.disabled = true;
 		button.setText(ui('检索中...', 'Searching...'));
 		this.statusEl.setText('');
@@ -109,7 +120,10 @@ export class MemoryRecallPreviewModal extends Modal {
 			this.renderResults(result);
 		} catch (error) {
 			console.error('tracekeeper recall preview failed', error);
-			this.statusEl.setText(error instanceof Error ? error.message : String(error));
+			this.statusEl.setText(ui(
+				'召回失败。请确认 Tracekeeper Runtime 正常运行后重试。',
+				'Recall failed. Confirm that the Tracekeeper Runtime is running, then try again.'
+			));
 		} finally {
 			button.disabled = false;
 			button.setText(ui('查看召回结果', 'Preview recall'));
@@ -143,8 +157,16 @@ export class MemoryRecallPreviewModal extends Modal {
 			this.renderDetail(details, ui('路径', 'Path'), item.path || ui('未知', 'Unknown'));
 			this.renderDetail(details, ui('类型', 'Type'), item.type || ui('笔记', 'Note'));
 			this.renderDetail(details, ui('命中词', 'Matched tokens'), item.matchedTokens.length ? item.matchedTokens.join(', ') : ui('无', 'None'));
-			this.renderDetail(details, ui('原因', 'Reason'), item.reason);
+			this.renderDetail(details, ui('原因', 'Reason'), this.recallReasonLabel(item));
 		}
+	}
+
+	private recallReasonLabel(item: MemoryRecallResultEntry): string {
+		if (item.scoreReasons.length === 0) {
+			return item.reason;
+		}
+		const locale = isChineseLanguage(getLanguage()) ? 'zh' : 'en';
+		return localizeMemoryRecallScoreReasons(item.scoreReasons, locale);
 	}
 
 	private renderProjectIdentityWarning(result: MemoryRecallResult): void {
@@ -191,7 +213,9 @@ export class MemoryRecallPreviewModal extends Modal {
 			case 'repo_leaf': return ui('仓库目录名', 'Repository directory name');
 			case 'task_metadata': return ui('任务元数据', 'Task metadata');
 			case 'unknown': return ui('未知', 'Unknown');
-			default: return source || ui('未确定', 'Unresolved');
+			default: return source
+				? ui('其他识别来源', 'Other identity source')
+				: ui('未确定', 'Unresolved');
 		}
 	}
 
@@ -200,7 +224,9 @@ export class MemoryRecallPreviewModal extends Modal {
 			case 'exact': return ui('精确', 'Exact');
 			case 'derived': return ui('推导', 'Derived');
 			case 'uncertain': return ui('不确定', 'Uncertain');
-			default: return confidence || ui('未确定', 'Unresolved');
+			default: return confidence
+				? ui('其他置信度', 'Other confidence level')
+				: ui('未确定', 'Unresolved');
 		}
 	}
 
@@ -213,7 +239,7 @@ export class MemoryRecallPreviewModal extends Modal {
 			case 'project_hint_conflicts_with_repo_path': return ui('项目名称与仓库路径对应的身份冲突。', 'The project hint conflicts with the identity selected by repository path.');
 			case 'project_hint_canonicalized_from_repo_match': return ui('项目名称已根据仓库匹配规范化。', 'The project hint was canonicalized from a repository match.');
 			case 'project_hint_derived_from_repo_leaf': return ui('项目名称由仓库目录名推导，尚未得到稳定身份确认。', 'The project hint was derived from the repository directory name and is not yet a stable identity.');
-			default: return code;
+			default: return ui('存在未识别的项目身份警告。', 'An unrecognized project identity warning was reported.');
 		}
 	}
 

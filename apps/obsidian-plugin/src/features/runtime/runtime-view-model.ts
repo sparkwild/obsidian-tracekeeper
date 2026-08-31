@@ -73,7 +73,6 @@ const labelFor = (state: RuntimeUiState, localize: Localize): string => {
 
 const detailFor = (state: RuntimeUiState, input: RuntimeViewModelInput, localize: Localize): string => {
 	const port = safePort(input.port);
-	const trimmedError = input.lastError?.trim() ?? '';
 	switch (state) {
 		case 'disabled':
 			return localize(
@@ -103,9 +102,10 @@ const detailFor = (state: RuntimeUiState, input: RuntimeViewModelInput, localize
 				`Port ${port} is already used, possibly by another Obsidian Vault or local process. Choose another port for this Vault or stop the owner.`
 			);
 		case 'failed':
-			return trimmedError
-				? localize(`MCP 服务启动失败：${trimmedError}`, `MCP service failed to start: ${trimmedError}`)
-				: localize('MCP 服务启动失败，请检查 Obsidian 控制台。', 'MCP service failed to start. Check the Obsidian console.');
+			return localize(
+				'MCP 服务启动失败。请重试；如果问题持续存在，请查看技术信息或 Obsidian 控制台。',
+				'MCP service failed to start. Retry, then check Technical details or the Obsidian console if the problem persists.'
+			);
 		default:
 			return localize('MCP 状态未知。', 'MCP status is unknown.');
 	}

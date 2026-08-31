@@ -125,6 +125,21 @@ try {
 	assert.doesNotMatch(settingsSource, /选择 Agent|Select Agent/);
 	assert.match(settingsSource, /未匹配的 OAuth 请求/);
 	assert.match(settingsSource, /不会绑定到任何 Agent/);
+	const modalDecision = modalSource.slice(
+		modalSource.indexOf('private async decide'),
+		modalSource.indexOf('private async refreshSettings')
+	);
+	assert.match(modalDecision, /new Notice\(reportUiFailure\(error/);
+	assert.match(modalDecision, /zh: '无法更新 OAuth 审批。'/);
+	assert.match(modalDecision, /en: 'Unable to update OAuth approval.'/);
+	const settingsDecision = settingsSource.slice(
+		settingsSource.indexOf('private async denyPendingOAuthRequest'),
+		settingsSource.indexOf('private renderConnectionInfoSection')
+	);
+	assert.match(settingsDecision, /new Notice\(reportUiFailure\(error/);
+	assert.match(settingsDecision, /zh: '无法拒绝 OAuth 请求。'/);
+	assert.match(settingsDecision, /en: 'Unable to deny the OAuth request.'/);
+	assert.doesNotMatch(`${modalDecision}\n${settingsDecision}`, /error\.message/);
 	const renderPanel = modalSource.slice(
 		modalSource.indexOf('private renderPanel'),
 		modalSource.indexOf('private syncOAuthApprovalContext')
@@ -135,4 +150,4 @@ try {
 	fs.rmSync(tempDirectory, { recursive: true, force: true });
 }
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 27 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 34 })}\n`);

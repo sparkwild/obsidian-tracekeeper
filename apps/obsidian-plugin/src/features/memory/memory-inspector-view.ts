@@ -18,6 +18,105 @@ import { ui } from '../../ui/localization';
 import { TRACEKEEPER_MEMORY_INSPECTOR_VIEW } from '../../ui/view-types';
 import { trimText } from '../shared/markdown-record-parser';
 
+const unknownMemoryValueLabel = (
+	value: string,
+	zhLabel: string,
+	enLabel: string
+): string => {
+	const rawValue = value.trim();
+	return rawValue
+		? ui(zhLabel, enLabel)
+		: ui('未记录', 'Not recorded');
+};
+
+export const memoryInspectorAuthorityLabel = (authority: string): string => {
+	switch (authority.trim().toLowerCase()) {
+		case 'agent': return ui('AI 助手', 'Agent');
+		case 'source': return ui('资料来源', 'Source');
+		case 'user': return ui('用户', 'User');
+		default: return unknownMemoryValueLabel(authority, '未知权威来源', 'Unknown authority');
+	}
+};
+
+export const memoryInspectorConfidenceLabel = (confidence: string): string => {
+	switch (confidence.trim().toLowerCase()) {
+		case 'uncertain': return ui('不确定', 'Uncertain');
+		case 'inferred': return ui('推断', 'Inferred');
+		case 'supported': return ui('有证据支持', 'Supported');
+		case 'verified': return ui('已验证', 'Verified');
+		default: return unknownMemoryValueLabel(confidence, '未知置信度', 'Unknown confidence');
+	}
+};
+
+export const memoryInspectorEffectiveStateLabel = (state: string): string => {
+	switch (state.trim().toLowerCase()) {
+		case 'current': return ui('当前', 'Current');
+		case 'superseded': return ui('已被替代', 'Superseded');
+		case 'disputed': return ui('有争议', 'Disputed');
+		case 'retracted': return ui('已撤回', 'Retracted');
+		case 'review': return ui('待审核', 'Review');
+		case 'legacy_unkeyed': return ui('旧版未标识', 'Legacy unkeyed');
+		case 'queued': return ui('待确认', 'Queued');
+		case 'missing': return ui('证据缺失', 'Missing evidence');
+		default: return unknownMemoryValueLabel(state, '未知有效状态', 'Unknown effective state');
+	}
+};
+
+export const memoryInspectorLifecycleReasonLabel = (reason: string): string => {
+	const normalized = reason.trim().toLowerCase();
+	if (normalized.startsWith('superseded_by:')) {
+		const successorId = reason.trim().slice(reason.indexOf(':') + 1).trim();
+		return successorId
+			? ui(`被 ${successorId} 替代`, `Superseded by ${successorId}`)
+			: unknownMemoryValueLabel(reason, '未知生命周期原因', 'Unknown lifecycle reason');
+	}
+	switch (normalized) {
+		case 'declared_disputed': return ui('声明为有争议', 'Declared disputed');
+		case 'declared_retracted': return ui('声明为已撤回', 'Declared retracted');
+		case 'declared_review': return ui('声明为待审核', 'Declared for review');
+		case 'not_yet_valid': return ui('尚未生效', 'Not yet valid');
+		case 'validity_ended': return ui('有效期已结束', 'Validity ended');
+		case 'duplicate_memory_id': return ui('记忆标识重复', 'Duplicate memory ID');
+		case 'dangling_supersedes': return ui('替代关系目标缺失', 'Supersession target is missing');
+		case 'cross_claim_supersedes': return ui('跨 Claim 替代关系', 'Cross-claim supersession');
+		case 'dangling_contradicts': return ui('矛盾关系目标缺失', 'Contradiction target is missing');
+		case 'cross_claim_contradicts': return ui('跨 Claim 矛盾关系', 'Cross-claim contradiction');
+		case 'explicit_contradiction': return ui('显式矛盾', 'Explicit contradiction');
+		case 'supersession_cycle': return ui('替代关系成环', 'Supersession cycle');
+		case 'duplicate_current': return ui('存在多条当前记录', 'Multiple current records');
+		case 'stale_verification': return ui('验证已过期', 'Stale verification');
+		case 'missing_claim_key': return ui('缺少 Claim 标识', 'Missing Claim key');
+		case 'pending_human_review': return ui('等待人工审核', 'Pending human review');
+		case 'missing_persisted_evidence': return ui('缺少持久化证据', 'Missing persisted evidence');
+		default: return unknownMemoryValueLabel(reason, '未知生命周期原因', 'Unknown lifecycle reason');
+	}
+};
+
+export const memoryInspectorProposalStatusLabel = (status: string): string => {
+	switch (status.trim().toLowerCase()) {
+		case 'pending':
+		case 'pending_review': return ui('待审核', 'Pending review');
+		case 'approved': return ui('已批准', 'Approved');
+		case 'rejected': return ui('已拒绝', 'Rejected');
+		case 'deferred': return ui('已暂缓', 'Deferred');
+		case 'revision_requested': return ui('已请求修改', 'Revision requested');
+		case 'applied': return ui('已写入', 'Applied');
+		default: return unknownMemoryValueLabel(status, '未知提案状态', 'Unknown proposal status');
+	}
+};
+
+export const memoryInspectorIndexStateLabel = (state: string): string => {
+	switch (state.trim().toLowerCase()) {
+		case 'initializing': return ui('初始化中', 'Initializing');
+		case 'building': return ui('构建中', 'Building');
+		case 'rebuilding': return ui('重建中', 'Rebuilding');
+		case 'ready': return ui('已就绪', 'Ready');
+		case 'recovering': return ui('恢复中', 'Recovering');
+		case 'error': return ui('错误', 'Error');
+		default: return unknownMemoryValueLabel(state, '未知索引状态', 'Unknown index state');
+	}
+};
+
 export class TracekeeperMemoryInspectorView extends ItemView {
 	private migrationPreview: LegacyMemoryMigrationPreview | null = null;
 	private migrationResult: LegacyMemoryMigrationResult | null = null;
@@ -288,8 +387,18 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		this.renderDetail(details, ui('持久化', 'Persistence'), this.memoryStateDetail(record));
 		this.renderDetail(details, ui('有效状态', 'Effective state'), this.lifecycleStateDetail(record));
 		this.renderDetail(details, ui('Claim', 'Claim'), record.claimKey || ui('旧版未标识', 'Legacy unkeyed'));
-		this.renderDetail(details, ui('权威来源', 'Authority'), record.authority || ui('未声明', 'Not declared'));
-		this.renderDetail(details, ui('置信度', 'Confidence'), record.confidenceLevel || ui('未声明', 'Not declared'));
+		this.renderDetail(
+			details,
+			ui('权威来源', 'Authority'),
+			record.authority ? memoryInspectorAuthorityLabel(record.authority) : ui('未声明', 'Not declared')
+		);
+		this.renderDetail(
+			details,
+			ui('置信度', 'Confidence'),
+			record.confidenceLevel
+				? memoryInspectorConfidenceLabel(record.confidenceLevel)
+				: ui('未声明', 'Not declared')
+		);
 		this.renderDetail(details, ui('有效期', 'Validity'), this.memoryValidity(record));
 		this.renderDetail(details, ui('证据', 'Evidence'), record.evidence.length
 			? `${record.evidence.slice(0, 3).join(', ')}${record.evidence.length > 3 ? ` (+${record.evidence.length - 3})` : ''}`
@@ -331,8 +440,8 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		status.setAttr('aria-live', 'polite');
 		if (this.migrationPreview) {
 			status.setText(ui(
-				`候选 ${this.migrationPreview.rows.length} · 可生成 ${this.migrationPreview.executableCount} · 阻塞 ${this.migrationPreview.blockedCount} · 索引 ${this.migrationPreview.indexState}`,
-				`Candidates ${this.migrationPreview.rows.length} · executable ${this.migrationPreview.executableCount} · blocked ${this.migrationPreview.blockedCount} · index ${this.migrationPreview.indexState}`
+				`候选 ${this.migrationPreview.rows.length} · 可生成 ${this.migrationPreview.executableCount} · 阻塞 ${this.migrationPreview.blockedCount} · 索引 ${memoryInspectorIndexStateLabel(this.migrationPreview.indexState)}`,
+				`Candidates ${this.migrationPreview.rows.length} · executable ${this.migrationPreview.executableCount} · blocked ${this.migrationPreview.blockedCount} · index ${memoryInspectorIndexStateLabel(this.migrationPreview.indexState)}`
 			));
 		} else {
 			status.setText(ui('尚未生成预览；不会自动启动迁移。', 'No preview yet; migration never starts automatically.'));
@@ -390,9 +499,9 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 
 	private lifecycleStateDetail(record: MemoryInspectorRecord): string {
 		const reasons = record.lifecycleReasons.length > 0
-			? ` · ${record.lifecycleReasons.join(', ')}`
+			? ` · ${record.lifecycleReasons.map(memoryInspectorLifecycleReasonLabel).join(ui('、', ', '))}`
 			: '';
-		return `${record.effectiveState}${reasons}`;
+		return `${memoryInspectorEffectiveStateLabel(record.effectiveState)}${reasons}`;
 	}
 
 	private memoryValidity(record: MemoryInspectorRecord): string {
@@ -408,7 +517,10 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 			case 'persisted':
 				return ui('Markdown 已存在', 'Markdown exists');
 			case 'queued':
-				return ui(`提案 ${record.status}`, `Proposal ${record.status}`);
+				return ui(
+					`提案：${memoryInspectorProposalStatusLabel(record.status)}`,
+					`Proposal: ${memoryInspectorProposalStatusLabel(record.status)}`
+				);
 			case 'missing':
 				return ui('目标 Markdown 不存在', 'Target Markdown is missing');
 		}

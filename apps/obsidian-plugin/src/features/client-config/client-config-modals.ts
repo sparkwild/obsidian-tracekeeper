@@ -2,8 +2,13 @@ import { App, Modal, Notice, setIcon } from 'obsidian';
 import type { OAuthDecision } from '@tracekeeper/mcp-runtime';
 import type TracekeeperPlugin from '../../main';
 import { ui } from '../../ui/localization';
+import { reportUiFailure } from '../../ui/user-facing-error';
 import { renderClientSkillPrompt } from '../skill-installation/client-skill-prompt';
-import { refreshAgentConfiguration, type AgentConfigurationRefreshKind } from '../settings/agent-configuration-refresh';
+import {
+	commitWithBestEffortRefresh,
+	refreshAgentConfiguration,
+	type AgentConfigurationRefreshKind,
+} from '../settings/agent-configuration-refresh';
 import type { AgentIntegrationSnapshot } from '../settings/agent-integrations';
 import { buildManualMcpJsonConfig, type ClientAuthMode, type GeneratedClientConfig } from './client-config';
 import {
@@ -74,11 +79,31 @@ export class ConnectAiToolModal extends Modal {
 		if (existing) {
 			const defaultMode = this.config.supportedAuthModes[0] ?? 'bearer';
 			if (!this.config.supportedAuthModes.includes(existing.authMode) && !existing.credential) {
+				const integrationId = existing.integrationId;
 				try {
-					existing = await this.plugin.setAgentAuthMode(existing.integrationId, defaultMode);
-					await this.refreshSettings('content');
+					const outcome = await commitWithBestEffortRefresh(
+						() => this.plugin.setAgentAuthMode(integrationId, defaultMode),
+						() => this.refreshSettings('content')
+					);
+					existing = outcome.result;
+					if (outcome.refreshError !== null) {
+						this.reportCommittedRefreshFailure(
+							outcome.refreshError,
+							'tracekeeper corrected Agent setup mode but failed to refresh the Agent view',
+							ui(
+								'Agent 配置方式已修正，但 Agent 视图暂未刷新。请重新打开设置页查看最新状态。',
+								'The Agent setup mode was corrected, but the Agent view is stale. Reopen Settings to see the latest state.'
+							)
+						);
+					}
 				} catch (error) {
-					new Notice(error instanceof Error ? error.message : ui('无法修正 Agent 配置方式。', 'Unable to correct the Agent setup mode.'));
+					new Notice(reportUiFailure(error, {
+						context: 'tracekeeper failed to correct Agent setup mode',
+						fallback: {
+							zh: '无法修正 Agent 配置方式。',
+							en: 'Unable to correct the Agent setup mode.',
+						},
+					}));
 				}
 			}
 			this.integration = existing;
@@ -88,10 +113,22 @@ export class ConnectAiToolModal extends Modal {
 		}
 		if (this.mode === 'add') {
 			try {
-				this.integration = await this.plugin.createAgentIntegration(this.config.clientId, this.selectedAuthMode);
-				await this.refreshSettings('structure');
+				const outcome = await commitWithBestEffortRefresh(
+					() => this.plugin.createAgentIntegration(this.config.clientId, this.selectedAuthMode),
+					() => this.refreshSettings('structure')
+				);
+				this.integration = outcome.result;
+				if (outcome.refreshError !== null) {
+					this.reportCreatedIntegrationRefreshFailure(outcome.refreshError);
+				}
 			} catch (error) {
-				new Notice(error instanceof Error ? error.message : ui('无法创建 Agent 集成。', 'Unable to create the Agent integration.'));
+				new Notice(reportUiFailure(error, {
+					context: 'tracekeeper failed to create Agent integration',
+					fallback: {
+						zh: '无法创建 Agent 集成。',
+						en: 'Unable to create the Agent integration.',
+					},
+				}));
 			}
 		}
 		this.renderPanel();
@@ -127,13 +164,24 @@ export class ConnectAiToolModal extends Modal {
 			const configure = container.createEl('button', { text: ui('配置 MCP', 'Configure MCP'), cls: 'mod-cta' });
 			configure.addEventListener('click', () => {
 				configure.disabled = true;
-				void this.plugin.createAgentIntegration(this.config.clientId, this.selectedAuthMode).then(async (entry) => {
-					this.integration = entry;
+				void commitWithBestEffortRefresh(
+					() => this.plugin.createAgentIntegration(this.config.clientId, this.selectedAuthMode),
+					() => this.refreshSettings('structure')
+				).then((outcome) => {
+					this.integration = outcome.result;
 					this.renderPanel();
-					await this.refreshSettings('structure');
+					if (outcome.refreshError !== null) {
+						this.reportCreatedIntegrationRefreshFailure(outcome.refreshError);
+					}
 				}).catch((error) => {
 					configure.disabled = false;
-					new Notice(error instanceof Error ? error.message : ui('无法创建 Agent 集成。', 'Unable to create the Agent integration.'));
+					new Notice(reportUiFailure(error, {
+						context: 'tracekeeper failed to create Agent integration',
+						fallback: {
+							zh: '无法创建 Agent 集成。',
+							en: 'Unable to create the Agent integration.',
+						},
+					}));
 				});
 			});
 			this.renderSkill(container);
@@ -197,11 +245,31 @@ export class ConnectAiToolModal extends Modal {
 				}
 				this.selectedAuthMode = mode;
 				if (this.integration && this.integration.authMode !== mode) {
-					void this.plugin.setAgentAuthMode(this.integration.integrationId, mode).then(async (entry) => {
-						this.integration = entry;
+					void commitWithBestEffortRefresh(
+						() => this.plugin.setAgentAuthMode(this.integration!.integrationId, mode),
+						() => this.refreshSettings('content')
+					).then((outcome) => {
+						this.integration = outcome.result;
 						this.renderPanel();
-						await this.refreshSettings('content');
-					}).catch((error) => new Notice(error instanceof Error ? error.message : ui('无法切换授权方式。', 'Unable to switch authorization mode.')));
+						if (outcome.refreshError !== null) {
+							this.reportCommittedRefreshFailure(
+								outcome.refreshError,
+								'tracekeeper switched Agent authorization mode but failed to refresh the Agent view',
+								ui(
+									'授权方式已切换，但 Agent 视图暂未刷新。请重新打开设置页查看最新状态。',
+									'The authorization mode was switched, but the Agent view is stale. Reopen Settings to see the latest state.'
+								)
+							);
+						}
+					}).catch((error) => {
+						new Notice(reportUiFailure(error, {
+							context: 'tracekeeper failed to switch Agent authorization mode',
+							fallback: {
+								zh: '无法切换授权方式。',
+								en: 'Unable to switch authorization mode.',
+							},
+						}));
+					});
 				} else this.renderPanel();
 			});
 		}
@@ -282,12 +350,31 @@ export class ConnectAiToolModal extends Modal {
 		if (!this.integration) return;
 		button.disabled = true;
 		try {
-			this.bearerToken = await this.plugin.issueManualBearerCredential(this.integration.integrationId);
+			const outcome = await commitWithBestEffortRefresh(
+				() => this.plugin.issueManualBearerCredential(this.integration!.integrationId),
+				() => this.refreshSettings('content')
+			);
+			this.bearerToken = outcome.result;
 			this.integration = this.plugin.getAgentIntegrationsSnapshot().find((entry) => entry.integrationId === this.integration?.integrationId) ?? this.integration;
 			this.renderPanel();
-			await this.refreshSettings('content');
+			if (outcome.refreshError !== null) {
+				this.reportCommittedRefreshFailure(
+					outcome.refreshError,
+					'tracekeeper issued a manual Agent credential but failed to refresh the Agent view',
+					ui(
+						'完整 JSON 已生成，但 Agent 视图暂未刷新。当前弹窗中的 JSON 仍可复制使用。',
+						'The complete JSON was generated, but the Agent view is stale. You can still copy and use the JSON in this modal.'
+					)
+				);
+			}
 		} catch (error) {
-			new Notice(error instanceof Error ? error.message : ui('无法生成完整 JSON。', 'Unable to generate the complete JSON.'));
+			new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to issue a manual Agent credential',
+				fallback: {
+					zh: '无法生成完整 JSON。',
+					en: 'Unable to generate the complete JSON.',
+				},
+			}));
 		} finally {
 			button.disabled = false;
 		}
@@ -387,14 +474,32 @@ export class ConnectAiToolModal extends Modal {
 			const revoke = actions.createEl('button', { text: ui('撤销 Agent 访问', 'Revoke Agent access') });
 			revoke.addEventListener('click', () => {
 				revoke.disabled = true;
-				void this.plugin.revokeAndRemoveAgentIntegration(this.integration?.integrationId ?? '').then(async () => {
+				void commitWithBestEffortRefresh(
+					() => this.plugin.revokeAndRemoveAgentIntegration(this.integration?.integrationId ?? ''),
+					() => this.refreshSettings('structure')
+				).then((outcome) => {
 					this.bearerToken = null;
 					this.integration = null;
-					await this.refreshSettings('structure');
 					this.close();
+					if (outcome.refreshError !== null) {
+						this.reportCommittedRefreshFailure(
+							outcome.refreshError,
+							'tracekeeper revoked Agent access but failed to refresh the Agent view',
+							ui(
+								'Agent 访问已撤销，但 Agent 列表暂未刷新。请重新打开设置页查看最新状态。',
+								'Agent access was revoked, but the Agent list is stale. Reopen Settings to see the latest state.'
+							)
+						);
+					}
 				}).catch((error) => {
 					revoke.disabled = false;
-					new Notice(error instanceof Error ? error.message : ui('无法撤销 Agent 访问。', 'Unable to revoke Agent access.'));
+					new Notice(reportUiFailure(error, {
+						context: 'tracekeeper failed to revoke Agent access',
+						fallback: {
+							zh: '无法撤销 Agent 访问。',
+							en: 'Unable to revoke Agent access.',
+						},
+					}));
 				});
 			});
 		}
@@ -440,7 +545,13 @@ export class ConnectAiToolModal extends Modal {
 				() => this.refreshSettings('content')
 			));
 		} catch (error) {
-			new Notice(error instanceof Error ? error.message : ui('无法更新 OAuth 审批。', 'Unable to update OAuth approval.'));
+			new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to update OAuth approval',
+				fallback: {
+					zh: '无法更新 OAuth 审批。',
+					en: 'Unable to update OAuth approval.',
+				},
+			}));
 			this.renderPanel();
 			return;
 		}
@@ -462,6 +573,22 @@ export class ConnectAiToolModal extends Modal {
 			content: this.onChanged,
 			structure: this.onStructureChanged,
 		});
+	}
+
+	private reportCreatedIntegrationRefreshFailure(refreshError: unknown): void {
+		this.reportCommittedRefreshFailure(
+			refreshError,
+			'tracekeeper created Agent integration but failed to refresh the Agent view',
+			ui(
+				'Agent 集成已创建，但 Agent 列表暂未刷新。请重新打开设置页查看最新状态。',
+				'The Agent integration was created, but the Agent list is stale. Reopen Settings to see the latest state.'
+			)
+		);
+	}
+
+	private reportCommittedRefreshFailure(refreshError: unknown, context: string, message: string): void {
+		console.error(context, refreshError);
+		new Notice(message);
 	}
 
 	private statusLabel(): string {

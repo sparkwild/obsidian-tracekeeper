@@ -139,6 +139,8 @@ try {
 	assert.ok(settingsSource.includes('renderClientSkillPrompt'));
 	assert.ok(clientSkillPromptSource.includes('SkillInstallPreviewModal'));
 	assert.ok(clientSkillPromptSource.includes('buildSkillInstallPrompt'));
+	assert.match(clientSkillPromptSource, /import \{ reportUiFailure \} from '\.\.\/\.\.\/ui\/user-facing-error';/);
+	assert.doesNotMatch(clientSkillPromptSource, /\berror\.message\b/);
 	const directoryActionStart = clientSkillPromptSource.indexOf("const operationStatus = prompt.action === 'update'");
 	const directoryActionEnd = clientSkillPromptSource.indexOf('if (prompt.assistantLabel)', directoryActionStart);
 	assert.ok(directoryActionStart >= 0 && directoryActionEnd > directoryActionStart);
@@ -150,12 +152,18 @@ try {
 	assert.match(directoryActionSource, /ui\('更新中…', 'Updating…'\)/);
 	assert.match(directoryActionSource, /正在重新校验并更新原安装目录/);
 	assert.match(directoryActionSource, /plugin\.updateSkillAtInstalledDirectory\(config\.clientId\)/);
+	assert.match(directoryActionSource, /context: 'tracekeeper failed to update Skill in its installed directory'/);
+	assert.doesNotMatch(directoryActionSource, /console\.error\('tracekeeper failed to update Skill in its installed directory'/);
+	assert.ok(directoryActionSource.includes("zh: 'Skill 更新失败。请重新检查安装位置后重试。'"));
+	assert.ok(directoryActionSource.includes("en: 'The Skill update failed. Check the installation location and try again.'"));
 	assert.match(directoryActionSource, /更新成功，正在刷新状态/);
 	assert.match(directoryActionSource, /await onChanged\?\.\(\)/);
 	assert.match(directoryActionSource, /updated Skill but failed to refresh its visible state/);
 	assert.match(directoryActionSource, /Skill 已更新，但页面状态刷新失败/);
 	assert.match(directoryActionSource, /if \(actionButton\.isConnected\)/);
 	assert.match(directoryActionSource, /new SkillInstallPreviewModal\(app, plugin, config\.clientId, onChanged\)\.open\(\)/);
+	assert.match(directoryActionSource, /context: 'tracekeeper failed to open Skill directory selection'/);
+	assert.doesNotMatch(directoryActionSource, /console\.error\('tracekeeper failed to open Skill directory selection'/);
 	assert.match(
 		directoryActionSource,
 		/\.finally\(\(\) => \{ actionButton\.disabled = false; \}\);/,

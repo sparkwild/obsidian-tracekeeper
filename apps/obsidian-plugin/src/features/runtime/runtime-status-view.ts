@@ -1,6 +1,7 @@
 import { ItemView, Notice, WorkspaceLeaf } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import { ui } from '../../ui/localization';
+import { reportUiFailure } from '../../ui/user-facing-error';
 import { TRACEKEEPER_ACTIVITY_VIEW, TRACEKEEPER_RUNTIME_STATUS_VIEW } from '../../ui/view-types';
 import type { AgentConnectionRecord } from '../activity/activity-model';
 import { runtimeViewModel } from './runtime-view-model';
@@ -93,7 +94,12 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 			);
 		}
 		if (status.lastError) {
-			this.renderDetail(detailGrid, ui('最近错误', 'Last error'), status.lastError);
+			const technical = contentEl.createEl('details', { cls: 'tracekeeper-advanced-details' });
+			technical.createEl('summary', {
+				text: ui('技术信息', 'Technical details'),
+				cls: 'tracekeeper-advanced-summary',
+			});
+			this.renderDetail(technical, ui('最近错误', 'Last error'), status.lastError);
 		}
 
 		const actions = contentEl.createDiv({ cls: 'tracekeeper-action-row' });
@@ -110,10 +116,36 @@ export class TracekeeperRuntimeStatusView extends ItemView {
 					action.disabled = true;
 					try {
 						await this.plugin.ensureMcpRuntimeRunning();
+					} catch (error) {
+						const runtimeStarted = this.plugin.getRuntimeViewStatus().state === 'running';
+						new Notice(reportUiFailure(error, runtimeStarted
+							? {
+								context: 'tracekeeper failed to refresh status view after recovering MCP Runtime',
+								fallback: {
+									zh: 'MCP 服务已启动，但连接状态视图刷新失败。请手动刷新。',
+									en: 'MCP service started, but the Connection status view failed to refresh. Refresh it manually.',
+								},
+							}
+							: {
+								context: 'tracekeeper failed to recover MCP Runtime from status view',
+								fallback: {
+									zh: 'MCP 服务启动失败。请重试，或查看技术信息。',
+									en: 'Failed to start MCP service. Retry or review Technical details.',
+								},
+							}));
+						action.disabled = false;
+						return;
+					}
+					try {
 						await this.refresh();
 					} catch (error) {
-						console.error('tracekeeper failed to recover MCP Runtime from status view', error);
-						new Notice(error instanceof Error ? error.message : ui('MCP 服务启动失败。', 'Failed to start MCP service.'));
+						new Notice(reportUiFailure(error, {
+							context: 'tracekeeper failed to refresh status view after recovering MCP Runtime',
+							fallback: {
+								zh: 'MCP 服务已启动，但连接状态视图刷新失败。请手动刷新。',
+								en: 'MCP service started, but the Connection status view failed to refresh. Refresh it manually.',
+							},
+						}));
 						action.disabled = false;
 					}
 				})();

@@ -5,6 +5,11 @@ export interface AgentConfigurationRefreshCallbacks {
 	structure?: () => void | Promise<void>;
 }
 
+export interface CommitWithBestEffortRefreshOutcome<T> {
+	result: T;
+	refreshError: unknown;
+}
+
 export function isSettingGroupHTMLElement(element: Element | null): element is HTMLElement {
 	return Boolean(
 		element
@@ -19,6 +24,19 @@ export function shouldReplaceAgentConfiguration(
 	force: boolean
 ): boolean {
 	return force || currentFingerprint !== nextFingerprint;
+}
+
+export async function commitWithBestEffortRefresh<T>(
+	commit: () => Promise<T>,
+	refresh: () => void | Promise<void>
+): Promise<CommitWithBestEffortRefreshOutcome<T>> {
+	const result = await commit();
+	try {
+		await refresh();
+		return { result, refreshError: null };
+	} catch (refreshError) {
+		return { result, refreshError };
+	}
 }
 
 export async function refreshAgentConfiguration(

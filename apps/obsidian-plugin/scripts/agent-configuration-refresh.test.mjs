@@ -19,10 +19,37 @@ try {
 		logLevel: 'silent',
 	});
 	const {
+		commitWithBestEffortRefresh,
 		isSettingGroupHTMLElement,
 		refreshAgentConfiguration,
 		shouldReplaceAgentConfiguration,
 	} = await import(`${pathToFileURL(output).href}?test=${Date.now()}`);
+	const committed = { integrationId: 'integration-1' };
+	const committedOutcome = await commitWithBestEffortRefresh(
+		async () => committed,
+		async () => {}
+	);
+	assert.equal(committedOutcome.result, committed);
+	assert.equal(committedOutcome.refreshError, null);
+
+	const refreshFailure = new Error('refresh failed');
+	const staleOutcome = await commitWithBestEffortRefresh(
+		async () => committed,
+		async () => { throw refreshFailure; }
+	);
+	assert.equal(staleOutcome.result, committed);
+	assert.equal(staleOutcome.refreshError, refreshFailure);
+
+	const commitFailure = new Error('commit failed');
+	let refreshedAfterCommitFailure = false;
+	await assert.rejects(
+		commitWithBestEffortRefresh(
+			async () => { throw commitFailure; },
+			async () => { refreshedAfterCommitFailure = true; }
+		),
+		(error) => error === commitFailure
+	);
+	assert.equal(refreshedAfterCommitFailure, false);
 	const calls = [];
 	let release;
 	const blocked = new Promise((resolve) => { release = resolve; });
@@ -60,7 +87,7 @@ try {
 	assert.equal(isSettingGroupHTMLElement({ ...settingGroup, classList: { contains: () => false } }), false);
 	assert.equal(isSettingGroupHTMLElement(null), false);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 11 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 17 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

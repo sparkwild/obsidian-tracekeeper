@@ -11,6 +11,7 @@ const targetPolicySource = read('src/features/review/review-target-policy.ts');
 const controllerSource = read('src/features/review/review-queue-controller.ts');
 const viewSource = read('src/features/review/review-queue-view.ts');
 const modalSource = read('src/features/review/review-modals.ts');
+const mainSource = read('src/main.ts');
 const stylesSource = read('styles.css');
 const governanceSource = read('../../docs/features/KNOWLEDGE_GOVERNANCE.md');
 
@@ -86,6 +87,10 @@ assert.match(modalSource, /tracekeeper-review-archive-modal__technical-details/)
 assert.match(modalSource, /tracekeeper-review-apply-modal__technical-details/);
 assert.match(modalSource, /targetDisplayName/);
 assert.equal((viewSource.match(/\(\) => this\.refreshSelectedProposal\(proposal\.path\)/g) || []).length, 3);
+assert.match(viewSource, /if \(options\.automatic && this\.showingDetail\)/);
+assert.match(viewSource, /this\.automaticRefreshDeferred = true/);
+assert.match(mainSource, /this\.refreshGovernanceViews\(\{ automatic: true \}\)/);
+assert.match(mainSource, /view\.refresh\(\{ automatic: options\.automatic \}\)/);
 
 assert.match(controllerSource, /dry_run: true/);
 assert.match(modalSource, /Generating writeback preview/);
@@ -101,4 +106,4 @@ assert.match(stylesSource, /button\.tracekeeper-confirm-button\s*\{[\s\S]*--trac
 assert.match(governanceSource, /incomplete proposal/i);
 assert.match(governanceSource, /Memory\/Wiki/i);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 66 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 70 })}\n`);
