@@ -10,7 +10,6 @@ import {
 	selectActivityPrimaryAction,
 	selectLatestTaskPlacement,
 	selectTaskDurableOutputPresentationStatus,
-	selectTaskExecutionPresentationStatus,
 	taskProposalNavigationPaths,
 	type ActivityPrimaryAction,
 } from './activity-view-model';
@@ -18,8 +17,13 @@ import { MemoryRecallPreviewModal } from '../recall/memory-recall-preview-modal'
 import { DurableOutputTargetsModal } from './durable-output-targets-modal';
 import { AgentActivityDetailsModal, RuntimeLogCleanupModal } from '../runtime/runtime-log-view';
 import { pluginDisplayName, ui } from '../../ui/localization';
+import { reportUiFailure } from '../../ui/user-facing-error';
 import { trimText } from '../shared/markdown-record-parser';
 import { TRACEKEEPER_SKILL_BUNDLE } from '../skill-installation/skill-bundle';
+import {
+	activityProposalKindLabel,
+	activityTaskStatusLabel,
+} from './activity-data-controller';
 import {
 	TRACEKEEPER_ACTIVITY_VIEW,
 	TRACEKEEPER_REVIEW_QUEUE_VIEW,
@@ -111,10 +115,12 @@ export class TracekeeperActivityView extends ItemView {
 					await this.refresh();
 					new Notice(ui('活动记录已刷新。', 'Activity refreshed.'));
 				} catch (error) {
-					console.error('tracekeeper failed to refresh activity view', error);
 					refreshButton.disabled = false;
 					refreshButton.setText(ui('刷新', 'Refresh'));
-					new Notice(ui('刷新活动记录失败。', 'Failed to refresh activity.'));
+					new Notice(reportUiFailure(error, {
+						context: 'tracekeeper failed to refresh activity view',
+						fallback: { zh: '刷新活动记录失败。', en: 'Failed to refresh activity.' },
+					}));
 				}
 			})();
 		});
@@ -319,10 +325,33 @@ export class TracekeeperActivityView extends ItemView {
 				button.disabled = true;
 				try {
 					await this.plugin.ensureMcpRuntimeRunning();
+				} catch (error) {
+					const runtimeStarted = this.plugin.getRuntimeViewStatus().state === 'running';
+					new Notice(reportUiFailure(error, runtimeStarted
+						? {
+							context: 'tracekeeper failed to refresh Activity after recovering MCP Runtime',
+							fallback: {
+								zh: 'MCP 服务已启动，但活动视图刷新失败。请手动刷新。',
+								en: 'MCP service started, but the Activity view failed to refresh. Refresh it manually.',
+							},
+						}
+						: {
+							context: 'tracekeeper failed to recover MCP Runtime from Activity',
+							fallback: { zh: 'MCP 服务启动失败。请重试。', en: 'Failed to start MCP service. Please retry.' },
+						}));
+					button.disabled = false;
+					return;
+				}
+				try {
 					await this.refresh();
 				} catch (error) {
-					console.error('tracekeeper failed to recover MCP Runtime from Activity', error);
-					new Notice(error instanceof Error ? error.message : ui('MCP 服务启动失败。', 'Failed to start MCP service.'));
+					new Notice(reportUiFailure(error, {
+						context: 'tracekeeper failed to refresh Activity after recovering MCP Runtime',
+						fallback: {
+							zh: 'MCP 服务已启动，但活动视图刷新失败。请手动刷新。',
+							en: 'MCP service started, but the Activity view failed to refresh. Refresh it manually.',
+						},
+					}));
 					button.disabled = false;
 				}
 				return;
@@ -444,7 +473,7 @@ export class TracekeeperActivityView extends ItemView {
 			details,
 			ui('最近变更提案', 'Latest change proposal'),
 			latestProposal
-				? `${latestProposal.proposalKind} • ${this.plugin.formatDisplayTime(latestProposal.sortTimestamp)}`
+				? `${activityProposalKindLabel(latestProposal.proposalKind)} • ${this.plugin.formatDisplayTime(latestProposal.sortTimestamp)}`
 				: ui('暂无', 'None')
 		);
 		if (completedTask) {
@@ -570,8 +599,10 @@ export class TracekeeperActivityView extends ItemView {
 				'npm run eval:agent-initiative:test',
 				ui('本地 Eval 命令已复制。', 'Local Eval command copied.')
 			).catch((error) => {
-				console.error('tracekeeper failed to copy local Eval command', error);
-				new Notice(ui('复制本地 Eval 命令失败。', 'Failed to copy the local Eval command.'));
+				new Notice(reportUiFailure(error, {
+					context: 'tracekeeper failed to copy local Eval command',
+					fallback: { zh: '复制本地 Eval 命令失败。', en: 'Failed to copy the local Eval command.' },
+				}));
 			});
 		});
 
@@ -770,19 +801,7 @@ export class TracekeeperActivityView extends ItemView {
 	}
 
 	private taskExecutionStatusLabel(task: AgentTaskRecord): string {
-		switch (selectTaskExecutionPresentationStatus(task)) {
-			case 'completed':
-				return ui('已完成', 'Completed');
-			case 'partially_complete':
-				return ui('部分完成', 'Partially complete');
-			case 'blocked':
-				return ui('受阻', 'Blocked');
-			case 'running':
-				return ui('执行中', 'Running');
-			case 'in_progress':
-			default:
-				return ui('进行中', 'In progress');
-		}
+		return activityTaskStatusLabel(task.status);
 	}
 
 	private taskPersistenceStatusLabel(task: AgentTaskRecord): string {
@@ -951,7 +970,7 @@ export class TracekeeperActivityView extends ItemView {
 
 	private renderTaskSummary(container: HTMLElement, task: AgentTaskRecord): void {
 		const compact = container.createDiv({
-			text: `${task.taskId} • ${this.plugin.formatDisplayTime(task.sortTimestamp)} • ${task.status}`,
+			text: `${task.taskId} • ${this.plugin.formatDisplayTime(task.sortTimestamp)} • ${activityTaskStatusLabel(task.status)}`,
 			cls: 'tracekeeper-view__item',
 		});
 		if (task.objective) {

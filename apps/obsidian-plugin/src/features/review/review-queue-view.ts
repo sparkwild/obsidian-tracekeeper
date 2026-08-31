@@ -98,6 +98,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 	private windowOffset = 0;
 	private selectedProposalPath = '';
 	private showingDetail = false;
+	private automaticRefreshDeferred = false;
 	private selectionMode = false;
 	private selectedProposalPaths = new Set<string>();
 
@@ -320,10 +321,19 @@ export class TracekeeperReviewQueueView extends ItemView {
 		this.renderPagination(list, snapshot, result.page);
 	}
 
-	async refresh(): Promise<void> {
+	async refresh(options: { automatic?: boolean } = {}): Promise<void> {
+		if (options.automatic && this.showingDetail) {
+			this.automaticRefreshDeferred = true;
+			return;
+		}
 		const snapshot = await this.plugin.loadMemoryReviewQueueSnapshot(this.windowOffset);
+		if (options.automatic && this.showingDetail) {
+			this.automaticRefreshDeferred = true;
+			return;
+		}
 		this.windowOffset = snapshot.windowOffset;
 		await this.render(snapshot);
+		this.automaticRefreshDeferred = false;
 	}
 
 	private async refreshSelectedProposal(proposalPath: string): Promise<void> {
@@ -627,6 +637,10 @@ export class TracekeeperReviewQueueView extends ItemView {
 				this.pageIndex = Math.floor(position.index / REVIEW_PAGE_SIZE);
 			}
 			this.showingDetail = false;
+			if (this.automaticRefreshDeferred) {
+				void this.refresh();
+				return;
+			}
 			void this.render(snapshot);
 		});
 
@@ -853,6 +867,16 @@ export class TracekeeperReviewQueueView extends ItemView {
 				this.renderSourceLine(sourceDetails, ui('写回时间', 'Applied at'), appliedHistory.appliedAt);
 			}
 		}
+		if (proposal.reviewReason) {
+			this.renderSourceLine(sourceDetails, ui('审核原因代码', 'Review reason code'), proposal.reviewReason);
+		}
+		if (proposal.reviewWarnings.length > 0) {
+			this.renderSourceLine(
+				sourceDetails,
+				ui('原始审核诊断', 'Raw review diagnostics'),
+				proposal.reviewWarnings.join('\n')
+			);
+		}
 		this.renderSourceLine(sourceDetails, ui('创建时间', 'Created'), this.plugin.formatDisplayTime(proposal.sortTimestamp));
 		if (proposal.relatedProject) {
 			this.renderSourceLine(sourceDetails, ui('相关项目', 'Related project'), proposal.relatedProject);
@@ -888,7 +912,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 			});
 			task.createEl('p', {
 				text: [
-					context.task.status,
+					this.taskStatusLabel(context.task.status),
 					context.task.summary,
 				].filter(Boolean).join(' · '),
 			});
@@ -1493,8 +1517,17 @@ export class TracekeeperReviewQueueView extends ItemView {
 			return mapped;
 		}
 		switch (reason) {
+			case 'wiki_change_requires_human_review':
+				return ui('显式 Wiki 变更始终需要人工审核。', 'Explicit Wiki changes always require human review.');
 			case 'memory_rule_requires_human_review':
 				return ui('当前记忆规则要求写入前由你确认。', 'The current memory rule requires your confirmation before writeback.');
+			case 'explicit_memory_target_requires_human_review':
+				return ui('显式指定 MemoryRecord 目标路径的变更需要人工审核。', 'Explicit MemoryRecord target paths require human review.');
+			case 'unresolved_relation_evidence':
+				return ui(
+					'一个或多个显式声明的 Wiki 或资料关系无法在当前 Vault 中验证，需要人工核对。',
+					'One or more explicitly declared Wiki or Source relations could not be verified in the active Vault.'
+				);
 			case 'missing_wiki_bridge':
 				return ui('项目记忆缺少可验证的知识笔记关联，不能自动保存。', 'The project memory has no verified knowledge-note relation and cannot be saved automatically.');
 			case 'user_authority_requires_human_review':
@@ -1503,6 +1536,11 @@ export class TracekeeperReviewQueueView extends ItemView {
 				return ui('这项变更会改变既有记忆的生命周期状态，必须由你确认。', 'This change updates an existing memory lifecycle state and must be confirmed by you.');
 			case 'unresolved_claim_conflict':
 				return ui('同一声明已有当前记录，且这项变更没有给出明确的取代或矛盾关系。', 'A current record already exists for this claim, without an explicit supersession or contradiction relation.');
+			case 'memory_snapshot_incomplete':
+				return ui(
+					'MemoryRecord 生命周期数据无效或不完整；请先修复结构，再继续自动写入。',
+					'MemoryRecord lifecycle data is invalid or incomplete; repair the structure before automatic writeback.'
+				);
 			case 'missing_exact_project_identity':
 			case 'invalid_repo_path':
 			case 'explicit_project_id_not_found':
@@ -1512,9 +1550,6 @@ export class TracekeeperReviewQueueView extends ItemView {
 			case 'project_snapshot_incomplete':
 				return ui('运行时无法唯一确认项目身份或项目记忆目录，需要你核对目标。', 'Runtime could not uniquely confirm the project identity or memory location; verify the target.');
 			default:
-				if (proposal.reviewWarnings.length > 0) {
-					return proposal.reviewWarnings.join(' ');
-				}
 				if (proposal.proposedAuthority === 'user') {
 					return ui('这项变更申请用户权威，必须由你确认。', 'This change requests user authority and must be confirmed by you.');
 				}
@@ -1524,7 +1559,43 @@ export class TracekeeperReviewQueueView extends ItemView {
 				if (proposal.proposedConfidence === 'verified') {
 					return ui('这项变更申请“已验证”可信度，因此创建时进入了人工审核。', 'This change requested verified confidence, so it entered human review when it was created.');
 				}
+				if (reason || proposal.reviewWarnings.length > 0) {
+					return ui(
+						'这项变更需要人工审核；原始诊断可在技术信息中查看。',
+						'This change requires human review. Raw diagnostics are available in Technical details.'
+					);
+				}
 				return '';
+		}
+	}
+
+	private taskStatusLabel(status: string): string {
+		switch (status.trim().toLowerCase().replace(/[\s-]+/g, '_')) {
+			case 'completed':
+			case 'done':
+			case 'success':
+				return ui('已完成', 'Completed');
+			case 'partial':
+			case 'partial_complete':
+			case 'partially_complete':
+			case 'partly_complete':
+				return ui('部分完成', 'Partially completed');
+			case 'interrupted':
+			case 'blocked':
+			case 'cancelled':
+			case 'canceled':
+			case 'timed_out':
+				return ui('受阻', 'Blocked');
+			case 'active':
+			case 'running':
+				return ui('执行中', 'Running');
+			case 'in_progress':
+				return ui('进行中', 'In progress');
+			case 'failed':
+			case 'error':
+				return ui('失败', 'Failed');
+			default:
+				return ui('状态待确认', 'Status unavailable');
 		}
 	}
 

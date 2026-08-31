@@ -31,6 +31,64 @@ const sourceEvidenceIssueLabel = (issue: SourceCaptureEvidenceIssue): string => 
 	}
 };
 
+const unknownSourceValueLabel = (
+	value: string,
+	zhLabel: string,
+	enLabel: string
+): string => {
+	const rawValue = value.trim();
+	return rawValue
+		? ui(zhLabel, enLabel)
+		: ui('未记录', 'Not recorded');
+};
+
+export const sourceStatusKindLabel = (sourceKind: string): string => {
+	switch (sourceKind.trim().toLowerCase()) {
+		case 'web':
+		case 'url':
+		case 'article':
+		case 'http':
+		case 'external': return ui('网页', 'Web');
+		case 'external_reference': return ui('外部引用', 'External reference');
+		case 'selection': return ui('选中文本', 'Selection');
+		case 'file':
+		case 'files':
+		case 'local':
+		case 'local_file':
+		case 'document': return ui('文件', 'File');
+		case 'current_note': return ui('当前笔记', 'Current note');
+		case 'transcript':
+		case 'transcripts':
+		case 'audio':
+		case 'video':
+		case 'meeting': return ui('转录资料', 'Transcript');
+		case 'unknown': return ui('未知资料类型', 'Unknown source type');
+		default: return unknownSourceValueLabel(sourceKind, '未知资料类型', 'Unknown source type');
+	}
+};
+
+export const sourceStatusCaptureModeLabel = (mode: string): string => {
+	switch (mode.trim().toLowerCase()) {
+		case 'external_reference': return ui('外部引用', 'External reference');
+		case 'extracted_snapshot': return ui('提取快照', 'Extracted snapshot');
+		case 'local_copy': return ui('本地副本', 'Local copy');
+		default: return unknownSourceValueLabel(mode, '未知捕获模式', 'Unknown capture mode');
+	}
+};
+
+export const sourceStatusRequestStatusLabel = (status: string): string => {
+	switch (status.trim().toLowerCase()) {
+		case 'pending':
+		case 'todo':
+		case 'open':
+		case 'queued':
+		case 'new': return ui('待处理', 'Pending');
+		case 'completed': return ui('已完成', 'Completed');
+		case 'failed': return ui('失败', 'Failed');
+		default: return unknownSourceValueLabel(status, '未知请求状态', 'Unknown request status');
+	}
+};
+
 export class TracekeeperSourceStatusView extends ItemView {
 	private query: SourceStatusQuery = { page: 1 };
 
@@ -246,8 +304,8 @@ export class TracekeeperSourceStatusView extends ItemView {
 		}
 
 		const details = item.createDiv({ cls: 'tracekeeper-detail-grid' });
-		this.renderDetail(details, ui('资料类型', 'Source type'), record.sourceKind || ui('未记录', 'Not recorded'));
-		this.renderDetail(details, ui('捕获模式', 'Capture mode'), record.mode || ui('未记录', 'Not recorded'));
+		this.renderDetail(details, ui('资料类型', 'Source type'), sourceStatusKindLabel(record.sourceKind));
+		this.renderDetail(details, ui('捕获模式', 'Capture mode'), sourceStatusCaptureModeLabel(record.mode));
 		this.renderDetail(details, ui('来源标识', 'Source ID'), record.sourceId || ui('未记录', 'Not recorded'));
 		this.renderDetail(details, ui('内容哈希', 'Content hash'), record.contentHash || ui('未记录', 'Not recorded'));
 		this.renderDetail(details, ui('存储路由', 'Storage route'), record.route || ui('旧版或未记录', 'Legacy or not recorded'));
@@ -374,7 +432,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 	private renderRequest(container: HTMLElement, request: SourceRequestRecord): void {
 		const item = container.createEl('li', { cls: 'tracekeeper-view__item' });
 		item.createDiv({
-			text: `${this.plugin.formatDisplayTime(request.sortTimestamp)} • ${request.sourceKind} • ${request.status}`,
+			text: `${this.plugin.formatDisplayTime(request.sortTimestamp)} • ${sourceStatusKindLabel(request.sourceKind)} • ${sourceStatusRequestStatusLabel(request.status)}`,
 		});
 		if (request.source) {
 			item.createDiv({ text: `${ui('来源', 'Source')}: ${trimText(request.source, 120)}` });

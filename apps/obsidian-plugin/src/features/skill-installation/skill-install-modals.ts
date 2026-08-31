@@ -3,6 +3,7 @@ import type TracekeeperPlugin from '../../main';
 import type { AiSkillAssistantContext } from './skill-assistant-prompt';
 import type { SkillInstallPlan } from '../../adapters/client-skill-adapter';
 import { ui } from '../../ui/localization';
+import { reportUiFailure } from '../../ui/user-facing-error';
 import { sameSkillTargetDirectory } from './skill-install-paths';
 import {
 	skillFileChangeLabel,
@@ -85,7 +86,13 @@ export class SkillInstallPreviewModal extends Modal {
 			void this.plugin.pickSkillDirectory(this.clientId).then((selection) => {
 				if (selection) void this.prepare(selection.selectedDirectory);
 			}).catch((error) => {
-				new Notice(error instanceof Error ? error.message : ui('无法选择目录。', 'Unable to choose a directory.'));
+				new Notice(reportUiFailure(error, {
+					context: 'tracekeeper failed to choose Skill directory for installation preview',
+					fallback: {
+						zh: '无法选择 Skill 目录。请重试。',
+						en: 'Unable to choose the Skill directory. Try again.',
+					},
+				}));
 			}).finally(() => { choose.disabled = false; });
 		});
 	}
@@ -111,7 +118,13 @@ export class SkillInstallPreviewModal extends Modal {
 			this.plan = this.plugin.prepareSkillWrite(this.clientId, selectedDirectory);
 			this.renderPlan();
 		} catch (error) {
-			new Notice(error instanceof Error ? error.message : ui('无法预览 Skill 变更。', 'Unable to preview the Skill change.'));
+			new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to preview Skill change',
+				fallback: {
+					zh: '无法预览 Skill 变更。请重新选择目录后重试。',
+					en: 'Unable to preview the Skill change. Choose the directory again and retry.',
+				},
+			}));
 		}
 	}
 
@@ -190,7 +203,15 @@ export class SkillAiAssistantModal extends Modal {
 			this.context = await this.plugin.prepareAiSkillAssistant(this.clientId);
 			this.renderContext();
 		} catch (error) {
-			this.contentEl.createEl('p', { text: error instanceof Error ? error.message : ui('无法导出 Skill 源目录。', 'Cannot export the Skill source directory.') });
+			this.contentEl.createEl('p', {
+				text: reportUiFailure(error, {
+					context: 'tracekeeper failed to export Skill source directory',
+					fallback: {
+						zh: '无法导出 Skill 源目录。请关闭后重试。',
+						en: 'Unable to export the Skill source directory. Close this dialog and try again.',
+					},
+				}),
+			});
 		}
 	}
 
@@ -239,7 +260,13 @@ export class SkillAiAssistantModal extends Modal {
 				directoryInput.value = this.selectedDirectory;
 				directoryInput.title = this.selectedDirectory;
 				directoryInput.focus();
-			}).catch((error) => new Notice(error instanceof Error ? error.message : ui('无法选择目录。', 'Unable to choose a directory.')))
+			}).catch((error) => new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to choose installed Skill directory for verification',
+				fallback: {
+					zh: '无法选择已安装的 Skill 目录。请重试。',
+					en: 'Unable to choose the installed Skill directory. Try again.',
+				},
+			})))
 				.finally(() => { choose.disabled = false; });
 		});
 		const verify = directoryRow.createEl('button', { text: ui('验证', 'Verify'), cls: 'mod-cta' });
@@ -256,9 +283,25 @@ export class SkillAiAssistantModal extends Modal {
 			void this.plugin.verifyExternalSkill(this.clientId, selectedDirectory).then(async (result) => {
 				if (!result) return;
 				new Notice(ui('Skill 已验证。', 'Skill verified.'));
-				await this.onChanged?.();
+				try {
+					await this.onChanged?.();
+				} catch (error) {
+					new Notice(reportUiFailure(error, {
+						context: 'tracekeeper verified Skill but failed to refresh its visible state',
+						fallback: {
+							zh: 'Skill 已验证，但页面状态刷新失败。请重新打开设置页。',
+							en: 'The Skill was verified, but the page did not refresh. Reopen Settings.',
+						},
+					}));
+				}
 				this.close();
-			}).catch((error) => new Notice(error instanceof Error ? error.message : ui('Skill 验证失败。', 'Skill verification failed.')))
+			}).catch((error) => new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to verify externally installed Skill',
+				fallback: {
+					zh: 'Skill 验证失败。请检查所选目录后重试。',
+					en: 'Skill verification failed. Check the selected directory and try again.',
+				},
+			})))
 				.finally(() => { verify.disabled = false; });
 		});
 	}

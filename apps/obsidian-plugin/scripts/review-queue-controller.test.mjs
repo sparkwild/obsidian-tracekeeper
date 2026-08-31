@@ -90,7 +90,7 @@ const obsidianStub = {
 				}
 					globalThis.__tracekeeperReviewFakeElement = FakeElement;
 				export function getLanguage() {
-					return 'en';
+					return globalThis.__tracekeeperReviewLanguage || 'en';
 				}
 				export function getFrontMatterInfo(content) {
 					if (!content.startsWith('---\\n')) {
@@ -760,6 +760,171 @@ try {
 		const invalidState = new Error('Proposal transition approved -> rejected is not allowed.');
 		invalidState.name = 'ProposalTransitionStateError';
 		assert.match(reviewStatusFailureMessage(invalidState), /current change state.*does not allow/i);
+	});
+
+	test('all persisted review reasons have localized primary messages', () => {
+		const proposeMemorySource = fs.readFileSync(
+			path.resolve('../../packages/mcp-runtime/src/application/propose-memory.ts'),
+			'utf8'
+		);
+		const projectMemorySource = fs.readFileSync(
+			path.resolve('../../packages/mcp-runtime/src/application/project-memory.ts'),
+			'utf8'
+		);
+		const toolsSource = fs.readFileSync(
+			path.resolve('../../packages/mcp-runtime/src/tools.ts'),
+			'utf8'
+		);
+		const immutableStart = toolsSource.indexOf('async function writeImmutableMemoryRecord');
+		const immutableEnd = toolsSource.indexOf('async function readCanonicalMemoryHub', immutableStart);
+		assert.ok(immutableStart >= 0 && immutableEnd > immutableStart);
+		const reasonCodes = new Set([
+			...[...proposeMemorySource.matchAll(/reason:\s*'([a-z_]+)'/g)].map((match) => match[1]),
+			...[...projectMemorySource.matchAll(/reviewRequired\('([a-z_]+)'\)/g)].map((match) => match[1]),
+			...[...toolsSource.slice(immutableStart, immutableEnd).matchAll(/reason:\s*'([a-z_]+)'/g)]
+				.map((match) => match[1]),
+		]);
+		assert.equal(reasonCodes.size, 16);
+
+		const view = new TracekeeperReviewQueueView({ app: {} }, {});
+		const rawDiagnostic = 'RAW RUNTIME DIAGNOSTIC';
+		const expectedNewMappings = {
+			'zh-CN': {
+				wiki_change_requires_human_review: '显式 Wiki 变更始终需要人工审核。',
+				explicit_memory_target_requires_human_review: '显式指定 MemoryRecord 目标路径的变更需要人工审核。',
+				unresolved_relation_evidence: '一个或多个显式声明的 Wiki 或资料关系无法在当前 Vault 中验证，需要人工核对。',
+				memory_snapshot_incomplete: 'MemoryRecord 生命周期数据无效或不完整；请先修复结构，再继续自动写入。',
+			},
+			en: {
+				wiki_change_requires_human_review: 'Explicit Wiki changes always require human review.',
+				explicit_memory_target_requires_human_review: 'Explicit MemoryRecord target paths require human review.',
+				unresolved_relation_evidence: 'One or more explicitly declared Wiki or Source relations could not be verified in the active Vault.',
+				memory_snapshot_incomplete: 'MemoryRecord lifecycle data is invalid or incomplete; repair the structure before automatic writeback.',
+			},
+		};
+		const previousLanguage = globalThis.__tracekeeperReviewLanguage;
+		try {
+			for (const language of ['zh-CN', 'en']) {
+				globalThis.__tracekeeperReviewLanguage = language;
+				const generic = view.reviewRequirementMessage(makeProposalRecord({
+					reviewReason: 'future_review_reason',
+					reviewWarnings: [rawDiagnostic],
+				}));
+				for (const reasonCode of reasonCodes) {
+					const message = view.reviewRequirementMessage(makeProposalRecord({
+						reviewReason: reasonCode,
+						reviewWarnings: [rawDiagnostic],
+					}));
+					assert.notEqual(message, generic, `${reasonCode} must have a specific ${language} mapping`);
+					assert.equal(message.includes(rawDiagnostic), false, `${reasonCode} must not expose raw diagnostics`);
+				}
+				for (const [reasonCode, expected] of Object.entries(expectedNewMappings[language])) {
+					assert.equal(view.reviewRequirementMessage(makeProposalRecord({
+						reviewReason: reasonCode,
+						reviewWarnings: [rawDiagnostic],
+					})), expected);
+				}
+				assert.equal(
+					view.reviewRequirementMessage(makeProposalRecord({
+						reviewReason: '',
+						reviewWarnings: [rawDiagnostic],
+					})),
+					language === 'zh-CN'
+						? '这项变更需要人工审核；原始诊断可在技术信息中查看。'
+						: 'This change requires human review. Raw diagnostics are available in Technical details.'
+				);
+				assert.equal(
+					view.taskStatusLabel('completed'),
+					language === 'zh-CN' ? '已完成' : 'Completed'
+				);
+				assert.equal(
+					view.taskStatusLabel('active'),
+					language === 'zh-CN' ? '执行中' : 'Running'
+				);
+				assert.equal(
+					view.taskStatusLabel('partially-complete'),
+					language === 'zh-CN' ? '部分完成' : 'Partially completed'
+				);
+			}
+		} finally {
+			if (previousLanguage === undefined) {
+				delete globalThis.__tracekeeperReviewLanguage;
+			} else {
+				globalThis.__tracekeeperReviewLanguage = previousLanguage;
+			}
+		}
+	});
+
+	test('Chinese review details keep raw diagnostics out of primary content', async () => {
+		const rawDiagnostic = 'Explicit Wiki changes always require human review.';
+		const proposal = makeProposalRecord({
+			reviewReason: 'wiki_change_requires_human_review',
+			reviewWarnings: [rawDiagnostic],
+		});
+		const snapshot = {
+			proposals: [proposal],
+			totalProposalCount: 1,
+			windowOffset: 0,
+			windowLimit: 250,
+			isTruncated: false,
+			contexts: {
+				[proposal.path]: {
+					proposalPath: proposal.path,
+					indexState: 'ready',
+					target: {
+						path: proposal.targetNote,
+						title: '目标笔记',
+						exists: true,
+						allowed: true,
+						excerpt: '',
+					},
+					targetCandidates: [],
+					task: {
+						path: '00_tracekeeper/work/tasks/task-1.md',
+						taskId: 'task-1',
+						objective: '审核本地化',
+						status: 'completed',
+						summary: '任务摘要',
+					},
+					sources: [],
+					priorMemory: [],
+					diffPreview: proposal.writebackContent,
+				},
+			},
+			indexState: 'ready',
+			missingReviewQueueFolder: false,
+			updatedAt: '2026-08-30T00:00:00.000Z',
+		};
+		const app = {
+			vault: { getAbstractFileByPath: () => null },
+			workspace: { getLeaf: () => ({ openFile: async () => {} }) },
+		};
+		const plugin = {
+			formatDisplayTime: (value) => new Date(value).toISOString(),
+			formatRiskLabel: (value) => value,
+		};
+		const view = new TracekeeperReviewQueueView({ app }, plugin);
+		view.selectedProposalPath = proposal.path;
+		view.showingDetail = true;
+		const previousLanguage = globalThis.__tracekeeperReviewLanguage;
+		globalThis.__tracekeeperReviewLanguage = 'zh-CN';
+		try {
+			await view.render(snapshot);
+			const primaryText = collectElementText(view.contentEl, { skipDetails: true });
+			const technicalDetails = findElement(view.contentEl, (element) => element.tag === 'details');
+			assert.match(primaryText, /显式 Wiki 变更始终需要人工审核。/);
+			assert.match(primaryText, /已完成 · 任务摘要/);
+			assert.equal(primaryText.includes(rawDiagnostic), false);
+			assert.ok(technicalDetails);
+			assert.match(collectElementText(technicalDetails), /wiki_change_requires_human_review/);
+			assert.match(collectElementText(technicalDetails), new RegExp(rawDiagnostic.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+		} finally {
+			if (previousLanguage === undefined) {
+				delete globalThis.__tracekeeperReviewLanguage;
+			} else {
+				globalThis.__tracekeeperReviewLanguage = previousLanguage;
+			}
+		}
 	});
 
 	test('native transition adapter commits frontmatter-only status through processFrontMatter', async () => {
@@ -2259,7 +2424,12 @@ try {
 				},
 			},
 		};
+		let snapshotLoads = 0;
 		const plugin = {
+			async loadMemoryReviewQueueSnapshot() {
+				snapshotLoads += 1;
+				return snapshot;
+			},
 			formatDisplayTime(value) {
 				return new Date(value).toISOString();
 			},
@@ -2284,6 +2454,19 @@ try {
 		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__detail')).length, 1);
 		assert.match(collectElementText(view.contentEl), /Reviewing 2 of 7/);
 		assert.match(collectElementText(view.contentEl), /Save task decision/);
+		const detailChildren = view.contentEl.children;
+		await view.refresh({ automatic: true });
+		assert.equal(snapshotLoads, 0);
+		assert.equal(view.contentEl.children, detailChildren);
+
+		await view.refresh();
+		assert.equal(snapshotLoads, 1);
+		assert.notEqual(view.contentEl.children, detailChildren);
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__detail')).length, 1);
+		const refreshedDetailChildren = view.contentEl.children;
+		await view.refresh({ automatic: true });
+		assert.equal(snapshotLoads, 1);
+		assert.equal(view.contentEl.children, refreshedDetailChildren);
 
 		const technicalDetails = findElement(view.contentEl, (element) => element.tag === 'details');
 		assert.ok(technicalDetails);
@@ -2306,7 +2489,8 @@ try {
 		const back = findElement(view.contentEl, (element) => element.text === '← Back to review list');
 		assert.ok(back);
 		back.handlers.click();
-		await Promise.resolve();
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(snapshotLoads, 2);
 		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__list')).length, 1);
 		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__detail')).length, 0);
 		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'is-selected')).length, 1);
@@ -2336,6 +2520,30 @@ try {
 		await Promise.resolve();
 		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'is-checked')).length, 1);
 		assert.match(collectElementText(view.contentEl), /Selected/);
+	});
+
+	test('automatic refresh yields to a detail opened while its snapshot is loading', async () => {
+		let resolveSnapshot;
+		const snapshot = new Promise((resolve) => {
+			resolveSnapshot = resolve;
+		});
+		const view = new TracekeeperReviewQueueView(
+			{ app: {} },
+			{ loadMemoryReviewQueueSnapshot: async () => snapshot }
+		);
+		let renderCalls = 0;
+		view.render = async () => {
+			renderCalls += 1;
+		};
+
+		const refresh = view.refresh({ automatic: true });
+		await Promise.resolve();
+		view.showingDetail = true;
+		resolveSnapshot({ windowOffset: 0 });
+		await refresh;
+
+		assert.equal(renderCalls, 0);
+		assert.equal(view.automaticRefreshDeferred, true);
 	});
 
 	test('rejecting a detail removes it from the actionable queue and leaves an organize entrypoint', async () => {

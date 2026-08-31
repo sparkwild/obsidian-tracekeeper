@@ -36,8 +36,11 @@ export interface MemoryRecallResultEntry {
 	type: string;
 	score: number;
 	matchedTokens: string[];
+	scoreReasons: string[];
 	reason: string;
 }
+
+export type MemoryRecallReasonLocale = 'zh' | 'en';
 
 interface MemoryRecallNormalization {
 	unknownPathLabel: string;
@@ -57,6 +60,77 @@ const trimText = (value: string, maxLength = 280): string => {
 		return trimmed;
 	}
 	return `${trimmed.slice(0, maxLength - 1)}…`;
+};
+
+const recallScoreAdjustment = (reason: string, prefix: string): string => {
+	const match = reason.match(new RegExp(`^${prefix} \\(([+-]\\d+(?:\\.\\d+)?)\\)$`));
+	return match?.[1] ?? '';
+};
+
+export const localizeMemoryRecallScoreReason = (
+	reason: string,
+	locale: MemoryRecallReasonLocale
+): string => {
+	const normalized = reason.trim();
+	const projectMemoryAdjustment = recallScoreAdjustment(normalized, 'Project-memory location boost');
+	if (projectMemoryAdjustment) {
+		return locale === 'zh'
+			? `项目记忆位置加权（${projectMemoryAdjustment}）`
+			: `Project-memory location boost (${projectMemoryAdjustment})`;
+	}
+	const wikiAdjustment = recallScoreAdjustment(normalized, 'Wiki location boost');
+	if (wikiAdjustment) {
+		return locale === 'zh'
+			? `Wiki 位置加权（${wikiAdjustment}）`
+			: `Wiki location boost (${wikiAdjustment})`;
+	}
+	const workRecordAdjustment = recallScoreAdjustment(normalized, 'Work-record query-echo penalty');
+	if (workRecordAdjustment) {
+		return locale === 'zh'
+			? `工作记录查询回显降权（${workRecordAdjustment}）`
+			: `Work-record query-echo penalty (${workRecordAdjustment})`;
+	}
+	const multipleTokenAdjustment = recallScoreAdjustment(normalized, 'Multiple query token matches');
+	if (multipleTokenAdjustment) {
+		return locale === 'zh'
+			? `多个查询词命中（${multipleTokenAdjustment}）`
+			: `Multiple query token matches (${multipleTokenAdjustment})`;
+	}
+	const recentEditAdjustment = recallScoreAdjustment(normalized, 'Recent edit');
+	if (recentEditAdjustment) {
+		return locale === 'zh'
+			? `近期编辑加权（${recentEditAdjustment}）`
+			: `Recent edit (${recentEditAdjustment})`;
+	}
+	const exactPhraseAdjustment = recallScoreAdjustment(normalized, 'Exact query phrase match in title/path');
+	if (exactPhraseAdjustment) {
+		return locale === 'zh'
+			? `标题或路径精确匹配查询短语（${exactPhraseAdjustment}）`
+			: `Exact query phrase match in title/path (${exactPhraseAdjustment})`;
+	}
+	const projectScopeAdjustment = recallScoreAdjustment(normalized, 'Project scope match');
+	if (projectScopeAdjustment) {
+		return locale === 'zh'
+			? `项目范围匹配（${projectScopeAdjustment}）`
+			: `Project scope match (${projectScopeAdjustment})`;
+	}
+	if (normalized === 'Core recall score') {
+		return locale === 'zh' ? '核心召回分数' : 'Core recall score';
+	}
+	if (normalized === 'Catalog lexical match') {
+		return locale === 'zh' ? '目录词法匹配' : 'Catalog lexical match';
+	}
+	return locale === 'zh' ? '其他召回排序依据' : 'Other recall ranking signal';
+};
+
+export const localizeMemoryRecallScoreReasons = (
+	reasons: string[],
+	locale: MemoryRecallReasonLocale
+): string => {
+	const localized = reasons
+		.map((reason) => localizeMemoryRecallScoreReason(reason, locale))
+		.filter(Boolean);
+	return [...new Set(localized)].join(locale === 'zh' ? '；' : '; ');
 };
 
 const firstString = (values: ParsedRecord, keys: string[]): string => {
@@ -143,6 +217,7 @@ const normalizeMatch = (match: unknown, fallbackScope: TracekeeperRecallScope): 
 			type: '',
 			score: 0,
 			matchedTokens: [],
+			scoreReasons: [],
 			reason: '',
 		};
 	}
@@ -154,6 +229,7 @@ const normalizeMatch = (match: unknown, fallbackScope: TracekeeperRecallScope): 
 		: typeof scoreRaw === 'string'
 			? Number.parseFloat(scoreRaw)
 			: 0;
+	const scoreReasons = readStringList(recallMatch, ['score_reason', 'scoreReason']);
 	return {
 		path: trimText(firstString(recallMatch, ['path']), 280),
 		title: firstString(recallMatch, ['title']),
@@ -161,7 +237,8 @@ const normalizeMatch = (match: unknown, fallbackScope: TracekeeperRecallScope): 
 		type: firstString(recallMatch, ['type']),
 		score: Number.isFinite(score) ? score : 0,
 		matchedTokens: readStringList(recallMatch, ['matched_tokens', 'matchedTokens', 'tokens', 'keywords']).slice(0, 8),
-		reason: readStringList(recallMatch, ['score_reason', 'scoreReason']).join('；')
+		scoreReasons,
+		reason: scoreReasons.join('；')
 			|| firstString(recallMatch, ['reason'])
 			|| firstString(recallMatch, ['summary']),
 	};
@@ -190,6 +267,7 @@ export const parseMemoryRecallResult = (
 			type: entry.type || localization.unknownTypeLabel,
 			score: entry.score,
 			matchedTokens: entry.matchedTokens,
+			scoreReasons: entry.scoreReasons,
 			reason: entry.reason || localization.noDisplayLabel || localization.noReasonLabel,
 		})),
 	};

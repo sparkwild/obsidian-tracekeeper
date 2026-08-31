@@ -57,6 +57,36 @@ assert.ok(source.includes("ui('端口号', 'Port')"));
 assert.ok(source.includes('DEFAULT_MCP_PORT'));
 assert.ok(source.includes('restartMcpRuntime'));
 assert.ok(source.includes("ui('应用并重启', 'Apply and restart')"));
+assert.match(source, /import \{ reportUiFailure \} from '\.\.\/\.\.\/ui\/user-facing-error';/);
+assert.doesNotMatch(source, /error instanceof Error\s*\?\s*error\.message/);
+assert.doesNotMatch(source, /new Notice\(error\.message/);
+assert.equal((source.match(/new Notice\(reportUiFailure\(/g) ?? []).length, 3);
+assert.equal((source.match(/commitWithBestEffortRefresh\(/g) ?? []).length, 2);
+for (const [context, zh, en] of [
+	['tracekeeper failed to deny an OAuth request', '无法拒绝 OAuth 请求。', 'Unable to deny the OAuth request.'],
+	['tracekeeper failed to recover MCP service', 'MCP 服务启动失败。', 'Failed to start MCP service.'],
+	['tracekeeper failed to update MCP port', '应用端口失败。', 'Failed to apply port.'],
+]) {
+	assert.ok(source.includes(context), `${context} must log the raw failure`);
+	assert.ok(source.includes(`zh: '${zh}'`), `${context} must have a Chinese fallback`);
+	assert.ok(source.includes(`en: '${en}'`), `${context} must have an English fallback`);
+}
+assert.doesNotMatch(source, /console\.error\('tracekeeper failed to recover MCP service'/);
+assert.doesNotMatch(source, /console\.error\('tracekeeper failed to update MCP port'/);
+assert.ok(source.includes("this.plugin.getRuntimeViewStatus().state === 'running'"));
+assert.ok(source.includes("runtimeStatus.state === 'running' && runtimeStatus.port === parsed"));
+assert.ok(source.includes('recovered MCP service but its internal view refresh failed'));
+assert.ok(source.includes('updated MCP port but its internal view refresh failed'));
+for (const [context, zh, en] of [
+	['tracekeeper recovered MCP service but failed to refresh settings', 'MCP 服务已启动，但设置视图暂未刷新。请重新打开设置页查看最新状态。', 'The MCP service started, but the Settings view is stale. Reopen Settings to see the latest state.'],
+	['tracekeeper updated MCP port but failed to refresh settings', '新端口已保存且 MCP 服务已重启，但设置视图暂未刷新。请重新打开设置页查看最新状态。', 'The new port was saved and the MCP service restarted, but the Settings view is stale. Reopen Settings to see the latest state.'],
+]) {
+	assert.ok(source.includes(context), `${context} must log the refresh failure`);
+	assert.ok(source.includes(zh), `${context} must explain the committed result in Chinese`);
+	assert.ok(source.includes(en), `${context} must explain the committed result in English`);
+}
+assert.match(source, /private async refreshSettings\(\): Promise<void>/);
+assert.match(source, /await this\.renderSettings\(\)/);
 assert.ok(source.includes("ui('查看功能', 'View capabilities')"));
 assert.ok(source.includes('runtimeStatus.accessProtected'));
 assert.equal(source.includes('runtimeAccessToken'), false);
@@ -107,4 +137,4 @@ assert.equal(pluginManifest.minAppVersion, '1.11.0');
 assert.equal(rootManifest.minAppVersion, '1.11.0');
 assert.equal(resolveMinimumAppVersion(versions, pluginManifest.version), '1.11.0');
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 77 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 105 })}\n`);

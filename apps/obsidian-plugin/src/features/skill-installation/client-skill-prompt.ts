@@ -2,6 +2,7 @@ import { Notice, setIcon, type App } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import type { GeneratedClientConfig } from '../client-config/client-config';
 import { ui } from '../../ui/localization';
+import { reportUiFailure } from '../../ui/user-facing-error';
 import { SkillAiAssistantModal, SkillInstallPreviewModal } from './skill-install-modals';
 import { buildSkillInstallPrompt } from './skill-install-view-model';
 
@@ -82,7 +83,6 @@ export function renderClientSkillPrompt({
 						await plugin.setOnboardingClientId(config.clientId);
 						await plugin.updateSkillAtInstalledDirectory(config.clientId);
 					} catch (error) {
-						console.error('tracekeeper failed to update Skill in its installed directory', error);
 						actionButton.disabled = false;
 						actionButton.removeAttribute('aria-busy');
 						actionButton.setText(prompt.actionLabel);
@@ -91,7 +91,13 @@ export function renderClientSkillPrompt({
 							'更新未完成。请根据提示处理后重试。',
 							'The update did not complete. Follow the notice, then try again.'
 						));
-						new Notice(error instanceof Error ? error.message : ui('无法更新 Skill。', 'Unable to update the Skill.'));
+						new Notice(reportUiFailure(error, {
+							context: 'tracekeeper failed to update Skill in its installed directory',
+							fallback: {
+								zh: 'Skill 更新失败。请重新检查安装位置后重试。',
+								en: 'The Skill update failed. Check the installation location and try again.',
+							},
+						}));
 						return;
 					}
 
@@ -128,10 +134,13 @@ export function renderClientSkillPrompt({
 			void plugin.setOnboardingClientId(config.clientId)
 				.then(() => new SkillInstallPreviewModal(app, plugin, config.clientId, onChanged).open())
 				.catch((error) => {
-					console.error('tracekeeper failed to open Skill directory selection', error);
-					new Notice(error instanceof Error
-						? error.message
-						: ui('无法打开目录选择。', 'Unable to open directory selection.'));
+					new Notice(reportUiFailure(error, {
+						context: 'tracekeeper failed to open Skill directory selection',
+						fallback: {
+							zh: '无法打开 Skill 目录选择。请重试。',
+							en: 'Unable to open Skill directory selection. Try again.',
+						},
+					}));
 				})
 				.finally(() => { actionButton.disabled = false; });
 		});

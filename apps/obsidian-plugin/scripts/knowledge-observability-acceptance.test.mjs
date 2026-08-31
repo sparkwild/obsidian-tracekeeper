@@ -1,6 +1,69 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { build } from 'esbuild';
+
+const require = createRequire(import.meta.url);
+
+const loadLocalizedLabels = async (language) => {
+	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `tracekeeper-observability-i18n-${language}-`));
+	const output = path.join(tempRoot, 'labels.cjs');
+	try {
+		await build({
+			stdin: {
+				contents: `
+					export {
+						memoryInspectorAuthorityLabel,
+						memoryInspectorConfidenceLabel,
+						memoryInspectorEffectiveStateLabel,
+						memoryInspectorLifecycleReasonLabel,
+						memoryInspectorProposalStatusLabel,
+						memoryInspectorIndexStateLabel,
+					} from './src/features/memory/memory-inspector-view.ts';
+					export {
+						sourceStatusKindLabel,
+						sourceStatusCaptureModeLabel,
+						sourceStatusRequestStatusLabel,
+					} from './src/features/sources/source-status-view.ts';
+				`,
+				resolveDir: process.cwd(),
+				sourcefile: 'knowledge-observability-i18n-test.ts',
+				loader: 'ts',
+			},
+			outfile: output,
+			bundle: true,
+			platform: 'node',
+			format: 'cjs',
+			logLevel: 'silent',
+			plugins: [{
+				name: 'obsidian-stub',
+				setup(buildContext) {
+					buildContext.onResolve({ filter: /^obsidian$/ }, () => ({
+						path: 'obsidian-stub',
+						namespace: 'obsidian-stub',
+					}));
+					buildContext.onLoad({ filter: /.*/, namespace: 'obsidian-stub' }, () => ({
+						contents: `
+							export class ItemView {}
+							export class Notice {}
+							export class TFile {}
+							export class WorkspaceLeaf {}
+							export function getLanguage() { return ${JSON.stringify(language)}; }
+						`,
+						loader: 'js',
+					}));
+				},
+			}],
+		});
+		return { labels: require(output), tempRoot };
+	} catch (error) {
+		fs.rmSync(tempRoot, { recursive: true, force: true });
+		throw error;
+	}
+};
 
 const mainSource = fs.readFileSync('src/main.ts', 'utf8');
 const activitySource = fs.readFileSync('src/features/activity/activity-view.ts', 'utf8');
@@ -99,4 +162,45 @@ assert.ok(reviewQueueSource.includes("ui('上一批', 'Previous batch')"));
 assert.ok(reviewQueueSource.includes("ui('下一批', 'Next batch')"));
 assert.ok(reviewQueueSource.includes('loadMemoryReviewQueueSnapshot(this.windowOffset)'));
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 70 })}\n`);
+const zhBundle = await loadLocalizedLabels('zh-CN');
+const enBundle = await loadLocalizedLabels('en');
+try {
+	const zh = zhBundle.labels;
+	assert.equal(zh.memoryInspectorAuthorityLabel('source'), '资料来源');
+	assert.equal(zh.memoryInspectorConfidenceLabel('supported'), '有证据支持');
+	assert.equal(zh.memoryInspectorEffectiveStateLabel('superseded'), '已被替代');
+	assert.equal(zh.memoryInspectorLifecycleReasonLabel('pending_human_review'), '等待人工审核');
+	assert.equal(zh.memoryInspectorLifecycleReasonLabel('superseded_by:memory-2'), '被 memory-2 替代');
+	assert.equal(zh.memoryInspectorProposalStatusLabel('revision_requested'), '已请求修改');
+	assert.equal(zh.memoryInspectorIndexStateLabel('recovering'), '恢复中');
+	assert.equal(zh.memoryInspectorAuthorityLabel('future_authority'), '未知权威来源');
+	assert.equal(zh.memoryInspectorLifecycleReasonLabel('future_reason'), '未知生命周期原因');
+	assert.equal(zh.memoryInspectorProposalStatusLabel('future_status'), '未知提案状态');
+	assert.equal(zh.sourceStatusKindLabel('local_file'), '文件');
+	assert.equal(zh.sourceStatusCaptureModeLabel('extracted_snapshot'), '提取快照');
+	assert.equal(zh.sourceStatusRequestStatusLabel('completed'), '已完成');
+	assert.equal(zh.sourceStatusKindLabel('future_kind'), '未知资料类型');
+	assert.equal(zh.sourceStatusCaptureModeLabel('future_mode'), '未知捕获模式');
+	assert.equal(zh.sourceStatusRequestStatusLabel('future_status'), '未知请求状态');
+
+	const en = enBundle.labels;
+	assert.equal(en.memoryInspectorAuthorityLabel('source'), 'Source');
+	assert.equal(en.memoryInspectorConfidenceLabel('supported'), 'Supported');
+	assert.equal(en.memoryInspectorEffectiveStateLabel('superseded'), 'Superseded');
+	assert.equal(en.memoryInspectorLifecycleReasonLabel('pending_human_review'), 'Pending human review');
+	assert.equal(en.memoryInspectorProposalStatusLabel('revision_requested'), 'Revision requested');
+	assert.equal(en.memoryInspectorIndexStateLabel('recovering'), 'Recovering');
+	assert.equal(en.memoryInspectorConfidenceLabel('future_confidence'), 'Unknown confidence');
+	assert.equal(en.memoryInspectorIndexStateLabel('future_index'), 'Unknown index state');
+	assert.equal(en.sourceStatusKindLabel('local_file'), 'File');
+	assert.equal(en.sourceStatusCaptureModeLabel('extracted_snapshot'), 'Extracted snapshot');
+	assert.equal(en.sourceStatusRequestStatusLabel('completed'), 'Completed');
+	assert.equal(en.sourceStatusKindLabel('future_kind'), 'Unknown source type');
+	assert.equal(en.sourceStatusCaptureModeLabel('future_mode'), 'Unknown capture mode');
+	assert.equal(en.sourceStatusRequestStatusLabel('future_status'), 'Unknown request status');
+} finally {
+	fs.rmSync(zhBundle.tempRoot, { recursive: true, force: true });
+	fs.rmSync(enBundle.tempRoot, { recursive: true, force: true });
+}
+
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 100 })}\n`);

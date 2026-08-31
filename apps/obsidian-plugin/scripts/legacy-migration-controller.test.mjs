@@ -10,6 +10,7 @@ import { build } from 'esbuild';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-legacy-migration-controller-test-'));
 const bundlePath = path.join(tempRoot, 'legacy-migration-controller.bundle.cjs');
+const modalBundlePath = path.join(tempRoot, 'initialize-memory-structure-modal.bundle.cjs');
 const require = createRequire(import.meta.url);
 globalThis.window = globalThis;
 
@@ -1062,6 +1063,10 @@ try {
 		scriptDir,
 		'../src/features/structure/legacy-migration-controller.ts'
 	);
+	const modalEntryPoint = path.resolve(
+		scriptDir,
+		'../src/features/structure/initialize-memory-structure-modal.ts'
+	);
 
 	await build({
 		entryPoints: [entryPoint],
@@ -1090,7 +1095,7 @@ try {
 						'export class TFile { static [Symbol.hasInstance](value) { return Boolean(value && value.__tracekeeper_kind === "file"); } }',
 						'export class TFolder { static [Symbol.hasInstance](value) { return Boolean(value && value.__tracekeeper_kind === "folder"); } }',
 						'export const Platform = { isDesktopApp: false };',
-						'export function getLanguage() { return "en"; }',
+						'export function getLanguage() { return globalThis.__tracekeeperLegacyMigrationLanguage || "en"; }',
 						'export const normalizePath = (value) => String(value).replace(/\\\\/g, "/").replace(/^\\/+/, "").replace(/\\/+/g, "/");',
 						'export async function requestUrl() { throw new Error("requestUrl is not available in this test shim"); }',
 					].join('\n'),
@@ -1098,10 +1103,79 @@ try {
 			},
 		}],
 	});
+	await build({
+		entryPoints: [modalEntryPoint],
+		outfile: modalBundlePath,
+		bundle: true,
+		platform: 'node',
+		format: 'cjs',
+		logLevel: 'silent',
+		plugins: [{
+			name: 'fake-obsidian',
+			setup(builder) {
+				builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: 'obsidian', namespace: 'fake' }));
+				builder.onLoad({ filter: /.*/, namespace: 'fake' }, () => ({
+					loader: 'js',
+					contents: [
+						'export class App {}',
+						'export class Notice {}',
+						'export class Modal {}',
+						'export class TFile {}',
+						'export class TFolder {}',
+						'export function getLanguage() { return globalThis.__tracekeeperLegacyMigrationLanguage || "en"; }',
+					].join('\n'),
+				}));
+			},
+		}],
+	});
 
 	const bundle = require(bundlePath);
+	const modalBundle = require(modalBundlePath);
 
 	await runCharacterizationRows('legacy-migration-controller-contract', [
+		['primary-preview-localizes-stable-values-with-generic-future-fallbacks', () => {
+			const cases = {
+				'zh-CN': {
+					statuses: ['需要预检', '无需预检', '已通过', '已阻断'],
+					actions: ['原生移动', '已移动', '冲突审核', '未映射'],
+					unknownStatus: '未知链接预检状态',
+					unknownAction: '未知迁移动作',
+				},
+				en: {
+					statuses: ['Preflight required', 'Preflight not required', 'Passed', 'Blocked'],
+					actions: ['Native move', 'Already moved', 'Conflict review', 'Unmapped'],
+					unknownStatus: 'Unknown link preflight status',
+					unknownAction: 'Unknown migration action',
+				},
+			};
+			const statuses = ['required', 'not_required', 'passed', 'blocked'];
+			const actions = ['native_move', 'already_moved', 'conflict', 'unmapped'];
+			for (const [language, expected] of Object.entries(cases)) {
+				globalThis.__tracekeeperLegacyMigrationLanguage = language;
+				assert.deepEqual(
+					statuses.map((status) => modalBundle.legacyLinkCapabilityStatusLabel(status)),
+					expected.statuses
+				);
+				assert.deepEqual(
+					actions.map((action) => modalBundle.legacyStructureActionLabel(action)),
+					expected.actions
+				);
+				assert.equal(
+					modalBundle.legacyLinkCapabilityStatusLabel('future_status_code'),
+					expected.unknownStatus
+				);
+				assert.equal(
+					modalBundle.legacyStructureActionLabel('future_action_code'),
+					expected.unknownAction
+				);
+			}
+			delete globalThis.__tracekeeperLegacyMigrationLanguage;
+
+			const modalSource = fs.readFileSync(modalEntryPoint, 'utf8');
+			assert.match(modalSource, /legacyLinkCapabilityStatusLabel\(plan\.linkCapability\.status\)/);
+			assert.match(modalSource, /legacyStructureActionLabel\(item\.action\)/);
+			assert.doesNotMatch(modalSource, /\$\{item\.action\}/);
+		}],
 		['plan-uses-native-actions-and-plan-hash', async () => {
 			const fixture = createVaultFixture();
 			const controller = createController(bundle, fixture);

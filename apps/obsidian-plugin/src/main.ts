@@ -153,6 +153,7 @@ import {
 	isChineseLanguage,
 	ui,
 } from './ui/localization';
+import { reportUiFailure } from './ui/user-facing-error';
 import {
 	LEGACY_AGENT_CONNECTIONS_VIEW,
 	TRACEKEEPER_ACTIVITY_VIEW,
@@ -469,6 +470,10 @@ interface TracekeeperSettings {
 	noteContentLanguage: NoteContentLanguageSetting;
 	autoRefreshEnabled: boolean;
 	autoRefreshIntervalSeconds: number;
+}
+
+interface GovernanceRefreshOptions {
+	automatic?: boolean;
 }
 
 const DEFAULT_SETTINGS: TracekeeperSettings = {
@@ -1056,10 +1061,16 @@ export default class TracekeeperPlugin extends Plugin {
 				));
 			}
 		} catch (error) {
-			console.error('tracekeeper failed to rebuild the knowledge index', error);
 			if (showNotice) {
-				const message = error instanceof Error ? error.message : String(error);
-				new Notice(ui(`知识索引重建失败：${message}`, `Knowledge index rebuild failed: ${message}`));
+				new Notice(reportUiFailure(error, {
+					context: 'tracekeeper failed to rebuild the knowledge index',
+					fallback: {
+						zh: '知识索引重建失败。请重试；如果问题持续存在，请检查 Obsidian 控制台。',
+						en: 'Failed to rebuild the knowledge index. Retry, then check the Obsidian console if the problem persists.',
+					},
+				}));
+			} else {
+				console.error('tracekeeper failed to rebuild the knowledge index', error);
 			}
 		}
 	}
@@ -1129,7 +1140,7 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 		this.autoRefreshInFlight = true;
 		try {
-			const tasks: Array<Promise<void>> = [this.refreshGovernanceViews()];
+			const tasks: Array<Promise<void>> = [this.refreshGovernanceViews({ automatic: true })];
 			if (this.settingTab?.isAgentListVisible()) {
 				tasks.push(this.settingTab.refreshAgentList());
 			}
@@ -1274,9 +1285,13 @@ export default class TracekeeperPlugin extends Plugin {
 			this.runtimeStatus = await pending ?? this.createStoppedRuntimeStatus();
 		} catch (error) {
 			this.runtimeStatus = this.mcpRuntimeLifecycle.getStatus() ?? this.createStoppedRuntimeStatus();
-			const message = error instanceof Error ? error.message : 'Unknown MCP Runtime error.';
-			console.error('tracekeeper failed to start MCP Runtime', error);
-			new Notice(ui(`MCP 服务启动失败：${message}`, `MCP service failed to start: ${message}`));
+			new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to start MCP Runtime',
+				fallback: {
+					zh: 'MCP 服务启动失败。请重试；如果问题持续存在，请查看连接状态或 Obsidian 控制台。',
+					en: 'MCP service failed to start. Retry, then check Connection status or the Obsidian console if the problem persists.',
+				},
+			}));
 		} finally {
 			await this.refreshRuntimeViews();
 		}
@@ -1779,12 +1794,12 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 	}
 
-	private async refreshReviewQueueViews(): Promise<void> {
+	private async refreshReviewQueueViews(options: GovernanceRefreshOptions = {}): Promise<void> {
 		const reviewQueueLeaves = this.app.workspace.getLeavesOfType(TRACEKEEPER_REVIEW_QUEUE_VIEW);
 		for (const leaf of reviewQueueLeaves) {
 			const view = leaf.view;
 			if (view instanceof TracekeeperReviewQueueView) {
-				await view.refresh();
+				await view.refresh({ automatic: options.automatic });
 			}
 		}
 	}
@@ -1864,9 +1879,9 @@ export default class TracekeeperPlugin extends Plugin {
 		return `"${escaped}"`;
 	}
 
-	async refreshGovernanceViews(): Promise<void> {
+	async refreshGovernanceViews(options: GovernanceRefreshOptions = {}): Promise<void> {
 		await this.refreshActivityViews();
-		await this.refreshReviewQueueViews();
+		await this.refreshReviewQueueViews(options);
 		await this.refreshMemoryInspectorViews();
 		await this.refreshSourceStatusViews();
 		await this.refreshRuntimeLogViews();

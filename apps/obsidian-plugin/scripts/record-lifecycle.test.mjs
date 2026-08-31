@@ -35,6 +35,7 @@ class StubTFolder {
 
 globalThis.__tracekeeperRecordLifecycleTFile = StubTFile;
 globalThis.__tracekeeperRecordLifecycleTFolder = StubTFolder;
+globalThis.__tracekeeperRecordLifecycleLanguage = 'en';
 globalThis.window = globalThis;
 
 const obsidianStub = {
@@ -48,7 +49,7 @@ const obsidianStub = {
 			loader: 'js',
 			contents: `
 				export function getLanguage() {
-					return 'en';
+					return globalThis.__tracekeeperRecordLifecycleLanguage || 'en';
 				}
 				export class App {}
 				export const TFile = globalThis.__tracekeeperRecordLifecycleTFile;
@@ -116,7 +117,14 @@ await Promise.all([
 ]);
 
 const { ReviewQueueController } = require(controllerOutput);
-const { ActivityDataController } = require(activityOutput);
+const {
+	ActivityDataController,
+	activityProposalKindLabel,
+	activitySourceCaptureModeLabel,
+	activitySourceKindLabel,
+	activitySourceRequestStatusLabel,
+	activityTaskStatusLabel,
+} = require(activityOutput);
 const { ActivityRecordRepository } = require(repositoryOutput);
 const { ObsidianAuditShardRepository } = require(auditRepositoryOutput);
 const { ACTIVITY_TIMELINE_MAX_ITEMS } = require(activityModelOutput);
@@ -2346,6 +2354,115 @@ test('activity timeline reads and merges one bounded recent window before paging
 	assert.equal(snapshot.totalItems, ACTIVITY_TIMELINE_MAX_ITEMS);
 	assert.equal(snapshot.items.length, 20);
 	assert.equal(snapshot.items[0].title, `task-${ACTIVITY_TIMELINE_MAX_ITEMS}`);
+});
+
+test('activity timeline localizes stable values while preserving record content', async () => {
+	const harness = createActivityHarness();
+	harness.host.readActivityTimelineRecords = async () => ({
+		tasks: [{
+			path: '00_tracekeeper/work/tasks/task-localized.md',
+			taskId: 'task-localized',
+			agent: 'Agent Raw Name',
+			status: 'completed',
+			objective: '用户与 Agent 正文 stays verbatim',
+			snippet: '',
+			sortTimestamp: 50,
+		}],
+		contextPacks: [{
+			path: '00_tracekeeper/work/context_packs/context-localized.md',
+			title: 'Context title verbatim',
+			taskId: 'task-localized',
+			snippet: 'Context body verbatim',
+			sortTimestamp: 40,
+		}],
+		sourceCaptures: [{
+			path: '01_knowledge/sources/source-localized.md',
+			type: 'source_capture',
+			title: 'Source title verbatim',
+			source: '/Users/example/source.pdf',
+			sourceKind: 'local_file',
+			mode: 'local_copy',
+			snippet: 'Source body verbatim',
+			sortTimestamp: 30,
+		}],
+		sourceRequests: [{
+			path: '00_tracekeeper/inbox/agent_requests/request-localized.md',
+			source: 'https://example.test/raw',
+			sourceKind: 'web',
+			status: 'pending',
+			summary: 'Request body verbatim',
+			sortTimestamp: 20,
+		}],
+		proposals: [makeProposal({
+			path: '00_tracekeeper/inbox/review_queue/proposal-localized.md',
+			proposalKind: 'task_decision',
+			approvalStatus: 'pending',
+			snippet: 'Proposal body verbatim',
+			sortTimestamp: 10,
+		})],
+		isTruncated: false,
+	});
+	const controller = harness.createController();
+	controller.readRecentAuditEvents = async () => [];
+
+	const expectations = {
+		en: {
+			task: ['Task', 'Agent Raw Name • Completed'],
+			context: 'Context pack',
+			source: 'File • Local copy',
+			request: ['Web', 'Pending'],
+			proposal: 'Pending • Task decision',
+		},
+		zh: {
+			task: ['任务', 'Agent Raw Name • 已完成'],
+			context: '上下文包',
+			source: '文件 • 本地副本',
+			request: ['网页', '待处理'],
+			proposal: '待审核 • 任务决策',
+		},
+	};
+
+	try {
+		for (const [language, expected] of Object.entries(expectations)) {
+			globalThis.__tracekeeperRecordLifecycleLanguage = language;
+			const snapshot = await controller.loadActivityTimelineSnapshot(1, 20);
+			const byPath = new Map(snapshot.items.map((item) => [item.path, item]));
+			assert.deepEqual(
+				[byPath.get('00_tracekeeper/work/tasks/task-localized.md').type, byPath.get('00_tracekeeper/work/tasks/task-localized.md').meta],
+				expected.task
+			);
+			assert.equal(byPath.get('00_tracekeeper/work/tasks/task-localized.md').body, '用户与 Agent 正文 stays verbatim');
+			assert.equal(byPath.get('00_tracekeeper/work/context_packs/context-localized.md').type, expected.context);
+			assert.equal(byPath.get('01_knowledge/sources/source-localized.md').meta, expected.source);
+			assert.equal(byPath.get('01_knowledge/sources/source-localized.md').body, '/Users/example/source.pdf');
+			assert.deepEqual(
+				[byPath.get('00_tracekeeper/inbox/agent_requests/request-localized.md').title, byPath.get('00_tracekeeper/inbox/agent_requests/request-localized.md').meta],
+				expected.request
+			);
+			assert.equal(byPath.get('00_tracekeeper/inbox/agent_requests/request-localized.md').body, 'https://example.test/raw');
+			assert.equal(byPath.get('00_tracekeeper/inbox/review_queue/proposal-localized.md').meta, expected.proposal);
+			assert.equal(byPath.get('00_tracekeeper/inbox/review_queue/proposal-localized.md').body, 'Proposal body verbatim');
+		}
+
+		globalThis.__tracekeeperRecordLifecycleLanguage = 'zh';
+		const unknownLabels = [
+			activityTaskStatusLabel('raw_task_status'),
+			activitySourceKindLabel('raw_source_kind'),
+			activitySourceCaptureModeLabel('raw_capture_mode'),
+			activitySourceRequestStatusLabel('raw_request_status'),
+			activityProposalKindLabel('raw_proposal_kind'),
+		];
+		assert.deepEqual(unknownLabels, [
+			'状态待确认',
+			'未知资料类型',
+			'未知捕获模式',
+			'未知请求状态',
+			'知识变更提案',
+		]);
+		assert.equal(unknownLabels.some((label) => label.includes('raw_')), false);
+	} finally {
+		globalThis.__tracekeeperRecordLifecycleLanguage = 'en';
+	}
 });
 
 test('native audit repository serializes bounded shards and suppresses exact retries', async () => {

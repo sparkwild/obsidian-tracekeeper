@@ -1,5 +1,6 @@
 import { App, Menu, Notice, PluginSettingTab, Setting, SettingGroup } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
+import { reportUiFailure } from '../../ui/user-facing-error';
 import type { AgentConnectionsSnapshot } from '../activity/activity-model';
 import type { GeneratedClientConfig } from '../client-config/client-config';
 import { ConnectAiToolModal } from '../client-config/client-config-modals';
@@ -22,6 +23,7 @@ import { ui } from '../../ui/localization';
 import { renderClientSkillPrompt } from '../skill-installation/client-skill-prompt';
 import { buildAgentConfigurationViewModel } from './agent-configuration-view-model';
 import {
+	commitWithBestEffortRefresh,
 	isSettingGroupHTMLElement,
 	shouldReplaceAgentConfiguration,
 } from './agent-configuration-refresh';
@@ -245,13 +247,13 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 		this.applyAgentConfigurationFocus();
 	}
 
-	private refreshSettings(): void {
+	private async refreshSettings(): Promise<void> {
 		const declarativeTab = this as DeclarativeSettingTabCompat;
 		if (declarativeTab.update) {
 			declarativeTab.update();
 			return;
 		}
-		void this.renderSettings();
+		await this.renderSettings();
 	}
 
 	private buildAgentListFingerprint(snapshot: AgentConnectionsSnapshot): string {
@@ -431,7 +433,13 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			));
 		} catch (error) {
 			onCommitFailure();
-			new Notice(error instanceof Error ? error.message : ui('无法拒绝 OAuth 请求。', 'Unable to deny the OAuth request.'));
+			new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to deny an OAuth request',
+				fallback: {
+					zh: '无法拒绝 OAuth 请求。',
+					en: 'Unable to deny the OAuth request.',
+				},
+			}));
 			return;
 		}
 		if (refreshError) {
@@ -494,14 +502,35 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						.setCta()
 						.onClick(() => {
 							button.setDisabled(true);
-							void this.plugin.ensureMcpRuntimeRunning()
-								.then(() => {
-									this.refreshSettings();
+							void commitWithBestEffortRefresh(
+								() => this.plugin.ensureMcpRuntimeRunning(),
+								() => this.refreshSettings()
+							)
+								.then(({ refreshError }) => {
+									if (refreshError === null) return;
+									console.error('tracekeeper recovered MCP service but failed to refresh settings', refreshError);
+									new Notice(ui(
+										'MCP 服务已启动，但设置视图暂未刷新。请重新打开设置页查看最新状态。',
+										'The MCP service started, but the Settings view is stale. Reopen Settings to see the latest state.'
+									));
 								})
 								.catch((error) => {
-									console.error('tracekeeper failed to recover MCP service', error);
 									button.setDisabled(false);
-									new Notice(error instanceof Error ? error.message : ui('MCP 服务启动失败。', 'Failed to start MCP service.'));
+									if (this.plugin.getRuntimeViewStatus().state === 'running') {
+										console.error('tracekeeper recovered MCP service but its internal view refresh failed', error);
+										new Notice(ui(
+											'MCP 服务已启动，但设置视图暂未刷新。请重新打开设置页查看最新状态。',
+											'The MCP service started, but the Settings view is stale. Reopen Settings to see the latest state.'
+										));
+										return;
+									}
+									new Notice(reportUiFailure(error, {
+										context: 'tracekeeper failed to recover MCP service',
+										fallback: {
+											zh: 'MCP 服务启动失败。',
+											en: 'Failed to start MCP service.',
+										},
+									}));
 								});
 						}));
 			});
@@ -931,15 +960,39 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 						}
 						applyButton!.disabled = true;
 						this.plugin.settings.mcpPort = parsed;
-						void this.plugin.saveSettings()
-							.then(() => this.plugin.restartMcpRuntime())
-							.then(() => {
-								this.refreshSettings();
+						void commitWithBestEffortRefresh(
+							async () => {
+								await this.plugin.saveSettings();
+								await this.plugin.restartMcpRuntime();
+							},
+							() => this.refreshSettings()
+						)
+							.then(({ refreshError }) => {
+								if (refreshError === null) return;
+								console.error('tracekeeper updated MCP port but failed to refresh settings', refreshError);
+								new Notice(ui(
+									'新端口已保存且 MCP 服务已重启，但设置视图暂未刷新。请重新打开设置页查看最新状态。',
+									'The new port was saved and the MCP service restarted, but the Settings view is stale. Reopen Settings to see the latest state.'
+								));
 							})
 							.catch((error) => {
-								console.error('tracekeeper failed to update MCP port', error);
 								applyButton!.disabled = false;
-								new Notice(error instanceof Error ? error.message : ui('应用端口失败。', 'Failed to apply port.'));
+								const runtimeStatus = this.plugin.getRuntimeViewStatus();
+								if (runtimeStatus.state === 'running' && runtimeStatus.port === parsed) {
+									console.error('tracekeeper updated MCP port but its internal view refresh failed', error);
+									new Notice(ui(
+										'新端口已保存且 MCP 服务已重启，但设置视图暂未刷新。请重新打开设置页查看最新状态。',
+										'The new port was saved and the MCP service restarted, but the Settings view is stale. Reopen Settings to see the latest state.'
+									));
+									return;
+								}
+								new Notice(reportUiFailure(error, {
+									context: 'tracekeeper failed to update MCP port',
+									fallback: {
+										zh: '应用端口失败。',
+										en: 'Failed to apply port.',
+									},
+								}));
 							});
 					});
 			})

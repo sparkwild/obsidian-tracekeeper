@@ -3,12 +3,38 @@ import type TracekeeperPlugin from '../../main';
 import type {
 	LegacyCleanupPreview,
 	LegacyCleanupResult,
+	LegacyLinkCapabilityStatus,
 	LegacyMigrationResult,
+	LegacyStructureAction,
 	LegacyStructurePlan,
 	StructureOrganizerSnapshot,
 } from './legacy-migration-controller';
 import { invalidBaseStructurePaths } from './base-structure-plan';
-import { ui } from '../../ui/localization';
+import { localizedText, type LocalizedText, ui } from '../../ui/localization';
+
+const LEGACY_LINK_CAPABILITY_STATUS_LABELS = {
+	required: { zh: '需要预检', en: 'Preflight required' },
+	not_required: { zh: '无需预检', en: 'Preflight not required' },
+	passed: { zh: '已通过', en: 'Passed' },
+	blocked: { zh: '已阻断', en: 'Blocked' },
+} satisfies Record<LegacyLinkCapabilityStatus, LocalizedText>;
+
+const LEGACY_STRUCTURE_ACTION_LABELS = {
+	native_move: { zh: '原生移动', en: 'Native move' },
+	already_moved: { zh: '已移动', en: 'Already moved' },
+	conflict: { zh: '冲突审核', en: 'Conflict review' },
+	unmapped: { zh: '未映射', en: 'Unmapped' },
+} satisfies Record<LegacyStructureAction, LocalizedText>;
+
+export const legacyLinkCapabilityStatusLabel = (status: string): string => {
+	const label = (LEGACY_LINK_CAPABILITY_STATUS_LABELS as Record<string, LocalizedText>)[status];
+	return label ? localizedText(label) : ui('未知链接预检状态', 'Unknown link preflight status');
+};
+
+export const legacyStructureActionLabel = (action: string): string => {
+	const label = (LEGACY_STRUCTURE_ACTION_LABELS as Record<string, LocalizedText>)[action];
+	return label ? localizedText(label) : ui('未知迁移动作', 'Unknown migration action');
+};
 
 export class InitializeMemoryStructureModal extends Modal {
 	private snapshot: StructureOrganizerSnapshot;
@@ -169,7 +195,7 @@ export class InitializeMemoryStructureModal extends Modal {
 		this.renderFact(
 			facts,
 			ui('链接预检', 'Link preflight'),
-			plan.linkCapability.status
+			legacyLinkCapabilityStatusLabel(plan.linkCapability.status)
 		);
 
 		const mapping = detail.createDiv({ cls: 'tracekeeper-structure-migration-preview' });
@@ -177,7 +203,7 @@ export class InitializeMemoryStructureModal extends Modal {
 		const list = mapping.createEl('ul');
 		for (const item of plan.items) {
 			list.createEl('li', {
-				text: `${item.oldPath} → ${item.newPath || ui('未映射', 'unmapped')} [${item.action}]`,
+				text: `${item.oldPath} → ${item.newPath || ui('未映射', 'unmapped')} [${legacyStructureActionLabel(item.action)}]`,
 			});
 		}
 

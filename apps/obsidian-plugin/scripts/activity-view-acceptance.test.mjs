@@ -34,7 +34,8 @@ assert.equal((activitySource.match(/cls: 'mod-cta'/g) || []).length, 1);
 assert.ok(activitySource.includes("ui('最近 Agent 使用', 'Recent Agent usage')"));
 assert.ok(activitySource.includes("ui('最近一次跟踪任务', 'Latest tracked task')"));
 assert.ok(activitySource.includes('this.renderTaskEntry(card, completedTask, false)'));
-assert.ok(activitySource.includes('selectTaskExecutionPresentationStatus'));
+assert.ok(activitySource.includes('activityTaskStatusLabel'));
+assert.ok(activitySource.includes('activityProposalKindLabel'));
 assert.ok(activitySource.includes('selectTaskDurableOutputPresentationStatus'));
 assert.ok(activitySource.includes('countTaskProposalReferences'));
 assert.ok(activitySource.includes('countTaskSourceCaptureEvidence'));
@@ -43,9 +44,9 @@ assert.ok(activitySource.includes("ui('任务执行', 'Task execution')"));
 assert.ok(activitySource.includes("ui('知识持久化', 'Knowledge durable output')"));
 assert.ok(activitySource.includes('`任务执行：${executionStatus}`'));
 assert.ok(activitySource.includes('`知识持久化：${persistenceStatus}`'));
-assert.ok(activitySource.includes("ui('已完成', 'Completed')"));
-assert.ok(activitySource.includes("ui('部分完成', 'Partially complete')"));
-assert.ok(activitySource.includes("ui('受阻', 'Blocked')"));
+assert.ok(activityControllerSource.includes("ui('已完成', 'Completed')"));
+assert.ok(activityControllerSource.includes("ui('部分完成', 'Partially complete')"));
+assert.ok(activityControllerSource.includes("ui('受阻', 'Blocked')"));
 assert.ok(activitySource.includes("ui('无持久化输出', 'No durable output')"));
 assert.ok(activitySource.includes("ui('收尾时无持久化输出', 'No durable output at finish')"));
 assert.ok(activitySource.includes("ui('收尾时待审核', 'Pending review at finish')"));
@@ -70,9 +71,24 @@ assert.ok(activitySource.includes("ui('查看持久化目标', 'View durable out
 assert.ok(activitySource.includes("this.openTaskChange(task, 'durable_targets')"));
 assert.ok(activitySource.includes('durableOutputTargetPaths.length === 1'));
 assert.equal(activitySource.includes('text: task.status ||'), false);
+assert.equal(activitySource.includes('latestProposal.proposalKind} •'), false);
+assert.equal(activityControllerSource.includes('${task.agent} • ${task.status}'), false);
+assert.equal(activityControllerSource.includes("type: 'context'"), false);
+assert.equal(activityControllerSource.includes('meta: request.status'), false);
+assert.equal(activityControllerSource.includes('${proposal.proposalKind}'), false);
 assert.equal(activitySource.includes('taskStatusClass'), false);
 assert.equal(activitySource.includes("ui('最后一次执行的任务', 'Last task')"), false);
 assert.equal(activitySource.includes("ui('还没有任务记录。', 'No task records yet.')"), false);
+assert.ok(activitySource.includes('reportUiFailure(error'));
+assert.equal(activitySource.includes('error instanceof Error ? error.message'), false);
+const runtimeRecoverySource = activitySource.slice(
+	activitySource.indexOf("case 'recover_runtime'", activitySource.indexOf('private async runPrimaryAction')),
+	activitySource.indexOf("case 'review_changes'", activitySource.indexOf('private async runPrimaryAction'))
+);
+assert.equal((runtimeRecoverySource.match(/catch \(error\)/g) || []).length, 2);
+assert.ok(runtimeRecoverySource.includes('MCP 服务已启动，但活动视图刷新失败'));
+assert.ok(runtimeRecoverySource.indexOf('ensureMcpRuntimeRunning') < runtimeRecoverySource.indexOf('await this.refresh()'));
+assert.ok(runtimeRecoverySource.includes("this.plugin.getRuntimeViewStatus().state === 'running'"));
 assert.ok(activitySource.includes('最近活动时间'));
 assert.ok(activitySource.includes('Latest activity'));
 assert.ok(activitySource.includes('sessionCount'));

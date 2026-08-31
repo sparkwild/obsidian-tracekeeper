@@ -19,10 +19,11 @@ assert.match(settingsSource, /integration/);
 
 for (const required of [
 	'private async ensureIntegration',
-	"await this.refreshSettings('structure')",
+	"() => this.refreshSettings('structure')",
 	"await this.refreshSettings('content')",
+	'commitWithBestEffortRefresh',
 	'!this.config.supportedAuthModes.includes(existing.authMode) && !existing.credential',
-	'this.plugin.setAgentAuthMode(existing.integrationId, defaultMode)',
+	'this.plugin.setAgentAuthMode(integrationId, defaultMode)',
 	'private renderAuthMode',
 	'private renderSetup',
 	'private renderManualBearer',
@@ -83,8 +84,37 @@ for (const required of [
 	"'aria-atomic': 'true'",
 	'this.plugin.subscribeAgentStateChanges',
 	'this.stopAgentStateSubscription?.()',
+	'reportUiFailure',
 ]) {
 	assert.ok(modalSource.includes(required), `${required} must be present`);
+}
+
+assert.doesNotMatch(modalSource, /error instanceof Error\s*\?\s*error\.message/);
+assert.doesNotMatch(modalSource, /new Notice\(error\.message/);
+assert.equal((modalSource.match(/new Notice\(reportUiFailure\(/g) ?? []).length, 7);
+assert.equal((modalSource.match(/commitWithBestEffortRefresh\(/g) ?? []).length, 6);
+for (const [context, zh, en] of [
+	['tracekeeper failed to correct Agent setup mode', '无法修正 Agent 配置方式。', 'Unable to correct the Agent setup mode.'],
+	['tracekeeper failed to create Agent integration', '无法创建 Agent 集成。', 'Unable to create the Agent integration.'],
+	['tracekeeper failed to switch Agent authorization mode', '无法切换授权方式。', 'Unable to switch authorization mode.'],
+	['tracekeeper failed to issue a manual Agent credential', '无法生成完整 JSON。', 'Unable to generate the complete JSON.'],
+	['tracekeeper failed to revoke Agent access', '无法撤销 Agent 访问。', 'Unable to revoke Agent access.'],
+	['tracekeeper failed to update OAuth approval', '无法更新 OAuth 审批。', 'Unable to update OAuth approval.'],
+]) {
+	assert.ok(modalSource.includes(context), `${context} must log the raw failure`);
+	assert.ok(modalSource.includes(`zh: '${zh}'`), `${context} must have a Chinese fallback`);
+	assert.ok(modalSource.includes(`en: '${en}'`), `${context} must have an English fallback`);
+}
+for (const [context, zh, en] of [
+	['tracekeeper corrected Agent setup mode but failed to refresh the Agent view', 'Agent 配置方式已修正，但 Agent 视图暂未刷新。请重新打开设置页查看最新状态。', 'The Agent setup mode was corrected, but the Agent view is stale. Reopen Settings to see the latest state.'],
+	['tracekeeper created Agent integration but failed to refresh the Agent view', 'Agent 集成已创建，但 Agent 列表暂未刷新。请重新打开设置页查看最新状态。', 'The Agent integration was created, but the Agent list is stale. Reopen Settings to see the latest state.'],
+	['tracekeeper switched Agent authorization mode but failed to refresh the Agent view', '授权方式已切换，但 Agent 视图暂未刷新。请重新打开设置页查看最新状态。', 'The authorization mode was switched, but the Agent view is stale. Reopen Settings to see the latest state.'],
+	['tracekeeper issued a manual Agent credential but failed to refresh the Agent view', '完整 JSON 已生成，但 Agent 视图暂未刷新。当前弹窗中的 JSON 仍可复制使用。', 'The complete JSON was generated, but the Agent view is stale. You can still copy and use the JSON in this modal.'],
+	['tracekeeper revoked Agent access but failed to refresh the Agent view', 'Agent 访问已撤销，但 Agent 列表暂未刷新。请重新打开设置页查看最新状态。', 'Agent access was revoked, but the Agent list is stale. Reopen Settings to see the latest state.'],
+]) {
+	assert.ok(modalSource.includes(context), `${context} must log the refresh failure`);
+	assert.ok(modalSource.includes(zh), `${context} must explain the committed result in Chinese`);
+	assert.ok(modalSource.includes(en), `${context} must explain the committed result in English`);
 }
 
 assert.ok(modalSource.indexOf('this.renderSkill(container);') < modalSource.indexOf('this.renderMaintenance(container);'));
@@ -148,12 +178,13 @@ const revokeFlowStart = modalSource.indexOf("ui('撤销 Agent 访问', 'Revoke A
 const revokeFlowEnd = modalSource.indexOf('const close =', revokeFlowStart);
 const revokeFlowSource = modalSource.slice(revokeFlowStart, revokeFlowEnd);
 assert.match(revokeFlowSource, /revokeAndRemoveAgentIntegration/);
-assert.match(revokeFlowSource, /await this\.refreshSettings\('structure'\)/);
+assert.match(revokeFlowSource, /commitWithBestEffortRefresh/);
+assert.match(revokeFlowSource, /\(\) => this\.refreshSettings\('structure'\)/);
 assert.match(revokeFlowSource, /this\.close\(\)/);
 assert.equal(revokeFlowSource.includes('forgetAgentIntegration'), false);
 assert.match(modalSource, /structure: this\.onStructureChanged/);
 assert.match(modalSource, /content: this\.onChanged/);
-assert.match(modalSource, /createAgentIntegration[\s\S]*await this\.refreshSettings\('structure'\)/);
+assert.match(modalSource, /createAgentIntegration[\s\S]*\(\) => this\.refreshSettings\('structure'\)/);
 assert.match(skillModalSource, /confirmSkillWrite[\s\S]*this\.close\(\)[\s\S]*await this\.onChanged\?\.\(\)/);
 assert.match(skillModalSource, /failed to refresh Skill state after confirmed write/);
 assert.match(skillModalSource, /verifyExternalSkill[\s\S]*await this\.onChanged\?\.\(\)[\s\S]*this\.close\(\)/);
@@ -214,4 +245,4 @@ assert.doesNotMatch(stylesSource, /\.tracekeeper-connect-ai-tool-modal__selector
 assert.match(stylesSource, /max-width:\s*min\(720px,\s*calc\(100vw - 32px\)\)/);
 assert.match(stylesSource, /@media \(max-width: 520px\)/);
 
-process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 97 })}\n`);
+process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 137 })}\n`);

@@ -32,6 +32,19 @@ try {
 	const mainSource = fs.readFileSync('src/main.ts', 'utf8');
 	const stylesSource = fs.readFileSync('styles.css', 'utf8');
 	assert.match(modalSource, /tracekeeper-skill-directory-row/);
+	assert.match(modalSource, /import \{ reportUiFailure \} from '\.\.\/\.\.\/ui\/user-facing-error';/);
+	assert.doesNotMatch(modalSource, /\berror\.message\b/);
+	for (const context of [
+		'tracekeeper failed to choose Skill directory for installation preview',
+		'tracekeeper failed to preview Skill change',
+		'tracekeeper failed to export Skill source directory',
+		'tracekeeper failed to choose installed Skill directory for verification',
+		'tracekeeper failed to verify externally installed Skill',
+	]) {
+		assert.ok(modalSource.includes(`context: '${context}'`));
+	}
+	assert.ok(modalSource.includes("zh: 'Skill \u9a8c\u8bc1\u5931\u8d25\u3002\u8bf7\u68c0\u67e5\u6240\u9009\u76ee\u5f55\u540e\u91cd\u8bd5\u3002'"));
+	assert.ok(modalSource.includes("en: 'Skill verification failed. Check the selected directory and try again.'"));
 	assert.match(modalSource, /createEl\('input', \{[\s\S]*placeholder: ui\('输入或粘贴已安装目录'/);
 	assert.match(modalSource, /const choose = directoryRow\.createEl\('button', \{ text: ui\('选择目录'/);
 	assert.match(modalSource, /const verify = directoryRow\.createEl\('button', \{ text: ui\('验证'/);
@@ -70,7 +83,7 @@ try {
 	assert.match(stylesSource, /\.tracekeeper-skill-directory-row \{[\s\S]*?flex/);
 	assert.match(stylesSource, /\.tracekeeper-skill-directory-row input \{[\s\S]*?text-overflow: ellipsis/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 31 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 40 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

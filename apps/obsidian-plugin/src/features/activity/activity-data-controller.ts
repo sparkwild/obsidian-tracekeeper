@@ -59,7 +59,10 @@ import {
 import { ui } from '../../ui/localization';
 import { buildAgentWorkflowDiagnostics } from './activity-workflow-diagnostics';
 import { buildRecentObservedClientConnections } from './activity-observed-client';
-import { selectRecentTimelineAuditEvents } from './activity-view-model';
+import {
+	selectRecentTimelineAuditEvents,
+	selectTaskExecutionPresentationStatus,
+} from './activity-view-model';
 import { withObsidianVaultPathLock } from '../../adapters/obsidian-vault-path-lock';
 import type { MemoryProposalRecordWindow } from './activity-record-repository';
 
@@ -116,6 +119,146 @@ const runtimeLogCleanupQueues = new WeakMap<
 	object,
 	Map<string, Promise<void>>
 >();
+
+const normalizeActivityValue = (value: string): string =>
+	value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+
+export const activityTaskStatusLabel = (status: string): string => {
+	const normalized = normalizeActivityValue(status);
+	if (![
+		'completed', 'done', 'success',
+		'partial', 'partial_complete', 'partially_complete', 'partly_complete',
+		'interrupted', 'blocked', 'failed', 'error', 'cancelled', 'canceled', 'timed_out',
+		'active', 'running', 'in_progress',
+	].includes(normalized)) {
+		return ui('状态待确认', 'Status unavailable');
+	}
+	switch (selectTaskExecutionPresentationStatus({ status })) {
+		case 'completed':
+			return ui('已完成', 'Completed');
+		case 'partially_complete':
+			return ui('部分完成', 'Partially complete');
+		case 'blocked':
+			return ui('受阻', 'Blocked');
+		case 'running':
+			return ui('执行中', 'Running');
+		case 'in_progress':
+		default:
+			return ui('进行中', 'In progress');
+	}
+};
+
+export const activitySourceKindLabel = (sourceKind: string): string => {
+	switch (normalizeActivityValue(sourceKind)) {
+		case 'web':
+		case 'url':
+		case 'article':
+		case 'http':
+		case 'external':
+			return ui('网页', 'Web');
+		case 'external_reference':
+			return ui('外部引用', 'External reference');
+		case 'selection':
+			return ui('选中文本', 'Selection');
+		case 'file':
+		case 'files':
+		case 'local':
+		case 'local_file':
+		case 'document':
+			return ui('文件', 'File');
+		case 'current_note':
+			return ui('当前笔记', 'Current note');
+		case 'transcript':
+		case 'transcripts':
+		case 'audio':
+		case 'video':
+		case 'meeting':
+			return ui('转录资料', 'Transcript');
+		default:
+			return ui('未知资料类型', 'Unknown source type');
+	}
+};
+
+export const activitySourceCaptureModeLabel = (mode: string): string => {
+	switch (normalizeActivityValue(mode)) {
+		case 'external_reference':
+			return ui('外部引用', 'External reference');
+		case 'extracted_snapshot':
+			return ui('提取快照', 'Extracted snapshot');
+		case 'local_copy':
+			return ui('本地副本', 'Local copy');
+		case 'source':
+		case 'source_capture':
+			return ui('资料捕获记录', 'Source capture record');
+		default:
+			return ui('未知捕获模式', 'Unknown capture mode');
+	}
+};
+
+export const activitySourceRequestStatusLabel = (status: string): string => {
+	switch (normalizeActivityValue(status)) {
+		case 'pending':
+		case 'todo':
+		case 'open':
+		case 'queued':
+		case 'new':
+			return ui('待处理', 'Pending');
+		case 'active':
+		case 'processing':
+		case 'in_progress':
+			return ui('处理中', 'Processing');
+		case 'completed':
+		case 'done':
+		case 'success':
+			return ui('已完成', 'Completed');
+		case 'failed':
+		case 'error':
+		case 'blocked':
+			return ui('失败', 'Failed');
+		case 'cancelled':
+		case 'canceled':
+			return ui('已取消', 'Cancelled');
+		default:
+			return ui('未知请求状态', 'Unknown request status');
+	}
+};
+
+export const activityProposalKindLabel = (proposalKind: string): string => {
+	switch (normalizeActivityValue(proposalKind)) {
+		case 'task_decision':
+		case 'project_decision':
+		case 'distill_decisions':
+			return ui('任务决策', 'Task decision');
+		case 'solution_change':
+			return ui('方案调整', 'Solution change');
+		case 'lesson_learned':
+			return ui('经验教训', 'Lesson learned');
+		case 'user_preference':
+		case 'agent_preference':
+		case 'distill_preferences':
+			return ui('用户偏好', 'User preference');
+		case 'project_next_action':
+			return ui('项目下一步', 'Project next action');
+		case 'project_update':
+			return ui('项目更新', 'Project update');
+		case 'graph_health_improvement':
+			return ui('图谱健康改进', 'Graph health improvement');
+		case 'source_evidence_check':
+			return ui('资料证据检查', 'Source evidence check');
+		case 'source_insight_draft':
+			return ui('资料洞察草稿', 'Source insight draft');
+		case 'external_source_follow_up':
+		case 'evidence_followup':
+			return ui('资料后续处理', 'Source follow-up');
+		case 'legacy_migration_review':
+			return ui('迁移审核', 'Migration review');
+		case 'memory':
+		case 'memory_proposal':
+			return ui('记忆更新', 'Memory update');
+		default:
+			return ui('知识变更提案', 'Knowledge change proposal');
+	}
+};
 
 export class ActivityDataController {
 	constructor(
@@ -1482,13 +1625,13 @@ private buildActivityTimelineItems(input: {
 				time: task.sortTimestamp,
 				type: ui('任务', 'Task'),
 				title: task.taskId,
-				meta: `${task.agent} • ${task.status}`,
+				meta: `${task.agent} • ${activityTaskStatusLabel(task.status)}`,
 				body: task.objective || task.snippet,
 				path: task.path,
 			})),
 			...input.contextPacks.map((contextPack) => ({
 				time: contextPack.sortTimestamp,
-				type: 'context',
+				type: ui('上下文包', 'Context pack'),
 				title: contextPack.title,
 				meta: contextPack.taskId,
 				body: contextPack.snippet,
@@ -1498,15 +1641,18 @@ private buildActivityTimelineItems(input: {
 				time: source.sortTimestamp,
 				type: ui('来源', 'Source'),
 				title: source.title || source.source || ui('来源记录', 'Source capture'),
-				meta: [source.sourceKind, source.mode || source.type].filter(Boolean).join(' • '),
+				meta: [
+					activitySourceKindLabel(source.sourceKind),
+					activitySourceCaptureModeLabel(source.mode || source.type),
+				].join(' • '),
 				body: source.source || source.snippet,
 				path: source.path,
 			})),
 			...input.sourceRequests.map((request) => ({
 				time: request.sortTimestamp,
 				type: ui('来源请求', 'Source request'),
-				title: request.sourceKind,
-				meta: request.status,
+				title: activitySourceKindLabel(request.sourceKind),
+				meta: activitySourceRequestStatusLabel(request.status),
 				body: request.source || request.summary,
 				path: request.path,
 			})),
@@ -1514,7 +1660,7 @@ private buildActivityTimelineItems(input: {
 				time: proposal.sortTimestamp,
 				type: ui('提案', 'Proposal'),
 				title: proposal.proposalId,
-				meta: `${memoryProposalStatusLabel(proposal.approvalStatus)} • ${proposal.proposalKind}`,
+				meta: `${memoryProposalStatusLabel(proposal.approvalStatus)} • ${activityProposalKindLabel(proposal.proposalKind)}`,
 				body: proposal.snippet,
 				path: proposal.path,
 			})),
