@@ -4,6 +4,14 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.3] - Reliable Wiki Batch Apply
+
+### Fixed
+
+- Removed the Wiki batch path-lock re-entry deadlock that left confirmation dialogs stuck on “Applying batch”.
+- Added encrypted batch operation manifests, ordered progress anchors, duplicate-target relation merging, and restart-safe continuation.
+- Kept Wiki batch execution in the confirmation dialog with durable phase/count progress, waiting feedback, and terminal result details.
+
 ## [0.4.2] - Full Wiki Batch Review
 
 ### Fixed

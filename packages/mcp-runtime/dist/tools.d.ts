@@ -55,6 +55,13 @@ export interface ToolInvocationContext extends ToolContext {
     writebackConfirmationTtlMs?: number;
     writebackConfirmationSecret?: string | Uint8Array;
     writebackRecoveryOperationId?: string;
+    /** Internal Obsidian-only override used to coalesce managed relation writes in one reviewed batch. */
+    wikiBatchWritebackOverride?: {
+        proposalPath: string;
+        targetPath: string;
+        writebackBlock: string;
+        batchOperationId: string;
+    };
 }
 interface ConnectionAuditEventInput {
     principalId?: string;

@@ -154,6 +154,96 @@ export function parseManagedRelationsBlock(content: string): ParsedManagedRelati
 	};
 }
 
+const relationPathFromLink = (value: string): string => {
+	const normalized = value.trim();
+	if (!normalized) {
+		throw new Error('Managed relation link target is empty.');
+	}
+	return normalizeManagedRelationPath(normalized.endsWith('.md') ? normalized : `${normalized}.md`);
+};
+
+/**
+ * 将一个完整托管关系区块解析为可合并的结构。
+ *
+ * @description 仅接受 Tracekeeper 生成的标准区块，未知行、重复 parent 或非法目标都会失败关闭。
+ */
+export function readManagedWikiRelations(block: string): ManagedWikiRelations {
+	const parsed = parseManagedRelationsBlock(block.trim());
+	if (
+		parsed.status !== 'valid'
+		|| parsed.start !== 0
+		|| parsed.end !== parsed.content.length
+	) {
+		throw new Error('Managed relations block must be one complete valid Tracekeeper block.');
+	}
+	let parent: string | null = null;
+	const sources: string[] = [];
+	const related: string[] = [];
+	for (const line of parsed.payload.split('\n')) {
+		if (line.trim() === '## Relations' || !line.trim()) continue;
+		const match = line.match(/^\s*-\s+(parent|source|related):\s+\[\[([^\]|#^]+)\]\]\s*$/);
+		if (!match) {
+			throw new Error('Managed relations block contains an unsupported line.');
+		}
+		const target = relationPathFromLink(match[2]);
+		if (match[1] === 'parent') {
+			if (parent && parent !== target) {
+				throw new Error('Managed relations contain conflicting parent targets.');
+			}
+			parent = target;
+		} else if (match[1] === 'source') {
+			sources.push(target);
+		} else {
+			related.push(target);
+		}
+	}
+	return {
+		parent,
+		sources: [...new Set(sources)],
+		related: [...new Set(related)],
+	};
+}
+
+/**
+ * 合并现有区块和同一批次中的多个关系提案。
+ *
+ * @description 只合并 parent、Source index 和 Wiki 关系；正文及损坏区块不会被改写或绕过校验。
+ */
+export function mergeManagedWikiRelationsBlocks(
+	currentContent: string,
+	proposedBlocks: readonly string[]
+): string {
+	const current = parseManagedRelationsBlock(currentContent);
+	if (current.status === 'invalid') {
+		throw new Error('Managed relations block is invalid or was edited outside Tracekeeper.');
+	}
+	const relations: ManagedWikiRelations[] = [];
+	if (current.status === 'valid') {
+		relations.push(readManagedWikiRelations(current.content.slice(current.start, current.end)));
+	}
+	for (const block of proposedBlocks) {
+		relations.push(readManagedWikiRelations(block));
+	}
+	let parent: string | null = null;
+	const sources: string[] = [];
+	const related: string[] = [];
+	for (const relation of relations) {
+		if (relation.parent) {
+			if (parent && parent !== relation.parent) {
+				throw new Error('Managed relations contain conflicting parent targets.');
+			}
+			parent = relation.parent;
+		}
+		sources.push(...(relation.sources ?? []));
+		related.push(...(relation.related ?? []));
+	}
+	return renderManagedRelationsBlock({
+		parent,
+		sources,
+		related,
+	});
+}
+
 /**
  * 在不触碰边界外正文的前提下插入或替换托管关系区块。
  */

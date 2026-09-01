@@ -737,6 +737,47 @@ test('approved managed relations update preserves user-authored Wiki content', a
 	assert.equal(target.includes('01_knowledge/wiki/old-map'), false);
 });
 
+test('Obsidian-only Wiki batch override applies a merged managed relation block', async (t) => {
+	const previousBlock = renderManagedRelationsBlock({
+		parent: '01_knowledge/wiki/old-map.md',
+	});
+	const proposalBlock = renderManagedRelationsBlock({
+		parent: '01_knowledge/wiki/new-map.md',
+		related: ['01_knowledge/wiki/related.md'],
+	});
+	const mergedBlock = renderManagedRelationsBlock({
+		parent: '01_knowledge/wiki/new-map.md',
+		sources: ['01_knowledge/sources/files/reference.md'],
+		related: ['01_knowledge/wiki/related.md', '01_knowledge/wiki/merged.md'],
+	});
+	const fixture = createFixture(t, {
+		targetPath: '01_knowledge/wiki/managed-topic.md',
+		targetText: `# User-authored topic\n\n${previousBlock}\n`,
+		proposalFields: { writeback_effect: 'update_managed_relations' },
+		writeback: proposalBlock,
+	});
+	fixture.context.transport = 'obsidian-direct';
+	fixture.context.principalId = 'obsidian-plugin-ui';
+	fixture.context.wikiBatchWritebackOverride = {
+		proposalPath: PROPOSAL_PATH,
+		targetPath: fixture.targetPath,
+		writebackBlock: mergedBlock,
+		batchOperationId: 'wiki-review-batch-test',
+	};
+	const dryRun = await callTool('tracekeeper.apply_approved_writeback', {
+		proposal_path: PROPOSAL_PATH,
+		dry_run: true,
+	}, fixture.context);
+	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
+	assert.equal(dryRun.structuredContent.writeback_preview, mergedBlock);
+	const applied = await callTool('tracekeeper.apply_approved_writeback', {
+		proposal_path: PROPOSAL_PATH,
+		confirmation_token: dryRun.structuredContent.confirmation_token,
+	}, fixture.context);
+	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
+	assert.match(fixture.read(fixture.targetPath), /01_knowledge\/wiki\/merged/);
+});
+
 function taskAppliedProposalIds(fixture) {
 	const value = parseMarkdown(fixture.read(TASK_PATH)).frontmatter.fields
 		.durable_output_applied_proposal_ids;

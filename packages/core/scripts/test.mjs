@@ -54,6 +54,30 @@ function runWikiGovernanceTests() {
 		wikiGovernanceModule.parseManagedRelationsBlock(block.replace('## Relations', '## Changed')).status,
 		'invalid'
 	);
+	const merged = wikiGovernanceModule.mergeManagedWikiRelationsBlocks(
+		inserted,
+		[
+			wikiGovernanceModule.renderManagedRelationsBlock({
+				parent: relations.parent,
+				sources: ['01_knowledge/sources/files/another.md'],
+				related: ['01_knowledge/wiki/programming/node.md'],
+			}),
+			wikiGovernanceModule.renderManagedRelationsBlock({
+				parent: relations.parent,
+				sources: ['01_knowledge/sources/files/reference.md'],
+				related: ['01_knowledge/wiki/programming/typescript.md'],
+			}),
+		]
+	);
+	assert.match(merged, /source: \[\[01_knowledge\/sources\/files\/another\]\]/);
+	assert.match(merged, /related: \[\[01_knowledge\/wiki\/programming\/node\]\]/);
+	assert.equal(wikiGovernanceModule.readManagedWikiRelations(merged).sources.length, 2);
+	assert.throws(() => wikiGovernanceModule.mergeManagedWikiRelationsBlocks(
+		inserted,
+		[wikiGovernanceModule.renderManagedRelationsBlock({
+			parent: '01_knowledge/wiki/programming/other.md',
+		})]
+	), /conflicting parent/);
 	assert.throws(() => wikiGovernanceModule.renderManagedRelationsBlock({
 		sources: ['01_knowledge/sources/files/reference.parts/part-0001.md'],
 	}));
@@ -94,7 +118,7 @@ function runWikiGovernanceTests() {
 	assert.equal(batches[1].items.length, 1);
 	assert.equal(batches[0].reviewBatchId, 'task:task-batch');
 
-	console.log(JSON.stringify({ suite: 'core-wiki-governance', result: 'pass', checks: 18 }));
+	console.log(JSON.stringify({ suite: 'core-wiki-governance', result: 'pass', checks: 20 }));
 }
 
 function runProposalWritebackTests() {

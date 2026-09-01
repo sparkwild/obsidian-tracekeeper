@@ -1,6 +1,7 @@
 import {
 	callTool,
 	type ProposalTransitionPort,
+	type ToolInvocationContext,
 } from '@tracekeeper/mcp-runtime';
 import { randomUUID } from 'node:crypto';
 import type { KnowledgeReadView, ScanResult, VaultRepository } from '@tracekeeper/core';
@@ -30,6 +31,8 @@ export interface LocalToolExecutorOptions {
 	getContext: () => LocalToolExecutorContext;
 	runtimeVersion?: string;
 }
+
+export type LocalToolExecutionOptions = Pick<ToolInvocationContext, 'wikiBatchWritebackOverride'>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -67,10 +70,14 @@ export class LocalToolExecutor {
 	private readonly sessionId = randomUUID();
 
 	constructor(private readonly options: LocalToolExecutorOptions) {
-		this.runtimeVersion = options.runtimeVersion?.trim() || '0.4.2';
+		this.runtimeVersion = options.runtimeVersion?.trim() || '0.4.3';
 	}
 
-	async executeLocalTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+	async executeLocalTool(
+		name: string,
+		args: Record<string, unknown>,
+		options: LocalToolExecutionOptions = {}
+	): Promise<Record<string, unknown>> {
 		const context = this.options.getContext();
 		const result = await callTool(name, args, {
 			defaultVaultRoot: context.defaultVaultRoot,
@@ -90,6 +97,7 @@ export class LocalToolExecutor {
 			clientName: 'tracekeeper-plugin-ui',
 			transport: 'obsidian-direct',
 			runtimeVersion: this.runtimeVersion,
+			...options,
 		});
 
 		const structured = result.structuredContent;
