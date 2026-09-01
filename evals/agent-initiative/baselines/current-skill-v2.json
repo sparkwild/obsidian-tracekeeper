@@ -1,11 +1,11 @@
 {
 	"baseline_id": "current-skill-v2-static-characterization",
 	"kind": "static_skill_characterization",
-	"tracekeeper_version": "0.4.0",
+	"tracekeeper_version": "0.4.1",
 	"skill_path": "skills/tracekeeper/SKILL.md",
-	"skill_sha256": "9e677035c25f926eae297edb0b65c57fff7777004fd52d2a8b21ca939b1c1274",
+	"skill_sha256": "293037f46512b88ecf922fc38f14147e607a85d6c6da0acc74884178f8d99404",
 	"skill_sources": [
-		{ "path": "skills/tracekeeper/SKILL.md", "sha256": "9e677035c25f926eae297edb0b65c57fff7777004fd52d2a8b21ca939b1c1274" },
+		{ "path": "skills/tracekeeper/SKILL.md", "sha256": "293037f46512b88ecf922fc38f14147e607a85d6c6da0acc74884178f8d99404" },
 		{ "path": "skills/tracekeeper/references/closeout-fields.md", "sha256": "0fe5c92886579c9f1914ac0779d8eba3116950b2f382f0d635e8864f070bc2f3" },
 		{ "path": "skills/tracekeeper/references/failure-recovery.md", "sha256": "1a0691cd2ad0ba86cca1d6a6e4aecbac9c2e9a6b2368a0d640867e55b410ec3b" },
 		{ "path": "skills/tracekeeper/references/ingestion-workflow.md", "sha256": "ca92f04ee11d7de52518771175331b90295b12a24e00ce6ccd008c08213dcaf2" },
@@ -24,6 +24,6 @@
 		"average_score": 100,
 		"passed_count": 40,
 		"failed_scenario_ids": [],
-		"report_sha256": "3b1ca47c4b3898445efe7a160c0f41b0585ec8ffe000afcb4a9e24a09402b202"
+		"report_sha256": "a2447e2ab92bfacfb9d01b9337a404213f50206bd96d843308c8cbf6bddbb1a2"
 	}
 }
