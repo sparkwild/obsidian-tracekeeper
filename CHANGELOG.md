@@ -4,6 +4,12 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.2] - Full Wiki Batch Review
+
+### Fixed
+
+- Planned Wiki batch cards from the complete bounded review window instead of the five-item presentation page, so one task batch uses one preview and one confirmation.
+
 ## [0.4.1] - Historical Knowledge Repair And Graph Diagnostics
 
 ### Added

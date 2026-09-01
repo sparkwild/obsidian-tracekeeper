@@ -15,11 +15,13 @@ import {
 } from './review-view-model';
 import {
 	filterReviewQueueItems,
+	paginateReviewQueueItems,
 	buildReviewQueueBatchGroups,
 	isReviewQueueArchiveCandidate,
 	memoryProposalStatusLabel,
 	reviewInboxFilterLabel,
 	type MemoryReviewQueueSnapshot,
+	type ReviewQueueBatchGroup,
 	type ReviewInboxFilter,
 	type ReviewQueueSort,
 } from './review-queue-model';
@@ -272,7 +274,31 @@ export class TracekeeperReviewQueueView extends ItemView {
 				}, snapshot.contexts);
 			}
 		}
-		this.pageIndex = result.page.pageIndex;
+		// 批次必须基于完整的有界筛选窗口规划，而不是五行展示页；否则同一任务批次会在翻页时被拆成多个确认弹窗。
+		const allFiltered = filterReviewQueueItems(snapshot.proposals, {
+			filter: this.activeFilter,
+			search: this.searchQuery,
+			sort: this.activeSort,
+			pageIndex: 0,
+			pageSize: Math.max(1, snapshot.proposals.length),
+		}, snapshot.contexts);
+		const batchCandidates = allFiltered.items.filter((proposal) => {
+			const state = this.proposalAttentionState(proposal, snapshot.contexts[proposal.path]);
+			return proposal.approvalStatus === 'pending'
+				&& (state === 'blocked' || state === 'pending_review' || state === 'incomplete');
+		});
+		const batchGroups = buildReviewQueueBatchGroups(
+			batchCandidates,
+			this.plugin.settings?.wikiChangeRule ?? 'review_batch'
+		);
+		const batchPaths = new Set(
+			batchGroups
+				.filter((group) => group.batchEligible && group.proposals.length > 1)
+				.flatMap((group) => group.proposals.map((proposal) => proposal.path))
+		);
+		const individualProposals = allFiltered.items.filter((proposal) => !batchPaths.has(proposal.path));
+		const individualPage = paginateReviewQueueItems(individualProposals, this.pageIndex, REVIEW_PAGE_SIZE);
+		this.pageIndex = individualPage.page.pageIndex;
 		const actionableCount = Object.values(result.counts).reduce((sum, count) => sum + count, 0);
 		if (actionableCount === 0 && !this.searchQuery) {
 			this.showingDetail = false;
@@ -318,9 +344,17 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 		const inbox = contentEl.createDiv({ cls: 'tracekeeper-review-inbox' });
 		const list = inbox.createDiv({ cls: 'tracekeeper-review-inbox__list' });
-		const selectedOnPage = result.items.find((proposal) => proposal.path === selected?.path) || null;
-		this.renderList(list, result.items, selectedOnPage, snapshot, result.totalItems);
-		this.renderPagination(list, snapshot, result.page);
+		const selectedOnPage = individualPage.proposals.find((proposal) => proposal.path === selected?.path) || null;
+		this.renderList(
+			list,
+			individualPage.proposals,
+			selectedOnPage,
+			snapshot,
+			allFiltered.totalItems,
+			batchGroups,
+			individualPage.page.pageIndex === 0
+		);
+		this.renderPagination(list, snapshot, individualPage.page);
 	}
 
 	async refresh(options: { automatic?: boolean } = {}): Promise<void> {
@@ -499,15 +533,13 @@ export class TracekeeperReviewQueueView extends ItemView {
 		proposals: MemoryProposalRecord[],
 		selected: MemoryProposalRecord | null,
 		snapshot: MemoryReviewQueueSnapshot,
-		totalItems: number
+		totalItems: number,
+		batchGroups: ReviewQueueBatchGroup[] = [],
+		showBatchCards = true
 	): void {
 		const listHeader = container.createDiv({ cls: 'tracekeeper-review-inbox__list-header' });
 		const listHeading = listHeader.createDiv({ cls: 'tracekeeper-review-inbox__list-heading' });
 		listHeading.createEl('strong', { text: ui('审核列表', 'Review list') });
-		const batchGroups = buildReviewQueueBatchGroups(
-			proposals,
-			this.plugin.settings?.wikiChangeRule ?? 'review_batch'
-		);
 		listHeading.createSpan({
 			text: ui(`${batchGroups.length} 批 / ${totalItems} 条`, `${batchGroups.length} batch(es) / ${totalItems} items`),
 			cls: 'tracekeeper-badge tracekeeper-badge--muted',
@@ -515,7 +547,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 		listHeader.createEl('small', {
 			text: ui('选择一项进入完整审核。', 'Select an item to open the full review.'),
 		});
-		if (proposals.length === 0) {
+		if (proposals.length === 0 && (!showBatchCards || batchGroups.length === 0)) {
 			this.renderEmptyState(
 				container,
 				ui('当前条件下没有知识变更。', 'No knowledge changes match the current conditions.'),
@@ -526,7 +558,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 		const rows = container.createDiv({ cls: 'tracekeeper-review-inbox__rows' });
 		const batchPaths = new Set<string>();
-		for (const group of batchGroups.filter((candidate) => candidate.batchEligible && candidate.proposals.length > 1)) {
+		for (const group of batchGroups.filter((candidate) => showBatchCards && candidate.batchEligible && candidate.proposals.length > 1)) {
 			for (const proposal of group.proposals) batchPaths.add(proposal.path);
 			const card = rows.createDiv({ cls: 'tracekeeper-card tracekeeper-review-batch-card' });
 			const heading = card.createDiv({ cls: 'tracekeeper-review-inbox__row-title' });
@@ -563,6 +595,11 @@ export class TracekeeperReviewQueueView extends ItemView {
 					this.showingDetail = true;
 					void this.render(snapshot);
 				});
+			}
+		}
+		if (!showBatchCards) {
+			for (const group of batchGroups.filter((candidate) => candidate.batchEligible && candidate.proposals.length > 1)) {
+				for (const proposal of group.proposals) batchPaths.add(proposal.path);
 			}
 		}
 		for (const proposal of proposals) {

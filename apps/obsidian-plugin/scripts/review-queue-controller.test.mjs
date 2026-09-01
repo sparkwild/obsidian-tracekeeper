@@ -2624,6 +2624,75 @@ try {
 		assert.match(collectElementText(view.contentEl), /Selected/);
 	});
 
+	test('Wiki task batches span presentation pages and require one confirmation', async () => {
+		const proposals = Array.from({ length: 12 }, (_, index) => makeProposalRecord({
+			path: `00_tracekeeper/inbox/review_queue/wiki-batch-${index + 1}.md`,
+			proposalId: `wiki-batch-${index + 1}`,
+			proposalKind: 'wiki_relations',
+			taskId: 'task-batch-1',
+			reviewBatchId: 'task:task-batch-1',
+			wikiRole: index === 0 ? 'topic_map' : 'topic',
+			parentWiki: index === 0 ? '01_knowledge/wiki/index.md' : '01_knowledge/wiki/programming/local-technical-documents-knowledge-map.md',
+			targetNote: `01_knowledge/wiki/programming/wiki-batch-target-${index + 1}.md`,
+			effectiveRisk: 'medium',
+			riskLevel: 'medium',
+			writebackEffect: 'update_managed_relations',
+			writebackContent: '<!-- tracekeeper:relations:start schema="1" -->\n<!-- tracekeeper:relations:end -->',
+			approvalStatus: 'pending',
+			created: `2026-07-${String(30 - index).padStart(2, '0')}T00:00:00.000Z`,
+		}));
+		const contexts = Object.fromEntries(proposals.map((proposal) => [
+			proposal.path,
+			{
+				proposalPath: proposal.path,
+				indexState: 'ready',
+				target: {
+					path: proposal.targetNote,
+					title: proposal.targetNote.split('/').pop(),
+					exists: true,
+					allowed: true,
+					excerpt: '',
+				},
+				targetCandidates: [],
+				task: null,
+				sources: [],
+				priorMemory: [],
+				diffPreview: proposal.writebackContent,
+			},
+		]));
+		const snapshot = {
+			proposals,
+			totalProposalCount: proposals.length,
+			windowOffset: 0,
+			windowLimit: 250,
+			isTruncated: false,
+			contexts,
+			indexState: 'ready',
+			missingReviewQueueFolder: false,
+			updatedAt: '2026-07-30T00:00:00.000Z',
+		};
+		const plugin = {
+			formatDisplayTime(value) {
+				return new Date(value).toISOString();
+			},
+			formatRiskLabel(value) {
+				return value;
+			},
+		};
+		const view = new TracekeeperReviewQueueView({
+			app: { vault: { getAbstractFileByPath: () => null } },
+		}, plugin);
+		view.activeFilter = 'needs_review';
+
+		await view.render(snapshot);
+		const batchCards = findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-batch-card'));
+		assert.equal(batchCards.length, 1);
+		assert.match(collectElementText(view.contentEl), /Wiki batch · 12 items/);
+		assert.ok(findElement(view.contentEl, (element) => element.text === 'Review and apply 12'));
+		assert.equal(findElements(view.contentEl, (element) => elementHasClass(element, 'tracekeeper-review-inbox__row')).length, 0);
+		assert.doesNotMatch(collectElementText(view.contentEl), /Page 1 of/);
+	});
+
 	test('automatic refresh yields to a detail opened while its snapshot is loading', async () => {
 		let resolveSnapshot;
 		const snapshot = new Promise((resolve) => {
