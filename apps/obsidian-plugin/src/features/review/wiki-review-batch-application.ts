@@ -484,7 +484,6 @@ export class WikiReviewBatchApplication {
 			const relations = readManagedWikiRelations(target.writebackBlock);
 			const dependencies = uniqueSorted([
 				...(relations.parent ? [relations.parent] : []),
-				...(relations.related ?? []),
 			].filter((relationPath) => targetPaths.has(relationPath)));
 			if (dependencies.includes(target.targetPath)) {
 				throw new WikiBatchTerminalConflictError(`Wiki batch relation dependency cycle includes ${target.targetPath}.`);
