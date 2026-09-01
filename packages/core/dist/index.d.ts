@@ -9,6 +9,7 @@ export * from './graph-health';
 export * from './knowledge-architecture';
 export * from './source-analysis';
 export * from './source-record';
+export * from './legacy-source-segments';
 export * from './legacy-structure';
 export * from './operation-journal';
 export * from './proposal-transition';

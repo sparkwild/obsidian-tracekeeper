@@ -4,6 +4,20 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.1] - Historical Knowledge Repair And Graph Diagnostics
+
+### Added
+
+- Added a hash-bound, restart-safe Source consolidation flow for legacy `*-segment-NNN.md` captures. It creates bounded Source indexes and parts first, then requires a separate confirmation before moving the legacy files to Archive.
+- Added semantic Graph Health counters for ignored raw Source and operational-link observations.
+
+### Fixed
+
+- Stopped treating incidental Markdown, shell, and local-path syntax inside captured Source bodies as knowledge-graph broken links.
+- Stopped treating review-queue proposal metadata as semantic YAML-only graph relations.
+- Accepted note-relative wikilinks without an explicit `./` prefix and preserved valid task/proposal reference mirrors.
+- Added the official Graph View filter that excludes Source parts and archived records from the suggested semantic view.
+
 ## [0.3.7] - Review Stability And Localization
 
 ### Fixed

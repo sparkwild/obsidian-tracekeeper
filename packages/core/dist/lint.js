@@ -124,6 +124,25 @@ function getSourceType(note) {
         isWiki: (0, knowledge_architecture_1.isKnowledgeWikiPath)(normalizedPath) || type === 'wiki',
     };
 }
+function isSourceCaptureNote(note) {
+    const type = typeof note.type === 'string'
+        ? note.type.trim().toLocaleLowerCase('en-US').replace(/_/g, '-')
+        : '';
+    return type === 'source-capture' || type === 'source-part';
+}
+function isSemanticRelationNote(note) {
+    if (isSourceCaptureNote(note)) {
+        return false;
+    }
+    const type = typeof note.type === 'string'
+        ? note.type.trim().toLocaleLowerCase('en-US').replace(/_/g, '-')
+        : '';
+    if (type === 'memory-proposal' || type === 'proposal') {
+        return false;
+    }
+    const normalizedPath = (0, knowledge_architecture_1.normalizeKnowledgePath)(note.relativePath);
+    return (0, knowledge_architecture_1.isKnowledgeMemoryPath)(normalizedPath) || (0, knowledge_architecture_1.isKnowledgeWikiPath)(normalizedPath);
+}
 function addRelationEdge(sourceToTargets, relationSource, source, target, line, sourceType, edges) {
     let targets = sourceToTargets.get(source);
     if (!targets) {
@@ -316,7 +335,7 @@ function lintNotes(vaultRoot, notes, options = {}) {
             });
         }
         for (const link of note.wikilinks) {
-            if (link.source === 'frontmatter' || EXTERNAL_LINK.test(link.target) || link.target.includes('|')) {
+            if (link.source === 'frontmatter' || isSourceCaptureNote(note) || EXTERNAL_LINK.test(link.target) || link.target.includes('|')) {
                 continue;
             }
             if (link.resolution.status !== 'resolved') {
@@ -416,6 +435,9 @@ function lintNotes(vaultRoot, notes, options = {}) {
                 }
                 addRelationEdge(wikiToMemoryYamlBySource, 'yaml', normalizedPath, resolvedByFrontmatter, 1, 'wiki', wikiToMemoryYamlEdges);
             }
+        }
+        if (!isSemanticRelationNote(note)) {
+            continue;
         }
         for (const ref of readListLikeFrontmatter(note, knowledge_architecture_1.YAML_RELATION_KEYS)) {
             const normalizedRef = normalizeWikilinkOrPlainRelation(ref);

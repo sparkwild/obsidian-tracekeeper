@@ -264,12 +264,28 @@ directory growth, and legacy Memory candidates. Graph profiles control
 reporting severity but never create notes or rewrite links. A selected graph
 suggestion may become a normal Knowledge Change Review proposal.
 
+Captured Source bodies are evidence, not authored knowledge relationships. Shell
+conditions, Markdown links, absolute paths, and other syntax copied into a
+`source_capture` or `source_part` must not be reported as broken knowledge
+links. Operational proposal/task metadata is likewise excluded from semantic
+graph warnings; its mirrors remain auditable through the task and proposal
+records. When older segmented captures are found, the plugin may offer an
+explicit, hash-bound consolidation preview that creates bounded Source indexes
+and parts first, then requires separate confirmations for relationship repair
+and moving the legacy files to `02_archive`.
+
 Managed proposal references in task and session records are one semantic
 relationship even though Tracekeeper mirrors them in frontmatter and the note
 body for machine and Obsidian readability. Lint reports misaligned ids, paths,
 links, duplicate identities, missing mirror markers, and mirrors that resolve to
 different targets; it does not rewrite historical Markdown. Graph-health totals
 deduplicate a valid mirror and separately expose the raw observation count.
+
+Graph Health ignores captured Source syntax and operational proposal mirrors
+when calculating semantic graph defects. Treat its ignored-observation count as
+diagnostic context, not as a list of files to edit. The plugin's suggested
+official Graph View filter is `path:01_knowledge -path:.parts -path:02_archive`;
+Tracekeeper never writes that filter into Obsidian configuration.
 
 Source records use a normalized `web`, `file`, or `transcript` owner route and
 carry a stable `source_id` plus content hash. Small captures keep content in the

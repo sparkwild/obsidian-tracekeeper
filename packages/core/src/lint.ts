@@ -222,6 +222,27 @@ function getSourceType(note: ScannedNote): { isMemory: boolean; isWiki: boolean 
 	};
 }
 
+function isSourceCaptureNote(note: ScannedNote): boolean {
+	const type = typeof note.type === 'string'
+		? note.type.trim().toLocaleLowerCase('en-US').replace(/_/g, '-')
+		: '';
+	return type === 'source-capture' || type === 'source-part';
+}
+
+function isSemanticRelationNote(note: ScannedNote): boolean {
+	if (isSourceCaptureNote(note)) {
+		return false;
+	}
+	const type = typeof note.type === 'string'
+		? note.type.trim().toLocaleLowerCase('en-US').replace(/_/g, '-')
+		: '';
+	if (type === 'memory-proposal' || type === 'proposal') {
+		return false;
+	}
+	const normalizedPath = normalizeVaultPath(note.relativePath);
+	return isKnowledgeMemoryPath(normalizedPath) || isKnowledgeWikiPath(normalizedPath);
+}
+
 function addRelationEdge(
 	sourceToTargets: Map<string, Set<string>>,
 	relationSource: RelationSource,
@@ -453,7 +474,7 @@ export function lintNotes(vaultRoot: string, notes: ScannedNote[], options: Lint
 		}
 
 		for (const link of note.wikilinks) {
-			if (link.source === 'frontmatter' || EXTERNAL_LINK.test(link.target) || link.target.includes('|')) {
+			if (link.source === 'frontmatter' || isSourceCaptureNote(note) || EXTERNAL_LINK.test(link.target) || link.target.includes('|')) {
 				continue;
 			}
 
@@ -593,6 +614,10 @@ export function lintNotes(vaultRoot: string, notes: ScannedNote[], options: Lint
 					wikiToMemoryYamlEdges
 				);
 			}
+		}
+
+		if (!isSemanticRelationNote(note)) {
+			continue;
 		}
 
 		for (const ref of readListLikeFrontmatter(note, YAML_RELATION_KEYS)) {

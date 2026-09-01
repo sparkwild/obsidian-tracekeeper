@@ -8,8 +8,13 @@ import {
 	type SourceStatusSnapshot,
 } from '../observability/knowledge-observability-model';
 import { ui } from '../../ui/localization';
+import { reportUiFailure } from '../../ui/user-facing-error';
 import { TRACEKEEPER_SOURCE_STATUS_VIEW } from '../../ui/view-types';
 import { trimText } from '../shared/markdown-record-parser';
+import {
+	LegacySourceArchiveModal,
+	LegacySourceConsolidationModal,
+} from './legacy-source-consolidation-modal';
 
 const sourceEvidenceIssueLabel = (issue: SourceCaptureEvidenceIssue): string => {
 	switch (issue) {
@@ -152,6 +157,18 @@ export class TracekeeperSourceStatusView extends ItemView {
 		refreshButton.addEventListener('click', () => {
 			void this.refreshWithNotice(refreshButton);
 		});
+		const consolidateButton = header.createEl('button', {
+			text: ui('预览旧版 Source 规范化', 'Preview legacy Source consolidation'),
+		});
+		consolidateButton.addEventListener('click', () => {
+			void this.openLegacySourceConsolidation(consolidateButton);
+		});
+		const archiveButton = header.createEl('button', {
+			text: ui('预览旧版 Source 归档', 'Preview legacy Source archive'),
+		});
+		archiveButton.addEventListener('click', () => {
+			void this.openLegacySourceArchive(archiveButton);
+		});
 
 		this.renderIndexStatus(contentEl, snapshot);
 
@@ -175,6 +192,40 @@ export class TracekeeperSourceStatusView extends ItemView {
 
 		this.renderSourceRecords(contentEl, snapshot);
 		this.renderRequests(contentEl, snapshot.requests, snapshot.missingRequestFolder);
+	}
+
+	private async openLegacySourceConsolidation(button: HTMLButtonElement): Promise<void> {
+		button.disabled = true;
+		try {
+			const preview = await this.plugin.previewLegacySourceConsolidation();
+			new LegacySourceConsolidationModal(this.app, this.plugin, preview).open();
+		} catch (error) {
+			new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to preview legacy Source consolidation',
+				fallback: { zh: '无法预览旧版 Source 规范化。', en: 'Failed to preview legacy Source consolidation.' },
+			}));
+		} finally {
+			button.disabled = false;
+		}
+	}
+
+	private async openLegacySourceArchive(button: HTMLButtonElement): Promise<void> {
+		button.disabled = true;
+		try {
+			const preview = await this.plugin.previewLatestLegacySourceArchive();
+			if (!preview) {
+				new Notice(ui('没有可归档的已验证 Source 规范化操作。', 'No verified Source consolidation is ready to archive.'));
+				return;
+			}
+			new LegacySourceArchiveModal(this.app, this.plugin, preview).open();
+		} catch (error) {
+			new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to preview legacy Source archive',
+				fallback: { zh: '无法预览旧版 Source 归档。', en: 'Failed to preview legacy Source archive.' },
+			}));
+		} finally {
+			button.disabled = false;
+		}
 	}
 
 	private renderIndexStatus(container: HTMLElement, snapshot: SourceStatusSnapshot): void {

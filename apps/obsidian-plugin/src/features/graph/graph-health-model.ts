@@ -28,6 +28,8 @@ export interface GraphHealthSnapshot {
 	errorMessage: string;
 	noteCount: number;
 	edgeObservationCount: number;
+	ignoredEdgeObservationCount: number;
+	ignoredUnresolvedEdgeCount: number;
 	wikilinkEdgeCount: number;
 	resolvedEdgeCount: number;
 	unresolvedEdgeCount: number;

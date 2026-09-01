@@ -23,6 +23,7 @@ import projectMemoryModule from '../dist/project-memory.js';
 import memoryRecordModule from '../dist/memory-record.js';
 import memoryLifecycleModule from '../dist/memory-lifecycle.js';
 import sourceRecordModule from '../dist/source-record.js';
+import legacySourceSegmentsModule from '../dist/legacy-source-segments.js';
 import lifecycleDiagnosticsModule from '../dist/lifecycle-diagnostics.js';
 import knowledgeArchitectureModule from '../dist/knowledge-architecture.js';
 import wikiGovernanceModule from '../dist/wiki-governance.js';
@@ -3285,6 +3286,15 @@ async function run() {
 					[relativeSource.relativePath, shortestSource.relativePath].sort()
 				);
 			}],
+			['links-note-relative-path-without-dot-prefix', () => {
+				const target = scannedCharacterizationNote('01_knowledge/memory/global/index.md', '# Global');
+				const source = scannedCharacterizationNote('01_knowledge/index.md', '[[memory/global/index]]');
+				const snapshot = knowledgeIndexModule.buildKnowledgeSnapshot(
+					characterizationScan('/characterization-vault', [source, target]),
+					{ indexState: 'ready', generation: 1 }
+				);
+				assert.deepEqual(snapshot.graph.outgoing.get(source.relativePath), [target.relativePath]);
+			}],
 			['links-unresolved-explicit-without-phantom-node', () => {
 				const source = scannedCharacterizationNote(
 					'01_knowledge/wiki/unresolved-source.md',
@@ -3522,6 +3532,53 @@ async function run() {
 				assert.equal(graph.unresolved_edge_count, 0);
 				assert.equal(
 					lint.issues.some((issue) => issue.kind === 'broken_wikilink'),
+					false
+				);
+			}],
+			['source-capture-raw-markup-is-not-semantic-graph', () => {
+				const source = scannedCharacterizationNote(
+					'01_knowledge/sources/files/raw-capture.md',
+					[
+						'---',
+						'type: source_capture',
+						'source_kind: file',
+						'---',
+						'# Captured source',
+						'',
+						'[README](README.md)',
+						'[[ -f /opt/homebrew/share/tool.sh ]]',
+					].join('\n')
+				);
+				const graph = graphHealthModule.analyzeGraphHealth([source], { semanticOnly: true });
+				const lint = lintModule.lintNotes('/characterization-vault', [source], {
+					graphProfile: 'advisory',
+				});
+				assert.equal(graph.unresolved_edge_count, 0);
+				assert.equal(graph.edge_observation_count, 0);
+				assert.equal(lint.issues.some((issue) => issue.kind === 'broken_wikilink'), false);
+			}],
+			['legacy-task-proposal-mirror-with-path-field-is-valid', () => {
+				const proposalPath = '00_tracekeeper/inbox/review_queue/proposal-legacy.md';
+				const proposal = scannedCharacterizationNote(proposalPath, '# Proposal');
+				const task = scannedCharacterizationNote(
+					'00_tracekeeper/work/tasks/task-legacy.md',
+					[
+						'---',
+						'type: agent-task',
+						'proposal_ids: proposal-legacy-id',
+						`proposal_paths: ${proposalPath}`,
+						`proposal_link_targets: ${proposalPath}`,
+						'proposal_links: "[[proposal-legacy]]"',
+						'---',
+						'# Task',
+						'- [[proposal-legacy]] ^tracekeeper-proposal-proposal-legacy-id',
+					].join('\n')
+				);
+				const lint = lintModule.lintNotes('/characterization-vault', [task, proposal], {
+					graphProfile: 'off',
+				});
+				assert.equal(
+					lint.issues.some((issue) => issue.kind === 'managed_proposal_reference_mismatch'),
 					false
 				);
 			}],
@@ -4842,6 +4899,66 @@ function runSourceRecordTests() {
 	}));
 }
 
+function runLegacySourceSegmentTests() {
+	const notes = Array.from({ length: 17 }, (_, index) => {
+		const segment = String(index + 1).padStart(3, '0');
+		return scannedCharacterizationNote(
+			`01_knowledge/sources/files/full-pdf-test-segment-${segment}.md`,
+			[
+				'---',
+				'type: source_capture',
+				'source_kind: file',
+				`source: /tmp/test.pdf#content-segment-${segment}`,
+				`source_id: source-${segment}`,
+				'---',
+				`# Legacy segment ${segment}`,
+				'',
+				`payload-${segment}`,
+			].join('\n')
+		);
+	});
+	const plan = legacySourceSegmentsModule.buildLegacySourceConsolidationPlan(notes, {
+		createdAt: '2026-09-01T00:00:00.000Z',
+	});
+	assert.equal(plan.ready, true);
+	assert.equal(plan.oldSegmentCount, 17);
+	assert.equal(plan.newParentCount, 2);
+	assert.equal(plan.newPartCount, 17);
+	assert.equal(plan.families[0]?.shards[0]?.parts.length, 16);
+	assert.equal(plan.families[0]?.shards[1]?.parts.length, 1);
+	assert.equal(plan.oldToNewParent[0]?.newParentPath, '01_knowledge/sources/files/full-pdf-test-shard-01.md');
+	assert.equal(plan.families[0]?.shards[0]?.parts[0]?.legacyPath, notes[0].relativePath);
+	assert.match(plan.planHash, /^sha256:[a-f0-9]{64}$/);
+
+	const invalid = legacySourceSegmentsModule.buildLegacySourceConsolidationPlan([
+		scannedCharacterizationNote(
+			'01_knowledge/sources/files/full-pdf-invalid-segment-001.md',
+			[
+				'---', 'type: source_capture', 'source_kind: file',
+				'source: /tmp/invalid.pdf#content-segment-002', '---', '# Invalid',
+			].join('\n')
+		),
+		scannedCharacterizationNote(
+			'01_knowledge/sources/files/full-pdf-invalid-segment-003.md',
+			[
+				'---', 'type: source_capture', 'source_kind: file',
+				'source: /tmp/invalid.pdf#content-segment-003', '---', '# Invalid',
+			].join('\n')
+		),
+	], {
+		occupiedPaths: ['01_knowledge/sources/files/full-pdf-invalid-shard-01.md'],
+	});
+	assert.equal(invalid.ready, false);
+	assert.equal(invalid.issues.some((item) => item.code === 'segment_number_mismatch'), true);
+	assert.equal(invalid.issues.some((item) => item.code === 'segment_number_gap'), true);
+	assert.equal(invalid.issues.some((item) => item.code === 'target_path_occupied'), true);
+
+	console.log(JSON.stringify({
+		suite: 'core-legacy-source-segments', result: 'pass',
+		rows: ['deterministic-family-detection', 'bounded-sharding', 'old-path-mapping', 'collision-and-gap-blocking'],
+	}));
+}
+
 async function runLifecycleGraphFixtureTests() {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-lifecycle-graph-'));
 	const vaultRoot = createFixture(root);
@@ -5163,7 +5280,7 @@ async function runKnowledgeReadIndexTests() {
 	}));
 }
 
-run().then(runProposalWritebackTests).then(runWikiGovernanceTests).then(runMemoryRecordV2Tests).then(runMemoryLifecycleTests).then(runSourceRecordTests).then(runLifecycleGraphFixtureTests).then(runLifecycleDiagnosticTests).then(runKnowledgeReadIndexTests).catch((error) => {
+run().then(runProposalWritebackTests).then(runWikiGovernanceTests).then(runMemoryRecordV2Tests).then(runMemoryLifecycleTests).then(runSourceRecordTests).then(runLegacySourceSegmentTests).then(runLifecycleGraphFixtureTests).then(runLifecycleDiagnosticTests).then(runKnowledgeReadIndexTests).catch((error) => {
 	console.error(error);
 	process.exitCode = 1;
 });

@@ -47,8 +47,9 @@ const loadLocalizedLabels = async (language) => {
 					}));
 					buildContext.onLoad({ filter: /.*/, namespace: 'obsidian-stub' }, () => ({
 						contents: `
-							export class ItemView {}
-							export class Notice {}
+										export class ItemView {}
+									export class Modal {}
+									export class Notice {}
 							export class TFile {}
 							export class WorkspaceLeaf {}
 							export function getLanguage() { return ${JSON.stringify(language)}; }

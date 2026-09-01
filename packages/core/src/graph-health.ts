@@ -42,6 +42,8 @@ export interface GraphProfileEvaluation {
 export interface GraphHealthReport {
 	note_count: number;
 	edge_observation_count: number;
+	ignored_edge_observation_count: number;
+	ignored_unresolved_edge_count: number;
 	wikilink_edge_count: number;
 	unresolved_edges: GraphHealthUnresolvedEdge[];
 	resolved_edge_count: number;
@@ -82,6 +84,28 @@ export interface GraphHealthUnresolvedEdge {
 const DEFAULT_MAX_ITEMS = 20;
 export const DEFAULT_GRAPH_PROFILE: GraphProfile = 'advisory';
 
+function normalizedNoteType(note: ScannedNote): string {
+	return (typeof note.type === 'string' ? note.type : '')
+		.trim()
+		.toLocaleLowerCase('en-US')
+		.replace(/_/g, '-');
+}
+
+function shouldIncludeSemanticEdge(note: ScannedNote, sourcePath: string, link: ScannedNote['edges'][number]): boolean {
+	if (isSourcePartPath(sourcePath)) {
+		return false;
+	}
+
+	// Source captures are immutable evidence. Their body is allowed to contain
+	// arbitrary Markdown, shell tests, and local paths that must not become
+	// knowledge-graph edges. Explicit frontmatter relations remain semantic.
+	if (normalizedNoteType(note) === 'source-capture') {
+		return link.source === 'frontmatter';
+	}
+
+	return true;
+}
+
 export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOptions = {}): GraphHealthReport {
 	const maxItems = normalizeMaxItems(options.maxItems);
 	const allNotePathSet = new Set(notes.map((note) => normalizeRelativePath(note.relativePath)).filter(Boolean));
@@ -91,6 +115,7 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 	}) : notes;
 	const notePaths = semanticNotes.map((note) => normalizeRelativePath(note.relativePath)).filter(Boolean);
 	const notePathSet = new Set(notePaths);
+	const semanticPathSet = new Set(notePaths);
 	const resolvedEdges = resolveNormalizedVaultEdges(
 		notes.map((note) => ({
 			path: note.relativePath,
@@ -111,6 +136,8 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 
 	let wikilinkEdgeCount = 0;
 	let edgeObservationCount = 0;
+	let ignoredEdgeObservationCount = 0;
+	let ignoredUnresolvedEdgeCount = 0;
 	let resolvedEdgeCount = 0;
 	let unresolvedEdgeCount = 0;
 	const unresolvedEdges: GraphHealthUnresolvedEdge[] = [];
@@ -121,13 +148,27 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 		declaredVia: Set<'frontmatter' | 'body_wikilink'>;
 	}>();
 
-	for (const note of semanticNotes) {
+	for (const note of notes) {
 		const sourcePath = normalizeRelativePath(note.relativePath);
 		if (!sourcePath) {
 			continue;
 		}
 
 		for (const link of resolvedEdges.get(sourcePath) ?? note.edges) {
+			if (!semanticPathSet.has(sourcePath)) {
+				ignoredEdgeObservationCount += 1;
+				if (link.resolution.status !== 'resolved') {
+					ignoredUnresolvedEdgeCount += 1;
+				}
+				continue;
+			}
+			if (!shouldIncludeSemanticEdge(note, sourcePath, link)) {
+				ignoredEdgeObservationCount += 1;
+				if (link.resolution.status !== 'resolved') {
+					ignoredUnresolvedEdgeCount += 1;
+				}
+				continue;
+			}
 			edgeObservationCount += 1;
 			const key = semanticGraphEdgeKey(sourcePath, link);
 			const declaredVia = link.source === 'frontmatter' ? 'frontmatter' : 'body_wikilink';
@@ -284,6 +325,8 @@ export function analyzeGraphHealth(notes: ScannedNote[], options: GraphHealthOpt
 	return {
 		note_count: semanticNotes.length,
 		edge_observation_count: edgeObservationCount,
+		ignored_edge_observation_count: ignoredEdgeObservationCount,
+		ignored_unresolved_edge_count: ignoredUnresolvedEdgeCount,
 		wikilink_edge_count: wikilinkEdgeCount,
 		unresolved_edges: unresolvedEdges.slice(0, maxItems),
 		resolved_edge_count: resolvedEdgeCount,

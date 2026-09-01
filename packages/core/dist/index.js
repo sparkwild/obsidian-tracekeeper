@@ -25,6 +25,7 @@ __exportStar(require("./graph-health"), exports);
 __exportStar(require("./knowledge-architecture"), exports);
 __exportStar(require("./source-analysis"), exports);
 __exportStar(require("./source-record"), exports);
+__exportStar(require("./legacy-source-segments"), exports);
 __exportStar(require("./legacy-structure"), exports);
 __exportStar(require("./operation-journal"), exports);
 __exportStar(require("./proposal-transition"), exports);

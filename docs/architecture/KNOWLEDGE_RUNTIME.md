@@ -100,13 +100,22 @@ Graph health evaluates the semantic knowledge subgraph under `01_knowledge/`,
 excluding Source parts and operational or archived records from component and
 isolation counts. The plugin only offers a copyable filter for Obsidian's
 official Graph View and never writes `.obsidian/graph.json` or uses a private
-graph renderer.
+graph renderer. The current copyable filter is
+`path:01_knowledge -path:.parts -path:02_archive`.
 
 A Source note's `source` metadata, capture structure, part links, and incidental
 body links remain visible in the raw Vault graph but do not become Recall
 knowledge relations. Only dedicated `related_wiki` or `related_sources`
 frontmatter, optionally mirrored by the same body link, contributes Source
 `relation_evidence`, `graph_links`, or graph-neighbor expansion.
+
+Graph Health exposes both semantic edge observations and the count of ignored
+raw observations. The latter includes Source evidence syntax and operational
+records; it is diagnostic context, not a repair queue. A legacy family of
+`*-segment-NNN.md` Source captures is not implicitly treated as a part family.
+The plugin's explicit consolidation flow groups each family into bounded
+16-part Source indexes, binds every output to the original hashes, and keeps
+the legacy files until a separately confirmed Archive move succeeds.
 
 The index is disposable. Status exposes readiness and generation, and a rebuild
 can reproduce it from Markdown.
