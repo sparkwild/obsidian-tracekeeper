@@ -3364,6 +3364,7 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
         ? await resolveApprovedMemoryRecordTargetPath(vaultRoot, proposal, context)
         : plan.targetNote, pathSafetyOptions(context));
     assertAllowedWritebackTarget(targetPath);
+    const batchOverride = wikiBatchWritebackOverrideFor(context, proposal.path, targetPath, plan.effectKind);
     const target = await readCurrentVaultTextState(vaultRoot, targetPath, context);
     if (!target && !plan.effectKind) {
         throw new safety_1.ToolInputError('Writeback effect is missing from proposal plan.');
@@ -3381,7 +3382,7 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
     }
     if (plan.effectKind === 'update_managed_relations' && target) {
         try {
-            (0, core_1.applyManagedRelationsBlock)(target.content, snapshot.writebackContent);
+            (0, core_1.applyManagedRelationsBlock)(target.content, batchOverride?.block || snapshot.writebackContent);
         }
         catch (error) {
             throw new safety_1.ToolInputError(error instanceof Error ? error.message : 'Managed relations writeback is invalid.');
@@ -3446,8 +3447,8 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
             ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, identity.operationId)
             : plan.effectKind === 'update_managed_relations'
                 ? {
-                    block: snapshot.writebackContent,
-                    marker: `managed-relations:${snapshot.proposalId}`,
+                    block: batchOverride?.block || snapshot.writebackContent,
+                    marker: batchOverride?.marker || `managed-relations:${snapshot.proposalId}`,
                 }
                 : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
     const touchedNotes = [
@@ -6688,6 +6689,27 @@ async function validateApprovedMemoryLifecycle(vaultRoot, identity, targetPath, 
         throw new core_1.OperationConflictError(`Approved MemoryRecord prospective lifecycle is invalid: ${proposedIssues.map((issue) => issue.code).join(', ')}.`);
     }
 }
+function wikiBatchWritebackOverrideFor(context, proposalPath, targetPath, effectKind) {
+    const override = context.wikiBatchWritebackOverride;
+    if (!override)
+        return null;
+    if (context.transport !== 'obsidian-direct'
+        || context.principalId !== 'obsidian-plugin-ui'
+        || override.proposalPath !== proposalPath
+        || override.targetPath !== targetPath
+        || effectKind !== 'update_managed_relations'
+        || !override.batchOperationId) {
+        throw new safety_1.ToolInputError('Wiki batch writeback override is restricted to the Obsidian review surface.');
+    }
+    const parsed = (0, core_1.parseManagedRelationsBlock)(override.writebackBlock.trim());
+    if (parsed.status !== 'valid' || parsed.start !== 0 || parsed.end !== parsed.content.length) {
+        throw new safety_1.ToolInputError('Wiki batch managed relations override is invalid.');
+    }
+    return {
+        block: parsed.content,
+        marker: `managed-relations:${proposalPath}:${override.batchOperationId}`,
+    };
+}
 async function currentWritebackEffect(vaultRoot, payload, operationId, context) {
     const proposal = await resolveMemoryProposalFromArgs(vaultRoot, {
         proposal_path: payload.proposalPath,
@@ -6697,6 +6719,7 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
     const createsMemoryRecord = payload.effectKind === 'create_memory_record';
     const createsWikiNote = payload.effectKind === CREATE_WIKI_NOTE_EFFECT;
     const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
+    const batchOverride = wikiBatchWritebackOverrideFor(context, payload.proposalPath, payload.targetPath, payload.effectKind);
     const writeback = createsMemoryRecord
         ? {
             block: buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, payload.targetPath, operationId, context),
@@ -6706,8 +6729,8 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
             ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, operationId)
             : payload.effectKind === 'update_managed_relations'
                 ? {
-                    block: snapshot.writebackContent,
-                    marker: `managed-relations:${snapshot.proposalId}`,
+                    block: batchOverride?.block || snapshot.writebackContent,
+                    marker: batchOverride?.marker || `managed-relations:${snapshot.proposalId}`,
                 }
                 : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
     const currentTaskPath = payload.taskId ? buildTaskNotePath(payload.taskId) : null;

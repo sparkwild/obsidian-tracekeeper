@@ -217,6 +217,15 @@ Coordinated operations use:
 - per-step journal progress and startup roll-forward recovery;
 - bounded, redacted Agent activity projections.
 
+The Obsidian Wiki review coordinator uses the same journal and progress-anchor
+primitives for its internal `wiki_review_batch` operation. It stores the
+preview manifest, target merge plan, and ordered proposal steps as encrypted
+recovery payload, but it never holds a Vault path lock while calling the
+proposal-transition or Vault-repository adapters. Those lower layers remain
+the sole owners of their atomic path locks, which prevents lock re-entry
+deadlocks. A modal subscribes to journal saves for phase and count updates and
+can be reopened against an unfinished operation after layout readiness.
+
 Retries return the first compatible result. Reusing a key for a changed payload
 or another tool fails closed. Recovery never rolls user-visible Markdown back
 over a later edit. On-disk journal JSON contains neither a plaintext recovery

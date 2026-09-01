@@ -5,6 +5,8 @@ import type {
 	ArchiveMemoryProposalPreview,
 	ArchiveMemoryProposalReceipt,
 	WikiReviewBatchPreview,
+	WikiReviewBatchProgress,
+	WikiReviewBatchReceipt,
 } from './review-queue-controller';
 import type { MemoryProposalRecord } from './review-view-model';
 import type { ReviewProposalContext, ReviewTargetCandidate } from './review-context-model';
@@ -739,12 +741,18 @@ export class ReviewQueueArchiveModal extends Modal {
 
 export class WikiReviewBatchApplyModal extends Modal {
 	private readonly selectedPaths: Set<string>;
+	private applying = false;
+	private escapeHandler: import('obsidian').KeymapEventHandler | null = null;
+	private progressWatchdogId: number | null = null;
+	private lastProgressAt = 0;
+	private lastProgress: WikiReviewBatchProgress | null = null;
 
 	constructor(
 		app: App,
 		private plugin: TracekeeperPlugin,
 		private proposals: readonly MemoryProposalRecord[],
-		private onApplied: () => void
+		private onApplied: () => void,
+		private recoveryOperationId = ''
 	) {
 		super(app);
 		this.selectedPaths = new Set(proposals.map((proposal) => proposal.path));
@@ -752,8 +760,68 @@ export class WikiReviewBatchApplyModal extends Modal {
 
 	onOpen(): void {
 		void super.onOpen();
+		if (this.scope) {
+			this.escapeHandler = this.scope.register(null, 'Escape', () => {
+				if (this.applying) {
+					new Notice(ui('批次正在写入，请等待完成。', 'The batch is still writing; please wait for it to finish.'));
+					return false;
+				}
+				return undefined;
+			});
+		}
 		this.titleEl.setText(ui('审查并写入 Wiki 批次', 'Review and apply Wiki batch'));
-		void this.renderPreview();
+		if (this.recoveryOperationId) {
+			void this.renderRecovery();
+		} else {
+			void this.renderPreview();
+		}
+	}
+
+	onClose(): void {
+		this.stopProgressWatchdog();
+		this.applying = false;
+		if (this.escapeHandler) {
+			this.scope.unregister(this.escapeHandler);
+			this.escapeHandler = null;
+		}
+	}
+
+	private async renderRecovery(): Promise<void> {
+		this.contentEl.empty();
+		this.titleEl.setText(ui('恢复 Wiki 批次', 'Resume Wiki batch'));
+		const status = this.contentEl.createEl('p', {
+			text: ui('正在从本地操作日志恢复 Wiki 批次...', 'Resuming the Wiki batch from the local operation journal...'),
+		});
+		configureLiveStatus(status);
+		const progress = this.contentEl.createEl('progress');
+		progress.max = 1;
+		progress.value = 0;
+		progress.setAttribute('aria-label', ui('批次恢复进度', 'Batch recovery progress'));
+		const confirm = this.contentEl.createEl('button', {
+			text: ui('正在恢复...', 'Resuming...'),
+			cls: 'mod-cta',
+		});
+		confirm.disabled = true;
+		this.applying = true;
+		this.lastProgressAt = Date.now();
+		this.setModalBusy(true);
+		this.startProgressWatchdog(status, progress, confirm, 1);
+		try {
+			const receipt = await this.plugin.resumeWikiReviewBatch(
+				this.recoveryOperationId,
+				(next) => this.renderProgress(status, progress, confirm, next)
+			);
+			this.stopProgressWatchdog();
+			this.applying = false;
+			this.setModalBusy(false);
+			this.renderReceipt(null, receipt);
+		} catch (error) {
+			this.stopProgressWatchdog();
+			this.applying = false;
+			this.setModalBusy(false);
+			console.error('tracekeeper failed to recover Wiki review batch', error);
+			this.renderFailure(ui('批次恢复失败，请重新生成预览。', 'Batch recovery failed. Generate a fresh preview.'));
+		}
 	}
 
 	private async renderPreview(): Promise<void> {
@@ -821,6 +889,10 @@ export class WikiReviewBatchApplyModal extends Modal {
 
 		const status = this.contentEl.createEl('p', { cls: 'tracekeeper-view__description' });
 		configureLiveStatus(status);
+		const progress = this.contentEl.createEl('progress');
+		progress.max = preview.items.length;
+		progress.value = 0;
+		progress.setAttribute('aria-label', ui('批次写入进度', 'Batch write progress'));
 		const actions = this.contentEl.createDiv({ cls: 'modal-button-container' });
 		const cancel = actions.createEl('button', { text: ui('取消', 'Cancel'), cls: 'mod-warning' });
 		cancel.addEventListener('click', () => this.close());
@@ -829,35 +901,210 @@ export class WikiReviewBatchApplyModal extends Modal {
 			cls: 'mod-cta',
 		});
 		confirm.addEventListener('click', () => {
-			void (async () => {
-				confirm.disabled = true;
-				cancel.disabled = true;
-				status.setText(ui('正在应用批次...', 'Applying batch...'));
-				try {
-					const receipt = await this.plugin.confirmWikiReviewBatch(preview, preview.confirmationToken);
-					if (receipt.status !== 'completed') {
-						status.setText(ui(
-							`批次部分完成：已写入 ${receipt.applied.length} 项，剩余冲突 ${receipt.conflicts.length} 项。`,
-							`Batch partially completed: ${receipt.applied.length} applied, ${receipt.conflicts.length} conflict(s) remain.`
-						));
-						confirm.disabled = false;
-						cancel.disabled = false;
-						confirm.focus();
-						return;
-					}
-					new Notice(ui('Wiki 批次已写入。', 'Wiki batch applied.'));
-					this.onApplied();
-					this.close();
-				} catch (error) {
-					console.error('tracekeeper failed to apply Wiki review batch', error);
-					status.setText(ui('批次写入失败，请刷新后重新预览。', 'Batch apply failed. Refresh and generate a new preview.'));
-					confirm.disabled = false;
-					cancel.disabled = false;
-					confirm.focus();
-				}
-			})();
+			void this.applyBatch(preview, status, progress, confirm, cancel);
 		});
 		cancel.focus();
+	}
+
+	private async applyBatch(
+		preview: WikiReviewBatchPreview,
+		status: HTMLElement,
+		progress: HTMLProgressElement,
+		confirm: HTMLButtonElement,
+		cancel: HTMLButtonElement
+	): Promise<void> {
+		this.applying = true;
+		this.lastProgressAt = Date.now();
+		this.lastProgress = { phase: 'preflight', completed: 0, total: preview.items.length };
+		confirm.disabled = true;
+		cancel.disabled = true;
+		this.setModalBusy(true);
+		this.startProgressWatchdog(status, progress, confirm, preview.items.length);
+		this.renderProgress(status, progress, confirm, this.lastProgress);
+		try {
+			const receipt = await this.plugin.confirmWikiReviewBatch(
+				preview,
+				preview.confirmationToken,
+				{
+					idempotencyKey: preview.idempotencyKey,
+					onProgress: (next) => this.renderProgress(status, progress, confirm, next),
+				}
+			);
+			this.stopProgressWatchdog();
+			this.applying = false;
+			this.setModalBusy(false);
+			this.renderReceipt(preview, receipt);
+		} catch (error) {
+			this.stopProgressWatchdog();
+			this.applying = false;
+			this.setModalBusy(false);
+			console.error('tracekeeper failed to apply Wiki review batch', error);
+			this.renderFailure(
+				ui('批次写入失败，请刷新后重新预览。', 'Batch apply failed. Refresh and generate a new preview.')
+			);
+		}
+	}
+
+	private renderReceipt(preview: WikiReviewBatchPreview | null, receipt: WikiReviewBatchReceipt): void {
+		this.contentEl.empty();
+		const completed = receipt.status === 'completed';
+		this.titleEl.setText(
+			completed
+				? ui('Wiki 批次已完成', 'Wiki batch completed')
+				: ui('Wiki 批次需要处理', 'Wiki batch needs attention')
+		);
+		const status = this.contentEl.createEl('p', {
+			text: completed
+				? ui('Wiki 批次已经完成。', 'The Wiki batch is complete.')
+				: ui(
+					`批次部分完成：已写入 ${receipt.applied.length} 项，剩余 ${receipt.pending.length} 项。`,
+					`Batch partially completed: ${receipt.applied.length} applied, ${receipt.pending.length} remaining.`
+				),
+		});
+		configureLiveStatus(status);
+		const summary = this.contentEl.createDiv({ cls: 'tracekeeper-detail-grid' });
+		this.renderDetail(summary, ui('已批准', 'Approved'), String(receipt.approved.length));
+		this.renderDetail(summary, ui('已应用', 'Applied'), String(receipt.applied.length));
+		this.renderDetail(summary, ui('目标写入', 'Target writes'), String(receipt.targetWrites.length));
+		this.renderDetail(summary, ui('冲突', 'Conflicts'), String(receipt.conflicts.length));
+		if (receipt.conflicts.length > 0) {
+			const conflictList = this.contentEl.createEl('ul');
+			for (const conflict of receipt.conflicts) {
+				conflictList.createEl('li', {
+					text: `${noteNameFromPath(conflict.targetPath || conflict.proposalPath)}: ${conflict.message}`,
+				});
+			}
+		}
+		const actions = this.contentEl.createDiv({ cls: 'modal-button-container' });
+		if (!completed && receipt.resumable) {
+			const resume = actions.createEl('button', {
+				text: ui('继续未完成项', 'Resume remaining items'),
+				cls: 'mod-cta',
+			});
+			resume.addEventListener('click', () => void this.resumeBatch(
+				preview?.operationId || this.recoveryOperationId || receipt.operationId
+			));
+		}
+		const close = actions.createEl('button', {
+			text: completed ? ui('完成', 'Done') : ui('关闭并重新预览', 'Close and prepare a fresh preview'),
+		});
+		close.addEventListener('click', () => {
+			this.onApplied();
+			this.close();
+		});
+		close.focus();
+		if (completed) {
+			new Notice(ui('Wiki 批次已写入。', 'Wiki batch applied.'));
+		}
+	}
+
+	private async resumeBatch(operationId: string): Promise<void> {
+		this.contentEl.empty();
+		const status = this.contentEl.createEl('p', {
+			text: ui('正在恢复 Wiki 批次...', 'Resuming Wiki batch...'),
+		});
+		configureLiveStatus(status);
+		const progress = this.contentEl.createEl('progress');
+		progress.max = Math.max(1, this.lastProgress?.total || 1);
+		progress.value = 0;
+		progress.setAttribute('aria-label', ui('批次恢复进度', 'Batch recovery progress'));
+		const confirm = this.contentEl.createEl('button', {
+			text: ui('正在恢复...', 'Resuming...'),
+			cls: 'mod-cta',
+		});
+		confirm.disabled = true;
+		this.applying = true;
+		this.setModalBusy(true);
+		this.startProgressWatchdog(status, progress, confirm, progress.max);
+		try {
+			const receipt = await this.plugin.resumeWikiReviewBatch(
+				operationId,
+				(next) => this.renderProgress(status, progress, confirm, next)
+			);
+			this.stopProgressWatchdog();
+			this.applying = false;
+			this.setModalBusy(false);
+			this.renderReceipt(null, receipt);
+		} catch (error) {
+			this.stopProgressWatchdog();
+			this.applying = false;
+			this.setModalBusy(false);
+			console.error('tracekeeper failed to resume Wiki review batch', error);
+			this.renderFailure(ui('批次恢复失败，请重新生成预览。', 'Batch recovery failed. Generate a fresh preview.'));
+		}
+	}
+
+	private renderFailure(message: string): void {
+		this.contentEl.empty();
+		const failure = this.contentEl.createEl('p', { text: message });
+		configureLiveStatus(failure);
+		const close = this.contentEl.createEl('button', { text: ui('关闭', 'Close') });
+		close.addEventListener('click', () => this.close());
+		close.focus();
+	}
+
+	private renderProgress(
+		status: HTMLElement,
+		progress: HTMLProgressElement,
+		confirm: HTMLButtonElement,
+		value: WikiReviewBatchProgress
+	): void {
+		this.lastProgress = value;
+		this.lastProgressAt = Date.now();
+		progress.max = Math.max(1, value.total);
+		progress.value = Math.min(value.total, Math.max(0, value.completed));
+		progress.setAttribute('aria-valuemin', '0');
+		progress.setAttribute('aria-valuemax', String(value.total));
+		progress.setAttribute('aria-valuenow', String(progress.value));
+		const phase = {
+			preflight: ui('正在预检', 'Preflighting'),
+			claiming: ui('正在认领批次', 'Claiming batch'),
+			approving: ui('正在提交批准回执', 'Recording approvals'),
+			writing: ui('正在写入 Wiki', 'Writing Wiki'),
+			finalizing: ui('正在收尾', 'Finalizing'),
+			completed: ui('已完成', 'Completed'),
+			conflict: ui('需要处理冲突', 'Conflict needs attention'),
+		}[value.phase];
+		const current = value.currentTargetPath ? ` · ${noteNameFromPath(value.currentTargetPath)}` : '';
+		status.setText(`${phase} · ${value.completed}/${value.total}${current}${value.message ? ` · ${value.message}` : ''}`);
+		if (this.applying) {
+			confirm.setText(ui(`${phase} ${value.completed}/${value.total}`, `${phase} ${value.completed}/${value.total}`));
+		}
+	}
+
+	private startProgressWatchdog(
+		status: HTMLElement,
+		progress: HTMLProgressElement,
+		confirm: HTMLButtonElement,
+		total: number
+	): void {
+		this.stopProgressWatchdog();
+		this.progressWatchdogId = window.setInterval(() => {
+			if (!this.applying || Date.now() - this.lastProgressAt < 10_000) return;
+			const completed = this.lastProgress?.completed ?? progress.value;
+			status.setText(ui(
+				`仍在等待文件锁或恢复步骤 · ${completed}/${total}`,
+				`Still waiting for a file lock or recovery step · ${completed}/${total}`
+			));
+			confirm.setText(ui(`仍在处理 ${completed}/${total}`, `Still processing ${completed}/${total}`));
+		}, 1000);
+	}
+
+	private stopProgressWatchdog(): void {
+		if (this.progressWatchdogId !== null) {
+			window.clearInterval(this.progressWatchdogId);
+			this.progressWatchdogId = null;
+		}
+	}
+
+	private setModalBusy(busy: boolean): void {
+		if (!this.modalEl) return;
+		this.modalEl.toggleClass('tracekeeper-review-batch-modal--running', busy);
+		const close = this.modalEl.querySelector('.modal-close-button') as HTMLButtonElement | null;
+		if (close) {
+			close.disabled = busy;
+			close.setAttribute('aria-disabled', String(busy));
+		}
 	}
 
 	private renderDetail(container: HTMLElement, label: string, value: string): void {

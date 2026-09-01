@@ -110,6 +110,14 @@ missing is not review-ready: approval cannot supply the additional structure
 authority, and legacy blocked proposals must be resubmitted after the runtime
 can follow the selected Project Auto policy.
 
+Wiki batch execution remains in its confirmation modal and reports the current
+phase, durable completed-count, target note, and waiting state. After the batch
+operation is claimed, confirmation and cancellation controls are disabled until
+a terminal receipt is available; closing the modal is not treated as a cancel.
+The batch journal owns restart recovery and reopens the same modal after layout
+readiness, while a target drift creates a new-preview conflict instead of
+reusing the old confirmation.
+
 Project identity is equally fail-closed. `project_id` is an opaque stable id
 returned by the Runtime, not the human label, Hub directory key, or repository
 leaf. An unknown or conflicting explicit id is rejected before a proposal file

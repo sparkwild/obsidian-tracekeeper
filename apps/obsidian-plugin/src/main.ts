@@ -20,7 +20,7 @@ import {
 	type StreamableHttpRuntimeStatus,
 	type RuntimeState,
 } from '@tracekeeper/mcp-runtime';
-import { LocalToolExecutor } from './composition/local-tool-executor';
+import { LocalToolExecutor, type LocalToolExecutionOptions } from './composition/local-tool-executor';
 import {
 	BASE_STRUCTURE_DIRECTORIES,
 	KNOWLEDGE_ROOT,
@@ -272,12 +272,15 @@ import {
 	ARCHIVE_TARGET_CLAIM_MAX_LENGTH,
 	type ApprovedWritebackPreview,
 	type WikiReviewBatchPreview,
+	type WikiReviewBatchConfirmOptions,
+	type WikiReviewBatchProgress,
 	type WikiReviewBatchReceipt,
 	type ArchiveMemoryProposalPreview,
 	type ArchiveMemoryProposalReceipt,
 	type ArchiveMemoryProposalTargetClaim,
 } from './features/review/review-queue-controller';
 import { ObsidianProposalTransitionAdapter } from './features/review/proposal-transition-adapter';
+import { WikiReviewBatchApplyModal } from './features/review/review-modals';
 import type { ReviewKnowledgeSnapshot } from './features/review/review-context-model';
 import {
 	KNOWLEDGE_RELATIONSHIP_READ_LIMIT,
@@ -627,9 +630,10 @@ export default class TracekeeperPlugin extends Plugin {
 			this.app,
 			this.activityRecordRepository,
 			{
-				executeLocalTool: (name, args) => this.executeLocalTool(name, args),
+				executeLocalTool: (name, args, options) => this.executeLocalTool(name, args, options),
 				refreshGovernanceViews: () => this.refreshGovernanceViews(),
 				appendToAuditLog: (entry) => this.appendToAuditLog(entry),
+				getVaultRoot: () => this.getVaultRoot(),
 				ensureFolderExists: (path) => this.ensureFolderExists(path),
 				normalizeVaultPath: (path) => this.normalizeVaultPath(path),
 				loadReviewKnowledgeSnapshot: () => this.loadReviewKnowledgeSnapshot(),
@@ -879,7 +883,9 @@ export default class TracekeeperPlugin extends Plugin {
 		this.restartAutoRefresh();
 		this.app.workspace.onLayoutReady(() => {
 			this.registerAutoRefreshEvents();
-			void this.rebuildKnowledgeIndex(false);
+			void this.rebuildKnowledgeIndex(false)
+				.then(() => this.openPendingWikiReviewBatchRecovery())
+				.catch((error) => console.error('tracekeeper failed to recover Wiki review batch', error));
 			void this.openOnboardingEntryIfNeeded().catch((error) => {
 				console.error('tracekeeper failed to evaluate onboarding entry state', error);
 			});
@@ -2912,8 +2918,12 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 	}
 
-	async executeLocalTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-		return this.localToolExecutor.executeLocalTool(name, args);
+	async executeLocalTool(
+		name: string,
+		args: Record<string, unknown>,
+		options: LocalToolExecutionOptions = {}
+	): Promise<Record<string, unknown>> {
+		return this.localToolExecutor.executeLocalTool(name, args, options);
 	}
 
 	private buildLocalToolExecutionContext(): import('./composition/local-tool-executor').LocalToolExecutorContext {
@@ -2966,9 +2976,37 @@ export default class TracekeeperPlugin extends Plugin {
 
 	async confirmWikiReviewBatch(
 		preview: WikiReviewBatchPreview,
-		confirmationToken: string
+		confirmationToken: string,
+		options: WikiReviewBatchConfirmOptions | ((progress: WikiReviewBatchProgress) => void) = {}
 	): Promise<WikiReviewBatchReceipt> {
-		return this.reviewQueueController.confirmWikiReviewBatch(preview, confirmationToken);
+		return this.reviewQueueController.confirmWikiReviewBatch(preview, confirmationToken, options);
+	}
+
+	async resumeWikiReviewBatch(
+		operationId: string,
+		onProgress?: (progress: WikiReviewBatchProgress) => void
+	): Promise<WikiReviewBatchReceipt> {
+		return this.reviewQueueController.resumeWikiReviewBatch(operationId, onProgress);
+	}
+
+	async recoverPendingWikiReviewBatches(
+		onProgress?: (progress: WikiReviewBatchProgress) => void
+	): Promise<WikiReviewBatchReceipt[]> {
+		return this.reviewQueueController.recoverPendingWikiReviewBatches(onProgress);
+	}
+
+	private async openPendingWikiReviewBatchRecovery(): Promise<void> {
+		const operationIds = await this.reviewQueueController.listRecoverableWikiReviewBatchIds();
+		const operationId = operationIds[0];
+		if (!operationId) return;
+		new Notice(ui('检测到未完成的 Wiki 批次，正在恢复。', 'An unfinished Wiki batch was found and will resume.'));
+		new WikiReviewBatchApplyModal(
+			this.app,
+			this,
+			[],
+			() => void this.refreshGovernanceViews(),
+			operationId
+		).open();
 	}
 
 	async runMemoryRecall(input: MemoryRecallInput): Promise<MemoryRecallResult> {

@@ -264,6 +264,13 @@ export interface ToolInvocationContext extends ToolContext {
 	writebackConfirmationTtlMs?: number;
 	writebackConfirmationSecret?: string | Uint8Array;
 	writebackRecoveryOperationId?: string;
+	/** Internal Obsidian-only override used to coalesce managed relation writes in one reviewed batch. */
+	wikiBatchWritebackOverride?: {
+		proposalPath: string;
+		targetPath: string;
+		writebackBlock: string;
+		batchOperationId: string;
+	};
 }
 
 function normalizeContentLanguage(value: unknown): ContentLanguage {
@@ -4832,6 +4839,12 @@ async function prepareWritebackConfirmation(
 		pathSafetyOptions(context)
 	);
 	assertAllowedWritebackTarget(targetPath);
+	const batchOverride = wikiBatchWritebackOverrideFor(
+		context,
+		proposal.path,
+		targetPath,
+		plan.effectKind
+	);
 	const target = await readCurrentVaultTextState(vaultRoot, targetPath, context);
 	if (!target && !plan.effectKind) {
 		throw new ToolInputError('Writeback effect is missing from proposal plan.');
@@ -4848,7 +4861,10 @@ async function prepareWritebackConfirmation(
 	}
 	if (plan.effectKind === 'update_managed_relations' && target) {
 		try {
-			applyManagedRelationsBlock(target.content, snapshot.writebackContent);
+			applyManagedRelationsBlock(
+				target.content,
+				batchOverride?.block || snapshot.writebackContent
+			);
 		} catch (error) {
 			throw new ToolInputError(error instanceof Error ? error.message : 'Managed relations writeback is invalid.');
 		}
@@ -4951,8 +4967,8 @@ async function prepareWritebackConfirmation(
 			)
 			: plan.effectKind === 'update_managed_relations'
 				? {
-					block: snapshot.writebackContent,
-					marker: `managed-relations:${snapshot.proposalId}`,
+					block: batchOverride?.block || snapshot.writebackContent,
+					marker: batchOverride?.marker || `managed-relations:${snapshot.proposalId}`,
 				}
 			: buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
 	const touchedNotes = [
@@ -9042,6 +9058,34 @@ async function validateApprovedMemoryLifecycle(
 	}
 }
 
+function wikiBatchWritebackOverrideFor(
+	context: ToolInvocationContext,
+	proposalPath: string,
+	targetPath: string,
+	effectKind: ApplyApprovedWritebackPayload['effectKind']
+): { block: string; marker: string } | null {
+	const override = context.wikiBatchWritebackOverride;
+	if (!override) return null;
+	if (
+		context.transport !== 'obsidian-direct'
+		|| context.principalId !== 'obsidian-plugin-ui'
+		|| override.proposalPath !== proposalPath
+		|| override.targetPath !== targetPath
+		|| effectKind !== 'update_managed_relations'
+		|| !override.batchOperationId
+	) {
+		throw new ToolInputError('Wiki batch writeback override is restricted to the Obsidian review surface.');
+	}
+	const parsed = parseManagedRelationsBlock(override.writebackBlock.trim());
+	if (parsed.status !== 'valid' || parsed.start !== 0 || parsed.end !== parsed.content.length) {
+		throw new ToolInputError('Wiki batch managed relations override is invalid.');
+	}
+	return {
+		block: parsed.content,
+		marker: `managed-relations:${proposalPath}:${override.batchOperationId}`,
+	};
+}
+
 async function currentWritebackEffect(
 	vaultRoot: string,
 	payload: ApplyApprovedWritebackPayload,
@@ -9066,6 +9110,12 @@ async function currentWritebackEffect(
 	const claimKey = stripYamlQuotes(
 		readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey'])
 	);
+	const batchOverride = wikiBatchWritebackOverrideFor(
+		context,
+		payload.proposalPath,
+		payload.targetPath,
+		payload.effectKind
+	);
 	const writeback = createsMemoryRecord
 		? {
 			block: buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, payload.targetPath, operationId, context),
@@ -9079,8 +9129,8 @@ async function currentWritebackEffect(
 			)
 			: payload.effectKind === 'update_managed_relations'
 				? {
-					block: snapshot.writebackContent,
-					marker: `managed-relations:${snapshot.proposalId}`,
+					block: batchOverride?.block || snapshot.writebackContent,
+					marker: batchOverride?.marker || `managed-relations:${snapshot.proposalId}`,
 				}
 			: buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
 	const currentTaskPath = payload.taskId ? buildTaskNotePath(payload.taskId) : null;

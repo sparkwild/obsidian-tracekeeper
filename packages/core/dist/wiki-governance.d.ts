@@ -55,6 +55,18 @@ export declare function renderManagedRelationsBlock(relations: ManagedWikiRelati
  */
 export declare function parseManagedRelationsBlock(content: string): ParsedManagedRelationsBlock;
 /**
+ * 将一个完整托管关系区块解析为可合并的结构。
+ *
+ * @description 仅接受 Tracekeeper 生成的标准区块，未知行、重复 parent 或非法目标都会失败关闭。
+ */
+export declare function readManagedWikiRelations(block: string): ManagedWikiRelations;
+/**
+ * 合并现有区块和同一批次中的多个关系提案。
+ *
+ * @description 只合并 parent、Source index 和 Wiki 关系；正文及损坏区块不会被改写或绕过校验。
+ */
+export declare function mergeManagedWikiRelationsBlocks(currentContent: string, proposedBlocks: readonly string[]): string;
+/**
  * 在不触碰边界外正文的前提下插入或替换托管关系区块。
  */
 export declare function upsertManagedRelationsBlock(content: string, relations: ManagedWikiRelations): string;
