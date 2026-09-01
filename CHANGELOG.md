@@ -4,6 +4,12 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.4] - Wiki Dependency Ordering Hotfix
+
+### Fixed
+
+- Treat `parent` links as creation dependencies while keeping `related` child links as graph edges, so valid Topic Map child lists no longer form false dependency cycles.
+
 ## [0.4.3] - Reliable Wiki Batch Apply
 
 ### Fixed

@@ -1930,6 +1930,77 @@ try {
 		assert.equal(targetWriteCount, 1);
 	});
 
+	test('Wiki batch treats parent links as dependencies without mistaking child related links for cycles', async () => {
+		const harness = createHarness();
+		const { renderManagedRelationsBlock } = require('@tracekeeper/core');
+		const mapPath = '01_knowledge/wiki/programming/map.md';
+		const topicPath = '01_knowledge/wiki/programming/topic.md';
+		const mapBlock = renderManagedRelationsBlock({
+			parent: '01_knowledge/wiki/index.md',
+			related: [topicPath],
+		});
+		const topicBlock = renderManagedRelationsBlock({ parent: mapPath });
+		const mapFile = harness.files.get(proposalPath);
+		mapFile.frontmatter = {
+			...mapFile.frontmatter,
+			type: 'memory-proposal',
+			proposal_id: 'proposal-map',
+			proposal_kind: 'wiki_relations',
+			target_note: mapPath,
+			wiki_role: 'topic_map',
+			writeback_effect: 'update_managed_relations',
+			writeback_content: mapBlock,
+		};
+		mapFile.body = `# Map\n\n## Writeback\n\n${mapBlock}\n`;
+		mapFile.content = renderFileContent(mapFile);
+		harness.files.set(mapPath, {
+			__tracekeeper_kind: 'file',
+			path: mapPath,
+			extension: 'md',
+			basename: 'map',
+			stat: { mtime: Date.parse('2026-07-30T00:00:00.000Z') },
+			content: '# Map\n',
+		});
+		const topicProposalPath = '00_tracekeeper/inbox/review_queue/proposal-topic.md';
+		const topicFile = {
+			...mapFile,
+			path: topicProposalPath,
+			frontmatter: {
+				...mapFile.frontmatter,
+				proposal_id: 'proposal-topic',
+				target_note: topicPath,
+				wiki_role: 'topic',
+				parent_wiki: mapPath,
+				writeback_content: topicBlock,
+			},
+			body: `# Topic\n\n## Writeback\n\n${topicBlock}\n`,
+		};
+		topicFile.content = renderFileContent(topicFile);
+		harness.files.set(topicProposalPath, topicFile);
+		harness.files.set(topicPath, {
+			__tracekeeper_kind: 'file',
+			path: topicPath,
+			extension: 'md',
+			basename: 'topic',
+			stat: { mtime: Date.parse('2026-07-30T00:00:00.000Z') },
+			content: '# Topic\n',
+		});
+		const controller = new ReviewQueueController(
+			harness.app,
+			harness.records,
+			harness.host,
+			harness.transitionOwner,
+			() => 'review-parent-child-order',
+			() => new Date('2026-07-30T00:00:00.000Z')
+		);
+		const preview = await controller.previewWikiReviewBatch([
+			currentProposalFromFile(mapFile),
+			currentProposalFromFile(topicFile),
+		]);
+		assert.deepEqual(preview.targets.map((target) => target.targetPath), [mapPath, topicPath]);
+		assert.deepEqual(preview.executionOrder, preview.targets.map((target) => target.targetGroupId));
+	});
+
 	test('Wiki batch modal keeps the confirmation dialog open with durable progress and completion', async () => {
 		let resolveBatch;
 		let onAppliedCalled = false;
