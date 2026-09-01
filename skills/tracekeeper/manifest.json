@@ -3,7 +3,7 @@
   "name": "tracekeeper",
   "skill_version": "2.5.0",
   "workflow_contract_version": 6,
-  "minimum_tracekeeper_version": "0.4.1",
+  "minimum_tracekeeper_version": "0.4.2",
   "hash_algorithm": "sha256",
   "bundle_hash": "sha256:52a7d8b9447bcbab4084bce6559a81b5b7a0c6106f8e58043854c1cd0ba308d0",
   "files": [
