@@ -1,15 +1,15 @@
 {
   "format_version": 1,
   "name": "tracekeeper",
-  "skill_version": "2.4.0",
+  "skill_version": "2.5.0",
   "workflow_contract_version": 6,
-  "minimum_tracekeeper_version": "0.4.0",
+  "minimum_tracekeeper_version": "0.4.1",
   "hash_algorithm": "sha256",
-  "bundle_hash": "sha256:85a0ec2c4ca220c54e78793e49265e1b8bd7512ae779cf9b8280548a37aca19c",
+  "bundle_hash": "sha256:52a7d8b9447bcbab4084bce6559a81b5b7a0c6106f8e58043854c1cd0ba308d0",
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "sha256:9e677035c25f926eae297edb0b65c57fff7777004fd52d2a8b21ca939b1c1274"
+      "sha256": "sha256:293037f46512b88ecf922fc38f14147e607a85d6c6da0acc74884178f8d99404"
     },
     {
       "path": "references/workflow-state-machine.md",
@@ -35,7 +35,7 @@
   "artifacts": {
     "flattened": {
       "path": "dist/tracekeeper.flattened.md",
-      "sha256": "sha256:8c963a035cfff099f43172262ce663aa3b2f5098ec7278740ac85ac294fce5d1"
+      "sha256": "sha256:c76bb60a246d43bb4d489bba053bdd02b401037fbf8f4d0b53f2e6e70f19077a"
     }
   }
 }

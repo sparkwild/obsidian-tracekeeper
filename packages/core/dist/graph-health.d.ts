@@ -19,6 +19,8 @@ export interface GraphProfileEvaluation {
 export interface GraphHealthReport {
     note_count: number;
     edge_observation_count: number;
+    ignored_edge_observation_count: number;
+    ignored_unresolved_edge_count: number;
     wikilink_edge_count: number;
     unresolved_edges: GraphHealthUnresolvedEdge[];
     resolved_edge_count: number;

@@ -43,6 +43,8 @@ import {
 	TRACEKEEPER_ROOT,
 	TRACEKEEPER_SYSTEM_PATH,
 	renderAgentActivityHub,
+	scannedNoteFromContent,
+	KNOWLEDGE_SOURCES_FILES_DIR,
 	type WikiChangeRule,
 } from '@tracekeeper/core';
 import {
@@ -204,6 +206,14 @@ import {
 } from './features/structure/legacy-memory-migration-controller';
 import { OnboardingEntryModal } from './features/onboarding/onboarding-entry-modal';
 import { TracekeeperSourceStatusView } from './features/sources/source-status-view';
+import {
+	LegacySourceConsolidationController,
+	LEGACY_SOURCE_CONSOLIDATION_JOURNAL_ROOT,
+	type LegacySourceArchivePreview,
+	type LegacySourceArchiveResult,
+	type LegacySourceConsolidationPreview,
+	type LegacySourceConsolidationResult,
+} from './features/sources/legacy-source-consolidation-controller';
 import { TracekeeperActivityView } from './features/activity/activity-view';
 import { TracekeeperReviewQueueView } from './features/review/review-queue-view';
 import { TracekeeperGraphHealthView } from './features/graph/graph-health-view';
@@ -512,6 +522,7 @@ export default class TracekeeperPlugin extends Plugin {
 	private clientSkillAdapter: ClientSkillAdapter | null = null;
 	private legacyMigrationController!: LegacyMigrationController;
 	private legacyMemoryMigrationController!: LegacyMemoryMigrationController;
+	private legacySourceConsolidationController!: LegacySourceConsolidationController;
 	private activityDataController!: ActivityDataController;
 	private activityRecordRepository!: ActivityRecordRepository;
 	private graphHealthController!: GraphHealthController;
@@ -678,6 +689,59 @@ export default class TracekeeperPlugin extends Plugin {
 			this.app.vault,
 			this.app.fileManager
 		);
+		this.legacySourceConsolidationController = new LegacySourceConsolidationController({
+			loadSourceNotes: async () => {
+				const vaultRoot = this.getVaultRoot();
+				const files = this.app.vault.getMarkdownFiles()
+					.filter((file) => file.path.startsWith(`${KNOWLEDGE_SOURCES_FILES_DIR}/`))
+					.sort((left, right) => left.path.localeCompare(right.path));
+				const notes = [];
+				for (const file of files) {
+					const content = await this.app.vault.read(file);
+					notes.push(scannedNoteFromContent({
+						absolutePath: `${vaultRoot}/${file.path}`,
+						relativePath: file.path,
+						fallbackTitle: file.basename,
+						size: file.stat.size,
+						modifiedAt: new Date(file.stat.mtime).toISOString(),
+						content,
+					}));
+				}
+				return notes;
+			},
+			listMarkdownPaths: async () => this.app.vault.getMarkdownFiles().map((file) => file.path).sort(),
+			readText: async (relativePath) => {
+				const file = this.app.vault.getAbstractFileByPath(this.normalizeVaultPath(relativePath));
+				return file instanceof TFile ? this.app.vault.read(file) : null;
+			},
+			createText: async (relativePath, content) => {
+				await this.vaultRepository.createText(this.normalizeVaultPath(relativePath), content);
+			},
+			writeText: async (relativePath, content) => {
+				const current = await this.vaultRepository.readText(this.normalizeVaultPath(relativePath));
+				if (!current) {
+					throw new Error(`Cannot update missing consolidation journal: ${relativePath}`);
+				}
+				await this.vaultRepository.replaceText(current.path, current.version, content);
+			},
+			ensureFolder: (relativePath) => this.ensureFolderExists(relativePath),
+			moveText: async (sourcePath, destinationPath) => {
+				const source = this.app.vault.getAbstractFileByPath(this.normalizeVaultPath(sourcePath));
+				if (!(source instanceof TFile)) {
+					throw new Error(`Cannot archive missing Source file: ${sourcePath}`);
+				}
+				if (this.app.vault.getAbstractFileByPath(this.normalizeVaultPath(destinationPath))) {
+					throw new Error(`Archive target already exists: ${destinationPath}`);
+				}
+				await this.ensureFolderExists(destinationPath.split('/').slice(0, -1).join('/'));
+				await this.app.fileManager.renameFile(source, this.normalizeVaultPath(destinationPath));
+			},
+			listJournalPaths: async () => this.app.vault.getFiles()
+				.filter((file) => file.path.startsWith(`${LEGACY_SOURCE_CONSOLIDATION_JOURNAL_ROOT}/`))
+				.map((file) => file.path)
+				.sort(),
+			now: () => new Date().toISOString(),
+		});
 		this.knowledgeIndex = ObsidianKnowledgeIndexAdapter.create(this.app, this.getVaultRoot());
 		await this.startMcpRuntime();
 		this.localToolExecutor = new LocalToolExecutor({
@@ -1966,6 +2030,43 @@ export default class TracekeeperPlugin extends Plugin {
 			missingRequestFolder: !(this.app.vault.getAbstractFileByPath(TRACEKEEPER_AGENT_REQUESTS_DIR) instanceof TFolder),
 			query,
 		});
+	}
+
+	async previewLegacySourceConsolidation(
+		migrationId = `legacy-source-consolidation-${new Date().toISOString().replace(/[:.]/g, '-')}`
+	): Promise<LegacySourceConsolidationPreview> {
+		return this.legacySourceConsolidationController.preview(migrationId);
+	}
+
+	async applyLegacySourceConsolidation(
+		preview: LegacySourceConsolidationPreview,
+		confirmationToken: string
+	): Promise<LegacySourceConsolidationResult> {
+		const result = await this.legacySourceConsolidationController.apply(preview, confirmationToken);
+		await this.rebuildKnowledgeIndex(true);
+		await this.refreshGovernanceViews();
+		return result;
+	}
+
+	async previewLegacySourceArchive(
+		migrationId: string
+	): Promise<LegacySourceArchivePreview> {
+		return this.legacySourceConsolidationController.previewArchive(migrationId);
+	}
+
+	async previewLatestLegacySourceArchive(): Promise<LegacySourceArchivePreview | null> {
+		const migrationId = await this.legacySourceConsolidationController.latestCompletedMigrationId();
+		return migrationId ? this.previewLegacySourceArchive(migrationId) : null;
+	}
+
+	async archiveLegacySources(
+		preview: LegacySourceArchivePreview,
+		confirmationToken: string
+	): Promise<LegacySourceArchiveResult> {
+		const result = await this.legacySourceConsolidationController.archive(preview, confirmationToken);
+		await this.rebuildKnowledgeIndex(true);
+		await this.refreshGovernanceViews();
+		return result;
 	}
 
 

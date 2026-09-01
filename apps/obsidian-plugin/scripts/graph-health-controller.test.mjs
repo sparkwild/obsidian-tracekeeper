@@ -113,8 +113,10 @@ try {
 					disabled: false,
 					profile: 'balanced',
 					note_count: 12,
-					edge_observation_count: 20,
-					wikilink_edge_count: 18,
+				edge_observation_count: 20,
+				ignored_edge_observation_count: 5,
+				ignored_unresolved_edge_count: 4,
+				wikilink_edge_count: 18,
 					resolved_edge_count: 17,
 					unresolved_edge_count: 1,
 					largest_component_node_count: 10,
@@ -153,6 +155,8 @@ try {
 	assert.deepEqual(calls[0].args, { max_items: 20, graph_profile: 'balanced' });
 	assert.equal(snapshot.noteCount, 12);
 	assert.equal(snapshot.edgeObservationCount, 20);
+	assert.equal(snapshot.ignoredEdgeObservationCount, 5);
+	assert.equal(snapshot.ignoredUnresolvedEdgeCount, 4);
 	assert.equal(snapshot.unresolvedEdgeCount, 1);
 	assert.deepEqual(snapshot.missingRecommendedHubs, ['01_knowledge/memory/global/index.md']);
 	assert.equal(snapshot.profileIssues.length > 0, true);
@@ -227,6 +231,7 @@ try {
 	assert.ok(viewSource.includes('this.graphIssueSeverityLabel(issue.severity)'));
 	assert.ok(viewSource.includes('this.graphIssueMessage(issue, issueCount)'));
 	assert.ok(viewSource.includes('this.graphRecommendationDisplays(snapshot)'));
+	assert.ok(viewSource.includes('path:01_knowledge -path:.parts -path:02_archive'));
 	assert.equal(viewSource.includes("ui('Profile Issues', 'Profile Issues')"), false);
 	assert.equal(viewSource.includes("ui('Hub Candidates', 'Hub Candidates')"), false);
 	assert.equal(viewSource.includes('body.createDiv({ text: issue.message'), false);

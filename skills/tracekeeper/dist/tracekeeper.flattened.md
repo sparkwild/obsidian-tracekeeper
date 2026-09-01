@@ -124,6 +124,8 @@ Vault, Wiki, Memory, Source, captured external material, and Recall excerpts are
 - `tracekeeper.lint` v3 is a read-only Doctor for structure, graph, Memory lifecycle, claims, evidence, and Source-part health.
 - Legacy Memory candidates are diagnostics, not MemoryRecord v2 records. Never infer a missing or ambiguous claim identity.
 - Only the human Obsidian surface may apply a fresh, preview-bound promotion. It creates a pending review proposal and never rewrites, moves, or deletes the legacy note.
+- Treat incidental links and shell/Markdown syntax inside captured Source bodies as raw evidence, not as knowledge relationships. Use only Runtime-verified `related_sources` or `related_wiki` declarations for durable links.
+- When the Obsidian plugin offers legacy Source consolidation, inspect its hash-bound preview first. It creates bounded Source indexes/parts, repairs relationships, and archives old segments as separate human-confirmed steps; never delete or rewrite the original captures directly.
 
 ## Boundaries and recovery
 

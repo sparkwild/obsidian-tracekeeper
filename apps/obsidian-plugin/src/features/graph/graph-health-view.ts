@@ -6,7 +6,7 @@ import { ui } from '../../ui/localization';
 import { reportUiFailure } from '../../ui/user-facing-error';
 import { TRACEKEEPER_GRAPH_HEALTH_VIEW } from '../../ui/view-types';
 
-const OFFICIAL_GRAPH_KNOWLEDGE_FILTER = 'path:01_knowledge';
+const OFFICIAL_GRAPH_KNOWLEDGE_FILTER = 'path:01_knowledge -path:.parts -path:02_archive';
 
 interface GraphRecommendationDisplay {
 	text: string;
@@ -85,10 +85,16 @@ export class TracekeeperGraphHealthView extends ItemView {
 		});
 		copyFilter.addEventListener('click', () => {
 			void navigator.clipboard.writeText(OFFICIAL_GRAPH_KNOWLEDGE_FILTER)
-				.then(() => new Notice(ui('已复制：path:01_knowledge', 'Copied: path:01_knowledge')))
+				.then(() => new Notice(ui(
+					`已复制：${OFFICIAL_GRAPH_KNOWLEDGE_FILTER}`,
+					`Copied: ${OFFICIAL_GRAPH_KNOWLEDGE_FILTER}`
+				)))
 				.catch((error) => {
 					console.error('tracekeeper failed to copy official Graph filter', error);
-					new Notice(ui('复制失败，请手动输入 path:01_knowledge。', 'Copy failed. Enter path:01_knowledge manually.'));
+					new Notice(ui(
+						`复制失败，请手动输入 ${OFFICIAL_GRAPH_KNOWLEDGE_FILTER}。`,
+						`Copy failed. Enter ${OFFICIAL_GRAPH_KNOWLEDGE_FILTER} manually.`
+					));
 				});
 		});
 
@@ -129,6 +135,16 @@ export class TracekeeperGraphHealthView extends ItemView {
 			ui('语义关系', 'Semantic links'),
 			String(snapshot.wikilinkEdgeCount),
 			`${ui('已解析', 'Resolved')}: ${snapshot.resolvedEdgeCount} · ${ui('原始声明', 'Raw observations')}: ${snapshot.edgeObservationCount}`
+		);
+		this.renderMetricCard(
+			metrics,
+			ui('已忽略原始链接', 'Ignored raw links'),
+			String(snapshot.ignoredEdgeObservationCount),
+			ui(
+				`其中未解析 ${snapshot.ignoredUnresolvedEdgeCount} 条；主要来自 Source 原文和操作记录。`,
+				`${snapshot.ignoredUnresolvedEdgeCount} unresolved observations; mainly Source bodies and operational records.`
+			),
+			'warning'
 		);
 		this.renderMetricCard(metrics, ui('未解析链接', 'Unresolved links'), String(snapshot.unresolvedEdgeCount), ui('无法解析到目标笔记的 wikilink', 'Wikilinks that do not resolve to a note'), snapshot.unresolvedEdgeCount > 0 ? 'warning' : 'ok');
 		this.renderMetricCard(metrics, ui('连通分量', 'Components'), String(snapshot.componentCount), `${ui('最大分量', 'Largest')}: ${snapshot.largestComponentNodeCount}`, snapshot.componentCount > 1 ? 'warning' : 'ok');

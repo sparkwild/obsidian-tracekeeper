@@ -204,6 +204,23 @@ function resolvePathTarget(target, sourcePath, index) {
     if (extensionless) {
         return { status: 'resolved', path: extensionless };
     }
+    // Obsidian also accepts a note-relative path without an explicit `./`
+    // prefix (for example `[[memory/index]]` from `01_knowledge/index.md`).
+    // Prefer the vault-root interpretation above, then fall back to the
+    // note-relative interpretation when no root target exists.
+    if (!target.startsWith('./') && !target.startsWith('../') && !target.startsWith('/')) {
+        const relative = node_path_1.default.posix.normalize(node_path_1.default.posix.join(node_path_1.default.posix.dirname(sourcePath), candidate));
+        if (relative && relative !== '.' && relative !== '..' && !relative.startsWith('../')) {
+            const relativeExact = index.paths.get(normalizeLookupToken(relative));
+            if (relativeExact) {
+                return { status: 'resolved', path: relativeExact };
+            }
+            const relativeExtensionless = index.pathsWithoutExtensions.get(normalizeLookupToken(stripKnownExtension(relative)));
+            if (relativeExtensionless) {
+                return { status: 'resolved', path: relativeExtensionless };
+            }
+        }
+    }
     return { status: 'missing' };
 }
 function resolveUniqueLookupTarget(target, index) {

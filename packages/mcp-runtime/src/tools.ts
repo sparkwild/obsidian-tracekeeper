@@ -10423,6 +10423,8 @@ function buildGraphSummary(graphHealth: GraphHealthReport): Record<string, unkno
 		note_count: graphHealth.note_count,
 		edge_observation_count: graphHealth.edge_observation_count,
 		wikilink_edge_count: graphHealth.wikilink_edge_count,
+		ignored_edge_observation_count: graphHealth.ignored_edge_observation_count,
+		ignored_unresolved_edge_count: graphHealth.ignored_unresolved_edge_count,
 		resolved_edge_count: graphHealth.resolved_edge_count,
 		unresolved_edge_count: graphHealth.unresolved_edge_count,
 		component_count: graphHealth.component_count,
