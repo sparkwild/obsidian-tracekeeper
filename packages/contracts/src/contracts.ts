@@ -6,6 +6,7 @@ import {
 	GENERIC_TOOL_OUTPUT_SCHEMA,
 	FINISH_TASK_OUTPUT_SCHEMA,
 	LINT_OUTPUT_SCHEMA,
+	REQUEST_MAINTENANCE_OUTPUT_SCHEMA,
 	PROPOSE_MEMORY_OUTPUT_SCHEMA,
 	MEMORY_OUTPUT_SCHEMA,
 	RECALL_OUTPUT_SCHEMA,
@@ -101,7 +102,7 @@ export type ToolRisk = 'read-only' | 'low-risk-write' | 'review-gated-write';
 export type ToolEffect = 'read' | 'append' | 'bounded-update' | 'review-gated';
 export type ToolIdempotency = 'natural' | 'keyed' | 'none';
 export type ToolWorld = 'closed';
-export type ToolWorkflowRole = 'observe' | 'recall' | 'task-start' | 'task-finish' | 'review' | 'source' | 'memory';
+export type ToolWorkflowRole = 'observe' | 'recall' | 'task-start' | 'task-finish' | 'review' | 'source' | 'memory' | 'maintenance';
 export type ToolCapability =
 	| 'vault.read'
 	| 'vault.write'
@@ -166,6 +167,7 @@ export type TracekeeperToolName =
 	| 'tracekeeper.apply_approved_writeback'
 	| 'tracekeeper.build_context_pack'
 	| 'tracekeeper.lint'
+	| 'tracekeeper.request_maintenance'
 	| 'tracekeeper.finish_task'
 	| 'tracekeeper.distill_session'
 	| 'tracekeeper.write_context_pack'
@@ -193,6 +195,7 @@ export const PUBLIC_TOOL_NAME_ORDER = [
 	'tracekeeper.status',
 	'tracekeeper.agent_activity_recent',
 	'tracekeeper.lint',
+	'tracekeeper.request_maintenance',
 	'tracekeeper.recall',
 	'tracekeeper.memory',
 	'tracekeeper.read_note',
@@ -746,7 +749,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.lint',
-		version: 3,
+		version: 4,
 		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -756,9 +759,11 @@ export const toolContracts = [
 		workflowRole: 'observe',
 		useCase: 'lint',
 		description:
-			'[read-only] Run the single vault check entry for structure, links, sources, claims, and graph health.',
+			'[read-only] Run the single vault check entry for structure, links, sources, claims, role-aware graph health, and generation-bound maintenance candidates.',
 		inputSchema: withToolInput({
 			max_items: { type: 'integer', description: 'Maximum number of issues to return.' },
+			page_size: { type: 'integer', minimum: 1, maximum: 200, description: 'Maintenance candidates per page.' },
+			cursor: { type: 'string', minLength: 1, description: 'Generation-bound cursor from a previous lint v4 page.' },
 			stale_after_days: {
 				type: 'integer',
 				minimum: 1,
@@ -771,6 +776,26 @@ export const toolContracts = [
 			},
 		}),
 		...withResultSchema(LINT_OUTPUT_SCHEMA),
+	},
+	{
+		name: 'tracekeeper.request_maintenance',
+		version: 1,
+		visibility: 'public',
+		capability: 'vault.write',
+		risk: 'low-risk-write',
+		effect: 'append',
+		idempotency: 'keyed',
+		world: 'closed',
+		workflowRole: 'maintenance',
+		useCase: 'request_maintenance',
+		description: '[low-risk write] Request human review of current lint maintenance candidates. This tool cannot approve, trash, purge, or delete files.',
+		inputSchema: withToolInput({
+			snapshot_generation: { type: 'integer', minimum: 0, description: 'Exact generation returned by tracekeeper.lint v4.' },
+			candidate_ids: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'string', pattern: '^maintenance_[a-f0-9]{24}$' }, description: 'Current requestable candidate IDs returned by lint.' },
+			task_id: { type: 'string', minLength: 1, maxLength: 256, description: 'Optional current Tracekeeper task id.' },
+			idempotency_key: { type: 'string', minLength: 1, maxLength: 512, description: 'Stable retry key for this exact maintenance request.' },
+		}, ['snapshot_generation', 'candidate_ids', 'idempotency_key']),
+		...withResultSchema(REQUEST_MAINTENANCE_OUTPUT_SCHEMA),
 	},
 	{
 		name: 'tracekeeper.finish_task',

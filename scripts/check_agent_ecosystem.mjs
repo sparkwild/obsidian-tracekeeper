@@ -50,6 +50,7 @@ const ALLOWED_SKILL_TOOL_NAMES = new Set([
 	'tracekeeper.capture_source',
 	'tracekeeper.propose_memory',
 	'tracekeeper.lint',
+	'tracekeeper.request_maintenance',
 ]);
 
 function isSafeRelativePath(relativePath) {

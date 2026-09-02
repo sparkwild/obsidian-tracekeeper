@@ -347,7 +347,11 @@ class ProposeMemoryApplicationService {
                 if (parsedRelations.status === 'valid') {
                     operationPayload.expectedManagedRelationsHash = parsedRelations.hash;
                 }
-                operationPayload.effectiveRisk = (0, core_1.computeWikiEffectiveRisk)({
+                const roleConflict = Boolean(snapshot.wiki_role
+                    && parsedRelations.status === 'valid'
+                    && parsedRelations.role !== 'unknown'
+                    && parsedRelations.role !== snapshot.wiki_role);
+                const computedRisk = (0, core_1.computeWikiEffectiveRisk)({
                     targetExists: !targetMissing,
                     writebackEffect: managedRelationsOnly
                         ? 'update_managed_relations'
@@ -357,7 +361,14 @@ class ProposeMemoryApplicationService {
                         ? { relationsStatus: parsedRelations.status }
                         : {}),
                     hasUnresolvedRelations: unresolvedRelations.length > 0,
+                    hasTargetConflict: roleConflict,
                 });
+                operationPayload.effectiveRisk = computedRisk === 'low'
+                    && managedRelationsOnly
+                    && Boolean(snapshot.wiki_role)
+                    && parsedRelations.role === 'unknown'
+                    ? 'medium'
+                    : computedRisk;
             }
         }
         const runner = new core_1.RecoverableOperationRunner({
@@ -428,10 +439,11 @@ class ProposeMemoryApplicationService {
             parent: operationPayload.resolvedWikiParent,
             related: operationPayload.resolvedWikiRelated ?? [],
             sources: bridgeMetadata.related_sources.filter((path) => !(0, core_1.isSourcePartPath)(path)),
-        }) : '';
+        }, snapshot.wiki_role ?? undefined) : '';
         const proposedWritebackContent = writebackEffect === 'update_managed_relations'
             ? managedRelationsBlock
-            : wikiTarget && (snapshot.parent_wiki
+            : wikiTarget && (snapshot.wiki_role
+                || snapshot.parent_wiki
                 || snapshot.related_wiki.length > 0
                 || bridgeMetadata.related_sources.length > 0)
                 ? [

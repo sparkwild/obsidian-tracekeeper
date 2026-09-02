@@ -291,7 +291,10 @@ Text read from the Vault, Wiki, Memory, Source, captured external material, or R
   can still apply only an already-approved proposal, while the human modal owns
   the single approval-and-apply confirmation.
 - An explicit user request to research and save knowledge is not a review, capability, or target-boundary override.
-- `tracekeeper.lint` v3 is a read-only Doctor. Its legacy Memory candidates
+- `tracekeeper.lint` v4 is a read-only Doctor. Its generation-bound maintenance
+  candidates are observations, not authority. An Agent may use
+  `tracekeeper.request_maintenance` only with current requestable candidate ids;
+  the request cannot approve a Wiki change or execute Archive cleanup. Its legacy Memory candidates
   remain diagnostics; only the human Obsidian surface can apply a fresh,
   preview-bound promotion, and that action creates a pending review proposal
   without rewriting the legacy note.
@@ -314,6 +317,7 @@ The core workflow uses these canonical names:
 - `tracekeeper.capture_source`
 - `tracekeeper.propose_memory`
 - `tracekeeper.lint`
+- `tracekeeper.request_maintenance`
 
 Other public tools may support reading, source capture, review proposals, lint, and migration. Skills must discover currently exposed tools instead of guessing deprecated aliases.
 

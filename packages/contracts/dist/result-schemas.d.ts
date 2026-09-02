@@ -12,6 +12,7 @@ export declare const MEMORY_SUCCESS_OUTPUT_SCHEMA: JsonSchema2020;
 export declare const PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA: JsonSchema2020;
 export declare const STATUS_OUTPUT_SCHEMA: JsonSchema2020;
 export declare const LINT_OUTPUT_SCHEMA: JsonSchema2020;
+export declare const REQUEST_MAINTENANCE_OUTPUT_SCHEMA: JsonSchema2020;
 export declare const READ_NOTE_OUTPUT_SCHEMA: JsonSchema2020;
 export declare const BUILD_CONTEXT_PACK_OUTPUT_SCHEMA: JsonSchema2020;
 export declare const REVIEW_QUEUE_OUTPUT_SCHEMA: JsonSchema2020;

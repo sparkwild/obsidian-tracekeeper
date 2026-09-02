@@ -3210,6 +3210,9 @@ test('runtime-log cleanup has zero Vault.delete reachability and uses trashFile'
 		'src/features/review/review-queue-controller.ts',
 		'utf8'
 	);
+	const archiveControllerSource = controllerSource.slice(
+		controllerSource.indexOf('async previewArchiveMemoryProposals')
+	);
 	const transitionSource = fs.readFileSync(
 		'src/features/review/proposal-transition-adapter.ts',
 		'utf8'
@@ -3229,7 +3232,7 @@ test('runtime-log cleanup has zero Vault.delete reachability and uses trashFile'
 		'archive must not read private Vault configuration'
 	);
 	assert.equal(
-		/\.cachedRead\s*\(/.test(controllerSource),
+		/\.cachedRead\s*\(/.test(archiveControllerSource),
 		false,
 		'archive preview and commit must use fresh Vault reads'
 	);

@@ -21,6 +21,7 @@ import {
 	memoryProposalStatusLabel,
 	reviewInboxFilterLabel,
 	type MemoryReviewQueueSnapshot,
+	type MaintenanceRequestSummary,
 	type ReviewQueueBatchGroup,
 	type ReviewInboxFilter,
 	type ReviewQueueSort,
@@ -40,6 +41,7 @@ import type {
 	ReviewTargetContext,
 } from './review-context-model';
 import { ui } from '../../ui/localization';
+import { reportUiFailure } from '../../ui/user-facing-error';
 import { TRACEKEEPER_REVIEW_QUEUE_VIEW } from '../../ui/view-types';
 import { snippetFromText, trimText } from '../shared/markdown-record-parser';
 
@@ -167,6 +169,10 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 		const headerActions = header.createDiv({ cls: 'tracekeeper-action-row' });
 		this.renderRefreshButton(headerActions);
+		if (snapshot.maintenanceRequests?.some((request) => request.status === 'pending')) {
+			const recheck = headerActions.createEl('button', { text: ui('复检维护请求', 'Recheck maintenance requests') });
+			recheck.addEventListener('click', () => void this.reconcileMaintenanceRequests(recheck));
+		}
 		if (!this.showingDetail && !snapshot.missingReviewQueueFolder && batchActionableProposals.length > 0) {
 			const selectionButton = headerActions.createEl('button', {
 				text: this.selectionMode ? ui('退出批量操作', 'Exit batch actions') : ui('批量操作', 'Batch actions'),
@@ -178,6 +184,8 @@ export class TracekeeperReviewQueueView extends ItemView {
 				void this.render(snapshot);
 			});
 		}
+
+		this.renderMaintenanceRequests(contentEl, snapshot.maintenanceRequests ?? []);
 		if (!this.showingDetail && archiveCandidates.length > 0) {
 			const archiveButton = headerActions.createEl('button', {
 				text: ui('整理已处理记录', 'Organize processed records'),
@@ -355,6 +363,88 @@ export class TracekeeperReviewQueueView extends ItemView {
 			individualPage.page.pageIndex === 0
 		);
 		this.renderPagination(list, snapshot, individualPage.page);
+	}
+
+	private async reconcileMaintenanceRequests(button: HTMLButtonElement): Promise<void> {
+		button.disabled = true;
+		try {
+			await this.plugin.reconcileMaintenanceRequests();
+			await this.refresh();
+		} catch (error) {
+			button.disabled = false;
+			new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to recheck maintenance requests',
+				fallback: { zh: '复检维护请求失败。', en: 'Failed to recheck maintenance requests.' },
+			}));
+		}
+	}
+
+	private renderMaintenanceRequests(container: HTMLElement, requests: readonly MaintenanceRequestSummary[]): void {
+		const pending = requests.filter((request) => request.status === 'pending' || request.status === 'stale');
+		if (pending.length === 0) return;
+		const section = container.createDiv({ cls: 'tracekeeper-section' });
+		section.createEl('h3', { text: ui('Agent 维护请求', 'Agent maintenance requests') });
+		section.createEl('p', {
+			text: ui(
+				'请求只引用当前检查候选，不构成批准，也不能让 Agent 删除文件。具体 Wiki 变更仍进入下方批次审核；Source Archive 清理由“来源状态”单独确认。',
+				'Requests only reference current lint candidates. They are not approval and cannot let an Agent delete files. Concrete Wiki changes still use the review batches below; Source Archive cleanup is confirmed separately in Source status.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+		for (const request of pending) {
+			const card = section.createDiv({ cls: 'tracekeeper-card' });
+			const header = card.createDiv({ cls: 'tracekeeper-card__header' });
+			header.createEl('strong', { text: `${request.requestId} · ${request.status}` });
+			card.createEl('p', {
+				text: ui(
+					`generation ${request.snapshotGeneration} · ${request.candidates.length} 个候选${request.taskId ? ` · task ${request.taskId}` : ''}`,
+					`generation ${request.snapshotGeneration} · ${request.candidates.length} candidates${request.taskId ? ` · task ${request.taskId}` : ''}`
+				),
+				cls: 'tracekeeper-view__description',
+			});
+			if (!request.valid) {
+				card.createEl('p', {
+					text: ui(
+						`记录无效，不能参与复检或状态转换。技术原因：${request.validationError}`,
+						`The record is invalid and cannot be rechecked or transitioned. Technical reason: ${request.validationError}`
+					),
+					cls: 'tracekeeper-view__description',
+				});
+			}
+			const list = card.createEl('ul');
+			for (const candidate of request.candidates) {
+				list.createEl('li', { text: `${candidate.category} · ${candidate.risk} · ${candidate.paths.join(', ')} · ${candidate.reasons.join(', ')}` });
+			}
+			const actions = card.createDiv({ cls: 'tracekeeper-action-row' });
+			const open = actions.createEl('button', { text: ui('打开请求记录', 'Open request record') });
+			open.addEventListener('click', () => {
+				const file = this.app.vault.getAbstractFileByPath(request.path);
+				if (file instanceof TFile) void this.app.workspace.getLeaf(true).openFile(file);
+			});
+			if (request.valid && (request.status === 'pending' || request.status === 'stale')) {
+				const reject = actions.createEl('button', { text: ui('拒绝请求', 'Reject request'), cls: 'mod-warning' });
+				reject.addEventListener('click', () => void this.rejectMaintenanceRequest(request, reject));
+			} else {
+				card.createEl('p', {
+					text: ui('索引 generation 已变化；请让 Agent 重新运行 lint 后再提交当前候选。', 'The index generation changed. Ask the Agent to run lint again and submit current candidates.'),
+					cls: 'tracekeeper-view__description',
+				});
+			}
+		}
+	}
+
+	private async rejectMaintenanceRequest(request: MaintenanceRequestSummary, button: HTMLButtonElement): Promise<void> {
+		button.disabled = true;
+		try {
+			await this.plugin.rejectMaintenanceRequest(request);
+			await this.refresh();
+		} catch (error) {
+			button.disabled = false;
+			new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to reject maintenance request',
+				fallback: { zh: '拒绝维护请求失败。', en: 'Failed to reject maintenance request.' },
+			}));
+		}
 	}
 
 	async refresh(options: { automatic?: boolean } = {}): Promise<void> {

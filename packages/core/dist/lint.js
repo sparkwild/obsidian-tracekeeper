@@ -556,7 +556,7 @@ function buildGraphProfileLintIssues(report, profile) {
         }
         const paths = profileIssue.paths && profileIssue.paths.length > 0
             ? profileIssue.paths
-            : [knowledge_architecture_1.GRAPH_RECOMMENDED_ENTRY];
+            : [knowledge_architecture_1.KNOWLEDGE_WIKI_INDEX_PATH];
         for (const issuePath of paths) {
             issues.push({
                 severity: profileIssue.severity,

@@ -1,5 +1,5 @@
 export declare const WIKI_PROPOSAL_SCHEMA_VERSION: 2;
-export declare const MANAGED_RELATIONS_SCHEMA_VERSION: 1;
+export declare const MANAGED_RELATIONS_SCHEMA_VERSION: 2;
 export declare const WIKI_REVIEW_BATCH_MAX_ITEMS = 100;
 export declare const WIKI_REVIEW_BATCH_MAX_BYTES: number;
 export type WikiChangeRule = 'review_each' | 'review_batch' | 'auto_managed' | 'disabled';
@@ -12,6 +12,8 @@ export interface ManagedWikiRelations {
 }
 export interface ParsedManagedRelationsBlock {
     status: 'missing' | 'valid' | 'invalid';
+    schemaVersion: 1 | 2 | null;
+    role: WikiRole | 'unknown';
     content: string;
     payload: string;
     hash: string;
@@ -49,7 +51,7 @@ export declare function normalizeManagedRelationPath(value: string): string;
  *
  * @description 区块使用稳定排序、完整 Vault 相对 wikilink 与内容哈希，便于后续只替换该边界内的关系。
  */
-export declare function renderManagedRelationsBlock(relations: ManagedWikiRelations): string;
+export declare function renderManagedRelationsBlock(relations: ManagedWikiRelations, role?: WikiRole): string;
 /**
  * 校验并定位现有托管关系区块。
  */
@@ -69,7 +71,7 @@ export declare function mergeManagedWikiRelationsBlocks(currentContent: string, 
 /**
  * 在不触碰边界外正文的前提下插入或替换托管关系区块。
  */
-export declare function upsertManagedRelationsBlock(content: string, relations: ManagedWikiRelations): string;
+export declare function upsertManagedRelationsBlock(content: string, relations: ManagedWikiRelations, role?: WikiRole): string;
 export declare function applyManagedRelationsBlock(content: string, proposedBlock: string): string;
 export declare function computeWikiEffectiveRisk(input: WikiRiskInput): WikiEffectiveRisk;
 export declare function buildWikiReviewBatchId(taskId: string | null | undefined, proposalId: string): string;

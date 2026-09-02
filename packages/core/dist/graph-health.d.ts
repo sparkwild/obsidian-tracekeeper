@@ -29,6 +29,9 @@ export interface GraphHealthReport {
     component_count: number;
     isolated_nodes: string[];
     isolated_node_count: number;
+    actionable_isolated_nodes: string[];
+    actionable_isolated_node_count: number;
+    maintenance_component_count: number;
     only_inbound_nodes: string[];
     only_inbound_node_count: number;
     only_outbound_nodes: string[];

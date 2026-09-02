@@ -1,4 +1,5 @@
 import {
+	MaintenanceCandidateV1,
 	TRACEKEEPER_REVIEW_QUEUE_DIR,
 	buildWikiReviewBatches,
 	isKnowledgeWikiPath,
@@ -161,6 +162,19 @@ export interface MemoryReviewQueueSnapshot {
 	indexState: string;
 	missingReviewQueueFolder: boolean;
 	updatedAt: string;
+	maintenanceRequests: MaintenanceRequestSummary[];
+}
+
+export interface MaintenanceRequestSummary {
+	path: string;
+	requestId: string;
+	status: 'pending' | 'completed' | 'rejected' | 'stale';
+	valid: boolean;
+	validationError: string;
+	snapshotGeneration: number;
+	taskId: string;
+	manifestHash: string;
+	candidates: Array<Pick<MaintenanceCandidateV1, 'candidate_id' | 'category' | 'state' | 'risk' | 'paths' | 'reasons'>>;
 }
 
 export interface ReviewQueueDisplaySummary {

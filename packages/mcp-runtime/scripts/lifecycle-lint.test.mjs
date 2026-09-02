@@ -13,7 +13,7 @@ function write(vaultRoot, relativePath, content) {
 	fs.writeFileSync(target, content, 'utf8');
 }
 
-test('lint v3 exposes a closed read-only lifecycle Doctor report without inferring claims', async (t) => {
+test('lint v4 exposes a closed read-only lifecycle Doctor and maintenance snapshot without inferring claims', async (t) => {
 	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-lifecycle-lint-'));
 	const vaultRoot = path.join(tempRoot, 'vault');
 	t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -57,4 +57,8 @@ test('lint v3 exposes a closed read-only lifecycle Doctor report without inferri
 	}]);
 	assert.match(payload.lifecycle_doctor.legacy_candidates[0].content_hash, /^[a-f0-9]{64}$/);
 	assert.equal(Array.isArray(payload.lifecycle_doctor.directory_counts), true);
+	assert.equal(payload.maintenance.schema_version, 1);
+	assert.equal(Number.isSafeInteger(payload.maintenance.generation), true);
+	if (payload.snapshot_generation !== null) assert.equal(payload.maintenance.generation, payload.snapshot_generation);
+	assert.equal(Array.isArray(payload.maintenance.candidates), true);
 });

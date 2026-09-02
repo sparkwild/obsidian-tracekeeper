@@ -4,6 +4,29 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - Knowledge Maintenance Lifecycle
+
+### Added
+
+- Added a generation-bound maintenance snapshot that unifies Wiki role and relation diagnostics, Memory lifecycle findings, unassociated Source information, and Source Archive purge candidates.
+- Added `tracekeeper.request_maintenance` so Agents can request review of exact lint candidates without gaining approval, writeback, Trash, or delete authority.
+- Added a separately confirmed, byte-exact Source Archive cleanup flow with bounded batches, durable claims, idempotent receipts, restart recovery, and Obsidian `FileManager.trashFile()` integration.
+- Added schema 2 managed Wiki relation blocks with explicit `topic` and `topic_map` roles for role-aware graph maintenance.
+
+### Changed
+
+- Made Graph Health use `wiki/index.md`, maintenance components, actionable isolated nodes, unresolved semantic links, and role-aware candidates as its authoritative maintenance view; raw components and one-way links remain neutral statistics.
+- Folded Source-part Recall matches into their Source index while retaining the matching part paths as supporting evidence.
+- Unified MaintenanceRequest parsing and hash validation across Core, Runtime, and the Obsidian review interface, including structured YAML manifests and nullable task identities.
+- Kept Wiki relation repair and destructive Source Archive cleanup as two independent human confirmations.
+
+### Fixed
+
+- Removed obsolete Hub recommendations and prevented healthy Graph Health results from rebuilding warnings from raw graph statistics.
+- Fixed maintenance requests appearing with zero candidates or a literal `task null`, and corrected exact `pending → stale → completed` reconciliation and stale-request rejection.
+- Added explicit expired, stale, invalid-confirmation, empty-preview, and operation-binding cleanup errors with safe preview regeneration in the confirmation dialog.
+- Removed fully empty nested Source migration trees after verified cleanup while preserving the Archive roots, retaining trees containing unknown files, and resuming directory-only failures without repeating Source Trash operations.
+
 ## [0.4.5] - Reliable Wiki Batch Task Chaining
 
 ### Fixed

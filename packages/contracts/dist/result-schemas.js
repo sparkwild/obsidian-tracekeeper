@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA = exports.GENERIC_TOOL_OUTPUT_SCHEMA = exports.FINISH_TASK_OUTPUT_SCHEMA = exports.MEMORY_OUTPUT_SCHEMA = exports.RECALL_OUTPUT_SCHEMA = exports.START_TASK_OUTPUT_SCHEMA = exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = exports.CAPTURE_SOURCE_OUTPUT_SCHEMA = exports.SOURCE_REQUEST_OUTPUT_SCHEMA = exports.APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA = exports.REVIEW_QUEUE_OUTPUT_SCHEMA = exports.BUILD_CONTEXT_PACK_OUTPUT_SCHEMA = exports.READ_NOTE_OUTPUT_SCHEMA = exports.LINT_OUTPUT_SCHEMA = exports.STATUS_OUTPUT_SCHEMA = exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA = exports.MEMORY_SUCCESS_OUTPUT_SCHEMA = exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = exports.RECALL_SUCCESS_OUTPUT_SCHEMA = exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA = exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = exports.SCHEMA_VERSION = void 0;
+exports.AGENT_ACTIVITY_RECENT_OUTPUT_SCHEMA = exports.GENERIC_TOOL_OUTPUT_SCHEMA = exports.FINISH_TASK_OUTPUT_SCHEMA = exports.MEMORY_OUTPUT_SCHEMA = exports.RECALL_OUTPUT_SCHEMA = exports.START_TASK_OUTPUT_SCHEMA = exports.PROPOSE_MEMORY_OUTPUT_SCHEMA = exports.CAPTURE_SOURCE_OUTPUT_SCHEMA = exports.SOURCE_REQUEST_OUTPUT_SCHEMA = exports.APPLY_APPROVED_WRITEBACK_OUTPUT_SCHEMA = exports.REVIEW_QUEUE_OUTPUT_SCHEMA = exports.BUILD_CONTEXT_PACK_OUTPUT_SCHEMA = exports.READ_NOTE_OUTPUT_SCHEMA = exports.REQUEST_MAINTENANCE_OUTPUT_SCHEMA = exports.LINT_OUTPUT_SCHEMA = exports.STATUS_OUTPUT_SCHEMA = exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA = exports.MEMORY_SUCCESS_OUTPUT_SCHEMA = exports.FINISH_TASK_SUCCESS_OUTPUT_SCHEMA = exports.RECALL_SUCCESS_OUTPUT_SCHEMA = exports.START_TASK_SUCCESS_OUTPUT_SCHEMA = exports.COMMON_TOOL_FAILURE_OUTPUT_SCHEMA = exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = exports.SCHEMA_VERSION = void 0;
 const action_envelope_1 = require("./action-envelope");
 exports.SCHEMA_VERSION = 2;
 exports.COMMON_TOOL_SUCCESS_OUTPUT_SCHEMA = {
@@ -868,6 +868,41 @@ const LIFECYCLE_DOCTOR_SCHEMA = {
     },
     additionalProperties: false,
 };
+const MAINTENANCE_CANDIDATE_SCHEMA = {
+    type: 'object',
+    required: [
+        'candidate_id', 'snapshot_generation', 'category', 'state', 'risk', 'paths',
+        'content_hashes', 'dependencies', 'reclaimable_bytes', 'reasons', 'requestable',
+    ],
+    properties: {
+        candidate_id: { type: 'string', minLength: 1 },
+        snapshot_generation: { type: 'integer', minimum: 0 },
+        category: { type: 'string', enum: ['wiki_role', 'wiki_relation', 'unassociated_source', 'memory_lifecycle', 'source_archive_purge'] },
+        state: { type: 'string', enum: ['actionable', 'informational', 'blocked'] },
+        risk: { type: 'string', enum: ['low', 'medium', 'high', 'destructive'] },
+        paths: { type: 'array', items: { type: 'string', minLength: 1 } },
+        content_hashes: { type: 'array', items: { type: 'string', minLength: 1 } },
+        dependencies: { type: 'array', items: { type: 'string', minLength: 1 } },
+        reclaimable_bytes: { type: 'integer', minimum: 0 },
+        reasons: { type: 'array', items: { type: 'string', minLength: 1 } },
+        requestable: { type: 'boolean' },
+    },
+    additionalProperties: false,
+};
+const MAINTENANCE_SNAPSHOT_PAGE_SCHEMA = {
+    type: 'object',
+    required: ['schema_version', 'generation', 'counts', 'candidate_count', 'candidates', 'cursor', 'page_size'],
+    properties: {
+        schema_version: { const: 1, type: 'integer' },
+        generation: { type: 'integer', minimum: 0 },
+        counts: OPEN_OBJECT_SCHEMA,
+        candidate_count: { type: 'integer', minimum: 0 },
+        candidates: { type: 'array', items: MAINTENANCE_CANDIDATE_SCHEMA },
+        cursor: NULLABLE_STRING_SCHEMA,
+        page_size: { type: 'integer', minimum: 1, maximum: 200 },
+    },
+    additionalProperties: false,
+};
 exports.LINT_OUTPUT_SCHEMA = {
     type: 'object',
     oneOf: [
@@ -877,7 +912,7 @@ exports.LINT_OUTPUT_SCHEMA = {
                 'schema_version', 'ok', 'tool', 'read_only', 'profile', 'graph_profile_disabled',
                 'profile_issues', 'vault_root', 'scanned_at', 'index_state', 'snapshot_generation',
                 'snapshot_warning', 'issue_count', 'issues', 'graph_summary', 'graph_health',
-                'legacy_structure', 'lifecycle_doctor', 'fix_plan_summary',
+                'legacy_structure', 'lifecycle_doctor', 'maintenance', 'fix_plan_summary',
             ],
             properties: {
                 schema_version: { const: exports.SCHEMA_VERSION, type: 'integer' },
@@ -896,7 +931,38 @@ exports.LINT_OUTPUT_SCHEMA = {
                 graph_health: { oneOf: [OPEN_OBJECT_SCHEMA, { type: 'null' }] },
                 legacy_structure: OPEN_OBJECT_SCHEMA,
                 lifecycle_doctor: LIFECYCLE_DOCTOR_SCHEMA,
+                maintenance: MAINTENANCE_SNAPSHOT_PAGE_SCHEMA,
                 fix_plan_summary: STRING_ARRAY_SCHEMA,
+            },
+            additionalProperties: false,
+        },
+        exports.PUBLIC_TOOL_FAILURE_OUTPUT_SCHEMA,
+    ],
+};
+exports.REQUEST_MAINTENANCE_OUTPUT_SCHEMA = {
+    type: 'object',
+    oneOf: [
+        {
+            type: 'object',
+            required: [
+                'schema_version', 'ok', 'tool', 'read_only', 'vault_root', 'request_id',
+                'request_path', 'status', 'snapshot_generation', 'candidate_ids', 'task_id',
+                'idempotency_key', 'activity_path',
+            ],
+            properties: {
+                schema_version: { const: exports.SCHEMA_VERSION, type: 'integer' },
+                ok: { const: true, type: 'boolean' },
+                tool: { const: 'tracekeeper.request_maintenance', type: 'string' },
+                read_only: { const: false, type: 'boolean' },
+                vault_root: { type: 'string', minLength: 1 },
+                request_id: { type: 'string', minLength: 1 },
+                request_path: { type: 'string', minLength: 1 },
+                status: { type: 'string', enum: ['pending', 'completed', 'rejected', 'stale'] },
+                snapshot_generation: { type: 'integer', minimum: 0 },
+                candidate_ids: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
+                task_id: NULLABLE_STRING_SCHEMA,
+                idempotency_key: { type: 'string', minLength: 1 },
+                activity_path: { type: 'string', minLength: 1 },
             },
             additionalProperties: false,
         },

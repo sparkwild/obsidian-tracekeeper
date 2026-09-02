@@ -44,6 +44,16 @@ export interface KnowledgeIndexEvidence {
 	errors: readonly ScanError[];
 }
 
+export interface MaintenanceSurfaceCandidate {
+	candidateId: string;
+	category: string;
+	state: string;
+	risk: string;
+	paths: string[];
+	reasons: string[];
+	reclaimableBytes: number;
+}
+
 export interface MemoryInspectorQuery {
 	page?: number;
 	pageSize?: number;
@@ -105,6 +115,7 @@ export interface MemoryInspectorSnapshot {
 	};
 	lifecycleCounts: Record<MemoryLifecycleDisplayState, number>;
 	updatedAt: string;
+	maintenanceCandidates?: MaintenanceSurfaceCandidate[];
 }
 
 export interface SourceStatusQuery {
@@ -172,6 +183,7 @@ export interface SourceStatusSnapshot {
 	readFailures: ScanError[];
 	staleRecordCount: number;
 	updatedAt: string;
+	maintenanceCandidates?: MaintenanceSurfaceCandidate[];
 }
 
 export interface BuildMemoryInspectorInput {

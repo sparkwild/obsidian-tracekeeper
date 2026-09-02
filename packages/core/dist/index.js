@@ -38,3 +38,4 @@ __exportStar(require("./project-memory"), exports);
 __exportStar(require("./memory-record"), exports);
 __exportStar(require("./memory-lifecycle"), exports);
 __exportStar(require("./lifecycle-diagnostics"), exports);
+__exportStar(require("./maintenance"), exports);

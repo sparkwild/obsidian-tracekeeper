@@ -191,6 +191,7 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		});
 
 		this.renderIndexStatus(contentEl, snapshot);
+		this.renderMaintenanceCandidates(contentEl, snapshot);
 		this.renderLegacyMigrationStatus(contentEl, snapshot.lifecycleCounts.legacy_unkeyed);
 		this.renderFilters(contentEl, snapshot);
 
@@ -242,6 +243,25 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		}
 
 		this.renderPagination(contentEl, snapshot);
+	}
+
+	private renderMaintenanceCandidates(container: HTMLElement, snapshot: MemoryInspectorSnapshot): void {
+		const candidates = snapshot.maintenanceCandidates ?? [];
+		if (candidates.length === 0) return;
+		const card = container.createDiv({ cls: 'tracekeeper-card tracekeeper-observability-warning' });
+		card.createEl('strong', {
+			text: ui(`${candidates.length} 项记忆生命周期维护建议`, `${candidates.length} memory lifecycle maintenance suggestions`),
+		});
+		card.createEl('p', {
+			text: ui(
+				'MemoryRecord 历史不会被删除或改写；建议通过重新验证、后继记录以及 supersedes/contradicts 关系维护当前状态。',
+				'MemoryRecord history is never deleted or rewritten. Maintain current state through re-verification, successor records, and supersedes/contradicts relations.'
+			),
+		});
+		const list = card.createEl('ul');
+		for (const candidate of candidates.slice(0, 20)) {
+			list.createEl('li', { text: `${candidate.paths.join(', ')} · ${candidate.reasons.join(', ')}` });
+		}
 	}
 
 	private renderIndexStatus(container: HTMLElement, snapshot: MemoryInspectorSnapshot): void {

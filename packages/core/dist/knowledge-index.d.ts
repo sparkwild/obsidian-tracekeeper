@@ -2,6 +2,7 @@ import { type ScanResult, type ScannedNote } from './scan';
 import { type NormalizedVaultEdge, type NormalizedVaultNote, type VaultSemanticEvent } from './knowledge-note';
 import { type MemoryRecord } from './memory-record';
 import { type MemoryLifecycleProjection } from './memory-lifecycle';
+import { type WikiRole } from './wiki-governance';
 export declare const KNOWLEDGE_INDEX_VERSION = "1.0";
 export type VaultPath = string;
 export type FileVersion = string;
@@ -67,6 +68,12 @@ export interface KnowledgeCatalogEntry {
     excerpt: string;
     modifiedAt: string;
     size: number;
+    managedRelationsStatus: 'missing' | 'valid' | 'invalid';
+    managedRelationsSchemaVersion: 1 | 2 | null;
+    wikiRole: WikiRole | 'unknown';
+    managedParent: string | null;
+    managedSources: readonly string[];
+    managedRelated: readonly string[];
 }
 export interface KnowledgeLexicalIndex {
     postings: ReadonlyMap<string, readonly VaultPath[]>;

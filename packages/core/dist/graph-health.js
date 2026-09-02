@@ -171,10 +171,21 @@ function analyzeGraphHealth(notes, options = {}) {
         }
     }
     const componentResult = computeComponents(notePaths, undirected);
+    const isolatedNodeSet = new Set(isolatedNodes);
+    const informationalSourceIsolates = new Set(semanticNotes
+        .filter((note) => {
+        const notePath = normalizeRelativePath(note.relativePath);
+        return isolatedNodeSet.has(notePath)
+            && normalizedNoteType(note) === 'source-capture'
+            && !(0, wiki_governance_1.isSourcePartPath)(notePath);
+    })
+        .map((note) => normalizeRelativePath(note.relativePath)));
+    const actionableIsolatedNodes = isolatedNodes.filter((notePath) => !informationalSourceIsolates.has(notePath));
+    const maintenanceComponentResult = computeComponents(notePaths.filter((notePath) => !informationalSourceIsolates.has(notePath)), undirected);
     const missingRecommendedHubs = knowledge_architecture_1.GRAPH_RECOMMENDED_HUBS.filter((hub) => !notePathSet.has((0, knowledge_architecture_1.normalizeKnowledgePath)(hub))).map((hub) => hub);
-    const missingRecommendedEntry = notePathSet.has((0, knowledge_architecture_1.normalizeKnowledgePath)(knowledge_architecture_1.GRAPH_RECOMMENDED_ENTRY))
+    const missingRecommendedEntry = notePathSet.has((0, knowledge_architecture_1.normalizeKnowledgePath)(knowledge_architecture_1.KNOWLEDGE_WIKI_INDEX_PATH))
         ? null
-        : knowledge_architecture_1.GRAPH_RECOMMENDED_ENTRY;
+        : knowledge_architecture_1.KNOWLEDGE_WIKI_INDEX_PATH;
     const hubCandidatesSorted = hubScores
         .sort((a, b) => {
         if (b.degree !== a.degree) {
@@ -193,27 +204,15 @@ function analyzeGraphHealth(notes, options = {}) {
     if (unresolvedEdgeCount > 0) {
         recommendations.push(`Fix ${unresolvedEdgeCount} unresolved wikilinks to improve graph connectivity.`);
     }
-    if (componentResult.componentCount > 1) {
-        recommendations.push(`Graph has ${componentResult.componentCount} components; add cross-component links for better reachability.`);
+    if (maintenanceComponentResult.componentCount > 1) {
+        recommendations.push(`Knowledge graph has ${maintenanceComponentResult.componentCount} structural components; inspect role-specific relations.`);
     }
-    if (isolatedNodes.length > 0) {
-        recommendations.push(`${isolatedNodes.length} notes are isolated from wikilink graph.`);
+    if (actionableIsolatedNodes.length > 0) {
+        recommendations.push(`${actionableIsolatedNodes.length} structural notes are isolated from the wikilink graph.`);
     }
-    if (onlyInboundNodes.length > 0) {
-        recommendations.push(`There are ${onlyInboundNodes.length} notes with only inbound links (potential sinks).`);
-    }
-    if (onlyOutboundNodes.length > 0) {
-        recommendations.push(`There are ${onlyOutboundNodes.length} notes with only outbound links (potential sources).`);
-    }
-    if (missingRecommendedEntry) {
-        recommendations.push(`Missing recommended graph entry: ${missingRecommendedEntry}`);
-    }
-    for (const hub of missingRecommendedHubs) {
-        recommendations.push(`Missing recommended hub: ${hub}`);
-    }
-    if (componentResult.componentCount === 1 && unresolvedEdgeCount === 0 && recommendations.length === 0) {
-        recommendations.push('Graph is connected and links are largely resolved.');
-    }
+    // Compatibility-only structure fields remain available to older clients, but
+    // directory presence is not graph health. Doctor owns missing structure and
+    // role-aware maintenance candidates own Wiki parent/role recommendations.
     const sortedIsolatedNodes = isolatedNodes.sort();
     const sortedOnlyInboundNodes = onlyInboundNodes.sort();
     const sortedOnlyOutboundNodes = onlyOutboundNodes.sort();
@@ -231,6 +230,9 @@ function analyzeGraphHealth(notes, options = {}) {
         component_count: componentResult.componentCount,
         isolated_nodes: sortedIsolatedNodes.slice(0, maxItems),
         isolated_node_count: sortedIsolatedNodes.length,
+        actionable_isolated_nodes: actionableIsolatedNodes.sort().slice(0, maxItems),
+        actionable_isolated_node_count: actionableIsolatedNodes.length,
+        maintenance_component_count: maintenanceComponentResult.componentCount,
         only_inbound_nodes: sortedOnlyInboundNodes.slice(0, maxItems),
         only_inbound_node_count: sortedOnlyInboundNodes.length,
         only_outbound_nodes: sortedOnlyOutboundNodes.slice(0, maxItems),
@@ -289,57 +291,21 @@ function evaluateGraphProfile(report, profileValue = exports.DEFAULT_GRAPH_PROFI
             paths: uniquePaths(report.unresolved_edges.map((edge) => edge.path)),
         });
     }
-    if (report.missing_recommended_entry) {
-        issues.push({
-            severity: strictSeverity,
-            kind: 'graph_missing_entry',
-            message: `Missing graph entry note: ${report.missing_recommended_entry}`,
-            count: 1,
-            paths: [report.missing_recommended_entry],
-        });
-    }
-    if (report.missing_recommended_hub_count > 0) {
-        issues.push({
-            severity: strictSeverity,
-            kind: 'graph_missing_hub',
-            message: `${report.missing_recommended_hub_count} recommended graph hub note(s) are missing.`,
-            count: report.missing_recommended_hub_count,
-            paths: report.missing_recommended_hubs,
-        });
-    }
-    if (report.isolated_node_count > 0) {
+    if (report.actionable_isolated_node_count > 0) {
         issues.push({
             severity: strictSeverity,
             kind: 'graph_isolated_node',
-            message: `${report.isolated_node_count} note(s) are isolated from the wikilink graph.`,
-            count: report.isolated_node_count,
-            paths: report.isolated_nodes,
+            message: `${report.actionable_isolated_node_count} structural note(s) are isolated from the wikilink graph.`,
+            count: report.actionable_isolated_node_count,
+            paths: report.actionable_isolated_nodes,
         });
     }
-    if (report.component_count > 1) {
+    if (report.maintenance_component_count > 1) {
         issues.push({
             severity: 'warning',
             kind: 'graph_disconnected',
-            message: `Graph has ${report.component_count} disconnected component(s).`,
-            count: report.component_count,
-        });
-    }
-    if (report.only_inbound_node_count > 0) {
-        issues.push({
-            severity: 'warning',
-            kind: 'graph_only_inbound',
-            message: `${report.only_inbound_node_count} note(s) only have inbound links.`,
-            count: report.only_inbound_node_count,
-            paths: report.only_inbound_nodes,
-        });
-    }
-    if (report.only_outbound_node_count > 0) {
-        issues.push({
-            severity: 'warning',
-            kind: 'graph_only_outbound',
-            message: `${report.only_outbound_node_count} note(s) only have outbound links.`,
-            count: report.only_outbound_node_count,
-            paths: report.only_outbound_nodes,
+            message: `Knowledge graph has ${report.maintenance_component_count} structural component(s).`,
+            count: report.maintenance_component_count,
         });
     }
     return {

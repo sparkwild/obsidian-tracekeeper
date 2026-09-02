@@ -107,7 +107,10 @@ top-level Recall knowledge or semantic graph-health nodes.
 
 Graph health evaluates the semantic knowledge subgraph under `01_knowledge/`,
 excluding Source parts and operational or archived records from component and
-isolation counts. The plugin only offers a copyable filter for Obsidian's
+isolation counts. Role-aware maintenance treats `wiki/index.md` as the root,
+Topic Maps as parents of Topics, inbound-only Source indexes as normal leaves,
+and outbound-only roots as normal entry nodes. Unassociated Source indexes are
+informational maintenance candidates rather than strict graph failures. The plugin only offers a copyable filter for Obsidian's
 official Graph View and never writes `.obsidian/graph.json` or uses a private
 graph renderer. The current copyable filter is
 `path:01_knowledge -path:.parts -path:02_archive`.
@@ -196,17 +199,46 @@ index visibly links every part, each part identifies its parent Source, and
 knowledge relations point to the index so parts do not appear as independent
 user-level sources.
 
-## Doctor And Legacy Promotion
+## Maintenance Snapshot And Legacy Promotion
 
-`tracekeeper.lint` v3 combines structure, graph, Memory lifecycle, claim,
+`tracekeeper.lint` v4 combines structure, graph, Memory lifecycle, claim,
 authority/evidence, Source-part, and bounded-growth diagnostics in one
-read-only Doctor result. Its legacy candidates contain path, hash, scope, and
+read-only Doctor result. One generation-bound `MaintenanceSnapshotV1` adds
+stable, paginated candidates for Wiki roles and relations, unassociated Source
+indexes, Memory lifecycle follow-up, and Source Archive cleanup review.
+Candidate ids are valid only for that generation. `tracekeeper.request_maintenance`
+can record a selected current candidate for human review, but cannot approve a
+Wiki change or invoke archive, trash, purge, or delete behavior. Its legacy candidates contain path, hash, scope, and
 non-authoritative identity suggestions only. The plugin promotion controller
 binds a preview to the ready snapshot generation, candidate hashes, and exact
 proposal bytes; apply re-reads the Doctor snapshot and creates only a pending
 review proposal for a unique suggestion. Missing or ambiguous identity stays
 blocked. The source legacy note is never rewritten, moved, deleted, or silently
 promoted.
+
+Managed Wiki relations have two readable schemas. Schema 1 remains valid but
+has an `unknown` role. Schema 2 binds `topic` or `topic_map` into the marker and
+hash alongside the normalized relation payload. Existing notes are never
+rewritten merely because the plugin was upgraded; an explicit reviewed role or
+relation change is required before a schema-1 note becomes schema 2.
+
+## Source Archive Cleanup
+
+Only byte-exact redundant files created under
+`02_archive/source_migrations/**` by a completed Source consolidation can enter
+cleanup preview. Metadata candidates in lint still require an authoritative
+plugin preview, which reads the selected archive and replacement Source part,
+verifies both consolidation journals, the part manifest, all output hashes, and
+managed Wiki relations, and binds at most 100 files and 256 MiB to a five-minute
+manifest. Relationship repair and cleanup are always separate confirmations.
+
+After confirmation, the plugin persists a `source_archive_purge` claim, checks
+each source and replacement again, and calls only Obsidian's public
+`FileManager.trashFile()`. The user's current Obsidian deleted-files setting
+controls recoverability and disk reclamation. A crash after Trash but before a
+durable result becomes `outcome_unknown`; automatic recovery never repeats that
+Trash call. Unknown or manually archived files and migrations without complete
+receipts remain blocked. The `02_archive` root is retained.
 
 ## Recoverable Writes
 

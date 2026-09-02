@@ -2273,7 +2273,7 @@ test('Wiki disabled and auto-managed policies remain independent from Memory rul
 	}, autoContext), 'auto-managed Wiki create');
 	assert.equal(created.auto_applied, true);
 	assert.equal(created.effective_risk, 'low');
-	assert.match(fixture.read(target), /tracekeeper:relations:start/);
+	assert.match(fixture.read(target), /tracekeeper:relations:start schema="2" role="topic"/);
 	assert.match(fixture.read(target), /project-memory-fixture/);
 	assert.match(fixture.read(target), /01_knowledge\/sources\/files\/auto-policy-source/);
 
@@ -2294,6 +2294,19 @@ test('Wiki disabled and auto-managed policies remain independent from Memory rul
 	assert.equal(updated.auto_applied, true);
 	assert.match(fixture.read(WIKI_PATH), /Keep user body\./);
 	assert.match(fixture.read(WIKI_PATH), /01_knowledge\/wiki\/index/);
+	const beforeRoleReview = fixture.read(WIKI_PATH);
+	const roleUpgrade = expectSuccess(await callTool('tracekeeper.propose_memory', {
+		proposal_kind: 'wiki_relations',
+		content: 'Classify the existing Wiki note.',
+		target_note: WIKI_PATH,
+		wiki_role: 'topic',
+		parent_wiki: '01_knowledge/wiki/index.md',
+		idempotency_key: 'wiki-auto-managed-schema-one-role-review',
+	}, autoContext), 'schema-one Wiki role review');
+	assert.equal(roleUpgrade.auto_applied, false);
+	assert.equal(roleUpgrade.effective_risk, 'medium');
+	assert.equal(fixture.read(WIKI_PATH), beforeRoleReview);
+	assert.match(fixture.read(roleUpgrade.proposal_path), /schema="2" role="topic"/);
 });
 
 test('auto-managed Wiki recovery preserves a later valid user relation edit', async (t) => {
@@ -2386,6 +2399,7 @@ test('same-task Wiki proposals may reference one uniquely planned target', async
 		idempotency_key: 'planned-wiki-map',
 	}, context), 'planned Wiki map');
 	assert.equal(map.effective_risk, 'low');
+	assert.match(fixture.read(map.proposal_path), /tracekeeper:relations:start schema="2" role="topic_map" hash="sha256:/);
 	const topic = expectSuccess(await callTool('tracekeeper.propose_memory', {
 		proposal_kind: 'wiki_topic',
 		content: '# TypeScript',
@@ -2398,6 +2412,7 @@ test('same-task Wiki proposals may reference one uniquely planned target', async
 	assert.equal(topic.effective_risk, 'low');
 	assert.equal(topic.review_batch_id, `task:${taskId}`);
 	assert.match(fixture.read(topic.proposal_path), /01_knowledge\/wiki\/programming-map/);
+	assert.match(fixture.read(topic.proposal_path), /tracekeeper:relations:start schema="2" role="topic" hash="sha256:/);
 });
 
 test('disabled Memory scope ignores a candidate without proposal or durable record', async (t) => {

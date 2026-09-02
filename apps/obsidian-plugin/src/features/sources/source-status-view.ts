@@ -14,6 +14,7 @@ import { trimText } from '../shared/markdown-record-parser';
 import {
 	LegacySourceArchiveModal,
 	LegacySourceConsolidationModal,
+	SourceArchivePurgeModal,
 } from './legacy-source-consolidation-modal';
 
 const sourceEvidenceIssueLabel = (issue: SourceCaptureEvidenceIssue): string => {
@@ -169,8 +170,15 @@ export class TracekeeperSourceStatusView extends ItemView {
 		archiveButton.addEventListener('click', () => {
 			void this.openLegacySourceArchive(archiveButton);
 		});
+		const purgeButton = header.createEl('button', {
+			text: ui('预览冗余 Archive 清理', 'Preview redundant Archive cleanup'),
+		});
+		purgeButton.addEventListener('click', () => {
+			void this.openSourceArchivePurge(purgeButton);
+		});
 
 		this.renderIndexStatus(contentEl, snapshot);
+		this.renderMaintenanceCandidates(contentEl, snapshot);
 
 		if (snapshot.focused) {
 			const focus = contentEl.createDiv({ cls: 'tracekeeper-card tracekeeper-observability-focus' });
@@ -192,6 +200,22 @@ export class TracekeeperSourceStatusView extends ItemView {
 
 		this.renderSourceRecords(contentEl, snapshot);
 		this.renderRequests(contentEl, snapshot.requests, snapshot.missingRequestFolder);
+	}
+
+	private renderMaintenanceCandidates(container: HTMLElement, snapshot: SourceStatusSnapshot): void {
+		const candidates = snapshot.maintenanceCandidates ?? [];
+		if (candidates.length === 0) return;
+		const unassociated = candidates.filter((candidate) => candidate.category === 'unassociated_source');
+		const purge = candidates.filter((candidate) => candidate.category === 'source_archive_purge');
+		const card = container.createDiv({ cls: 'tracekeeper-card' });
+		card.createEl('strong', { text: ui('Source 维护候选', 'Source maintenance candidates') });
+		card.createEl('p', {
+			text: ui(
+				`未关联 Source ${unassociated.length} 项；需打开权威清理预览复核的 Archive ${purge.length} 项。未关联 Source 仅为整理建议，不计入严格图谱失败。`,
+				`${unassociated.length} unassociated Sources; ${purge.length} Archive items require authoritative cleanup preview. Unassociated Sources are informational and do not fail strict graph checks.`
+			),
+			cls: 'tracekeeper-view__description',
+		});
 	}
 
 	private async openLegacySourceConsolidation(button: HTMLButtonElement): Promise<void> {
@@ -222,6 +246,21 @@ export class TracekeeperSourceStatusView extends ItemView {
 			new Notice(reportUiFailure(error, {
 				context: 'tracekeeper failed to preview legacy Source archive',
 				fallback: { zh: '无法预览旧版 Source 归档。', en: 'Failed to preview legacy Source archive.' },
+			}));
+		} finally {
+			button.disabled = false;
+		}
+	}
+
+	private async openSourceArchivePurge(button: HTMLButtonElement): Promise<void> {
+		button.disabled = true;
+		try {
+			const preview = await this.plugin.previewSourceArchivePurge();
+			new SourceArchivePurgeModal(this.app, this.plugin, preview).open();
+		} catch (error) {
+			new Notice(reportUiFailure(error, {
+				context: 'tracekeeper failed to preview Source Archive purge',
+				fallback: { zh: '无法预览冗余 Source Archive 清理。', en: 'Failed to preview redundant Source Archive cleanup.' },
 			}));
 		} finally {
 			button.disabled = false;

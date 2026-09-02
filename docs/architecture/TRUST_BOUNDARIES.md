@@ -125,7 +125,7 @@ permissions.
 | Class | Allowed behavior | Examples |
 | --- | --- | --- |
 | Read-only | Inspect Vault-local state without changing notes | status, lint, Recall, note reads, review inspection |
-| Bounded write | Create governed records or proposals in allowlisted Tracekeeper paths | tasks, sessions, context packs, sources, immutable policy-authorized MemoryRecord v2 entries, proposals |
+| Bounded write | Create governed records or proposals in allowlisted Tracekeeper paths | tasks, sessions, context packs, sources, immutable policy-authorized MemoryRecord v2 entries, proposals, maintenance requests |
 | Review-gated write | Append to an existing durable target or create one explicitly approved Wiki/MemoryRecord target | approved writeback |
 
 Generated records never overwrite existing notes. Global and Project Auto are
@@ -158,6 +158,8 @@ higher-priority instructions.
 ## Human Review Invariants
 
 - Proposal creation is not approval.
+- A maintenance request is not approval. Public MCP accepts only current lint
+  candidate ids and exposes no archive, purge, trash, or delete execution tool.
 - Public MCP proposal creation is not approval, and MCP cannot approve its own proposal.
 - A human Wiki preview may authorize approval and application with one final confirmation; internally, exact approval receipts still commit before target writeback.
 - Only proposals covered by those committed approval receipts are eligible for durable target writeback.
@@ -186,6 +188,10 @@ higher-priority instructions.
   counts, cutoff, and configured Obsidian trash behavior. A changed file set,
   content hash, cutoff, trash behavior, expiry, or confirmation fails before a
   new trash effect.
+- Source Archive cleanup is a separate Obsidian-only confirmation after repair
+  and recheck. It is restricted to journal-proven byte-exact consolidation
+  duplicates and calls `FileManager.trashFile()` under the user's current
+  Obsidian setting. Unknown outcomes never trigger an automatic repeated Trash.
 - Concurrent review edits never silently replace the current proposal. The
   user's unsaved draft remains available, the conflict is announced to
   assistive technology, and focus returns to the relevant control.
