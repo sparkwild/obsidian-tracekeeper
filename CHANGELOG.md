@@ -4,6 +4,15 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.5] - Reliable Wiki Batch Task Chaining
+
+### Fixed
+
+- Chain each Wiki batch item's expected task hash from the previous verified result, preventing the batch's own task-reference updates from being misclassified as external drift.
+- Persist per-item prepare, apply, and verify ownership so restart recovery accepts only the exact nested writeback operation, target result, and task result owned by the batch.
+- Keep proposal bodies, diffs, relation blocks, and confirmation tokens out of the batch journal while rebuilding hash-bound relation plans during recovery.
+- Record one idempotent native activity summary per batch and report applied, conflicting, and dependency-blocked items from durable verification progress.
+
 ## [0.4.4] - Wiki Dependency Ordering Hotfix
 
 ### Fixed

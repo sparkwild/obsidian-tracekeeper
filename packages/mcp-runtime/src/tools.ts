@@ -270,6 +270,8 @@ export interface ToolInvocationContext extends ToolContext {
 		targetPath: string;
 		writebackBlock: string;
 		batchOperationId: string;
+		previewNonce: string;
+		suppressAgentActivity?: boolean;
 	};
 }
 
@@ -4878,55 +4880,28 @@ async function prepareWritebackConfirmation(
 			`Writeback confirmation is stale because the task does not exist: ${taskPath}`
 		);
 	}
-	const taskFrontmatter = task
-		? parseMarkdown(task.content).frontmatter.fields
-		: {};
-	const taskHadTargetReference = task
-		? readFrontmatterStringList(taskFrontmatter, 'memory_writes').includes(targetPath)
-		: false;
-	const taskHadProposalIdReference = task
-		? readFrontmatterStringList(taskFrontmatter, 'proposal_ids').includes(proposal.proposalId)
-		: false;
-	const taskHadProposalPathEvidence = task
-		? readFrontmatterStringList(taskFrontmatter, 'proposal_paths').includes(proposal.path)
-		: false;
-	const taskHadAppliedProposalReference = task
-		? readFrontmatterStringList(
-			taskFrontmatter,
-			'durable_output_applied_proposal_ids'
-		).includes(proposal.proposalId)
-		: false;
-	const taskHadProposalReference = taskHadProposalIdReference;
-	const taskLinkedContent = task && (
-		!taskHadTargetReference
-		|| !taskHadProposalIdReference
-		|| !taskHadProposalPathEvidence
-		|| !taskHadAppliedProposalReference
-	)
-		? updateFrontmatterFields(task.content, {
-			memory_writes: mergeFrontmatterList(taskFrontmatter, 'memory_writes', [targetPath]),
-			proposal_ids: mergeFrontmatterList(
-				taskFrontmatter,
-				'proposal_ids',
-				[proposal.proposalId]
-			),
-			proposal_paths: mergeFrontmatterList(
-				taskFrontmatter,
-				'proposal_paths',
-				[proposal.path]
-			),
-			durable_output_applied_proposal_ids: mergeFrontmatterList(
-				taskFrontmatter,
-				'durable_output_applied_proposal_ids',
-				[proposal.proposalId]
-			),
+	const taskLinkPlan = task
+		? planApprovedWritebackTaskLink({
+			taskContent: task.content,
+			targetPath,
+			proposalId: proposal.proposalId,
+			proposalPath: proposal.path,
+			usesStableProposalReferences: true,
+			usesAppliedProposalEvidence: true,
 		})
-		: task?.content || '';
+		: null;
+	const taskHadTargetReference = taskLinkPlan?.hadTargetReference ?? false;
+	const taskHadProposalIdReference = taskLinkPlan?.hadProposalIdReference ?? false;
+	const taskHadProposalPathEvidence = taskLinkPlan?.hadProposalPathEvidence ?? false;
+	const taskHadAppliedProposalReference = taskLinkPlan?.hadAppliedProposalReference ?? false;
+	const taskHadProposalReference = taskLinkPlan?.hadProposalReference ?? false;
+	const taskLinkedContent = taskLinkPlan?.content ?? '';
 	const proposalRevision = computeProposalRevision(snapshot);
+	const effectivePreviewNonce = batchOverride?.previewNonce || previewNonce;
 	const identity = buildApprovedWritebackOperationIdentity(
 		proposal,
 		proposalRevision,
-		previewNonce
+		effectivePreviewNonce
 	);
 	const createsMemoryRecord = plan.effectKind === 'create_memory_record';
 	const createsWikiNote = plan.effectKind === CREATE_WIKI_NOTE_EFFECT;
@@ -4980,7 +4955,7 @@ async function prepareWritebackConfirmation(
 	return {
 		binding: {
 			schemaVersion: WRITEBACK_CONFIRMATION_SCHEMA_VERSION,
-			previewNonce,
+			previewNonce: effectivePreviewNonce,
 			operationId: identity.operationId,
 			idempotencyKey: identity.idempotencyKey,
 			proposalId: proposal.proposalId,
@@ -6557,6 +6532,91 @@ function mergeFrontmatterList(frontmatter: Record<string, unknown>, key: string,
 	return Array.from(merged).join(', ');
 }
 
+export interface ApprovedWritebackTaskLinkPlanInput {
+	taskContent: string;
+	targetPath: string;
+	proposalId: string;
+	proposalPath: string;
+	usesStableProposalReferences: boolean;
+	usesAppliedProposalEvidence: boolean;
+}
+
+export interface ApprovedWritebackTaskLinkPlan {
+	content: string;
+	contentHashBefore: string;
+	contentHashAfter: string;
+	hadTargetReference: boolean;
+	hadProposalReference: boolean;
+	hadProposalIdReference: boolean;
+	hadProposalPathEvidence: boolean;
+	hadAppliedProposalReference: boolean;
+}
+
+/**
+ * 规划一次 approved writeback 对任务引用的确定性更新。
+ *
+ * @description 批次预览和 Runtime 写回必须复用此函数，确保逐项任务哈希链与实际持久化内容完全一致。
+ */
+export function planApprovedWritebackTaskLink(
+	input: ApprovedWritebackTaskLinkPlanInput
+): ApprovedWritebackTaskLinkPlan {
+	const frontmatter = parseMarkdown(input.taskContent).frontmatter.fields;
+	const memoryWrites = new Set(readFrontmatterStringList(frontmatter, 'memory_writes'));
+	const proposalIds = new Set(readFrontmatterStringList(frontmatter, 'proposal_ids'));
+	const proposalPaths = new Set(readFrontmatterStringList(frontmatter, 'proposal_paths'));
+	const appliedProposalIds = new Set(
+		readFrontmatterStringList(frontmatter, 'durable_output_applied_proposal_ids')
+	);
+	const legacyProposals = new Set(readFrontmatterStringList(frontmatter, 'proposals'));
+	const hadProposalReference = input.usesStableProposalReferences
+		? proposalIds.has(input.proposalId)
+		: legacyProposals.has(input.proposalPath);
+	const hadProposalPathEvidence = input.usesStableProposalReferences
+		? proposalPaths.has(input.proposalPath)
+		: true;
+	const hadAppliedProposalReference = input.usesAppliedProposalEvidence
+		? appliedProposalIds.has(input.proposalId)
+		: true;
+	const needsUpdate = !memoryWrites.has(input.targetPath)
+		|| !hadProposalReference
+		|| !hadProposalPathEvidence
+		|| !hadAppliedProposalReference;
+	const content = needsUpdate
+		? updateFrontmatterFields(
+			input.taskContent,
+			input.usesStableProposalReferences
+				? {
+					memory_writes: mergeFrontmatterList(frontmatter, 'memory_writes', [input.targetPath]),
+					proposal_ids: mergeFrontmatterList(frontmatter, 'proposal_ids', [input.proposalId]),
+					proposal_paths: mergeFrontmatterList(frontmatter, 'proposal_paths', [input.proposalPath]),
+					...(input.usesAppliedProposalEvidence
+						? {
+							durable_output_applied_proposal_ids: mergeFrontmatterList(
+								frontmatter,
+								'durable_output_applied_proposal_ids',
+								[input.proposalId]
+							),
+						}
+						: {}),
+				}
+				: {
+					memory_writes: mergeFrontmatterList(frontmatter, 'memory_writes', [input.targetPath]),
+					proposals: mergeFrontmatterList(frontmatter, 'proposals', [input.proposalPath]),
+				}
+		)
+		: input.taskContent;
+	return {
+		content,
+		contentHashBefore: hashText(input.taskContent),
+		contentHashAfter: hashText(content),
+		hadTargetReference: memoryWrites.has(input.targetPath),
+		hadProposalReference,
+		hadProposalIdReference: proposalIds.has(input.proposalId),
+		hadProposalPathEvidence,
+		hadAppliedProposalReference,
+	};
+}
+
 function durableProposalStatusFromApproval(status: string): DurableProposalStatus {
 	switch (status.trim().toLowerCase().replace(/[\s-]+/g, '_')) {
 		case 'pending':
@@ -6895,36 +6955,22 @@ async function linkApprovedWritebackTask(
 	if (!current) {
 		throw new OperationConflictError('Writeback task is unavailable for the journaled operation.');
 	}
-	const frontmatter = parseMarkdown(current.content).frontmatter.fields;
 	const usesStableProposalReferences =
 		typeof payload.taskHadProposalIdReference === 'boolean'
 		&& typeof payload.taskHadProposalPathEvidence === 'boolean';
 	const usesAppliedProposalEvidence =
 		typeof payload.taskHadAppliedProposalReference === 'boolean';
-	const memoryWrites = new Set(readFrontmatterStringList(frontmatter, 'memory_writes'));
-	const proposalIds = new Set(readFrontmatterStringList(frontmatter, 'proposal_ids'));
-	const proposalPaths = new Set(readFrontmatterStringList(frontmatter, 'proposal_paths'));
-	const appliedProposalIds = new Set(
-		readFrontmatterStringList(frontmatter, 'durable_output_applied_proposal_ids')
-	);
-	const legacyProposals = new Set(readFrontmatterStringList(frontmatter, 'proposals'));
-	const hasProposalReference = usesStableProposalReferences
-		? proposalIds.has(payload.proposalId)
-		: legacyProposals.has(payload.proposalPath);
-	const hasProposalPathEvidence = usesStableProposalReferences
-		? proposalPaths.has(payload.proposalPath)
-		: true;
-	const hasAppliedProposalReference = usesAppliedProposalEvidence
-		? appliedProposalIds.has(payload.proposalId)
-		: true;
+	const taskPlan = planApprovedWritebackTaskLink({
+		taskContent: current.content,
+		targetPath: payload.targetPath,
+		proposalId: payload.proposalId,
+		proposalPath: payload.proposalPath,
+		usesStableProposalReferences,
+		usesAppliedProposalEvidence,
+	});
 	const targetReferenceAdded = !payload.taskHadTargetReference;
 	const proposalReferenceAdded = !payload.taskHadProposalReference;
-	if (
-		memoryWrites.has(payload.targetPath)
-		&& hasProposalReference
-		&& hasProposalPathEvidence
-		&& hasAppliedProposalReference
-	) {
+	if (taskPlan.contentHashBefore === taskPlan.contentHashAfter) {
 		if (current.contentHash !== payload.taskLinkedContentHash) {
 			throw new OperationConflictError(
 				'Writeback task changed after its durable update.'
@@ -6942,61 +6988,20 @@ async function linkApprovedWritebackTask(
 		);
 	}
 	if (
-		memoryWrites.has(payload.targetPath) !== payload.taskHadTargetReference
-		|| hasProposalReference !== payload.taskHadProposalReference
+		taskPlan.hadTargetReference !== payload.taskHadTargetReference
+		|| taskPlan.hadProposalReference !== payload.taskHadProposalReference
 		|| (
 			usesStableProposalReferences
-			&& hasProposalPathEvidence !== payload.taskHadProposalPathEvidence
+			&& taskPlan.hadProposalPathEvidence !== payload.taskHadProposalPathEvidence
 		)
 		|| (
 			usesAppliedProposalEvidence
-			&& hasAppliedProposalReference !== payload.taskHadAppliedProposalReference
+			&& taskPlan.hadAppliedProposalReference !== payload.taskHadAppliedProposalReference
 		)
 	) {
 		throw new OperationConflictError('Writeback task references changed after preview.');
 	}
-	const next = updateFrontmatterFields(
-		current.content,
-		usesStableProposalReferences
-			? {
-				memory_writes: mergeFrontmatterList(
-					frontmatter,
-					'memory_writes',
-					[payload.targetPath]
-				),
-				proposal_ids: mergeFrontmatterList(
-					frontmatter,
-					'proposal_ids',
-					[payload.proposalId]
-				),
-				proposal_paths: mergeFrontmatterList(
-					frontmatter,
-					'proposal_paths',
-					[payload.proposalPath]
-				),
-				...(usesAppliedProposalEvidence
-					? {
-						durable_output_applied_proposal_ids: mergeFrontmatterList(
-							frontmatter,
-							'durable_output_applied_proposal_ids',
-							[payload.proposalId]
-						),
-					}
-					: {}),
-			}
-			: {
-				memory_writes: mergeFrontmatterList(
-					frontmatter,
-					'memory_writes',
-					[payload.targetPath]
-				),
-				proposals: mergeFrontmatterList(
-					frontmatter,
-					'proposals',
-					[payload.proposalPath]
-				),
-			}
-	);
+	const next = taskPlan.content;
 	if (hashText(next) !== payload.taskLinkedContentHash) {
 		throw new OperationConflictError('Writeback task update no longer matches its preview.');
 	}
@@ -9063,7 +9068,7 @@ function wikiBatchWritebackOverrideFor(
 	proposalPath: string,
 	targetPath: string,
 	effectKind: ApplyApprovedWritebackPayload['effectKind']
-): { block: string; marker: string } | null {
+): { block: string; marker: string; previewNonce: string } | null {
 	const override = context.wikiBatchWritebackOverride;
 	if (!override) return null;
 	if (
@@ -9071,10 +9076,15 @@ function wikiBatchWritebackOverrideFor(
 		|| context.principalId !== 'obsidian-plugin-ui'
 		|| override.proposalPath !== proposalPath
 		|| override.targetPath !== targetPath
-		|| effectKind !== 'update_managed_relations'
 		|| !override.batchOperationId
 	) {
 		throw new ToolInputError('Wiki batch writeback override is restricted to the Obsidian review surface.');
+	}
+	if (!/^[a-f0-9]{32,64}$/.test(override.previewNonce)) {
+		throw new ToolInputError('Wiki batch preview nonce is invalid.');
+	}
+	if (effectKind !== 'update_managed_relations') {
+		return { block: '', marker: '', previewNonce: override.previewNonce };
 	}
 	const parsed = parseManagedRelationsBlock(override.writebackBlock.trim());
 	if (parsed.status !== 'valid' || parsed.start !== 0 || parsed.end !== parsed.content.length) {
@@ -9083,7 +9093,31 @@ function wikiBatchWritebackOverrideFor(
 	return {
 		block: parsed.content,
 		marker: `managed-relations:${proposalPath}:${override.batchOperationId}`,
+		previewNonce: override.previewNonce,
 	};
+}
+
+function wikiBatchStableBindingHash(
+	binding: WritebackConfirmationBinding,
+	batchOperationId: string
+): string {
+	return computePayloadHash({
+		batchOperationId,
+		operationId: binding.operationId,
+		idempotencyKey: binding.idempotencyKey,
+		proposalId: binding.proposalId,
+		proposalPath: binding.proposalPath,
+		proposalRevision: binding.proposalRevision,
+		proposalFileHash: binding.proposalFileHash,
+		targetPath: binding.targetPath,
+		targetContentHash: binding.targetContentHash,
+		taskPath: binding.taskPath,
+		taskContentHash: binding.taskContentHash,
+		taskLinkedContentHash: binding.taskLinkedContentHash,
+		writebackBlockHash: binding.writebackBlockHash,
+		touchedNotes: binding.touchedNotes,
+		effectKind: binding.effectKind,
+	});
 }
 
 async function currentWritebackEffect(
@@ -9495,36 +9529,118 @@ async function resolveApplyWritebackPlan(
 	return buildWritebackPlanForTarget(normalizedProposal, targetState);
 }
 
+export interface ObsidianWikiBatchWritebackPreview {
+	proposal_id: string;
+	proposal_path: string;
+	target_note: string;
+	target_content_hash: string;
+	touched_notes: string[];
+	writeback_effect: string;
+	writeback_preview: string;
+	confirmation_token: string;
+	confirmation_expires_at: string;
+	batch_writeback_operation_id: string;
+	batch_writeback_idempotency_key: string;
+	batch_stable_binding_hash: string;
+	batch_task_content_hash_before: string;
+	batch_task_content_hash_after: string;
+}
+
+/**
+ * Prepares the internal binding used by the Obsidian Wiki batch application.
+ *
+ * @description This function is intentionally outside the public MCP tool catalog. Its extra
+ * operation identity is available only to the trusted in-process Obsidian review surface.
+ */
+export async function previewObsidianWikiBatchWriteback(
+	rawArgs: ApplyApprovedWritebackArgs,
+	context: ToolInvocationContext
+): Promise<ObsidianWikiBatchWritebackPreview> {
+	const vaultRoot = configuredVaultRoot(context);
+	const proposal = await resolveMemoryProposalFromArgs(vaultRoot, rawArgs, context);
+	const taskId = resolveWritebackTaskId(rawArgs, proposal);
+	const plan = await resolveApplyWritebackPlan(vaultRoot, proposal, context);
+	if (!plan.ready || !plan.writebackContent) {
+		throw new ToolInputError(plan.reason || 'approved writeback is not ready to apply.');
+	}
+	assertNoSensitiveText([
+		{ label: 'proposal id', value: proposal.proposalId },
+		{ label: 'target note', value: plan.targetNote || 'new memory record' },
+		{ label: 'writeback content', value: plan.writebackContent },
+	]);
+	const issuedAt = writebackConfirmationNow(context);
+	const prepared = await prepareWritebackConfirmation(
+		vaultRoot,
+		proposal,
+		plan,
+		taskId,
+		context,
+		issuedAt,
+		issuedAt + writebackConfirmationTtl(context)
+	);
+	const confirmationToken = createWritebackConfirmationToken(prepared.binding, context);
+	const batchOverride = wikiBatchWritebackOverrideFor(
+		context,
+		proposal.path,
+		prepared.binding.targetPath,
+		prepared.binding.effectKind
+	);
+	if (!batchOverride || !context.wikiBatchWritebackOverride) {
+		throw new ToolInputError('Internal Wiki batch preview requires an Obsidian batch binding.');
+	}
+	return {
+		proposal_id: proposal.proposalId,
+		proposal_path: proposal.path,
+		target_note: prepared.binding.targetPath,
+		target_content_hash: prepared.binding.targetContentHash,
+		touched_notes: prepared.binding.touchedNotes,
+		writeback_effect: prepared.binding.effectKind || 'append',
+		writeback_preview: prepared.writebackBlock,
+		confirmation_token: confirmationToken,
+		confirmation_expires_at: new Date(prepared.binding.expiresAt).toISOString(),
+		batch_writeback_operation_id: prepared.binding.operationId,
+		batch_writeback_idempotency_key: prepared.binding.idempotencyKey,
+		batch_stable_binding_hash: wikiBatchStableBindingHash(
+			prepared.binding,
+			context.wikiBatchWritebackOverride.batchOperationId
+		),
+		batch_task_content_hash_before: prepared.binding.taskContentHash,
+		batch_task_content_hash_after: prepared.binding.taskLinkedContentHash,
+	};
+}
+
 async function handleApplyApprovedWriteback(rawArgs: ApplyApprovedWritebackArgs, context: ToolInvocationContext) {
 	const vaultRoot = configuredVaultRoot(context);
 	const dryRun = coerceBoolean(rawArgs.dry_run, 'dry_run', false);
 
 	if (dryRun) {
+		if (context.wikiBatchWritebackOverride) {
+			const internal = await previewObsidianWikiBatchWriteback(rawArgs, context);
+			return {
+			ok: true,
+			read_only: true,
+			dry_run: true,
+			permission_level: 'review-gated apply',
+			proposal_id: internal.proposal_id,
+			proposal_path: internal.proposal_path,
+			target_note: internal.target_note,
+			target_content_hash: internal.target_content_hash,
+			touched_notes: internal.touched_notes,
+			writeback_effect: internal.writeback_effect,
+			writeback_preview: internal.writeback_preview,
+			confirmation_token: internal.confirmation_token,
+			confirmation_expires_at: internal.confirmation_expires_at,
+			};
+		}
 		const proposal = await resolveMemoryProposalFromArgs(vaultRoot, rawArgs, context);
 		const taskId = resolveWritebackTaskId(rawArgs, proposal);
 		const plan = await resolveApplyWritebackPlan(vaultRoot, proposal, context);
 		if (!plan.ready || !plan.writebackContent) {
 			throw new ToolInputError(plan.reason || 'approved writeback is not ready to apply.');
 		}
-		assertNoSensitiveText([
-			{ label: 'proposal id', value: proposal.proposalId },
-			{ label: 'target note', value: plan.targetNote || 'new memory record' },
-			{ label: 'writeback content', value: plan.writebackContent },
-		]);
 		const issuedAt = writebackConfirmationNow(context);
-		const prepared = await prepareWritebackConfirmation(
-			vaultRoot,
-			proposal,
-			plan,
-			taskId,
-			context,
-			issuedAt,
-			issuedAt + writebackConfirmationTtl(context)
-		);
-		const confirmationToken = createWritebackConfirmationToken(
-			prepared.binding,
-			context
-		);
+		const prepared = await prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, context, issuedAt, issuedAt + writebackConfirmationTtl(context));
+		const confirmationToken = createWritebackConfirmationToken(prepared.binding, context);
 		return {
 			ok: true,
 			read_only: true,
@@ -9532,9 +9648,9 @@ async function handleApplyApprovedWriteback(rawArgs: ApplyApprovedWritebackArgs,
 			permission_level: 'review-gated apply',
 			proposal_id: proposal.proposalId,
 			proposal_path: proposal.path,
-				target_note: prepared.binding.targetPath,
-				target_content_hash: prepared.binding.targetContentHash,
-				touched_notes: prepared.binding.touchedNotes,
+			target_note: prepared.binding.targetPath,
+			target_content_hash: prepared.binding.targetContentHash,
+			touched_notes: prepared.binding.touchedNotes,
 			writeback_effect: prepared.binding.effectKind || 'append',
 			writeback_preview: prepared.writebackBlock,
 			confirmation_token: confirmationToken,
@@ -9851,6 +9967,9 @@ async function handleApplyApprovedWriteback(rawArgs: ApplyApprovedWritebackArgs,
 				);
 			},
 			async appendAgentActivity(currentPayload, operationId, receipt) {
+				if (context.wikiBatchWritebackOverride?.suppressAgentActivity) {
+					return;
+				}
 				await appendAuditEventAsync(vaultRoot, {
 					operationId,
 					tool: 'tracekeeper.apply_approved_writeback',

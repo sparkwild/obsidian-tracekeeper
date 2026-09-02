@@ -1,7 +1,7 @@
 {
 	"id": "tracekeeper",
 	"name": "Tracekeeper",
-	"version": "0.4.4",
+	"version": "0.4.5",
 	"minAppVersion": "1.11.0",
 	"description": "Connect AI agents to your vault through a local MCP runtime, with scoped recall and governed memory updates.",
 	"author": "sparkwild",

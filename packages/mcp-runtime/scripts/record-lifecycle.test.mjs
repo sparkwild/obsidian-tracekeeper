@@ -201,9 +201,16 @@ test('concurrent changed live finish payload cannot reuse the winning request bi
 	const fixture = createFixture();
 	try {
 		const task = await startTask(fixture, 'concurrent-changed-live-finish');
+		let releaseWinningWrite;
+		let signalWinningWrite;
+		const winningWriteReached = new Promise((resolve) => { signalWinningWrite = resolve; });
+		const winningWriteRelease = new Promise((resolve) => { releaseWinningWrite = resolve; });
 		const delayedRepository = taskRepositoryWithPostWriteAction(
 			fixture.repository,
-			() => new Promise((resolve) => setTimeout(resolve, 120)),
+			async () => {
+				signalWinningWrite();
+				await winningWriteRelease;
+			},
 			'replaceText'
 		);
 		const common = {
@@ -219,12 +226,13 @@ test('concurrent changed live finish payload cannot reuse the winning request bi
 			...fixture.context,
 			vaultRepository: delayedRepository,
 		});
-		await new Promise((resolve) => setTimeout(resolve, 20));
+		await winningWriteReached;
 		const secondPromise = callTool('tracekeeper.finish_task', {
 			...common,
 			summary: 'LIVE-LOSER-SUMMARY',
 			outcomes: ['LIVE-LOSER-OUTCOME'],
 		}, fixture.context);
+		releaseWinningWrite();
 		const [first, second] = await Promise.all([firstPromise, secondPromise]);
 		assert.notEqual(first.isError, true);
 		assert.equal(second.isError, true);

@@ -1,5 +1,7 @@
 import {
 	callTool,
+	previewObsidianWikiBatchWriteback,
+	type ObsidianWikiBatchWritebackPreview,
 	type ProposalTransitionPort,
 	type ToolInvocationContext,
 } from '@tracekeeper/mcp-runtime';
@@ -32,7 +34,10 @@ export interface LocalToolExecutorOptions {
 	runtimeVersion?: string;
 }
 
-export type LocalToolExecutionOptions = Pick<ToolInvocationContext, 'wikiBatchWritebackOverride'>;
+export type LocalToolExecutionOptions = Pick<
+	ToolInvocationContext,
+	'wikiBatchWritebackOverride' | 'writebackRecoveryOperationId'
+>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -70,7 +75,7 @@ export class LocalToolExecutor {
 	private readonly sessionId = randomUUID();
 
 	constructor(private readonly options: LocalToolExecutorOptions) {
-		this.runtimeVersion = options.runtimeVersion?.trim() || '0.4.4';
+		this.runtimeVersion = options.runtimeVersion?.trim() || '0.4.5';
 	}
 
 	async executeLocalTool(
@@ -108,5 +113,32 @@ export class LocalToolExecutor {
 			throw new Error(errorToString(structured.error, `${name} failed.`));
 		}
 		return structured;
+	}
+
+	async previewWikiBatchApprovedWriteback(
+		args: Record<string, unknown>,
+		override: NonNullable<LocalToolExecutionOptions['wikiBatchWritebackOverride']>
+	): Promise<ObsidianWikiBatchWritebackPreview> {
+		const context = this.options.getContext();
+		return previewObsidianWikiBatchWriteback(args, {
+			defaultVaultRoot: context.defaultVaultRoot,
+			vaultConfigDir: context.vaultConfigDir,
+			vaultRepository: context.vaultRepository,
+			proposalTransitionPort: context.proposalTransitionPort,
+			knowledgeSnapshotProvider: context.knowledgeSnapshotProvider,
+			knowledgeReadViewProvider: context.knowledgeReadViewProvider,
+			graphProfile: context.graphProfile,
+			memoryRules: context.memoryRules,
+			contentLanguage: context.contentLanguage,
+			contentLanguageSource: context.contentLanguageSource,
+			principalId: 'obsidian-plugin-ui',
+			credentialCapabilities: ['*'],
+			agentId: 'tracekeeper-plugin-ui',
+			sessionId: this.sessionId,
+			clientName: 'tracekeeper-plugin-ui',
+			transport: 'obsidian-direct',
+			runtimeVersion: this.runtimeVersion,
+			wikiBatchWritebackOverride: override,
+		});
 	}
 }
