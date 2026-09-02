@@ -118,6 +118,15 @@ The batch journal owns restart recovery and reopens the same modal after layout
 readiness, while a target drift creates a new-preview conflict instead of
 reusing the old confirmation.
 
+Wiki batch schema v3 executes every approved item as a durable
+`prepare -> apply -> verify` chain. For a task-linked batch, preview computes an
+ordered task-content hash chain: each item's expected task hash is the previous
+verified item's result hash. Verification accepts an applied proposal only when
+its operation id, exact target result hash, and task result hash all belong to
+that batch item. A skipped or conflicting item therefore cannot make a later
+write look like an external task edit, and an externally applied proposal is
+never adopted as batch progress.
+
 Project identity is equally fail-closed. `project_id` is an opaque stable id
 returned by the Runtime, not the human label, Hub directory key, or repository
 leaf. An unknown or conflicting explicit id is rejected before a proposal file
@@ -138,6 +147,14 @@ unlinked or legacy proposal remains a singleton. A batch contains at most 100
 proposals and 2 MiB of writeback content. High-risk user-body changes are split
 into individual review. Applied items leave the working queue but are not moved
 to Archive implicitly.
+
+The batch journal stores only paths, hashes, bounded operation identities, and
+step results. It does not store proposal bodies, diffs, writeback blocks, or
+confirmation tokens. A restart reconstructs a required relation block from the
+still-bound proposal revisions and rejects it unless its hash matches the
+claimed manifest. Internal item writes keep their encrypted operation journals;
+the visible activity timeline receives one idempotent batch summary through the
+native activity-shard repository.
 
 Tracekeeper-managed Wiki relations use one hash-bound Markdown region. New
 notes may include it during creation; existing notes are changed only inside a

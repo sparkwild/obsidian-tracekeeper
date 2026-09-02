@@ -6,7 +6,12 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { callTool, recoverPendingOperations } = require('../dist/index.js');
+const {
+	callTool,
+	planApprovedWritebackTaskLink,
+	previewObsidianWikiBatchWriteback,
+	recoverPendingOperations,
+} = require('../dist/index.js');
 const { ApplyApprovedWritebackService } = require('../dist/application/apply-approved-writeback.js');
 const {
 	buildMemoryRecord,
@@ -763,19 +768,66 @@ test('Obsidian-only Wiki batch override applies a merged managed relation block'
 		targetPath: fixture.targetPath,
 		writebackBlock: mergedBlock,
 		batchOperationId: 'wiki-review-batch-test',
+		previewNonce: 'a'.repeat(32),
+		suppressAgentActivity: true,
 	};
-	const dryRun = await callTool('tracekeeper.apply_approved_writeback', {
+	const dryRun = await previewObsidianWikiBatchWriteback({
 		proposal_path: PROPOSAL_PATH,
 		dry_run: true,
 	}, fixture.context);
-	assert.equal(dryRun.isError, false, JSON.stringify(dryRun.structuredContent));
-	assert.equal(dryRun.structuredContent.writeback_preview, mergedBlock);
+	assert.equal(dryRun.writeback_preview, mergedBlock);
+	assert.match(dryRun.batch_writeback_operation_id, /^writeback-/);
+	const publicDryRun = await callTool('tracekeeper.apply_approved_writeback', {
+		proposal_path: PROPOSAL_PATH,
+		dry_run: true,
+	}, fixture.context);
+	assert.equal(publicDryRun.isError, false, JSON.stringify(publicDryRun.structuredContent));
+	assert.equal('batch_writeback_operation_id' in publicDryRun.structuredContent, false);
 	const applied = await callTool('tracekeeper.apply_approved_writeback', {
 		proposal_path: PROPOSAL_PATH,
-		confirmation_token: dryRun.structuredContent.confirmation_token,
+		confirmation_token: dryRun.confirmation_token,
 	}, fixture.context);
 	assert.equal(applied.isError, false, JSON.stringify(applied.structuredContent));
 	assert.match(fixture.read(fixture.targetPath), /01_knowledge\/wiki\/merged/);
+	assert.equal(readAuditText(fixture.vaultRoot), '');
+});
+
+test('task link planner produces a deterministic per-item hash chain without duplicate references', () => {
+	const first = planApprovedWritebackTaskLink({
+		taskContent: '# Batch task\n',
+		targetPath: '01_knowledge/wiki/map.md',
+		proposalId: 'proposal-map',
+		proposalPath: '00_tracekeeper/inbox/review_queue/map.md',
+		usesStableProposalReferences: true,
+		usesAppliedProposalEvidence: true,
+	});
+	const second = planApprovedWritebackTaskLink({
+		taskContent: first.content,
+		targetPath: '01_knowledge/wiki/topic.md',
+		proposalId: 'proposal-topic',
+		proposalPath: '00_tracekeeper/inbox/review_queue/topic.md',
+		usesStableProposalReferences: true,
+		usesAppliedProposalEvidence: true,
+	});
+	const replay = planApprovedWritebackTaskLink({
+		taskContent: second.content,
+		targetPath: '01_knowledge/wiki/topic.md',
+		proposalId: 'proposal-topic',
+		proposalPath: '00_tracekeeper/inbox/review_queue/topic.md',
+		usesStableProposalReferences: true,
+		usesAppliedProposalEvidence: true,
+	});
+
+	assert.equal(first.contentHashAfter, second.contentHashBefore);
+	assert.equal(second.contentHashAfter, replay.contentHashAfter);
+	assert.deepEqual(
+		String(parseMarkdown(replay.content).frontmatter.fields.durable_output_applied_proposal_ids).split(', '),
+		['proposal-map', 'proposal-topic']
+	);
+	assert.deepEqual(
+		String(parseMarkdown(replay.content).frontmatter.fields.memory_writes).split(', '),
+		['01_knowledge/wiki/map.md', '01_knowledge/wiki/topic.md']
+	);
 });
 
 function taskAppliedProposalIds(fixture) {

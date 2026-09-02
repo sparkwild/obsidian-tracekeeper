@@ -74,6 +74,15 @@ finish operation conflicts. Recoverable finish writes use the operation journal
 and the canonical task record; unfinished older journal entries retain their
 original step layout so an upgrade does not change an in-flight operation.
 
+Wiki batch writeback also updates the canonical task record, but its schema-v3
+coordinator plans those updates item by item. One pure task-link planner is used
+by batch preview and the single-item Runtime writer, so item `N + 1` expects the
+exact task hash produced by item `N`. The batch stores the initial and final task
+hashes plus every item boundary, then verifies the nested writeback operation,
+target content, and task content before advancing durable progress. The batch
+journal contains hashes and identities only; writeback content is reconstructed
+from revision-bound proposals when recovery needs it.
+
 ## Read And Recall Flow
 
 1. The plugin creates an empty index, subscribes to Vault events, and rebuilds

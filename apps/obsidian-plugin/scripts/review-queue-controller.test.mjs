@@ -145,9 +145,12 @@ const obsidianStub = {
 				}
 				export function stringifyYaml(value) {
 					return Object.entries(value)
-						.map(([key, item]) => Array.isArray(item)
-							? key + ': [' + item.join(', ') + ']'
-							: key + ': ' + String(item))
+						.map(([key, item]) => {
+							if (Array.isArray(item)) return key + ': ' + JSON.stringify(item);
+							if (item === null) return key + ': null';
+							const text = String(item);
+							return key + ': ' + (/[:#\[\]{},]/.test(text) ? JSON.stringify(text) : text);
+						})
 						.join('\\n') + '\\n';
 				}
 				export class TFile {
@@ -161,6 +164,15 @@ const obsidianStub = {
 					}
 				}
 				export class App {}
+				export class Vault {
+					static recurseChildren(root, callback) {
+						for (const child of root.children || []) {
+							callback(child);
+							if (child && Array.isArray(child.children)) Vault.recurseChildren(child, callback);
+						}
+					}
+				}
+				export const normalizePath = (value) => String(value).replace(/\\\\/g, '/').replace(/\\/{2,}/g, '/');
 				export class Modal {
 					constructor(app) {
 						this.app = app;
@@ -356,6 +368,7 @@ function createHarness(options = {}) {
 	let committedWrites = 0;
 	let refreshes = 0;
 	let mutationCount = 0;
+	const batchPreviews = new Map();
 	const initialFile = makeInitialFile({
 		targetNotePath: proposalTargetPath,
 		proposalFields: options.proposalFields || {},
@@ -485,14 +498,110 @@ function createHarness(options = {}) {
 	const host = {
 		async executeLocalTool(name, args, executionOptions) {
 			if (options.executeLocalTool) {
-				return options.executeLocalTool(name, args, executionOptions);
+				const result = await options.executeLocalTool(name, args, executionOptions);
+				const override = executionOptions?.wikiBatchWritebackOverride;
+				if (override && args.dry_run !== true) {
+					const prepared = batchPreviews.get(args.proposal_path);
+					if (!prepared) throw new Error('fake batch preparation is missing');
+					const proposalFile = files.get(args.proposal_path);
+					const targetFile = files.get(prepared.target_note);
+					if (prepared.writeback_effect === 'update_managed_relations') {
+						const { applyManagedRelationsBlock } = require('@tracekeeper/core');
+						targetFile.content = applyManagedRelationsBlock(targetFile.content, prepared.writeback_preview);
+					} else if (prepared.writeback_effect === 'create_wiki_note') {
+						files.set(prepared.target_note, {
+							__tracekeeper_kind: 'file',
+							path: prepared.target_note,
+							extension: 'md',
+							basename: path.basename(prepared.target_note, '.md'),
+							stat: { mtime: Date.now(), size: Buffer.byteLength(prepared.writeback_preview) },
+							content: prepared.writeback_preview,
+						});
+					} else if (targetFile) {
+						targetFile.content = `${targetFile.content}\n\n${prepared.writeback_preview}\n`;
+					}
+					const taskFile = files.get('00_tracekeeper/work/tasks/task-1.md');
+					if (taskFile) {
+						const { planApprovedWritebackTaskLink } = require('@tracekeeper/mcp-runtime');
+						taskFile.content = planApprovedWritebackTaskLink({
+							taskContent: taskFile.content,
+							targetPath: prepared.target_note,
+							proposalId: currentProposalFromFile(proposalFile).proposalId,
+							proposalPath: args.proposal_path,
+							usesStableProposalReferences: true,
+							usesAppliedProposalEvidence: true,
+						}).content;
+					}
+					proposalFile.frontmatter.approval_status = 'approved';
+					proposalFile.frontmatter.status = 'approved';
+					proposalFile.content = renderFileContent(proposalFile);
+					await transitionOwner.transition({
+						proposalPath: args.proposal_path,
+						expectedRevision: currentProposalFromFile(proposalFile).revision,
+						expectedContentHash: currentProposalFromFile(proposalFile).contentHash,
+						operationId: prepared.batch_writeback_operation_id,
+						action: { kind: 'apply' },
+						now: '2026-07-30T00:00:01.000Z',
+						actor: 'user',
+					});
+					const { NodeFileOperationJournal } = require('@tracekeeper/core');
+					await new NodeFileOperationJournal({
+						directory: path.join(batchJournalRoot, '00_tracekeeper/control/operations'),
+					}).save({
+						operation_id: prepared.batch_writeback_operation_id,
+						idempotency_key: prepared.batch_writeback_idempotency_key,
+						payload_hash: hashContent(prepared.batch_stable_binding_hash),
+						payload: { schemaVersion: 1 },
+						status: 'completed',
+						created_at: '2026-07-30T00:00:00.000Z',
+						updated_at: '2026-07-30T00:00:01.000Z',
+						completed_steps: [],
+						result: { ok: true },
+					});
+				}
+				return result;
 			}
 			throw new Error('executeLocalTool should not be called in this test.');
+		},
+		async previewWikiBatchApprovedWriteback(args, override) {
+			if (options.executeLocalTool || host.executeLocalTool) {
+				const result = await host.executeLocalTool(
+					'tracekeeper.apply_approved_writeback',
+					args,
+					{ wikiBatchWritebackOverride: override }
+				);
+				const proposal = currentProposalFromFile(files.get(args.proposal_path));
+				const taskFile = proposal.taskId ? files.get(`00_tracekeeper/work/tasks/${proposal.taskId}.md`) : null;
+				const taskPlan = taskFile
+					? require('@tracekeeper/mcp-runtime').planApprovedWritebackTaskLink({
+						taskContent: taskFile.content,
+						targetPath: result.target_note,
+						proposalId: proposal.proposalId,
+						proposalPath: proposal.path,
+						usesStableProposalReferences: true,
+						usesAppliedProposalEvidence: true,
+					})
+					: { contentHashBefore: '', contentHashAfter: '' };
+				const internal = {
+					...result,
+					batch_writeback_operation_id: `writeback-${override.previewNonce.slice(0, 24)}`,
+					batch_writeback_idempotency_key: `apply-approved-writeback:${override.previewNonce}`,
+					batch_stable_binding_hash: hashContent(`${override.batchOperationId}:${proposal.path}:${override.previewNonce}`),
+					batch_task_content_hash_before: taskPlan.contentHashBefore,
+					batch_task_content_hash_after: taskPlan.contentHashAfter,
+				};
+				batchPreviews.set(args.proposal_path, internal);
+				return internal;
+			}
+			throw new Error('previewWikiBatchApprovedWriteback should not be called in this test.');
 		},
 		async refreshGovernanceViews() {
 			refreshes += 1;
 		},
 		async appendToAuditLog(entry) {
+			auditLog.push(entry);
+		},
+		async appendWikiBatchActivity(_operationId, entry) {
 			auditLog.push(entry);
 		},
 		getVaultRoot() {
@@ -519,6 +628,7 @@ function createHarness(options = {}) {
 		files,
 		auditLog,
 		initialFile,
+		batchJournalRoot,
 		staleSnapshot: makeProposalRecord({
 			fileContentHash: hashContent(renderFileContent(initialFile)),
 			writebackEffect: initialFile.frontmatter.writeback_effect || initialFile.frontmatter.writebackEffect,
@@ -713,7 +823,18 @@ function createNativeTransitionHarness(options = {}) {
 try {
 	await Promise.all([
 		build({
-			entryPoints: [path.resolve('src/features/review/review-queue-controller.ts')],
+			stdin: {
+				contents: [
+					"export { ReviewQueueController } from './src/features/review/review-queue-controller';",
+					"export { LocalToolExecutor } from './src/composition/local-tool-executor';",
+					"export { ObsidianVaultRepository } from './src/adapters/obsidian-vault-repository';",
+					"export { ActivityRecordRepository } from './src/features/activity/activity-record-repository';",
+					"export { ObsidianAuditShardRepository } from './src/features/activity/native-audit-repository';",
+				].join('\n'),
+				resolveDir: path.resolve('.'),
+				sourcefile: 'review-queue-controller-test-entry.ts',
+				loader: 'ts',
+			},
 			outfile: controllerOutput,
 			bundle: true,
 			platform: 'node',
@@ -750,7 +871,13 @@ try {
 		}),
 	]);
 
-	const { ReviewQueueController } = require(controllerOutput);
+	const {
+		ActivityRecordRepository,
+		LocalToolExecutor,
+		ObsidianAuditShardRepository,
+		ObsidianVaultRepository,
+		ReviewQueueController,
+	} = require(controllerOutput);
 	const {
 		TracekeeperReviewQueueView,
 		reviewStatusFailureMessage,
@@ -775,6 +902,122 @@ try {
 	proposalTransitionReceiptFromFrontmatterForTest =
 		proposalTransitionReceiptFromFrontmatter;
 	transitionProposalForTest = transitionProposal;
+
+	function createRealBatchHarness(t) {
+		const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-real-wiki-batch-'));
+		t.after(() => fs.rmSync(vaultRoot, { recursive: true, force: true }));
+		const entries = new Map();
+		let clock = Date.parse('2026-09-01T00:00:00.000Z');
+		const ensureFolder = (folderPath) => {
+			if (!folderPath || entries.has(folderPath)) return entries.get(folderPath)?.file;
+			const parentPath = folderPath.includes('/') ? folderPath.slice(0, folderPath.lastIndexOf('/')) : '';
+			const parent = ensureFolder(parentPath);
+			const folder = { __tracekeeper_kind: 'folder', path: folderPath, children: [] };
+			entries.set(folderPath, { file: folder, content: '' });
+			parent?.children.push(folder);
+			fs.mkdirSync(path.join(vaultRoot, folderPath), { recursive: true });
+			return folder;
+		};
+		const putFile = (filePath, content) => {
+			const parentPath = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '';
+			const parent = ensureFolder(parentPath);
+			let record = entries.get(filePath);
+			if (!record) {
+				const file = {
+					__tracekeeper_kind: 'file',
+					path: filePath,
+					extension: path.extname(filePath).slice(1),
+					basename: path.basename(filePath, path.extname(filePath)),
+					stat: { mtime: ++clock, size: Buffer.byteLength(content) },
+				};
+				record = { file, content };
+				entries.set(filePath, record);
+				parent?.children.push(file);
+			} else {
+				record.content = content;
+				record.file.stat = { mtime: ++clock, size: Buffer.byteLength(content) };
+			}
+			fs.mkdirSync(path.dirname(path.join(vaultRoot, filePath)), { recursive: true });
+			fs.writeFileSync(path.join(vaultRoot, filePath), content, 'utf8');
+			return record.file;
+		};
+		const deleteFile = (file) => {
+			entries.delete(file.path);
+			fs.rmSync(path.join(vaultRoot, file.path), { force: true });
+		};
+		const vault = {
+			configDir: '.obsidian',
+			getAbstractFileByPath: (filePath) => entries.get(filePath)?.file || null,
+			getFolderByPath: (folderPath) => entries.get(folderPath)?.file?.__tracekeeper_kind === 'folder'
+				? entries.get(folderPath).file : null,
+			getFiles: () => [...entries.values()].map((entry) => entry.file).filter((file) => file.__tracekeeper_kind === 'file'),
+			getMarkdownFiles() {
+				return this.getFiles().filter((file) => file.extension === 'md');
+			},
+			read: async (file) => entries.get(file.path).content,
+			cachedRead: async (file) => entries.get(file.path).content,
+			create: async (filePath, content) => putFile(filePath, content),
+			createFolder: async (folderPath) => ensureFolder(folderPath),
+			process: async (file, updater) => {
+				const next = updater(entries.get(file.path).content);
+				putFile(file.path, next);
+				return next;
+			},
+		};
+		const fileManager = {
+			generateMarkdownLink(file, _sourcePath, subpath = '', alias = '') {
+				return `[[${file.path.replace(/\.md$/i, '')}${subpath}${alias ? `|${alias}` : ''}]]`;
+			},
+			trashFile: async (file) => deleteFile(file),
+		};
+		const app = { vault, fileManager };
+		const repository = new ObsidianVaultRepository(vault, fileManager);
+		const transitions = new ObsidianProposalTransitionAdapter(app);
+		const executor = new LocalToolExecutor({
+			runtimeVersion: '0.4.4',
+			getContext: () => ({
+				defaultVaultRoot: vaultRoot,
+				vaultConfigDir: '.obsidian',
+				vaultRepository: repository,
+				proposalTransitionPort: transitions,
+				knowledgeSnapshotProvider: () => null,
+				knowledgeReadViewProvider: async () => null,
+				graphProfile: 'default',
+				memoryRules: {
+					globalMemoryRule: 'review_queue',
+					projectMemoryRule: 'review_queue',
+					wikiChangeRule: 'review_batch',
+					taskTrackingEnabled: true,
+				},
+				contentLanguage: 'en',
+				contentLanguageSource: 'fallback',
+			}),
+		});
+		const records = new ActivityRecordRepository(app);
+		const auditRepository = new ObsidianAuditShardRepository(app, {
+			ensureFolderExists: async (folderPath) => { ensureFolder(folderPath); },
+			createOperationId: () => 'native-real-batch',
+		});
+		const host = {
+			executeLocalTool: (name, args, options) => executor.executeLocalTool(name, args, options),
+			previewWikiBatchApprovedWriteback: (args, override) =>
+				executor.previewWikiBatchApprovedWriteback(args, override),
+			refreshGovernanceViews: async () => undefined,
+			appendToAuditLog: async () => undefined,
+			appendWikiBatchActivity: (operationId, entry) =>
+				auditRepository.appendRawEvents(entry, { operationId }).then(() => undefined),
+			getVaultRoot: () => vaultRoot,
+			ensureFolderExists: async (folderPath) => { ensureFolder(folderPath); },
+			normalizeVaultPath: (value) => value,
+			loadReviewKnowledgeSnapshot: async () => ({ state: 'ready', notes: [] }),
+			waitForNativePath: async () => undefined,
+			readArchiveReceipt: async () => null,
+			writeArchiveReceipt: async () => undefined,
+			readArchiveTargetClaim: async () => null,
+			writeArchiveTargetClaim: async () => undefined,
+		};
+		return { app, entries, executor, host, putFile, records, transitions, vaultRoot };
+	}
 
 	test('review status errors expose localized, actionable failure reasons', () => {
 		const missingTarget = new Error('Proposal target does not exist.');
@@ -1669,6 +1912,131 @@ try {
 		assert.equal(calls[0].args.confirmation_token, preview.confirmation_token);
 	});
 
+	test('real 12-item Wiki batch maintains the task hash chain through repository, Runtime, and native transitions', async (t) => {
+		const harness = createRealBatchHarness(t);
+		const { hashVaultContent, parseManagedRelationsBlock, parseMarkdown, NodeFileOperationJournal } = require('@tracekeeper/core');
+		const wikiIndex = '01_knowledge/wiki/index.md';
+		const mapPath = '01_knowledge/wiki/programming-map.md';
+		harness.putFile(wikiIndex, '# Wiki index\n');
+		const started = await harness.executor.executeLocalTool('tracekeeper.start_task', {
+			goal: 'Create a twelve item Wiki batch.',
+			idempotency_key: 'real-wiki-batch-start',
+		});
+		const taskId = started.task_id;
+		const proposalPaths = [];
+		const propose = async (args) => {
+			const result = await harness.executor.executeLocalTool('tracekeeper.propose_memory', {
+				...args,
+				task_id: taskId,
+			});
+			assert.equal(result.auto_applied, false);
+			proposalPaths.push(result.proposal_path);
+			return result;
+		};
+		await propose({
+			proposal_kind: 'wiki_topic_map',
+			content: '# Programming map',
+			target_note: mapPath,
+			wiki_role: 'topic_map',
+			parent_wiki: wikiIndex,
+			idempotency_key: 'real-wiki-batch-map',
+		});
+		for (let index = 1; index <= 10; index += 1) {
+			await propose({
+				proposal_kind: 'wiki_topic',
+				content: `# Topic ${index}`,
+				target_note: `01_knowledge/wiki/topic-${index}.md`,
+				wiki_role: 'topic',
+				parent_wiki: mapPath,
+				idempotency_key: `real-wiki-batch-topic-${index}`,
+			});
+		}
+		await propose({
+			proposal_kind: 'wiki_relations',
+			content: 'Maintain the root Wiki relation.',
+			target_note: wikiIndex,
+			related_wiki: [mapPath],
+			idempotency_key: 'real-wiki-batch-index',
+		});
+		assert.equal(proposalPaths.length, 12);
+		for (const proposalPathValue of proposalPaths) {
+			const raw = harness.entries.get(proposalPathValue).content;
+			harness.putFile(proposalPathValue, raw.replace(/^title:.*$/m, 'title: Memory proposal'));
+		}
+
+		const proposals = await Promise.all(proposalPaths.map(async (proposalPathValue) => {
+			const file = harness.app.vault.getAbstractFileByPath(proposalPathValue);
+			return harness.records.readMemoryProposalFile(file);
+		}));
+		assert.equal(proposals.every(Boolean), true);
+		for (const proposalPathValue of proposalPaths) {
+			const raw = harness.entries.get(proposalPathValue).content;
+			assert.match(String(parseMarkdown(raw).frontmatter.fields.type), /memory[-_]proposal/);
+		}
+		const controller = new ReviewQueueController(
+			harness.app,
+			harness.records,
+			harness.host,
+			harness.transitions,
+			() => 'review-real-12-item-batch',
+			() => new Date('2026-09-01T00:01:00.000Z')
+		);
+		const preview = await controller.previewWikiReviewBatch(proposals);
+		assert.equal(preview.schemaVersion, 3);
+		assert.equal(preview.items.length, 12);
+		assert.equal(preview.taskPlans.length, 1);
+		for (let index = 1; index < preview.items.length; index += 1) {
+			assert.equal(
+				preview.items[index].expectedTaskContentHashBefore,
+				preview.items[index - 1].expectedTaskContentHashAfter
+			);
+		}
+		assert.equal(preview.items[0].targetPath, wikiIndex);
+		assert.equal(preview.items[1].targetPath, mapPath);
+
+		const receipt = await controller.confirmWikiReviewBatch(preview, preview.confirmationToken);
+		assert.equal(receipt.status, 'completed', JSON.stringify(receipt));
+		assert.equal(receipt.applied.length, 12);
+		assert.equal(receipt.conflicts.length, 0);
+		assert.equal(receipt.dependencyBlocked.length, 0);
+		assert.equal(receipt.targetWrites.length, 12);
+		const taskPath = `00_tracekeeper/work/tasks/${taskId}.md`;
+		const taskContent = await harness.app.vault.read(harness.app.vault.getAbstractFileByPath(taskPath));
+		assert.equal(hashVaultContent(taskContent), preview.taskPlans[0].finalContentHash);
+		const taskFields = parseMarkdown(taskContent).frontmatter.fields;
+		assert.equal(String(taskFields.memory_writes).split(', ').length, 12);
+		assert.equal(String(taskFields.proposal_ids).split(', ').length, 12);
+		assert.equal(String(taskFields.proposal_paths).split(', ').length, 12);
+		assert.equal(String(taskFields.durable_output_applied_proposal_ids).split(', ').length, 12);
+		for (const targetPathValue of [wikiIndex, mapPath, ...Array.from({ length: 10 }, (_, index) => `01_knowledge/wiki/topic-${index + 1}.md`)]) {
+			const file = harness.app.vault.getAbstractFileByPath(targetPathValue);
+			assert.ok(file, targetPathValue);
+			assert.equal(parseManagedRelationsBlock(await harness.app.vault.read(file)).status, 'valid');
+		}
+		for (const proposalPathValue of proposalPaths) {
+			const proposal = await harness.records.readMemoryProposalFile(harness.app.vault.getAbstractFileByPath(proposalPathValue));
+			assert.equal(proposal.approvalStatus, 'applied');
+			assert.match(proposal.writebackOperationId, /^writeback-/);
+			assert.equal(proposal.archived, false);
+		}
+		const activityText = harness.app.vault.getMarkdownFiles()
+			.filter((file) => file.path.startsWith('00_tracekeeper/control/agent_activity/'))
+			.map((file) => harness.entries.get(file.path).content)
+			.join('\n');
+		assert.equal((activityText.match(/action: wiki\.review_batch/g) || []).length, 1);
+		const batchRecord = await new NodeFileOperationJournal({
+			directory: path.join(harness.vaultRoot, '00_tracekeeper/control/operations'),
+		}).loadById(preview.operationId);
+		assert.equal(batchRecord.status, 'completed');
+		assert.equal(batchRecord.payload.items.some((item) => 'writebackPreview' in item), false);
+		assert.equal(batchRecord.payload.targets.some((target) => 'writebackBlock' in target), false);
+		const rawBatchJournal = fs.readFileSync(
+			path.join(harness.vaultRoot, '00_tracekeeper/control/operations', `${preview.operationId}.json`),
+			'utf8'
+		);
+		assert.doesNotMatch(rawBatchJournal, /Programming map|Topic 1|confirmation_token|tracekeeper:relations:start/);
+	});
+
 	test('one Wiki batch confirmation approves and invokes governed apply', async () => {
 		const calls = [];
 		const harness = createHarness({
@@ -1702,12 +2070,12 @@ try {
 		const preview = await controller.previewWikiReviewBatch([harness.staleSnapshot]);
 		assert.equal(preview.items.length, 1);
 		const receipt = await controller.confirmWikiReviewBatch(preview, preview.confirmationToken);
-		assert.equal(receipt.status, 'completed');
+		assert.equal(receipt.status, 'completed', JSON.stringify(receipt));
 		assert.deepEqual(receipt.applied, [proposalPath]);
 		assert.equal(calls.length, 2);
 		assert.equal(calls[0].args.dry_run, true);
 		assert.equal(calls[1].args.confirmation_token, 'opaque-confirmation-token');
-		assert.equal(harness.initialFile.frontmatter.approval_status, 'approved');
+		assert.equal(harness.initialFile.frontmatter.approval_status, 'applied');
 	});
 
 	test('Wiki batch confirmation completes through the native transition adapter without lock re-entry', async () => {
@@ -1719,6 +2087,8 @@ try {
 		});
 		const journalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-review-native-batch-root-'));
 		const calls = [];
+		let preparedBatchWriteback;
+		let nativeTransitionOwner;
 		const records = {
 			async readMemoryProposalFile(file) {
 				const parsed = parseNativeProposal(file.content);
@@ -1726,6 +2096,7 @@ try {
 					classification: 'other_review_item',
 					proposalKind: parsed.fields.proposal_kind || 'memory',
 					approvalStatus: parsed.fields.approval_status || 'pending',
+					writebackOperationId: parsed.fields.writeback_operation_id || '',
 					writebackEffect: 'append',
 					writebackContent: '- native writeback',
 					fileContentHash: hashContent(file.content),
@@ -1748,26 +2119,78 @@ try {
 						confirmation_expires_at: '2026-07-30T00:05:00.000Z',
 					};
 				}
-				const current = parseNativeProposal(native.proposalFile.content);
-				current.fields.approval_status = 'applied';
-				native.proposalFile.content = renderNativeProposal(current.fields, current.body);
-				native.proposalFile.frontmatter = current.fields;
+				const taskFile = native.files.get('00_tracekeeper/work/tasks/task-1.md');
+				taskFile.content = require('@tracekeeper/mcp-runtime').planApprovedWritebackTaskLink({
+					taskContent: taskFile.content,
+					targetPath: targetPath,
+					proposalId: 'proposal-1',
+					proposalPath,
+					usesStableProposalReferences: true,
+					usesAppliedProposalEvidence: true,
+				}).content;
+				native.files.get(targetPath).content = `${native.files.get(targetPath).content}\n\npreview\n`;
+				const applied = parseNativeProposal(native.proposalFile.content);
+				applied.fields.approval_status = 'applied';
+				applied.fields.status = 'applied';
+				applied.fields.writeback_operation_id = preparedBatchWriteback.batch_writeback_operation_id;
+				native.proposalFile.content = renderNativeProposal(applied.fields, applied.body);
+				native.proposalFile.frontmatter = applied.fields;
+				await new (require('@tracekeeper/core').NodeFileOperationJournal)({
+					directory: path.join(journalRoot, '00_tracekeeper/control/operations'),
+				}).save({
+					operation_id: preparedBatchWriteback.batch_writeback_operation_id,
+					idempotency_key: preparedBatchWriteback.batch_writeback_idempotency_key,
+					payload_hash: hashContent('native-binding'),
+					payload: { schemaVersion: 1 },
+					status: 'completed',
+					created_at: '2026-07-30T00:00:00.000Z',
+					updated_at: '2026-07-30T00:00:01.000Z',
+					completed_steps: [],
+					result: { ok: true },
+				});
 				return { ok: true };
 			},
+			async previewWikiBatchApprovedWriteback(args, override) {
+				const result = await this.executeLocalTool(
+					'tracekeeper.apply_approved_writeback',
+					args,
+					{ wikiBatchWritebackOverride: override }
+				);
+				const taskContent = native.files.get('00_tracekeeper/work/tasks/task-1.md').content;
+				const taskPlan = require('@tracekeeper/mcp-runtime').planApprovedWritebackTaskLink({
+					taskContent,
+					targetPath,
+					proposalId: 'proposal-1',
+					proposalPath,
+					usesStableProposalReferences: true,
+					usesAppliedProposalEvidence: true,
+				});
+				preparedBatchWriteback = {
+					...result,
+					batch_writeback_operation_id: `writeback-${override.previewNonce.slice(0, 24)}`,
+					batch_writeback_idempotency_key: `apply-approved-writeback:${override.previewNonce}`,
+					batch_stable_binding_hash: hashContent('native-binding'),
+					batch_task_content_hash_before: taskPlan.contentHashBefore,
+					batch_task_content_hash_after: taskPlan.contentHashAfter,
+				};
+				return preparedBatchWriteback;
+			},
 			async appendToAuditLog() {},
+			async appendWikiBatchActivity() {},
 			async refreshGovernanceViews() {},
 			getVaultRoot() {
 				return journalRoot;
 			},
 		};
 		const adapter = new ObsidianProposalTransitionAdapter(native.app);
-		const nativeTransitionOwner = {
+		nativeTransitionOwner = {
 			async transition(request) {
 				const current = await adapter.inspect(request.proposalPath);
+				const record = await records.readMemoryProposalFile(native.proposalFile);
 				return adapter.transition({
 					...request,
 					expectedRevision: current.revision,
-					expectedContentHash: undefined,
+					expectedContentHash: record.contentHash,
 				});
 			},
 		};
@@ -1785,7 +2208,7 @@ try {
 			controller.confirmWikiReviewBatch(preview, preview.confirmationToken),
 			new Promise((_, reject) => setTimeout(() => reject(new Error('batch confirmation timed out')), 2000)),
 		]);
-		assert.equal(receipt.status, 'completed');
+		assert.equal(receipt.status, 'completed', JSON.stringify(receipt));
 		assert.deepEqual(receipt.applied, [proposalPath]);
 		assert.equal(native.proposalFile.frontmatter.approval_status, 'applied');
 		assert.equal(calls.length, 2);
@@ -1833,10 +2256,113 @@ try {
 		assert.deepEqual(resumed.applied, [proposalPath]);
 	});
 
-	test('Wiki batch preview coalesces duplicate managed-relation targets', async () => {
+	test('Wiki batch resumes after a persisted verify checkpoint without repeating the nested apply', async () => {
+		let applyCalls = 0;
+		let interrupted = false;
+		const harness = createHarness({
+			async executeLocalTool(_name, args) {
+				if (args.dry_run === true) {
+					return {
+						proposal_id: 'proposal-1',
+						proposal_path: proposalPath,
+						target_note: targetPath,
+						target_content_hash: targetContentHash,
+						touched_notes: [targetPath, proposalPath],
+						writeback_preview: 'preview',
+						writeback_effect: 'append',
+						confirmation_token: 'opaque-confirmation-token',
+						confirmation_expires_at: '2026-07-30T00:05:00.000Z',
+					};
+				}
+				applyCalls += 1;
+				return { ok: true };
+			},
+		});
+		const controller = new ReviewQueueController(
+			harness.app,
+			harness.records,
+			harness.host,
+			harness.transitionOwner,
+			() => 'review-verify-checkpoint',
+			() => new Date('2026-07-30T00:00:00.000Z'),
+			({ phase, stepName }) => {
+				if (!interrupted && phase === 'after_step' && stepName === 'verify-000') {
+					interrupted = true;
+					throw new Error('interrupt after persisted verify');
+				}
+			}
+		);
+		const preview = await controller.previewWikiReviewBatch([harness.staleSnapshot]);
+		const partial = await controller.confirmWikiReviewBatch(preview, preview.confirmationToken);
+		assert.equal(partial.status, 'partial');
+		assert.deepEqual(partial.applied, [proposalPath]);
+		assert.equal(partial.resumable, true);
+		const resumed = await controller.resumeWikiReviewBatch(preview.operationId);
+		assert.equal(resumed.status, 'completed');
+		assert.equal(applyCalls, 1);
+	});
+
+	test('Wiki batch refuses to auto-resume a legacy v2 journal without a task hash chain', async () => {
 		const harness = createHarness();
+		const operationId = 'wiki-review-batch-legacy-v2';
+		await new (require('@tracekeeper/core').NodeFileOperationJournal)({
+			directory: path.join(harness.batchJournalRoot, '00_tracekeeper/control/operations'),
+		}).save({
+			operation_id: operationId,
+			idempotency_key: 'wiki-review-batch:legacy-v2',
+			payload_hash: hashContent('legacy-v2'),
+			payload: { schemaVersion: 2 },
+			status: 'failed',
+			created_at: '2026-07-30T00:00:00.000Z',
+			updated_at: '2026-07-30T00:00:01.000Z',
+			completed_steps: [],
+			error: 'legacy interruption',
+			failed_at: '2026-07-30T00:00:01.000Z',
+		});
+		const controller = new ReviewQueueController(
+			harness.app,
+			harness.records,
+			harness.host,
+			harness.transitionOwner
+		);
+		await assert.rejects(
+			controller.resumeWikiReviewBatch(operationId),
+			/v2 cannot be resumed safely.*fresh v3 preview/i
+		);
+	});
+
+	test('Wiki batch preview coalesces duplicate managed-relation targets', async () => {
+		let harness;
 		const { applyManagedRelationsBlock, renderManagedRelationsBlock } = require('@tracekeeper/core');
 		let targetWriteCount = 0;
+		harness = createHarness({
+			async executeLocalTool(_name, args, executionOptions) {
+				const proposal = currentProposalFromFile(harness.files.get(args.proposal_path));
+				const target = harness.files.get(targetPath);
+				const override = executionOptions?.wikiBatchWritebackOverride;
+				if (args.dry_run === true) {
+					return {
+						proposal_id: proposal.proposalId,
+						proposal_path: proposal.path,
+						target_note: targetPath,
+						target_content_hash: hashContent(target.content),
+						touched_notes: [targetPath, proposal.path],
+						writeback_preview: override?.writebackBlock || proposal.writebackContent,
+						writeback_effect: override?.writebackBlock ? 'update_managed_relations' : 'append',
+						confirmation_token: `batch-token-${proposal.proposalId}`,
+						confirmation_expires_at: '2026-07-30T00:05:00.000Z',
+					};
+				}
+				if (override?.writebackBlock) {
+					const next = applyManagedRelationsBlock(target.content, override.writebackBlock);
+					if (next !== target.content) {
+						target.content = next;
+						targetWriteCount += 1;
+					}
+				}
+				return { ok: true };
+			},
+		});
 		const firstFile = harness.files.get(proposalPath);
 		const firstBlock = renderManagedRelationsBlock({
 			parent: '01_knowledge/wiki/programming/map.md',
@@ -1872,36 +2398,6 @@ try {
 		};
 		secondFile.content = renderFileContent(secondFile);
 		harness.files.set(secondPath, secondFile);
-		harness.host.executeLocalTool = async (_name, args, executionOptions) => {
-			const proposal = currentProposalFromFile(harness.files.get(args.proposal_path));
-			const target = harness.files.get(targetPath);
-			const override = executionOptions?.wikiBatchWritebackOverride;
-			if (args.dry_run === true) {
-				return {
-					proposal_id: proposal.proposalId,
-					proposal_path: proposal.path,
-					target_note: targetPath,
-					target_content_hash: hashContent(target.content),
-					touched_notes: [targetPath, proposal.path],
-					writeback_preview: override?.writebackBlock || proposal.writebackContent,
-					writeback_effect: override?.writebackBlock ? 'update_managed_relations' : 'append',
-					confirmation_token: `batch-token-${proposal.proposalId}`,
-					confirmation_expires_at: '2026-07-30T00:05:00.000Z',
-				};
-			}
-			if (override?.writebackBlock) {
-				const next = applyManagedRelationsBlock(target.content, override.writebackBlock);
-				if (next !== target.content) {
-					target.content = next;
-					targetWriteCount += 1;
-				}
-			}
-			const proposalFile = harness.files.get(args.proposal_path);
-			proposalFile.frontmatter.approval_status = 'applied';
-			proposalFile.frontmatter.status = 'applied';
-			proposalFile.content = renderFileContent(proposalFile);
-			return { ok: true };
-		};
 		const preview = await new ReviewQueueController(
 			harness.app,
 			harness.records,
@@ -1926,7 +2422,7 @@ try {
 			() => 'review-merge-apply',
 			() => new Date('2026-07-30T00:00:00.000Z')
 		).confirmWikiReviewBatch(preview, preview.confirmationToken);
-		assert.equal(receipt.status, 'completed');
+		assert.equal(receipt.status, 'completed', JSON.stringify(receipt));
 		assert.equal(targetWriteCount, 1);
 	});
 
@@ -2020,7 +2516,7 @@ try {
 			},
 		};
 		const preview = {
-			schemaVersion: 2,
+			schemaVersion: 3,
 			operationId: 'wiki-review-batch-ui-progress',
 			idempotencyKey: 'wiki-review-batch:wiki-review-batch-ui-progress',
 			reviewBatchId: 'task:task-1',
@@ -2060,7 +2556,7 @@ try {
 		assert.equal(cancel.disabled, true);
 		assert.match(collectElementText(modal.contentEl), /Writing Wiki|4\/12/);
 		resolveBatch({
-			schemaVersion: 2,
+			schemaVersion: 3,
 			operationId: preview.operationId,
 			reviewBatchId: preview.reviewBatchId,
 			status: 'completed',
@@ -2068,6 +2564,7 @@ try {
 			applied: preview.items.map((item) => item.proposalPath),
 			pending: [],
 			conflicts: [],
+			dependencyBlocked: [],
 			targetWrites: preview.items.map((item) => item.targetPath),
 			resumable: false,
 			completedAt: '2026-07-30T00:00:01.000Z',
@@ -2119,7 +2616,7 @@ try {
 		const receipt = await controller.confirmWikiReviewBatch(preview, preview.confirmationToken);
 		assert.equal(receipt.status, 'conflict');
 		assert.equal(receipt.applied.length, 0);
-		assert.match(receipt.conflicts[0].message, /target changed before item apply/i);
+		assert.match(receipt.conflicts[0].message, /target changed|binding changed/i);
 		assert.equal(calls.length, 1);
 	});
 

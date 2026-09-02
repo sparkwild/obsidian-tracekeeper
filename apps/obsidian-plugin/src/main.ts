@@ -64,6 +64,7 @@ import {
 	type DesktopDirectoryDialog,
 } from './adapters/desktop-directory-dialog';
 import { ObsidianVaultRepository } from './adapters/obsidian-vault-repository';
+import { ObsidianAuditShardRepository } from './features/activity/native-audit-repository';
 import {
 	ensureObsidianVaultFolderPath,
 	withObsidianVaultPathLock,
@@ -528,6 +529,7 @@ export default class TracekeeperPlugin extends Plugin {
 	private legacySourceConsolidationController!: LegacySourceConsolidationController;
 	private activityDataController!: ActivityDataController;
 	private activityRecordRepository!: ActivityRecordRepository;
+	private nativeAuditRepository!: ObsidianAuditShardRepository;
 	private graphHealthController!: GraphHealthController;
 	private reviewQueueController!: ReviewQueueController;
 	private proposalTransitionAdapter!: ObsidianProposalTransitionAdapter;
@@ -619,6 +621,9 @@ export default class TracekeeperPlugin extends Plugin {
 			},
 		});
 		this.activityRecordRepository = new ActivityRecordRepository(this.app);
+		this.nativeAuditRepository = new ObsidianAuditShardRepository(this.app, {
+			ensureFolderExists: (folderPath) => this.ensureFolderExists(folderPath),
+		});
 		this.graphHealthController = new GraphHealthController({
 			executeLocalTool: (name, args) => this.executeLocalTool(name, args),
 			refreshGovernanceViews: () => this.refreshGovernanceViews(),
@@ -631,8 +636,12 @@ export default class TracekeeperPlugin extends Plugin {
 			this.activityRecordRepository,
 			{
 				executeLocalTool: (name, args, options) => this.executeLocalTool(name, args, options),
+				previewWikiBatchApprovedWriteback: (args, override) =>
+					this.localToolExecutor.previewWikiBatchApprovedWriteback(args, override),
 				refreshGovernanceViews: () => this.refreshGovernanceViews(),
 				appendToAuditLog: (entry) => this.appendToAuditLog(entry),
+				appendWikiBatchActivity: (operationId, entry) =>
+					this.nativeAuditRepository.appendRawEvents(entry, { operationId }).then(() => undefined),
 				getVaultRoot: () => this.getVaultRoot(),
 				ensureFolderExists: (path) => this.ensureFolderExists(path),
 				normalizeVaultPath: (path) => this.normalizeVaultPath(path),

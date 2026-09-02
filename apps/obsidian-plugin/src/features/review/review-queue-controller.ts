@@ -5,10 +5,12 @@ import {
 	TRACEKEEPER_TASKS_DIR,
 	computePayloadHash,
 	hashVaultContent,
+	type OperationFailureInjection,
 	type ProposalTransitionDecision,
 } from '@tracekeeper/core';
 import type { ActivityRecordRepository } from '../activity/activity-record-repository';
 import type { LocalToolExecutionOptions } from '../../composition/local-tool-executor';
+import type { ObsidianWikiBatchWritebackPreview } from '@tracekeeper/mcp-runtime';
 import { withObsidianVaultPathLocks } from '../../adapters/obsidian-vault-path-lock';
 import {
 	firstString,
@@ -391,8 +393,13 @@ export interface ReviewQueueControllerHost {
 		args: Record<string, unknown>,
 		options?: LocalToolExecutionOptions
 	): Promise<Record<string, unknown>>;
+	previewWikiBatchApprovedWriteback(
+		args: Record<string, unknown>,
+		override: NonNullable<LocalToolExecutionOptions['wikiBatchWritebackOverride']>
+	): Promise<ObsidianWikiBatchWritebackPreview>;
 	refreshGovernanceViews(): Promise<void>;
 	appendToAuditLog(entry: string): Promise<void>;
+	appendWikiBatchActivity(operationId: string, entry: string): Promise<void>;
 	getVaultRoot?: () => string;
 	ensureFolderExists(path: string): Promise<void>;
 	normalizeVaultPath(path: string): string;
@@ -433,14 +440,18 @@ export class ReviewQueueController {
 		private readonly host: ReviewQueueControllerHost,
 		private readonly transitions: ReviewProposalTransitionOwner,
 		private readonly operationIdFactory: () => string = createReviewOperationId,
-		private readonly nowFactory: () => Date = () => new Date()
+		private readonly nowFactory: () => Date = () => new Date(),
+		private readonly wikiBatchFailureInjection?: OperationFailureInjection
 	) {
 		this.wikiBatchApplication = new WikiReviewBatchApplication(
 			this.app,
 			this.records,
 			{
 				executeLocalTool: (name, args, options) => this.host.executeLocalTool(name, args, options),
-				appendToAuditLog: (entry) => this.host.appendToAuditLog(entry),
+				previewWikiBatchApprovedWriteback: (args, override) =>
+					this.host.previewWikiBatchApprovedWriteback(args, override),
+				appendWikiBatchActivity: (operationId, entry) =>
+					this.host.appendWikiBatchActivity(operationId, entry),
 				refreshGovernanceViews: () => this.host.refreshGovernanceViews(),
 				getVaultRoot: () => {
 					if (!this.host.getVaultRoot) {
@@ -451,7 +462,8 @@ export class ReviewQueueController {
 			},
 			this.transitions,
 			this.operationIdFactory,
-			this.nowFactory
+			this.nowFactory,
+			this.wikiBatchFailureInjection
 		);
 	}
 

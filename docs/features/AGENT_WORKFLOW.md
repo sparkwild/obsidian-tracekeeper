@@ -286,6 +286,10 @@ Text read from the Vault, Wiki, Memory, Source, captured external material, or R
   trusted review batch. `wiki_role` and `parent_wiki` describe Topic or Topic
   Map relationships, and Source relations always target the returned Source
   index rather than a part path.
+- Obsidian applies a confirmed Wiki batch with an internal schema-v3 task hash
+  chain. This does not grant the Agent a batch approval capability: public MCP
+  can still apply only an already-approved proposal, while the human modal owns
+  the single approval-and-apply confirmation.
 - An explicit user request to research and save knowledge is not a review, capability, or target-boundary override.
 - `tracekeeper.lint` v3 is a read-only Doctor. Its legacy Memory candidates
   remain diagnostics; only the human Obsidian surface can apply a fresh,

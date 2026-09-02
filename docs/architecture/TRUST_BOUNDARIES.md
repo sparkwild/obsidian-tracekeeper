@@ -203,13 +203,19 @@ terminal status so replacing the JSON record with a shorter valid prefix cannot
 silently replay a completed effect.
 
 The internal Wiki batch coordinator follows the same boundary: it claims one
-manifest before any proposal or target mutation, records approval and apply
-steps as an ordered prefix, and delegates each file mutation to the existing
-path-locking adapter without holding that path lock itself. A batch confirmation
-token is valid only for the displayed manifest before claim; after claim,
-restart may resume that exact operation from its authenticated journal. A
-changed target or proposal becomes a terminal conflict requiring a fresh
-preview, while an interrupted non-conflict operation remains resumable.
+schema-v3 manifest before any proposal or target mutation, records approval and
+per-item `prepare`, `apply`, and `verify` steps as an ordered prefix, and
+delegates each file mutation to the existing path-locking adapter without
+holding that path lock itself. Task-linked items carry chained before/after
+content hashes, and recovery accepts an applied item only when the nested
+writeback operation id, target result hash, and task result hash all match. A
+batch confirmation token is valid only for the displayed manifest before claim;
+the token, note bodies, diffs, and relation blocks are never stored in the batch
+journal. After claim, restart may resume that exact operation from its
+authenticated hash-only plan. A v2 batch lacks this task chain and is not
+automatically resumed; it requires a fresh v3 preview. A changed target or
+proposal becomes a terminal conflict requiring a fresh preview, while an
+interrupted non-conflict operation remains resumable.
 
 Approved writeback records each target append or exact target creation,
 optional task link, proposal transition, and Agent activity append as a

@@ -42,6 +42,8 @@ const OPTIONAL_AUDIT_FIELDS = [
 	'moved_count',
 	'copied_count',
 	'review_count',
+	'approved_count',
+	'applied_count',
 	'trashed_roots',
 	'failed_roots',
 	'folders_created',

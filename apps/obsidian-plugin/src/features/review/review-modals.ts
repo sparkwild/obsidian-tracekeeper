@@ -967,11 +967,20 @@ export class WikiReviewBatchApplyModal extends Modal {
 		this.renderDetail(summary, ui('已应用', 'Applied'), String(receipt.applied.length));
 		this.renderDetail(summary, ui('目标写入', 'Target writes'), String(receipt.targetWrites.length));
 		this.renderDetail(summary, ui('冲突', 'Conflicts'), String(receipt.conflicts.length));
+		this.renderDetail(summary, ui('依赖阻塞', 'Dependency blocked'), String(receipt.dependencyBlocked.length));
 		if (receipt.conflicts.length > 0) {
 			const conflictList = this.contentEl.createEl('ul');
 			for (const conflict of receipt.conflicts) {
 				conflictList.createEl('li', {
 					text: `${noteNameFromPath(conflict.targetPath || conflict.proposalPath)}: ${conflict.message}`,
+				});
+			}
+		}
+		if (receipt.dependencyBlocked.length > 0) {
+			const blockedList = this.contentEl.createEl('ul');
+			for (const blocked of receipt.dependencyBlocked) {
+				blockedList.createEl('li', {
+					text: `${noteNameFromPath(blocked.targetPath || blocked.proposalPath)}: ${blocked.message}`,
 				});
 			}
 		}

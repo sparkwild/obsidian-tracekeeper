@@ -21,10 +21,15 @@ import {
 	WIKI_REVIEW_BATCH_MAX_ITEMS,
 	readManagedWikiRelations,
 	type OperationFailureStatus,
+	type OperationFailureInjection,
 	type OperationJournal,
 	type OperationRecord,
 	type ProposalTransitionDecision,
 } from '@tracekeeper/core';
+import {
+	planApprovedWritebackTaskLink,
+	type ObsidianWikiBatchWritebackPreview,
+} from '@tracekeeper/mcp-runtime';
 import type { ActivityRecordRepository } from '../activity/activity-record-repository';
 import type { LocalToolExecutionOptions } from '../../composition/local-tool-executor';
 import type { MemoryProposalRecord } from './review-view-model';
@@ -76,7 +81,9 @@ export interface WikiReviewBatchPreviewItem {
 	targetResultContentHash: string;
 	taskId: string;
 	taskPath: string;
-	taskContentHash: string;
+	expectedTaskContentHashBefore: string;
+	expectedTaskContentHashAfter: string;
+	previewNonce: string;
 	activityPath: string;
 	touchedNotes: string[];
 	effectiveRisk: string;
@@ -85,8 +92,15 @@ export interface WikiReviewBatchPreviewItem {
 	targetGroupId: string;
 }
 
-export interface WikiReviewBatchPreviewV2 {
-	schemaVersion: 2;
+export interface WikiReviewBatchTaskPlan {
+	taskPath: string;
+	initialContentHash: string;
+	finalContentHash: string;
+	proposalPaths: string[];
+}
+
+export interface WikiReviewBatchPreviewV3 {
+	schemaVersion: 3;
 	operationId: string;
 	idempotencyKey: string;
 	reviewBatchId: string;
@@ -95,6 +109,7 @@ export interface WikiReviewBatchPreviewV2 {
 	manifestHash: string;
 	items: WikiReviewBatchPreviewItem[];
 	targets: WikiReviewBatchTargetPlan[];
+	taskPlans: WikiReviewBatchTaskPlan[];
 	executionOrder: string[];
 	activityContext: {
 		actor: 'user';
@@ -104,10 +119,10 @@ export interface WikiReviewBatchPreviewV2 {
 	confirmationToken: string;
 }
 
-export type WikiReviewBatchPreview = WikiReviewBatchPreviewV2;
+export type WikiReviewBatchPreview = WikiReviewBatchPreviewV3;
 
-export interface WikiReviewBatchReceiptV2 {
-	schemaVersion: 2;
+export interface WikiReviewBatchReceiptV3 {
+	schemaVersion: 3;
 	operationId: string;
 	reviewBatchId: string;
 	status: 'completed' | 'partial' | 'conflict';
@@ -115,23 +130,34 @@ export interface WikiReviewBatchReceiptV2 {
 	applied: string[];
 	pending: string[];
 	conflicts: Array<{ proposalPath: string; targetPath?: string; message: string }>;
+	dependencyBlocked: Array<{ proposalPath: string; targetPath?: string; message: string }>;
 	targetWrites: string[];
 	resumable: boolean;
 	completedAt: string | null;
 }
 
-export type WikiReviewBatchReceipt = WikiReviewBatchReceiptV2;
+export type WikiReviewBatchReceipt = WikiReviewBatchReceiptV3;
+
+type WikiReviewBatchOperationItem = Omit<WikiReviewBatchPreviewItem, 'writebackPreview'> & {
+	writebackPreviewHash: string;
+};
+
+type WikiReviewBatchOperationTarget = Omit<WikiReviewBatchTargetPlan, 'writebackBlock'> & {
+	writebackBlockHash: string;
+};
 
 interface WikiReviewBatchOperationPayload {
-	schemaVersion: 2;
+	schemaVersion: 3;
 	operationId: string;
 	idempotencyKey: string;
 	reviewBatchId: string;
 	issuedAt: string;
 	expiresAt: string;
+	previewManifestHash: string;
 	manifestHash: string;
-	items: WikiReviewBatchPreviewItem[];
-	targets: WikiReviewBatchTargetPlan[];
+	items: WikiReviewBatchOperationItem[];
+	targets: WikiReviewBatchOperationTarget[];
+	taskPlans: WikiReviewBatchTaskPlan[];
 	executionOrder: string[];
 	activityContext: {
 		actor: 'user';
@@ -146,13 +172,43 @@ interface WikiReviewBatchHost {
 		args: Record<string, unknown>,
 		options?: LocalToolExecutionOptions
 	): Promise<Record<string, unknown>>;
-	appendToAuditLog(entry: string): Promise<void>;
+	previewWikiBatchApprovedWriteback(
+		args: Record<string, unknown>,
+		override: NonNullable<LocalToolExecutionOptions['wikiBatchWritebackOverride']>
+	): Promise<ObsidianWikiBatchWritebackPreview>;
+	appendWikiBatchActivity(operationId: string, entry: string): Promise<void>;
 	refreshGovernanceViews(): Promise<void>;
 	getVaultRoot(): string;
 }
 
 interface WikiReviewBatchTransitionOwner {
 	transition(request: ObsidianProposalTransitionRequest): Promise<ProposalTransitionDecision>;
+}
+
+type WikiBatchItemTerminalStatus = 'verified' | 'conflict' | 'dependency_blocked';
+
+interface WikiBatchPreparedItem {
+	status: 'prepared';
+	proposalPath: string;
+	targetPath: string;
+	writebackOperationId: string;
+	writebackIdempotencyKey: string;
+	stableBindingHash: string;
+	targetContentHashBefore: string;
+	targetResultContentHash: string;
+}
+
+interface WikiBatchAppliedItem extends Omit<WikiBatchPreparedItem, 'status'> {
+	status: 'applied_pending_verify';
+}
+
+interface WikiBatchTerminalItemResult {
+	status: WikiBatchItemTerminalStatus;
+	proposalPath: string;
+	targetPath: string;
+	message?: string;
+	writebackOperationId?: string;
+	targetWritten?: boolean;
 }
 
 class WikiBatchTerminalConflictError extends Error {
@@ -200,13 +256,33 @@ class ProgressReportingJournal implements OperationJournal {
 	}
 }
 
-const stepName = (kind: 'approve' | 'apply', index: number): string =>
+const stepName = (kind: 'approve' | 'prepare' | 'apply' | 'verify', index: number): string =>
 	`${kind}-${String(index).padStart(3, '0')}`;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const asString = (value: unknown): string => typeof value === 'string' ? value : '';
+
+const isPreparedItem = (value: unknown): value is WikiBatchPreparedItem =>
+	isRecord(value)
+	&& value.status === 'prepared'
+	&& typeof value.proposalPath === 'string'
+	&& typeof value.targetPath === 'string'
+	&& typeof value.writebackOperationId === 'string'
+	&& typeof value.writebackIdempotencyKey === 'string'
+	&& typeof value.stableBindingHash === 'string'
+	&& typeof value.targetContentHashBefore === 'string'
+	&& typeof value.targetResultContentHash === 'string';
+
+const isTerminalItemResult = (value: unknown): value is WikiBatchTerminalItemResult =>
+	isRecord(value)
+	&& (value.status === 'verified' || value.status === 'conflict' || value.status === 'dependency_blocked')
+	&& typeof value.proposalPath === 'string'
+	&& typeof value.targetPath === 'string'
+	&& (value.message === undefined || typeof value.message === 'string')
+	&& (value.writebackOperationId === undefined || typeof value.writebackOperationId === 'string')
+	&& (value.targetWritten === undefined || typeof value.targetWritten === 'boolean');
 
 const uniqueSorted = (values: readonly string[]): string[] => [...new Set(values)].sort((left, right) => left.localeCompare(right));
 
@@ -224,7 +300,7 @@ const fileVersion = (file: TFile | null, content: string): string => {
 	return `${stat?.mtime ?? 0}:${stat?.size ?? content.length}`;
 };
 
-const previewTaskContext = (value: unknown): value is WikiReviewBatchPreviewV2['activityContext'] =>
+const previewTaskContext = (value: unknown): value is WikiReviewBatchPreviewV3['activityContext'] =>
 	isRecord(value)
 	&& value.actor === 'user'
 	&& value.activityPath === TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH
@@ -284,7 +360,10 @@ const isBatchPreviewItem = (value: unknown): value is WikiReviewBatchPreviewItem
 	&& typeof value.targetResultContentHash === 'string'
 	&& typeof value.taskId === 'string'
 	&& typeof value.taskPath === 'string'
-	&& typeof value.taskContentHash === 'string'
+	&& typeof value.expectedTaskContentHashBefore === 'string'
+	&& typeof value.expectedTaskContentHashAfter === 'string'
+	&& typeof value.previewNonce === 'string'
+	&& /^[a-f0-9]{32}$/.test(value.previewNonce)
 	&& value.activityPath === TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH
 	&& Array.isArray(value.touchedNotes)
 	&& value.touchedNotes.every((item) => typeof item === 'string')
@@ -292,6 +371,19 @@ const isBatchPreviewItem = (value: unknown): value is WikiReviewBatchPreviewItem
 	&& typeof value.writebackPreview === 'string'
 	&& (value.writebackEffect === undefined || isWritebackEffect(value.writebackEffect))
 	&& typeof value.targetGroupId === 'string';
+
+const isBatchOperationItem = (value: unknown): value is WikiReviewBatchOperationItem => {
+	if (!isRecord(value) || typeof value.writebackPreviewHash !== 'string') return false;
+	return isBatchPreviewItem({ ...value, writebackPreview: '' });
+};
+
+const isBatchTaskPlan = (value: unknown): value is WikiReviewBatchTaskPlan =>
+	isRecord(value)
+	&& typeof value.taskPath === 'string'
+	&& typeof value.initialContentHash === 'string'
+	&& typeof value.finalContentHash === 'string'
+	&& Array.isArray(value.proposalPaths)
+	&& value.proposalPaths.every((item) => typeof item === 'string');
 
 const isBatchTargetPlan = (value: unknown): value is WikiReviewBatchTargetPlan =>
 	isRecord(value)
@@ -311,19 +403,27 @@ const isBatchTargetPlan = (value: unknown): value is WikiReviewBatchTargetPlan =
 	&& value.dependencies.every((item) => typeof item === 'string' && isKnowledgeWikiPath(item))
 	&& Number.isSafeInteger(value.priority);
 
+const isBatchOperationTarget = (value: unknown): value is WikiReviewBatchOperationTarget => {
+	if (!isRecord(value) || typeof value.writebackBlockHash !== 'string') return false;
+	return isBatchTargetPlan({ ...value, writebackBlock: '' });
+};
+
 /**
  * 负责 Wiki 批次预检、认领、逐步写回和中断恢复。
  *
  * @description 批次层只认领操作日志，不持有 Obsidian 文件锁；文件锁由下层原子适配器独占。
  */
 export class WikiReviewBatchApplication {
+	private readonly transientConfirmations = new Map<string, { confirmation_token: string }>();
+
 	constructor(
 		private readonly app: App,
 		private readonly records: ActivityRecordRepository,
 		private readonly host: WikiReviewBatchHost,
 		private readonly transitions: WikiReviewBatchTransitionOwner,
 		private readonly operationIdFactory: () => string,
-		private readonly nowFactory: () => Date = () => new Date()
+		private readonly nowFactory: () => Date = () => new Date(),
+		private readonly failureInjection?: OperationFailureInjection
 	) {}
 
 	/**
@@ -351,6 +451,7 @@ export class WikiReviewBatchApplication {
 			targetVersion: string;
 			taskPath: string;
 			taskContentHash: string;
+			taskContent: string;
 			effectiveRisk: string;
 			effectiveWritebackEffect: NonNullable<MemoryProposalRecord['writebackEffect']>;
 		}[]>();
@@ -412,6 +513,7 @@ export class WikiReviewBatchApplication {
 				targetVersion: fileVersion(target instanceof TFile ? target : null, targetContent),
 				taskPath,
 				taskContentHash: task instanceof TFile ? hashVaultContent(taskContent) : '',
+				taskContent,
 				effectiveRisk,
 				effectiveWritebackEffect,
 			});
@@ -501,9 +603,64 @@ export class WikiReviewBatchApplication {
 				|| (left.created || '').localeCompare(right.created || '')
 				|| left.path.localeCompare(right.path);
 		});
+		const issuedAt = this.nowFactory();
+		const operationId = `${WIKI_BATCH_OPERATION_PREFIX}${this.operationIdFactory().replace(/^review-/, '')}`;
+		const idempotencyKey = `wiki-review-batch:${operationId}`;
+		const taskChains = new Map<string, {
+			initialContentHash: string;
+			content: string;
+			proposalPaths: string[];
+		}>();
+		const itemTaskPlans = new Map<string, {
+			expectedBefore: string;
+			expectedAfter: string;
+			previewNonce: string;
+		}>();
+		for (const current of orderedRecords) {
+			const target = itemTarget.get(current.path);
+			if (!target) throw new Error(`Wiki target plan is missing: ${current.path}.`);
+			const entry = targetEntries.get(target.targetPath)?.find((candidate) =>
+				candidate.proposal.path === current.path
+			);
+			if (!entry) throw new Error(`Wiki task plan input is missing: ${current.path}.`);
+			const previewNonce = hashVaultContent(
+				`wiki-review-batch\0${operationId}\0${current.path}`
+			).slice(0, 32);
+			if (!entry.taskPath) {
+				itemTaskPlans.set(current.path, {
+					expectedBefore: '',
+					expectedAfter: '',
+					previewNonce,
+				});
+				continue;
+			}
+			const chain = taskChains.get(entry.taskPath) ?? {
+				initialContentHash: entry.taskContentHash,
+				content: entry.taskContent,
+				proposalPaths: [],
+			};
+			const taskPlan = planApprovedWritebackTaskLink({
+				taskContent: chain.content,
+				targetPath: target.targetPath,
+				proposalId: current.proposalId,
+				proposalPath: current.path,
+				usesStableProposalReferences: true,
+				usesAppliedProposalEvidence: true,
+			});
+			itemTaskPlans.set(current.path, {
+				expectedBefore: taskPlan.contentHashBefore,
+				expectedAfter: taskPlan.contentHashAfter,
+				previewNonce,
+			});
+			chain.content = taskPlan.content;
+			chain.proposalPaths.push(current.path);
+			taskChains.set(entry.taskPath, chain);
+		}
 		const items = orderedRecords.map((current): WikiReviewBatchPreviewItem => {
 			const target = itemTarget.get(current.path);
 			if (!target) throw new Error(`Wiki target plan is missing: ${current.path}.`);
+			const taskPlan = itemTaskPlans.get(current.path);
+			if (!taskPlan) throw new Error(`Wiki item task hash chain is missing: ${current.path}.`);
 			return {
 				proposalId: current.proposalId,
 				proposalPath: current.path,
@@ -517,7 +674,9 @@ export class WikiReviewBatchApplication {
 				targetResultContentHash: target.targetResultContentHash,
 				taskId: current.taskId,
 				taskPath: taskPathFor(current.taskId),
-				taskContentHash: targetEntries.get(target.targetPath)?.find((entry) => entry.proposal.path === current.path)?.taskContentHash || '',
+				expectedTaskContentHashBefore: taskPlan.expectedBefore,
+				expectedTaskContentHashAfter: taskPlan.expectedAfter,
+				previewNonce: taskPlan.previewNonce,
 				activityPath: TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
 				touchedNotes: uniqueSorted([
 					target.targetPath,
@@ -532,11 +691,16 @@ export class WikiReviewBatchApplication {
 			};
 		});
 
-		const issuedAt = this.nowFactory();
-		const operationId = `${WIKI_BATCH_OPERATION_PREFIX}${this.operationIdFactory().replace(/^review-/, '')}`;
-		const idempotencyKey = `wiki-review-batch:${operationId}`;
+		const taskPlans: WikiReviewBatchTaskPlan[] = [...taskChains.entries()]
+			.map(([taskPath, chain]) => ({
+				taskPath,
+				initialContentHash: chain.initialContentHash,
+				finalContentHash: hashVaultContent(chain.content),
+				proposalPaths: chain.proposalPaths,
+			}))
+			.sort((left, right) => left.taskPath.localeCompare(right.taskPath));
 		const base = {
-			schemaVersion: 2 as const,
+			schemaVersion: 3 as const,
 			operationId,
 			idempotencyKey,
 			reviewBatchId: [...reviewBatchIds][0] || '',
@@ -544,6 +708,7 @@ export class WikiReviewBatchApplication {
 			expiresAt: new Date(issuedAt.getTime() + WIKI_BATCH_PREVIEW_TTL_MS).toISOString(),
 			items,
 			targets: orderedTargets,
+			taskPlans,
 			executionOrder: orderedTargets.map((target) => target.targetGroupId),
 			activityContext: {
 				actor: 'user' as const,
@@ -640,25 +805,22 @@ export class WikiReviewBatchApplication {
 			payload,
 			journal: reportingJournal,
 			steps: this.buildSteps(payload, onProgress),
-			finalize: () => ({
-				schemaVersion: 2,
-				operationId: payload.operationId,
-				reviewBatchId: payload.reviewBatchId,
-				status: 'completed',
-				approved: payload.items.map((item) => item.proposalPath),
-				applied: payload.items.map((item) => item.proposalPath),
-				pending: [],
-				conflicts: [],
-				targetWrites: payload.targets.map((target) => target.targetPath),
-				resumable: false,
-				completedAt: this.nowFactory().toISOString(),
-			}),
-			failureInjection: undefined,
+			finalize: async () => {
+				const record = await baseJournal.loadById(payload.operationId);
+				if (!record) throw new Error('Wiki batch operation disappeared before finalization.');
+				return this.receiptFromCompletedRecord(payload, record);
+			},
+			failureInjection: this.failureInjection,
 			clock: () => this.nowFactory().toISOString(),
 		});
 		try {
 			const receipt = await runner.run();
-			notifyProgress(onProgress, { phase: 'completed', completed: payload.items.length, total: payload.items.length, message: 'Wiki 批次已完成' });
+			notifyProgress(onProgress, {
+				phase: receipt.status === 'completed' ? 'completed' : 'conflict',
+				completed: receipt.applied.length,
+				total: payload.items.length,
+				message: receipt.status === 'completed' ? 'Wiki 批次已完成' : 'Wiki 批次已完成可执行项',
+			});
 			await this.host.refreshGovernanceViews().catch((error) => {
 				console.error('tracekeeper failed to refresh after Wiki review batch', error);
 			});
@@ -719,90 +881,204 @@ export class WikiReviewBatchApplication {
 					now: this.nowFactory().toISOString(),
 					actor: 'user',
 				});
-				await this.appendProposalTransitionAuditEvent(decision, 'memory.proposal.approved');
 				return { status: 'approved', proposalPath: current.path };
 			},
 		}));
 
-		const applySteps = payload.items.map((item, index) => ({
-			name: stepName('apply', index),
-			persistResult: true,
-			failureStatus: (error: unknown): OperationFailureStatus =>
-				error instanceof WikiBatchTerminalConflictError ? 'conflicted' : 'failed',
-			execute: async () => {
-				notifyProgress(onProgress, {
-					phase: 'writing',
-					completed: index,
-					total: payload.items.length,
-					currentProposalPath: item.proposalPath,
-					currentTargetPath: item.targetPath,
-				});
-				const current = await this.readCurrentProposal(item.proposalPath);
-				if (current.approvalStatus === 'applied') {
-					return { status: 'already_applied', proposalPath: item.proposalPath, targetPath: item.targetPath };
-				}
-				if (current.approvalStatus !== 'approved') {
-					throw new WikiBatchTerminalConflictError(`Proposal is not approved: ${item.proposalPath}.`);
-				}
-				const target = this.app.vault.getAbstractFileByPath(item.targetPath);
-				const targetContent = target instanceof TFile ? await this.app.vault.read(target) : '';
-				const targetHash = target instanceof TFile ? hashVaultContent(targetContent) : 'absent';
-				if (targetHash !== item.targetContentHash && targetHash !== item.targetResultContentHash) {
-					throw new WikiBatchTerminalConflictError(`Wiki batch target changed: ${item.targetPath}.`);
-				}
-				const task = item.taskPath
-					? this.app.vault.getAbstractFileByPath(item.taskPath)
-					: null;
-				if (item.taskPath && !(task instanceof TFile)) {
-					throw new WikiBatchTerminalConflictError(`Wiki batch task context is unavailable: ${item.taskPath}.`);
-				}
-				const taskContent = task instanceof TFile ? await this.app.vault.read(task) : '';
-				if ((task instanceof TFile ? hashVaultContent(taskContent) : '') !== item.taskContentHash) {
-					throw new WikiBatchTerminalConflictError(`Wiki batch task changed: ${item.taskPath || item.proposalPath}.`);
-				}
-				const override = item.writebackEffect === 'update_managed_relations'
-					? {
+		const itemSteps = payload.items.flatMap((item, index) => [
+			{
+				name: stepName('prepare', index),
+				persistResult: true,
+				failureStatus: 'failed' as const,
+				execute: async (_operationPayload: WikiReviewBatchOperationPayload, context: { completedSteps: readonly { name: string; result?: unknown }[] }) => {
+					notifyProgress(onProgress, {
+						phase: 'writing',
+						completed: this.verifiedCount(context.completedSteps),
+						total: payload.items.length,
+						currentProposalPath: item.proposalPath,
+						currentTargetPath: item.targetPath,
+						message: '正在准备写入',
+					});
+					const blocked = this.dependencyBlockFor(payload, item, context.completedSteps);
+					if (blocked) return blocked;
+					try {
+						const current = await this.readCurrentProposal(item.proposalPath);
+						if (current.approvalStatus !== 'approved') {
+							return this.conflictResult(item, `Proposal is not approved by this batch: ${item.proposalPath}.`);
+						}
+						const targetFile = this.app.vault.getAbstractFileByPath(item.targetPath);
+						const targetContent = targetFile instanceof TFile ? await this.app.vault.read(targetFile) : '';
+						const targetHash = targetFile instanceof TFile
+							? hashVaultContent(targetContent)
+							: targetFile ? `occupied:${item.targetPath}` : 'absent';
+						if (targetHash !== item.targetContentHash && targetHash !== item.targetResultContentHash) {
+							return this.conflictResult(item, `Wiki batch target changed: ${item.targetPath}.`);
+						}
+						const taskHash = item.taskPath ? await this.currentFileHash(item.taskPath, '') : '';
+						if (taskHash !== item.expectedTaskContentHashBefore) {
+							return this.conflictResult(item, `Wiki batch task changed before ${item.proposalPath}.`);
+						}
+						const override = await this.batchOverride(payload, item);
+						const preview = await this.previewApprovedWriteback(current, override);
+						if (
+							preview.batch_task_content_hash_before !== item.expectedTaskContentHashBefore
+							|| preview.batch_task_content_hash_after !== item.expectedTaskContentHashAfter
+							|| preview.target_note !== item.targetPath
+							|| !new Set([item.targetContentHash, item.targetResultContentHash]).has(preview.target_content_hash)
+						) {
+							return this.conflictResult(item, `Wiki batch item binding changed: ${item.proposalPath}.`);
+						}
+						this.transientConfirmations.set(preview.batch_writeback_operation_id, {
+							confirmation_token: preview.confirmation_token,
+						});
+						return {
+							status: 'prepared',
+							proposalPath: item.proposalPath,
+							targetPath: item.targetPath,
+							writebackOperationId: preview.batch_writeback_operation_id,
+							writebackIdempotencyKey: preview.batch_writeback_idempotency_key,
+							stableBindingHash: preview.batch_stable_binding_hash,
+							targetContentHashBefore: preview.target_content_hash,
+							targetResultContentHash: this.plannedTargetResultHash(
+								item,
+								targetContent,
+								preview.writeback_preview
+							),
+						} satisfies WikiBatchPreparedItem;
+					} catch (error) {
+						if (this.isContentConflict(error)) {
+							return this.conflictResult(item, error instanceof Error ? error.message : String(error));
+						}
+						throw error;
+					}
+				},
+			},
+			{
+				name: stepName('apply', index),
+				persistResult: true,
+				failureStatus: 'failed' as const,
+				execute: async (_operationPayload: WikiReviewBatchOperationPayload, context: { completedSteps: readonly { name: string; result?: unknown }[] }) => {
+					const preparedResult = this.stepResult(context.completedSteps, stepName('prepare', index));
+					if (isTerminalItemResult(preparedResult)) return preparedResult;
+					if (!isPreparedItem(preparedResult)) throw new Error(`Wiki batch prepare result is missing: ${item.proposalPath}.`);
+					notifyProgress(onProgress, {
+						phase: 'writing',
+						completed: this.verifiedCount(context.completedSteps),
+						total: payload.items.length,
+						currentProposalPath: item.proposalPath,
+						currentTargetPath: item.targetPath,
+						message: '正在应用写入',
+					});
+					try {
+						const current = await this.readCurrentProposal(item.proposalPath);
+						const nestedRecord = await this.createJournal().loadById(preparedResult.writebackOperationId);
+						if (current.approvalStatus === 'applied' && this.appliedOperationId(current) !== preparedResult.writebackOperationId) {
+							return this.conflictResult(item, `Applied proposal belongs to another operation: ${item.proposalPath}.`);
+						}
+						if (nestedRecord) {
+							if (
+								nestedRecord.operation_id !== preparedResult.writebackOperationId
+								|| nestedRecord.idempotency_key !== preparedResult.writebackIdempotencyKey
+							) {
+								return this.conflictResult(item, `Wiki writeback journal identity changed: ${item.proposalPath}.`);
+							}
+							const override = await this.batchOverride(payload, item);
+							await this.applyApprovedWriteback(current, null, override, preparedResult.writebackOperationId);
+						} else {
+							if (current.approvalStatus !== 'approved') {
+								return this.conflictResult(item, `Proposal is not ready for batch apply: ${item.proposalPath}.`);
+							}
+							const override = await this.batchOverride(payload, item);
+							const cachedPreview = this.transientConfirmations.get(preparedResult.writebackOperationId);
+							const preview = cachedPreview
+								? { ...preparedResult, ...cachedPreview,
+									batch_writeback_operation_id: preparedResult.writebackOperationId,
+									batch_writeback_idempotency_key: preparedResult.writebackIdempotencyKey,
+									batch_stable_binding_hash: preparedResult.stableBindingHash }
+								: await this.previewApprovedWriteback(current, override);
+							if (
+								preview.batch_writeback_operation_id !== preparedResult.writebackOperationId
+								|| preview.batch_writeback_idempotency_key !== preparedResult.writebackIdempotencyKey
+								|| preview.batch_stable_binding_hash !== preparedResult.stableBindingHash
+							) {
+								return this.conflictResult(item, `Wiki batch binding changed after prepare: ${item.proposalPath}.`);
+							}
+							await this.applyApprovedWriteback(current, preview, override);
+							this.transientConfirmations.delete(preparedResult.writebackOperationId);
+						}
+						return { ...preparedResult, status: 'applied_pending_verify' } satisfies WikiBatchAppliedItem;
+					} catch (error) {
+						if (this.isContentConflict(error)) {
+							return this.conflictResult(item, error instanceof Error ? error.message : String(error));
+						}
+						throw error;
+					}
+				},
+			},
+			{
+				name: stepName('verify', index),
+				persistResult: true,
+				failureStatus: 'failed' as const,
+				execute: async (_operationPayload: WikiReviewBatchOperationPayload, context: { completedSteps: readonly { name: string; result?: unknown }[] }) => {
+					const applyResult = this.stepResult(context.completedSteps, stepName('apply', index));
+					if (isTerminalItemResult(applyResult)) return applyResult;
+					const preparedResult = this.stepResult(context.completedSteps, stepName('prepare', index));
+					if (!isPreparedItem(preparedResult) || !isRecord(applyResult) || applyResult.status !== 'applied_pending_verify') {
+						throw new Error(`Wiki batch apply result is missing: ${item.proposalPath}.`);
+					}
+					const current = await this.readCurrentProposal(item.proposalPath);
+					const targetHash = await this.currentFileHash(item.targetPath, 'absent');
+					const taskHash = item.taskPath ? await this.currentFileHash(item.taskPath, '') : '';
+					const nestedRecord = await this.createJournal().loadById(preparedResult.writebackOperationId);
+					if (
+						current.approvalStatus !== 'applied'
+						|| this.appliedOperationId(current) !== preparedResult.writebackOperationId
+						|| nestedRecord?.status !== 'completed'
+						|| targetHash !== preparedResult.targetResultContentHash
+						|| taskHash !== item.expectedTaskContentHashAfter
+					) {
+						return this.conflictResult(item, `Wiki batch verification failed: ${item.proposalPath}.`);
+					}
+					return {
+						status: 'verified',
 						proposalPath: item.proposalPath,
 						targetPath: item.targetPath,
-						writebackBlock: item.writebackPreview,
-						batchOperationId: payload.operationId,
-					}
-					: undefined;
-				const preview = await this.previewApprovedWriteback(current, override);
-				const appliedTargetHash = preview.target_content_hash;
-				const allowedTargetHashes = item.writebackEffect === 'update_managed_relations'
-					? new Set([item.targetContentHash, item.targetResultContentHash])
-					: new Set([item.targetContentHash]);
-				if (!allowedTargetHashes.has(appliedTargetHash)) {
-					throw new WikiBatchTerminalConflictError(`Wiki batch target changed before item apply: ${item.targetPath}.`);
-				}
-				await this.applyApprovedWriteback(current, preview, override);
-				return { status: 'applied', proposalPath: item.proposalPath, targetPath: item.targetPath };
+						writebackOperationId: preparedResult.writebackOperationId,
+						targetWritten: preparedResult.targetContentHashBefore !== preparedResult.targetResultContentHash,
+					} satisfies WikiBatchTerminalItemResult;
+				},
 			},
-		}));
+		]);
 
 		return [
 			...approvalSteps,
-			...applySteps,
+			...itemSteps,
 			{
 				name: WIKI_BATCH_ACTIVITY_STEP,
 				persistResult: true,
 				failureStatus: 'activity_pending' as const,
-				execute: async () => {
-					notifyProgress(onProgress, { phase: 'finalizing', completed: payload.items.length, total: payload.items.length, message: '正在记录批次结果' });
-					await this.host.appendToAuditLog(
-						`## ${this.nowFactory().toISOString()}\n` +
-						`action: wiki.review_batch\n` +
-						`actor: user\n` +
-						`operation_id: ${payload.operationId}\n` +
-						`review_batch_id: ${payload.reviewBatchId}\n` +
-						`approved_count: ${payload.items.length}\n` +
-						`applied_count: ${payload.items.length}\n` +
-						`target_count: ${payload.targets.length}\n` +
-						`result: success\n\n`
-					);
-					return { status: 'recorded' };
-				},
+					execute: async (_operationPayload: WikiReviewBatchOperationPayload, context: { completedSteps: readonly { name: string; result?: unknown }[] }) => {
+						const outcomes = this.terminalResults(payload, context.completedSteps);
+						const applied = outcomes.filter((result) => result.status === 'verified');
+						const conflicts = outcomes.filter((result) => result.status === 'conflict');
+						const blocked = outcomes.filter((result) => result.status === 'dependency_blocked');
+						notifyProgress(onProgress, { phase: 'finalizing', completed: applied.length, total: payload.items.length, message: '正在记录批次结果' });
+						await this.host.appendWikiBatchActivity(
+							payload.operationId,
+							`## ${this.nowFactory().toISOString()}\n` +
+							`type: native-audit-event\n` +
+							`event: wiki.review_batch\n` +
+							`action: wiki.review_batch\n` +
+							`actor: user\n` +
+							`operation_id: ${payload.operationId}\n` +
+							`approved_count: ${payload.items.length}\n` +
+							`applied_count: ${applied.length}\n` +
+							`target_paths: ${uniqueSorted(applied.map((result) => result.targetPath)).join(', ')}\n` +
+							`result_summary: batch=${payload.reviewBatchId}; conflicts=${conflicts.length}; dependency_blocked=${blocked.length}\n` +
+							`result: ${conflicts.length > 0 || blocked.length > 0 ? 'partial' : 'success'}\n\n`
+						);
+						return { status: 'recorded', applied: applied.length, conflicts: conflicts.length, dependencyBlocked: blocked.length };
+					},
 			},
 		];
 	}
@@ -811,7 +1087,7 @@ export class WikiReviewBatchApplication {
 		payload: WikiReviewBatchOperationPayload,
 		record: OperationRecord
 	): WikiReviewBatchProgress {
-		const completed = record.completed_steps.filter((step) => step.name.startsWith('apply-')).length;
+		const completed = this.verifiedCount(record.completed_steps);
 		const approved = record.completed_steps.filter((step) => step.name.startsWith('approve-')).length;
 		const phase = completed >= payload.items.length
 			? 'finalizing'
@@ -837,19 +1113,16 @@ export class WikiReviewBatchApplication {
 		const approved = payload.items
 			.filter((_item, index) => completed.has(stepName('approve', index)))
 			.map((item) => item.proposalPath);
-		const applied = payload.items
-			.filter((_item, index) => completed.has(stepName('apply', index)))
-			.map((item) => item.proposalPath);
+		const outcomes = this.terminalResults(payload, record.completed_steps);
+		const applied = outcomes.filter((result) => result.status === 'verified').map((result) => result.proposalPath);
 		const pending = payload.items
-			.filter((_item, index) => !completed.has(stepName('apply', index)))
+			.filter((_item, index) => !completed.has(stepName('verify', index)))
 			.map((item) => item.proposalPath);
 		const message = record.error || (error instanceof Error ? error.message : String(error));
-		const failedIndex = payload.items.findIndex((_item, index) =>
-			completed.has(stepName('approve', index)) && !completed.has(stepName('apply', index))
-		);
+		const failedIndex = payload.items.findIndex((_item, index) => completed.has(stepName('approve', index)) && !completed.has(stepName('verify', index)));
 		const failedItem = failedIndex >= 0 ? payload.items[failedIndex] : payload.items[applied.length];
 		return {
-			schemaVersion: 2,
+			schemaVersion: 3 as const,
 			operationId: payload.operationId,
 			reviewBatchId: payload.reviewBatchId,
 			status: applied.length > 0 ? 'partial' : 'conflict',
@@ -859,6 +1132,7 @@ export class WikiReviewBatchApplication {
 			conflicts: failedItem
 				? [{ proposalPath: failedItem.proposalPath, targetPath: failedItem.targetPath, message }]
 				: [],
+			dependencyBlocked: [],
 			targetWrites: payload.targets
 			.filter((target) => target.proposalPaths.some((proposalPath) => applied.includes(proposalPath)))
 			.map((target) => target.targetPath),
@@ -868,53 +1142,69 @@ export class WikiReviewBatchApplication {
 	}
 
 	private payloadFromPreview(preview: WikiReviewBatchPreview): WikiReviewBatchOperationPayload {
-		return {
-			schemaVersion: 2,
+		const base = {
+			schemaVersion: 3 as const,
 			operationId: preview.operationId,
 			idempotencyKey: preview.idempotencyKey,
 			reviewBatchId: preview.reviewBatchId,
 			issuedAt: preview.issuedAt,
 			expiresAt: preview.expiresAt,
-			manifestHash: preview.manifestHash,
-			items: preview.items,
-			targets: preview.targets,
+			previewManifestHash: preview.manifestHash,
+			items: preview.items.map(({ writebackPreview, ...item }) => ({
+				...item,
+				writebackPreviewHash: hashVaultContent(writebackPreview),
+			})),
+			targets: preview.targets.map(({ writebackBlock, ...target }) => ({
+				...target,
+				writebackBlockHash: hashVaultContent(writebackBlock),
+			})),
+			taskPlans: preview.taskPlans,
 			executionOrder: preview.executionOrder,
 			activityContext: preview.activityContext,
 		};
+		return { ...base, manifestHash: computePayloadHash(base) };
 	}
 
 	private parsePayload(value: Record<string, unknown>): WikiReviewBatchOperationPayload {
+		if (value.schemaVersion === 2) {
+			throw new Error('Wiki batch v2 cannot be resumed safely; close it and generate a fresh v3 preview.');
+		}
 		if (
-			value.schemaVersion !== 2
+			value.schemaVersion !== 3
 			|| !asString(value.operationId).startsWith(WIKI_BATCH_OPERATION_PREFIX)
 			|| !asString(value.idempotencyKey)
 			|| !asString(value.reviewBatchId)
 			|| !asString(value.issuedAt)
 			|| !asString(value.expiresAt)
+			|| !asString(value.previewManifestHash)
 			|| !asString(value.manifestHash)
 			|| !Array.isArray(value.items)
 			|| !Array.isArray(value.targets)
+			|| !Array.isArray(value.taskPlans)
 			|| !Array.isArray(value.executionOrder)
 			|| !value.executionOrder.every((item) => typeof item === 'string')
 			|| !previewTaskContext(value.activityContext)
 			|| value.items.length === 0
 			|| value.items.length > WIKI_REVIEW_BATCH_MAX_ITEMS
 			|| value.targets.length === 0
-			|| !value.items.every(isBatchPreviewItem)
-			|| !value.targets.every(isBatchTargetPlan)
+			|| !value.items.every(isBatchOperationItem)
+			|| !value.targets.every(isBatchOperationTarget)
+			|| !value.taskPlans.every(isBatchTaskPlan)
 		) {
 			throw new Error('Wiki batch operation payload is invalid.');
 		}
 		const payload: WikiReviewBatchOperationPayload = {
-			schemaVersion: 2,
+			schemaVersion: 3,
 			operationId: asString(value.operationId),
 			idempotencyKey: asString(value.idempotencyKey),
 			reviewBatchId: asString(value.reviewBatchId),
 			issuedAt: asString(value.issuedAt),
 			expiresAt: asString(value.expiresAt),
+			previewManifestHash: asString(value.previewManifestHash),
 			manifestHash: asString(value.manifestHash),
-			items: value.items as WikiReviewBatchPreviewItem[],
-			targets: value.targets as WikiReviewBatchTargetPlan[],
+			items: value.items as WikiReviewBatchOperationItem[],
+			targets: value.targets as WikiReviewBatchOperationTarget[],
+			taskPlans: value.taskPlans as WikiReviewBatchTaskPlan[],
 			executionOrder: value.executionOrder as string[],
 			activityContext: value.activityContext,
 		};
@@ -934,6 +1224,8 @@ export class WikiReviewBatchApplication {
 			|| !payload.executionOrder.every((groupId) => targetGroups.has(groupId))
 			|| !payload.items.every((item) => targetGroups.has(item.targetGroupId))
 			|| !payload.items.every((item) => buildWikiReviewBatchId(item.taskId, item.proposalId) === payload.reviewBatchId)
+			|| !this.validTaskHashChains(payload)
+			|| !/^[a-f0-9]{64}$/.test(payload.previewManifestHash)
 			|| manifestHash !== computePayloadHash(manifestPayload)
 		) {
 			throw new Error('Wiki batch operation manifest is invalid.');
@@ -950,7 +1242,7 @@ export class WikiReviewBatchApplication {
 				? preview.targets.filter(isBatchTargetPlan).map((target) => target.targetGroupId)
 				: []
 		);
-		const validShape = preview.schemaVersion === 2
+		const validShape = preview.schemaVersion === 3
 			&& asString(preview.operationId).startsWith(WIKI_BATCH_OPERATION_PREFIX)
 			&& Boolean(preview.idempotencyKey)
 			&& Boolean(preview.reviewBatchId)
@@ -967,6 +1259,8 @@ export class WikiReviewBatchApplication {
 			&& Array.isArray(preview.targets)
 			&& preview.targets.length > 0
 			&& preview.targets.every(isBatchTargetPlan)
+			&& Array.isArray(preview.taskPlans)
+			&& preview.taskPlans.every(isBatchTaskPlan)
 			&& new Set(preview.targets.map((target) => target.targetPath)).size === preview.targets.length
 			&& Array.isArray(preview.executionOrder)
 			&& preview.executionOrder.length === preview.targets.length
@@ -975,6 +1269,7 @@ export class WikiReviewBatchApplication {
 			&& preview.executionOrder.every((groupId) => targetGroups.has(groupId))
 			&& preview.items.every((item) => targetGroups.has(item.targetGroupId))
 			&& preview.items.every((item) => buildWikiReviewBatchId(item.taskId, item.proposalId) === preview.reviewBatchId)
+			&& this.validTaskHashChains(this.payloadFromPreview(preview))
 			&& previewTaskContext(preview.activityContext);
 		if (
 			!validShape
@@ -1013,15 +1308,6 @@ export class WikiReviewBatchApplication {
 			if (taskPath !== item.taskPath) {
 				throw new Error(`Wiki batch task context changed: ${item.proposalPath}.`);
 			}
-			const task = taskPath ? this.app.vault.getAbstractFileByPath(taskPath) : null;
-			if (taskPath && !(task instanceof TFile)) {
-				throw new Error(`Wiki batch task context is unavailable: ${taskPath}.`);
-			}
-			const taskContent = task instanceof TFile ? await this.app.vault.read(task) : '';
-			const taskHash = task instanceof TFile ? hashVaultContent(taskContent) : '';
-			if (taskHash !== item.taskContentHash) {
-				throw new Error(`Wiki batch task changed before the first write: ${taskPath || item.proposalPath}.`);
-			}
 			const expectedTouchedNotes = uniqueSorted([
 				item.targetPath,
 				item.proposalPath,
@@ -1030,6 +1316,11 @@ export class WikiReviewBatchApplication {
 			].filter(Boolean));
 			if (computePayloadHash(expectedTouchedNotes) !== computePayloadHash(item.touchedNotes)) {
 				throw new Error(`Wiki batch touched-note plan changed: ${item.proposalPath}.`);
+			}
+		}
+		for (const taskPlan of preview.taskPlans) {
+			if (await this.currentFileHash(taskPlan.taskPath, '') !== taskPlan.initialContentHash) {
+				throw new Error(`Wiki batch task changed before the first write: ${taskPlan.taskPath}.`);
 			}
 		}
 	}
@@ -1056,12 +1347,18 @@ export class WikiReviewBatchApplication {
 		proposal_path: string;
 		target_note: string;
 		target_content_hash: string;
+		writeback_preview: string;
+		writeback_effect: string;
 		confirmation_token: string;
+		batch_writeback_operation_id: string;
+		batch_writeback_idempotency_key: string;
+		batch_stable_binding_hash: string;
+		batch_task_content_hash_before: string;
+		batch_task_content_hash_after: string;
 	}> {
-		const result = await this.host.executeLocalTool(
-			'tracekeeper.apply_approved_writeback',
+		const result = await this.host.previewWikiBatchApprovedWriteback(
 			{ proposal_path: proposal.path, dry_run: true, ...(proposal.taskId ? { task_id: proposal.taskId } : {}) },
-			override ? { wikiBatchWritebackOverride: override } : undefined
+			override as NonNullable<LocalToolExecutionOptions['wikiBatchWritebackOverride']>
 		);
 		if (
 			!isRecord(result)
@@ -1069,7 +1366,14 @@ export class WikiReviewBatchApplication {
 			|| typeof result.proposal_path !== 'string'
 			|| typeof result.target_note !== 'string'
 			|| typeof result.target_content_hash !== 'string'
+			|| typeof result.writeback_preview !== 'string'
+			|| typeof result.writeback_effect !== 'string'
 			|| typeof result.confirmation_token !== 'string'
+			|| typeof result.batch_writeback_operation_id !== 'string'
+			|| typeof result.batch_writeback_idempotency_key !== 'string'
+			|| typeof result.batch_stable_binding_hash !== 'string'
+			|| typeof result.batch_task_content_hash_before !== 'string'
+			|| typeof result.batch_task_content_hash_after !== 'string'
 		) {
 			throw new Error('Approved writeback confirmation preview returned an invalid result.');
 		}
@@ -1078,62 +1382,239 @@ export class WikiReviewBatchApplication {
 			proposal_path: string;
 			target_note: string;
 			target_content_hash: string;
+			writeback_preview: string;
+			writeback_effect: string;
 			confirmation_token: string;
+			batch_writeback_operation_id: string;
+			batch_writeback_idempotency_key: string;
+			batch_stable_binding_hash: string;
+			batch_task_content_hash_before: string;
+			batch_task_content_hash_after: string;
 		};
 	}
 
 	private async applyApprovedWriteback(
 		proposal: MemoryProposalRecord,
-		preview: { confirmation_token: string },
-		override?: NonNullable<LocalToolExecutionOptions['wikiBatchWritebackOverride']>
-	): Promise<void> {
-		await this.host.executeLocalTool(
+		preview: { confirmation_token: string } | null,
+		override: NonNullable<LocalToolExecutionOptions['wikiBatchWritebackOverride']>,
+		recoveryOperationId = ''
+	): Promise<Record<string, unknown>> {
+		return this.host.executeLocalTool(
 			'tracekeeper.apply_approved_writeback',
 			{
 				proposal_path: proposal.path,
-				confirmation_token: preview.confirmation_token,
+				...(preview ? { confirmation_token: preview.confirmation_token } : {}),
 				...(proposal.taskId ? { task_id: proposal.taskId } : {}),
 			},
-			override ? { wikiBatchWritebackOverride: override } : undefined
+			{
+				wikiBatchWritebackOverride: override,
+				...(recoveryOperationId ? { writebackRecoveryOperationId: recoveryOperationId } : {}),
+			}
 		);
 	}
 
-	private async appendProposalTransitionAuditEvent(
-		decision: ProposalTransitionDecision,
-		action: string
-	): Promise<void> {
-		const receipt = decision.receipt;
-		await this.host.appendToAuditLog(
-			`## ${receipt.committedAt}\n` +
-			`action: ${action}\n` +
-			`actor: user\n` +
-			`target: ${receipt.proposalPath}\n` +
-			`reason: committed proposal transition ${receipt.proposalId}\n` +
-			`operation_id: ${receipt.operationId}\n` +
-			`transition_kind: ${receipt.kind}\n` +
-			`previous_status: ${receipt.previousStatus}\n` +
-			`next_status: ${receipt.nextStatus}\n` +
-			`expected_revision: ${receipt.expectedRevision}\n` +
-			`previous_revision: ${receipt.previousRevision}\n` +
-			`committed_revision: ${receipt.committedRevision}\n` +
-			`previous_content_hash: ${receipt.previousContentHash}\n` +
-			`committed_content_hash: ${receipt.committedContentHash}\n` +
-			`task_id: ${receipt.taskId}\n` +
-			`timestamp: ${receipt.committedAt}\n\n`
+	private async batchOverride(
+		payload: WikiReviewBatchOperationPayload,
+		item: WikiReviewBatchOperationItem
+	): Promise<NonNullable<LocalToolExecutionOptions['wikiBatchWritebackOverride']>> {
+		const targetPlan = payload.targets.find((target) => target.targetGroupId === item.targetGroupId);
+		if (!targetPlan) throw new WikiBatchTerminalConflictError(`Wiki target plan is missing: ${item.targetPath}.`);
+		let writebackBlock = '';
+		if (item.writebackEffect === 'update_managed_relations') {
+			const targetFile = this.app.vault.getAbstractFileByPath(item.targetPath);
+			if (!(targetFile instanceof TFile)) {
+				throw new WikiBatchTerminalConflictError(`Managed relation target is unavailable: ${item.targetPath}.`);
+			}
+			const targetContent = await this.app.vault.read(targetFile);
+			const proposalBlocks: string[] = [];
+			for (const proposalPath of targetPlan.proposalPaths) {
+				proposalBlocks.push((await this.readCurrentProposal(proposalPath)).writebackContent);
+			}
+			writebackBlock = mergeManagedWikiRelationsBlocks(targetContent, proposalBlocks);
+		} else {
+			writebackBlock = (await this.readCurrentProposal(item.proposalPath)).writebackContent;
+		}
+		if (
+			hashVaultContent(writebackBlock) !== item.writebackPreviewHash
+			|| hashVaultContent(writebackBlock) !== targetPlan.writebackBlockHash
+		) {
+			throw new WikiBatchTerminalConflictError(`Wiki batch writeback plan changed: ${item.proposalPath}.`);
+		}
+		return {
+			proposalPath: item.proposalPath,
+			targetPath: item.targetPath,
+			writebackBlock,
+			batchOperationId: payload.operationId,
+			previewNonce: item.previewNonce,
+			suppressAgentActivity: true,
+		};
+	}
+
+	private async currentFileHash(relativePath: string, absentHash: string): Promise<string> {
+		const file = this.app.vault.getAbstractFileByPath(relativePath);
+		if (!file) return absentHash;
+		if (!(file instanceof TFile)) return `occupied:${relativePath}`;
+		return hashVaultContent(await this.app.vault.read(file));
+	}
+
+	private plannedTargetResultHash(
+		item: Pick<WikiReviewBatchPreviewItem, 'writebackEffect'>,
+		currentContent: string,
+		preparedWritebackBlock: string
+	): string {
+		if (item.writebackEffect === 'create_wiki_note') {
+			return hashVaultContent(preparedWritebackBlock);
+		}
+		if (item.writebackEffect === 'update_managed_relations') {
+			return hashVaultContent(applyManagedRelationsBlock(currentContent, preparedWritebackBlock));
+		}
+		return hashVaultContent(`${currentContent}\n\n${preparedWritebackBlock}\n`);
+	}
+
+	private appliedOperationId(proposal: MemoryProposalRecord): string {
+		return proposal.writebackOperationId || (
+			proposal.lastTransition?.kind === 'apply' ? proposal.lastTransition.operationId : ''
 		);
+	}
+
+	private stepResult(
+		steps: readonly { name: string; result?: unknown }[],
+		name: string
+	): unknown {
+		return steps.find((step) => step.name === name)?.result;
+	}
+
+	private verifiedCount(steps: readonly { name: string; result?: unknown }[]): number {
+		return steps.filter((step) => step.name.startsWith('verify-') && isTerminalItemResult(step.result) && step.result.status === 'verified').length;
+	}
+
+	private terminalResults(
+		payload: WikiReviewBatchOperationPayload,
+		steps: readonly { name: string; result?: unknown }[]
+	): WikiBatchTerminalItemResult[] {
+		return payload.items.flatMap((_item, index) => {
+			const result = this.stepResult(steps, stepName('verify', index));
+			return isTerminalItemResult(result) ? [result] : [];
+		});
+	}
+
+	private conflictResult(
+		item: Pick<WikiReviewBatchPreviewItem, 'proposalPath' | 'targetPath'>,
+		message: string
+	): WikiBatchTerminalItemResult {
+		return {
+			status: 'conflict',
+			proposalPath: item.proposalPath,
+			targetPath: item.targetPath,
+			message,
+		};
+	}
+
+	private dependencyBlockFor(
+		payload: WikiReviewBatchOperationPayload,
+		item: WikiReviewBatchOperationItem,
+		steps: readonly { name: string; result?: unknown }[]
+	): WikiBatchTerminalItemResult | null {
+		const outcomes = this.terminalResults(payload, steps);
+		const target = payload.targets.find((candidate) => candidate.targetGroupId === item.targetGroupId);
+		const failedTargets = new Set(
+			outcomes
+				.filter((result) => result.status !== 'verified')
+				.map((result) => result.targetPath)
+		);
+		const earlierSameTaskFailed = payload.items.some((candidate, index) => {
+			const currentIndex = payload.items.indexOf(item);
+			if (index >= currentIndex || !item.taskPath || candidate.taskPath !== item.taskPath) return false;
+			const result = this.stepResult(steps, stepName('verify', index));
+			return isTerminalItemResult(result) && result.status !== 'verified';
+		});
+		if (
+			failedTargets.has(item.targetPath)
+			|| target?.dependencies.some((dependency) => failedTargets.has(dependency))
+			|| earlierSameTaskFailed
+		) {
+			return {
+				status: 'dependency_blocked',
+				proposalPath: item.proposalPath,
+				targetPath: item.targetPath,
+				message: `Wiki batch dependency was not verified before ${item.proposalPath}.`,
+			};
+		}
+		return null;
+	}
+
+	private isContentConflict(error: unknown): boolean {
+		const message = error instanceof Error ? error.message : String(error);
+		return /\b(changed|stale|conflict|occupied|unavailable|not approved|not ready)\b/i.test(message);
+	}
+
+	private validTaskHashChains(payload: WikiReviewBatchOperationPayload): boolean {
+		const plansByPath = new Map(payload.taskPlans.map((plan) => [plan.taskPath, plan]));
+		if (plansByPath.size !== payload.taskPlans.length) return false;
+		for (const item of payload.items) {
+			if (!item.taskPath) {
+				if (item.expectedTaskContentHashBefore || item.expectedTaskContentHashAfter) return false;
+				continue;
+			}
+			if (!plansByPath.has(item.taskPath)) return false;
+		}
+		for (const plan of payload.taskPlans) {
+			const items = payload.items.filter((item) => item.taskPath === plan.taskPath);
+			if (
+				items.length === 0
+				|| computePayloadHash(items.map((item) => item.proposalPath)) !== computePayloadHash(plan.proposalPaths)
+				|| items[0]?.expectedTaskContentHashBefore !== plan.initialContentHash
+				|| items[items.length - 1]?.expectedTaskContentHashAfter !== plan.finalContentHash
+			) return false;
+			for (let index = 1; index < items.length; index += 1) {
+				if (items[index - 1]?.expectedTaskContentHashAfter !== items[index]?.expectedTaskContentHashBefore) return false;
+			}
+		}
+		return true;
+	}
+
+	private receiptFromCompletedRecord(
+		payload: WikiReviewBatchOperationPayload,
+		record: OperationRecord
+	): WikiReviewBatchReceipt {
+		const outcomes = this.terminalResults(payload, record.completed_steps);
+		const approved = payload.items.map((item) => item.proposalPath);
+		const applied = outcomes.filter((result) => result.status === 'verified').map((result) => result.proposalPath);
+		const conflicts = outcomes
+			.filter((result) => result.status === 'conflict')
+			.map((result) => ({ proposalPath: result.proposalPath, targetPath: result.targetPath, message: result.message || 'Content conflict' }));
+		const dependencyBlocked = outcomes
+			.filter((result) => result.status === 'dependency_blocked')
+			.map((result) => ({ proposalPath: result.proposalPath, targetPath: result.targetPath, message: result.message || 'Dependency blocked' }));
+		return {
+			schemaVersion: 3,
+			operationId: payload.operationId,
+			reviewBatchId: payload.reviewBatchId,
+			status: conflicts.length === 0 && dependencyBlocked.length === 0
+				? 'completed'
+				: applied.length > 0 ? 'partial' : 'conflict',
+			approved,
+			applied,
+			pending: [],
+			conflicts,
+			dependencyBlocked,
+			targetWrites: uniqueSorted(outcomes.filter((result) => result.status === 'verified' && result.targetWritten).map((result) => result.targetPath)),
+			resumable: false,
+			completedAt: this.nowFactory().toISOString(),
+		};
 	}
 }
 
 const previewWithoutToken = (
 	preview: WikiReviewBatchPreview
-): Omit<WikiReviewBatchPreviewV2, 'confirmationToken'> => {
+): Omit<WikiReviewBatchPreviewV3, 'confirmationToken'> => {
 	const { confirmationToken: _token, ...unsigned } = preview;
 	return unsigned;
 };
 
 const previewWithoutManifest = (
 	preview: WikiReviewBatchPreview
-): Omit<WikiReviewBatchPreviewV2, 'confirmationToken' | 'manifestHash'> => {
+): Omit<WikiReviewBatchPreviewV3, 'confirmationToken' | 'manifestHash'> => {
 	const {
 		confirmationToken: _token,
 		manifestHash: _manifest,
