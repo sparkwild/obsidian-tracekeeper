@@ -17,6 +17,16 @@ export interface GraphProfileIssue {
 	paths: string[];
 }
 
+export interface GraphMaintenanceCandidate {
+	candidateId: string;
+	category: string;
+	state: string;
+	risk: string;
+	paths: string[];
+	reasons: string[];
+	requestable: boolean;
+}
+
 export interface GraphHealthSnapshot {
 	ok: boolean;
 	readOnly: boolean;
@@ -35,8 +45,11 @@ export interface GraphHealthSnapshot {
 	unresolvedEdgeCount: number;
 	largestComponentNodeCount: number;
 	componentCount: number;
+	maintenanceComponentCount: number;
 	isolatedNodes: string[];
 	isolatedNodeCount: number;
+	actionableIsolatedNodes: string[];
+	actionableIsolatedNodeCount: number;
 	onlyInboundNodes: string[];
 	onlyInboundNodeCount: number;
 	onlyOutboundNodes: string[];
@@ -49,4 +62,5 @@ export interface GraphHealthSnapshot {
 	recommendations: string[];
 	recommendationCount: number;
 	profileIssues: GraphProfileIssue[];
+	maintenanceCandidates: GraphMaintenanceCandidate[];
 }

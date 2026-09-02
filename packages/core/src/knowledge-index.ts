@@ -35,6 +35,11 @@ import {
 	KNOWLEDGE_GLOBAL_MEMORY_DIR,
 	LEGACY_MEMORY_DIRS,
 } from './knowledge-architecture';
+import {
+	parseManagedRelationsBlock,
+	readManagedWikiRelations,
+	type WikiRole,
+} from './wiki-governance';
 
 export const KNOWLEDGE_INDEX_VERSION = '1.0';
 
@@ -115,6 +120,12 @@ export interface KnowledgeCatalogEntry {
 	excerpt: string;
 	modifiedAt: string;
 	size: number;
+	managedRelationsStatus: 'missing' | 'valid' | 'invalid';
+	managedRelationsSchemaVersion: 1 | 2 | null;
+	wikiRole: WikiRole | 'unknown';
+	managedParent: string | null;
+	managedSources: readonly string[];
+	managedRelated: readonly string[];
 }
 
 export interface KnowledgeLexicalIndex {
@@ -595,6 +606,21 @@ function lexicalTerms(note: IndexedKnowledgeNote): string[] {
 }
 
 function toCatalogEntry(note: IndexedKnowledgeNote): KnowledgeCatalogEntry {
+	const managed = parseManagedRelationsBlock(note.text);
+	let managedParent: string | null = null;
+	let managedSources: readonly string[] = [];
+	let managedRelated: readonly string[] = [];
+	if (managed.status === 'valid') {
+		try {
+			const relations = readManagedWikiRelations(managed.content.slice(managed.start, managed.end));
+			managedParent = relations.parent ?? null;
+			managedSources = [...(relations.sources ?? [])];
+			managedRelated = [...(relations.related ?? [])];
+		} catch {
+			// A hash-valid block with an unsupported payload remains invalid for maintenance.
+			managed.status = 'invalid';
+		}
+	}
 	return {
 		path: note.path,
 		fileVersion: note.fileVersion,
@@ -609,6 +635,12 @@ function toCatalogEntry(note: IndexedKnowledgeNote): KnowledgeCatalogEntry {
 		excerpt: note.excerptSource,
 		modifiedAt: note.modifiedAt,
 		size: note.size,
+		managedRelationsStatus: managed.status,
+		managedRelationsSchemaVersion: managed.schemaVersion,
+		wikiRole: managed.role,
+		managedParent,
+		managedSources,
+		managedRelated,
 	};
 }
 
@@ -619,6 +651,8 @@ function cloneCatalogEntry(entry: KnowledgeCatalogEntry): KnowledgeCatalogEntry 
 		tags: [...entry.tags],
 		searchTokens: [...entry.searchTokens],
 		frontmatter: cloneVaultFrontmatter(entry.frontmatter),
+		managedSources: [...entry.managedSources],
+		managedRelated: [...entry.managedRelated],
 	};
 }
 

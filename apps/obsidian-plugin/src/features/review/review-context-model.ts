@@ -44,6 +44,7 @@ export interface ReviewKnowledgeNote {
 
 export interface ReviewKnowledgeSnapshot {
 	state: string;
+	generation: number;
 	notes: ReviewKnowledgeNote[];
 }
 

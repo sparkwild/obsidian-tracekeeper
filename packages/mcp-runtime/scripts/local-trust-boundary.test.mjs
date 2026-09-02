@@ -17,6 +17,7 @@ const ACCEPTED_LOCAL_TRUST_TOOLS = [
 	'tracekeeper.status',
 	'tracekeeper.agent_activity_recent',
 	'tracekeeper.lint',
+	'tracekeeper.request_maintenance',
 	'tracekeeper.recall',
 	'tracekeeper.memory',
 	'tracekeeper.read_note',
@@ -96,7 +97,7 @@ function auditSections(vaultRoot) {
 		.filter(Boolean);
 }
 
-test('accepted local trust capabilities expose the exact fixed twelve-tool surface', () => {
+test('accepted local trust capabilities expose the exact fixed public surface', () => {
 	assert.deepEqual(LOCAL_TRUST_CAPABILITIES, [
 		'vault.read',
 		'workflow.manage',
@@ -106,7 +107,7 @@ test('accepted local trust capabilities expose the exact fixed twelve-tool surfa
 	const toolNames = toolDefinitions(LOCAL_TRUST_CAPABILITIES)
 		.map((definition) => definition.name);
 	assert.deepEqual(toolNames, ACCEPTED_LOCAL_TRUST_TOOLS);
-	assert.equal(toolDefinitions().length, 14);
+	assert.equal(toolDefinitions().length, 15);
 	assert.equal(toolNames.includes('tracekeeper.review_queue'), false);
 	assert.equal(toolNames.includes('tracekeeper.apply_approved_writeback'), false);
 });

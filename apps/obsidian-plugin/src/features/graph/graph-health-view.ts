@@ -8,11 +8,6 @@ import { TRACEKEEPER_GRAPH_HEALTH_VIEW } from '../../ui/view-types';
 
 const OFFICIAL_GRAPH_KNOWLEDGE_FILTER = 'path:01_knowledge -path:.parts -path:02_archive';
 
-interface GraphRecommendationDisplay {
-	text: string;
-	paths?: string[];
-}
-
 export class TracekeeperGraphHealthView extends ItemView {
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -73,13 +68,6 @@ export class TracekeeperGraphHealthView extends ItemView {
 			void this.handleRefreshClick(refreshButton);
 		});
 
-		const proposalButton = actions.createEl('button', {
-			text: ui('创建知识变更提案', 'Create knowledge change proposal'),
-		});
-		proposalButton.disabled = !this.hasActionableGraphWork(snapshot);
-		proposalButton.addEventListener('click', () => {
-			void this.handleCreateProposalClick(snapshot, proposalButton);
-		});
 		const copyFilter = actions.createEl('button', {
 			text: ui('复制官方图谱筛选', 'Copy official Graph filter'),
 		});
@@ -147,13 +135,14 @@ export class TracekeeperGraphHealthView extends ItemView {
 			'warning'
 		);
 		this.renderMetricCard(metrics, ui('未解析链接', 'Unresolved links'), String(snapshot.unresolvedEdgeCount), ui('无法解析到目标笔记的 wikilink', 'Wikilinks that do not resolve to a note'), snapshot.unresolvedEdgeCount > 0 ? 'warning' : 'ok');
-		this.renderMetricCard(metrics, ui('连通分量', 'Components'), String(snapshot.componentCount), `${ui('最大分量', 'Largest')}: ${snapshot.largestComponentNodeCount}`, snapshot.componentCount > 1 ? 'warning' : 'ok');
-		this.renderMetricCard(metrics, ui('孤立节点', 'Isolated'), String(snapshot.isolatedNodeCount), ui('没有入链或出链的笔记', 'Notes with no inbound or outbound links'), snapshot.isolatedNodeCount > 0 ? 'warning' : 'ok');
-		this.renderMetricCard(metrics, ui('只有入链', 'Only inbound'), String(snapshot.onlyInboundNodeCount), ui('可能成为信息终点', 'Potential knowledge sinks'), snapshot.onlyInboundNodeCount > 0 ? 'warning' : 'ok');
-		this.renderMetricCard(metrics, ui('只有出链', 'Only outbound'), String(snapshot.onlyOutboundNodeCount), ui('可能成为来源入口', 'Potential source-only notes'), snapshot.onlyOutboundNodeCount > 0 ? 'warning' : 'ok');
+		this.renderMetricCard(metrics, ui('结构连通分量', 'Structural components'), String(snapshot.maintenanceComponentCount), `${ui('原始分量', 'Raw components')}: ${snapshot.componentCount} · ${ui('最大分量', 'Largest')}: ${snapshot.largestComponentNodeCount}`, snapshot.maintenanceComponentCount > 1 ? 'warning' : 'ok');
+		this.renderMetricCard(metrics, ui('孤立节点', 'Isolated'), String(snapshot.isolatedNodeCount), `${ui('需要关系修复', 'Actionable')}: ${snapshot.actionableIsolatedNodeCount}`, snapshot.actionableIsolatedNodeCount > 0 ? 'warning' : 'ok');
+		this.renderMetricCard(metrics, ui('只有入链', 'Only inbound'), String(snapshot.onlyInboundNodeCount), ui('保留统计；Source 叶子节点属于正常结构', 'Metric only; Source leaves are normal'), 'ok');
+		this.renderMetricCard(metrics, ui('只有出链', 'Only outbound'), String(snapshot.onlyOutboundNodeCount), ui('保留统计；根入口只有出链属于正常结构', 'Metric only; root entry nodes may have only outbound links'), 'ok');
 		this.renderMetricCard(metrics, ui('中心节点候选', 'Hub candidates'), String(snapshot.hubCandidateCount), ui('度数大于等于 2 的候选中心节点', 'Candidate hubs with degree >= 2'));
 
 		this.renderProfileIssues(contentEl, snapshot);
+		this.renderMaintenanceCandidates(contentEl, snapshot);
 		this.renderRecommendations(contentEl, snapshot);
 		this.renderHubCandidates(contentEl, snapshot);
 		this.renderAttentionLists(contentEl, snapshot);
@@ -173,48 +162,26 @@ export class TracekeeperGraphHealthView extends ItemView {
 		}
 	}
 
-	private async handleCreateProposalClick(snapshot: GraphHealthSnapshot, button: HTMLButtonElement): Promise<void> {
-		button.disabled = true;
-		button.setText(ui('创建中...', 'Creating...'));
-		let path: string;
-		try {
-			path = await this.plugin.createGraphHealthReviewProposal(snapshot);
-		} catch (error) {
-			new Notice(reportUiFailure(error, {
-				context: 'tracekeeper failed to create graph health proposal',
-				fallback: { zh: '创建知识变更提案失败。', en: 'Failed to create knowledge change proposal.' },
-			}));
-			button.disabled = false;
-			button.setText(ui('创建知识变更提案', 'Create knowledge change proposal'));
+	private renderMaintenanceCandidates(container: HTMLElement, snapshot: GraphHealthSnapshot): void {
+		const section = container.createDiv({ cls: 'tracekeeper-section' });
+		section.createEl('h3', { text: ui('角色与关系维护候选', 'Role and relation maintenance candidates') });
+		section.createEl('p', {
+			text: ui(
+				'这里只展示具体候选，不再把统计报告写成知识变更提案。角色或关系变更必须由 Agent 提交明确目标，或由用户在审核界面确认。',
+				'Only concrete candidates are shown. Statistical reports are no longer written as knowledge-change proposals. Role or relation changes require an explicit Agent target or human review.'
+			),
+			cls: 'tracekeeper-view__description',
+		});
+		if (snapshot.maintenanceCandidates.length === 0) {
+			section.createEl('p', { text: ui('当前没有 Wiki 角色或关系候选。', 'No Wiki role or relation candidates.'), cls: 'tracekeeper-view__description' });
 			return;
 		}
-		new Notice(path
-			? ui(`已创建知识变更提案：${path}`, `Knowledge change proposal created: ${path}`)
-			: ui('已创建知识变更提案。', 'Knowledge change proposal created.')
-		);
-		try {
-			await this.refresh();
-		} catch (error) {
-			button.setText(ui('提案已创建，请刷新', 'Proposal created; refresh view'));
-			new Notice(reportUiFailure(error, {
-				context: 'tracekeeper failed to refresh graph health view after creating proposal',
-				fallback: {
-					zh: '知识变更提案已创建，但图谱健康视图刷新失败。请手动刷新；无需重复创建提案。',
-					en: 'The knowledge change proposal was created, but the Graph health view failed to refresh. Refresh it manually; do not create the proposal again.',
-				},
-			}));
+		const list = section.createEl('ul');
+		for (const candidate of snapshot.maintenanceCandidates) {
+			list.createEl('li', {
+				text: `${candidate.category} · ${candidate.state} · ${candidate.paths.join(', ')} · ${candidate.reasons.join(', ')}`,
+			});
 		}
-	}
-
-	private hasActionableGraphWork(snapshot: GraphHealthSnapshot): boolean {
-		return snapshot.ok && (
-			snapshot.profileIssues.length > 0 ||
-			Boolean(snapshot.missingRecommendedEntry) ||
-			snapshot.missingRecommendedHubCount > 0 ||
-			snapshot.unresolvedEdgeCount > 0 ||
-			snapshot.isolatedNodeCount > 0 ||
-			snapshot.componentCount > 1
-		);
 	}
 
 	private renderStatusItem(container: HTMLElement, label: string, value: string, title?: string): void {
@@ -279,7 +246,7 @@ export class TracekeeperGraphHealthView extends ItemView {
 	private renderRecommendations(container: HTMLElement, snapshot: GraphHealthSnapshot): void {
 		const card = container.createDiv({ cls: 'tracekeeper-card' });
 		card.createEl('h3', { text: ui('建议', 'Recommendations') });
-		const recommendations = this.graphRecommendationDisplays(snapshot);
+		const recommendations = snapshot.recommendations.map((text) => ({ text: this.graphRecommendationText(text) }));
 		if (recommendations.length === 0) {
 			this.renderEmptyState(
 				card,
@@ -290,19 +257,7 @@ export class TracekeeperGraphHealthView extends ItemView {
 		}
 		const list = card.createEl('ul', { cls: 'tracekeeper-view__list' });
 		for (const item of recommendations) {
-			const row = list.createEl('li');
-			row.createDiv({ text: item.text });
-			if (item.paths && item.paths.length > 0) {
-				row.createEl('small', { text: item.paths.join(', ') });
-			}
-		}
-		if (snapshot.recommendations.length > 0) {
-			const technical = card.createEl('details', { cls: 'tracekeeper-advanced-details' });
-			technical.createEl('summary', { text: ui('技术信息', 'Technical details'), cls: 'tracekeeper-advanced-summary' });
-			const rawList = technical.createEl('ul');
-			for (const item of snapshot.recommendations) {
-				rawList.createEl('li', { text: item });
-			}
+			list.createEl('li', { text: item.text });
 		}
 	}
 
@@ -331,11 +286,19 @@ export class TracekeeperGraphHealthView extends ItemView {
 		const card = container.createDiv({ cls: 'tracekeeper-card' });
 		card.createEl('h3', { text: ui('需要关注的节点', 'Nodes Needing Attention') });
 		const details = card.createDiv({ cls: 'tracekeeper-detail-grid' });
-		this.renderNodeList(details, ui('缺失入口', 'Missing entry'), snapshot.missingRecommendedEntry ? [snapshot.missingRecommendedEntry] : []);
-		this.renderNodeList(details, ui('缺失中心节点', 'Missing hubs'), snapshot.missingRecommendedHubs);
-		this.renderNodeList(details, ui('孤立节点', 'Isolated nodes'), snapshot.isolatedNodes);
-		this.renderNodeList(details, ui('只有入链', 'Only inbound'), snapshot.onlyInboundNodes);
-		this.renderNodeList(details, ui('只有出链', 'Only outbound'), snapshot.onlyOutboundNodes);
+		this.renderNodeList(details, ui('可操作孤立节点', 'Actionable isolated nodes'), snapshot.actionableIsolatedNodes);
+		this.renderNodeList(
+			details,
+			ui('未解析链接来源', 'Unresolved link sources'),
+			[...new Set(snapshot.profileIssues
+				.filter((issue) => issue.kind === 'graph_unresolved_wikilink' || issue.kind === 'unresolved_wikilinks')
+				.flatMap((issue) => issue.paths))]
+		);
+		this.renderNodeList(
+			details,
+			ui('角色或关系候选', 'Role or relation candidates'),
+			[...new Set(snapshot.maintenanceCandidates.flatMap((candidate) => candidate.paths))]
+		);
 	}
 
 	private renderNodeList(container: HTMLElement, label: string, values: string[]): void {
@@ -388,6 +351,10 @@ export class TracekeeperGraphHealthView extends ItemView {
 			case 'graph_only_outbound':
 			case 'only_outbound_nodes':
 				return ui('只有出链的节点', 'Outbound-only nodes');
+			case 'graph_wiki_role':
+				return ui('Wiki 角色待确认', 'Wiki role needs review');
+			case 'graph_wiki_relation':
+				return ui('Wiki 关系待修复', 'Wiki relation needs repair');
 			default:
 				return ui('图谱问题', 'Graph issue');
 		}
@@ -406,10 +373,10 @@ export class TracekeeperGraphHealthView extends ItemView {
 				return snapshot.missingRecommendedHubCount || issue.count;
 			case 'graph_isolated_node':
 			case 'isolated_nodes':
-				return snapshot.isolatedNodeCount || issue.count;
+				return snapshot.actionableIsolatedNodeCount || issue.count;
 			case 'graph_disconnected':
 			case 'graph_components':
-				return snapshot.componentCount > 1 ? snapshot.componentCount : issue.count;
+				return snapshot.maintenanceComponentCount > 1 ? snapshot.maintenanceComponentCount : issue.count;
 			case 'graph_only_inbound':
 			case 'only_inbound_nodes':
 				return snapshot.onlyInboundNodeCount || issue.count;
@@ -444,92 +411,27 @@ export class TracekeeperGraphHealthView extends ItemView {
 			case 'graph_only_outbound':
 			case 'only_outbound_nodes':
 				return ui(`有 ${count} 个笔记只有出链。`, `${count} note(s) only have outbound links.`);
+			case 'graph_wiki_role':
+				return ui('Wiki 角色声明需要确认后才能采用角色专属检查。', 'The Wiki role declaration needs review before role-specific checks apply.');
+			case 'graph_wiki_relation':
+				return ui('Wiki 的 parent 或托管关系需要修复。', 'The Wiki parent or managed relation needs repair.');
 			default:
 				return ui(`图谱检查返回了 ${count} 个需要关注的问题。`, `The graph check returned ${count} issue(s) requiring attention.`);
 		}
 	}
 
-	private graphRecommendationDisplays(snapshot: GraphHealthSnapshot): GraphRecommendationDisplay[] {
-		const displays: GraphRecommendationDisplay[] = [];
-		let knownRecommendationCount = 0;
-		if (snapshot.unresolvedEdgeCount > 0) {
-			displays.push({
-				text: ui(
-					`修复 ${snapshot.unresolvedEdgeCount} 条未解析链接，以改善图谱连通性。`,
-					`Fix ${snapshot.unresolvedEdgeCount} unresolved wikilink(s) to improve graph connectivity.`
-				),
-			});
-			knownRecommendationCount += 1;
-		}
-		if (snapshot.componentCount > 1) {
-			displays.push({
-				text: ui(
-					`图谱包含 ${snapshot.componentCount} 个连通分量；可添加跨分量链接以提高可达性。`,
-					`The graph has ${snapshot.componentCount} components; add cross-component links for better reachability.`
-				),
-			});
-			knownRecommendationCount += 1;
-		}
-		if (snapshot.isolatedNodeCount > 0) {
-			displays.push({
-				text: ui(
-					`为 ${snapshot.isolatedNodeCount} 个孤立笔记添加有意义的链接。`,
-					`Add meaningful links for ${snapshot.isolatedNodeCount} isolated note(s).`
-				),
-			});
-			knownRecommendationCount += 1;
-		}
-		if (snapshot.onlyInboundNodeCount > 0) {
-			displays.push({
-				text: ui(
-					`检查 ${snapshot.onlyInboundNodeCount} 个只有入链的笔记，避免形成信息终点。`,
-					`Review ${snapshot.onlyInboundNodeCount} inbound-only note(s) to avoid knowledge sinks.`
-				),
-			});
-			knownRecommendationCount += 1;
-		}
-		if (snapshot.onlyOutboundNodeCount > 0) {
-			displays.push({
-				text: ui(
-					`检查 ${snapshot.onlyOutboundNodeCount} 个只有出链的笔记，确认其能被其他笔记发现。`,
-					`Review ${snapshot.onlyOutboundNodeCount} outbound-only note(s) and make sure other notes can discover them.`
-				),
-			});
-			knownRecommendationCount += 1;
-		}
-		if (snapshot.missingRecommendedEntry) {
-			displays.push({
-				text: ui('创建缺失的推荐图谱入口。', 'Create the missing recommended graph entry.'),
-				paths: [snapshot.missingRecommendedEntry],
-			});
-			knownRecommendationCount += 1;
-		}
-		if (snapshot.missingRecommendedHubCount > 0) {
-			displays.push({
-				text: ui(
-					`创建 ${snapshot.missingRecommendedHubCount} 个缺失的推荐中心节点。`,
-					`Create ${snapshot.missingRecommendedHubCount} missing recommended hub note(s).`
-				),
-				paths: snapshot.missingRecommendedHubs,
-			});
-			knownRecommendationCount += snapshot.missingRecommendedHubCount;
-		}
-		if (snapshot.componentCount === 1 && snapshot.unresolvedEdgeCount === 0 && knownRecommendationCount === 0) {
-			displays.push({ text: ui('图谱已连通，链接基本都能正确解析。', 'The graph is connected and links are largely resolved.') });
-			knownRecommendationCount += 1;
-		}
-
-		const otherRecommendationCount = Math.max(0, snapshot.recommendationCount - knownRecommendationCount);
-		if (otherRecommendationCount > 0 || (displays.length === 0 && snapshot.recommendations.length > 0)) {
-			const count = otherRecommendationCount || snapshot.recommendations.length;
-			displays.push({
-				text: ui(
-					`图谱检查还返回了 ${count} 项其他建议，请展开技术信息查看。`,
-					`The graph check returned ${count} additional recommendation(s); expand Technical details to review them.`
-				),
-			});
-		}
-		return displays;
+	private graphRecommendationText(value: string): string {
+		let match = value.match(/^Fix (\d+) unresolved wikilinks/u);
+		if (match) return ui(`修复 ${match[1]} 条未解析 wikilink。`, value);
+		match = value.match(/^Knowledge graph has (\d+) structural components/u);
+		if (match) return ui(`知识图谱包含 ${match[1]} 个需要维护的结构分量，请检查角色关系。`, value);
+		match = value.match(/^(\d+) structural notes are isolated/u);
+		if (match) return ui(`${match[1]} 个结构笔记没有有效关系。`, value);
+		match = value.match(/^Review the declared Wiki role for (.+)\.$/u);
+		if (match) return ui(`检查 Wiki 角色：${match[1]}。`, value);
+		match = value.match(/^Review the managed Wiki relation for (.+)\.$/u);
+		if (match) return ui(`检查 Wiki 托管关系：${match[1]}。`, value);
+		return value;
 	}
 
 	private formatVaultLabel(vaultRoot: string): string {

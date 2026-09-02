@@ -1,8 +1,8 @@
-import { KNOWLEDGE_INDEX_PATH } from '@tracekeeper/core';
 import { normalizeGraphProfileValue, type GraphProfile } from '../settings/settings-model';
 import { ui } from '../../ui/localization';
 import {
 	type GraphHealthHubCandidate,
+	type GraphMaintenanceCandidate,
 	type GraphHealthSnapshot,
 	type GraphProfileIssue,
 	type GraphProfileIssueSeverity,
@@ -14,7 +14,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 export interface GraphHealthControllerHost {
 	executeLocalTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
-	refreshGovernanceViews(): Promise<void>;
 	getVaultRoot(): string;
 	getGraphProfile(): GraphProfile;
 }
@@ -43,25 +42,6 @@ async loadGraphHealthSnapshot(): Promise<GraphHealthSnapshot> {
 		}
 	}
 
-async createGraphHealthReviewProposal(snapshot: GraphHealthSnapshot): Promise<string> {
-		if (!snapshot.ok) {
-			throw new Error(snapshot.errorMessage || 'Graph health is not available.');
-		}
-		const content = this.buildGraphHealthProposalContent(snapshot);
-		const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-		const result = await this.host.executeLocalTool('tracekeeper.propose_memory', {
-			proposal_kind: 'graph_health_improvement',
-			title: ui('知识图谱修复建议', 'Graph health improvement proposal'),
-			filename: `graph_health_improvement_${timestamp}`,
-			target_note: snapshot.missingRecommendedEntry || KNOWLEDGE_INDEX_PATH,
-			risk_level: snapshot.profile === 'strict' ? 'medium' : 'low',
-			evidence: `tracekeeper.lint ${snapshot.scannedAt || snapshot.updatedAt}`,
-			content,
-		});
-		await this.host.refreshGovernanceViews();
-		return typeof result.path === 'string' ? result.path : '';
-	}
-
 private emptyGraphHealthSnapshot(profile: GraphProfile, errorMessage = ''): GraphHealthSnapshot {
 		const updatedAt = new Date().toISOString();
 		return {
@@ -82,8 +62,11 @@ private emptyGraphHealthSnapshot(profile: GraphProfile, errorMessage = ''): Grap
 			unresolvedEdgeCount: 0,
 			largestComponentNodeCount: 0,
 			componentCount: 0,
+			maintenanceComponentCount: 0,
 			isolatedNodes: [],
 			isolatedNodeCount: 0,
+			actionableIsolatedNodes: [],
+			actionableIsolatedNodeCount: 0,
 			onlyInboundNodes: [],
 			onlyInboundNodeCount: 0,
 			onlyOutboundNodes: [],
@@ -96,11 +79,13 @@ private emptyGraphHealthSnapshot(profile: GraphProfile, errorMessage = ''): Grap
 			recommendations: [],
 			recommendationCount: 0,
 			profileIssues: [],
+			maintenanceCandidates: [],
 		};
 	}
 
 private toGraphHealthSnapshot(result: Record<string, unknown>, profile: GraphProfile): GraphHealthSnapshot {
 		const graphHealth = isRecord(result.graph_health) ? result.graph_health : result;
+		const maintenance = isRecord(result.maintenance) ? result.maintenance : {};
 		const resultProfile = normalizeGraphProfileValue(
 			this.stringFromRecord(graphHealth, 'profile')
 			|| this.stringFromRecord(result, 'profile')
@@ -124,8 +109,11 @@ private toGraphHealthSnapshot(result: Record<string, unknown>, profile: GraphPro
 			unresolvedEdgeCount: this.numberFromRecord(graphHealth, 'unresolved_edge_count'),
 			largestComponentNodeCount: this.numberFromRecord(graphHealth, 'largest_component_node_count'),
 			componentCount: this.numberFromRecord(graphHealth, 'component_count'),
+			maintenanceComponentCount: this.numberFromRecord(graphHealth, 'maintenance_component_count'),
 			isolatedNodes: this.stringArrayFromRecord(graphHealth, 'isolated_nodes'),
 			isolatedNodeCount: this.numberFromRecord(graphHealth, 'isolated_node_count'),
+			actionableIsolatedNodes: this.stringArrayFromRecord(graphHealth, 'actionable_isolated_nodes'),
+			actionableIsolatedNodeCount: this.numberFromRecord(graphHealth, 'actionable_isolated_node_count'),
 			onlyInboundNodes: this.stringArrayFromRecord(graphHealth, 'only_inbound_nodes'),
 			onlyInboundNodeCount: this.numberFromRecord(graphHealth, 'only_inbound_node_count'),
 			onlyOutboundNodes: this.stringArrayFromRecord(graphHealth, 'only_outbound_nodes'),
@@ -138,6 +126,8 @@ private toGraphHealthSnapshot(result: Record<string, unknown>, profile: GraphPro
 			recommendations: this.stringArrayFromRecord(graphHealth, 'recommendations'),
 			recommendationCount: this.numberFromRecord(graphHealth, 'recommendation_count'),
 			profileIssues: this.graphProfileIssuesFromRecord(graphHealth, 'profile_issues'),
+			maintenanceCandidates: this.maintenanceCandidatesFromRecord(maintenance, 'candidates')
+				.filter((item) => item.category === 'wiki_role' || item.category === 'wiki_relation'),
 		};
 		if (snapshot.profileIssues.length === 0 && !snapshot.disabled) {
 			snapshot.profileIssues = this.evaluateGraphProfile(snapshot);
@@ -165,121 +155,21 @@ private evaluateGraphProfile(snapshot: GraphHealthSnapshot): GraphProfileIssue[]
 				)
 			);
 		}
-		if (snapshot.missingRecommendedEntry) {
-			pushIssue(
-				'missing_graph_entry',
-				severityForCore,
-				ui(
-					`缺少图谱入口：${snapshot.missingRecommendedEntry}`,
-					`Missing graph entry: ${snapshot.missingRecommendedEntry}`
-				)
-			);
-		}
-		if (snapshot.missingRecommendedHubCount > 0) {
-			pushIssue(
-				'missing_recommended_hubs',
-				severityForCore,
-				ui(
-					`缺少 ${snapshot.missingRecommendedHubCount} 个推荐 hub。`,
-					`${snapshot.missingRecommendedHubCount} recommended hubs are missing.`
-				)
-			);
-		}
-		if (snapshot.isolatedNodeCount > 0) {
+		if (snapshot.actionableIsolatedNodeCount > 0) {
 			pushIssue(
 				'isolated_nodes',
 				severityForCore,
-				ui(
-					`${snapshot.isolatedNodeCount} 个笔记没有图谱连接。`,
-					`${snapshot.isolatedNodeCount} notes have no graph links.`
-				)
+				`${snapshot.actionableIsolatedNodeCount} structural notes have no graph links.`
 			);
 		}
-		if (snapshot.componentCount > 1) {
+		if (snapshot.maintenanceComponentCount > 1) {
 			pushIssue(
 				'graph_components',
 				'warning',
-				ui(
-					`图谱分成 ${snapshot.componentCount} 个连通分量。`,
-					`Graph is split into ${snapshot.componentCount} components.`
-				)
-			);
-		}
-		if (snapshot.onlyInboundNodeCount > 0) {
-			pushIssue(
-				'only_inbound_nodes',
-				'warning',
-				ui(
-					`${snapshot.onlyInboundNodeCount} 个笔记只有入链。`,
-					`${snapshot.onlyInboundNodeCount} notes only have inbound links.`
-				)
-			);
-		}
-		if (snapshot.onlyOutboundNodeCount > 0) {
-			pushIssue(
-				'only_outbound_nodes',
-				'warning',
-				ui(
-					`${snapshot.onlyOutboundNodeCount} 个笔记只有出链。`,
-					`${snapshot.onlyOutboundNodeCount} notes only have outbound links.`
-				)
+				`Knowledge graph is split into ${snapshot.maintenanceComponentCount} structural components.`
 			);
 		}
 		return issues;
-	}
-
-private buildGraphHealthProposalContent(snapshot: GraphHealthSnapshot): string {
-		const profileIssues = snapshot.profileIssues.length > 0
-			? snapshot.profileIssues.map((issue) => `- ${issue.severity}: ${issue.kind} - ${issue.message}`)
-			: ['- No profile issues detected.'];
-		const recommendations = snapshot.recommendations.length > 0
-			? snapshot.recommendations.map((item) => `- ${item}`)
-			: ['- No recommendations returned by graph health.'];
-		const hubCandidates = snapshot.hubCandidates.length > 0
-			? snapshot.hubCandidates.map((candidate) =>
-				`- ${candidate.path} (degree ${candidate.degree}, inbound ${candidate.inbound}, outbound ${candidate.outbound})`
-			)
-			: ['- No hub candidates returned.'];
-		const missingHubs = snapshot.missingRecommendedHubs.length > 0
-			? snapshot.missingRecommendedHubs.map((item) => `- ${item}`)
-			: ['- None'];
-
-		return [
-			'## Graph health review proposal',
-			'',
-			`- graph_profile: ${snapshot.profile}`,
-			`- scanned_at: ${snapshot.scannedAt || snapshot.updatedAt}`,
-			`- vault_root: ${snapshot.vaultRoot}`,
-			`- note_count: ${snapshot.noteCount}`,
-			`- edge_observation_count: ${snapshot.edgeObservationCount}`,
-			`- ignored_edge_observation_count: ${snapshot.ignoredEdgeObservationCount}`,
-			`- ignored_unresolved_edge_count: ${snapshot.ignoredUnresolvedEdgeCount}`,
-			`- wikilink_edge_count: ${snapshot.wikilinkEdgeCount}`,
-			`- resolved_edge_count: ${snapshot.resolvedEdgeCount}`,
-			`- unresolved_edge_count: ${snapshot.unresolvedEdgeCount}`,
-			`- component_count: ${snapshot.componentCount}`,
-			`- largest_component_node_count: ${snapshot.largestComponentNodeCount}`,
-			`- isolated_node_count: ${snapshot.isolatedNodeCount}`,
-			`- only_inbound_node_count: ${snapshot.onlyInboundNodeCount}`,
-			`- only_outbound_node_count: ${snapshot.onlyOutboundNodeCount}`,
-			`- missing_recommended_entry: ${snapshot.missingRecommendedEntry || 'none'}`,
-			'',
-			'## Profile issues',
-			...profileIssues,
-			'',
-			'## Recommendations',
-			...recommendations,
-			'',
-			'## Missing recommended hubs',
-			...missingHubs,
-			'',
-			'## Hub candidates',
-			...hubCandidates,
-			'',
-			'## Review boundary',
-			'- This proposal only creates a Knowledge Change Review record.',
-			'- Do not modify notes, create hubs, or write long-term memory until the user approves the specific writeback.',
-		].join('\n');
 	}
 
 private stringFromRecord(record: Record<string, unknown>, key: string): string {
@@ -345,5 +235,22 @@ private graphProfileIssuesFromRecord(record: Record<string, unknown>, key: strin
 			});
 		}
 		return issues;
-	}
+}
+
+private maintenanceCandidatesFromRecord(record: Record<string, unknown>, key: string): GraphMaintenanceCandidate[] {
+	const value = record[key];
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((item) => {
+		if (!isRecord(item) || typeof item.candidate_id !== 'string' || typeof item.category !== 'string') return [];
+		return [{
+			candidateId: item.candidate_id,
+			category: item.category,
+			state: typeof item.state === 'string' ? item.state : '',
+			risk: typeof item.risk === 'string' ? item.risk : '',
+			paths: Array.isArray(item.paths) ? item.paths.filter((path): path is string => typeof path === 'string') : [],
+			reasons: Array.isArray(item.reasons) ? item.reasons.filter((reason): reason is string => typeof reason === 'string') : [],
+			requestable: item.requestable === true,
+		}];
+	});
+}
 }

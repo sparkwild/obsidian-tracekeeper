@@ -1041,6 +1041,7 @@ async function main() {
 			'tracekeeper.source_request',
 			'tracekeeper.capture_source',
 			'tracekeeper.propose_memory',
+			'tracekeeper.request_maintenance',
 		]);
 		for (const definition of buildStructured(tools).tools) {
 			assert.equal(
@@ -1049,7 +1050,7 @@ async function main() {
 				`${definition.name} must not expose a caller-selected Vault root`,
 			);
 		}
-		assert.equal(listedTools.length, 12, 'tools/list should expose the fixed local trust toolset');
+		assert.equal(listedTools.length, 13, 'tools/list should expose the fixed local trust toolset');
 		assert.equal(listedTools.includes('tracekeeper.review_queue'), false);
 		assert.equal(listedTools.includes('tracekeeper.apply_approved_writeback'), false);
 		for (const hiddenTool of [

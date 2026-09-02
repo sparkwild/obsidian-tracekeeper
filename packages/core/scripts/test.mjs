@@ -27,6 +27,7 @@ import legacySourceSegmentsModule from '../dist/legacy-source-segments.js';
 import lifecycleDiagnosticsModule from '../dist/lifecycle-diagnostics.js';
 import knowledgeArchitectureModule from '../dist/knowledge-architecture.js';
 import wikiGovernanceModule from '../dist/wiki-governance.js';
+import maintenanceModule from '../dist/maintenance.js';
 
 const KNOWLEDGE_DIR = '01_knowledge';
 const CONFIG_DIR = 'vault-config';
@@ -40,6 +41,17 @@ function runWikiGovernanceTests() {
 	const block = wikiGovernanceModule.renderManagedRelationsBlock(relations);
 	const parsed = wikiGovernanceModule.parseManagedRelationsBlock(block);
 	assert.equal(parsed.status, 'valid');
+	assert.equal(parsed.schemaVersion, 1);
+	assert.equal(parsed.role, 'unknown');
+	const v2Block = wikiGovernanceModule.renderManagedRelationsBlock(relations, 'topic');
+	const parsedV2 = wikiGovernanceModule.parseManagedRelationsBlock(v2Block);
+	assert.equal(parsedV2.status, 'valid');
+	assert.equal(parsedV2.schemaVersion, 2);
+	assert.equal(parsedV2.role, 'topic');
+	assert.equal(
+		wikiGovernanceModule.parseManagedRelationsBlock(v2Block.replace('role="topic"', 'role="topic_map"')).status,
+		'invalid'
+	);
 	assert.match(block, /parent: \[\[01_knowledge\/wiki\/programming\/index\]\]/);
 	assert.match(block, /source: \[\[01_knowledge\/sources\/files\/reference\]\]/);
 	const inserted = wikiGovernanceModule.upsertManagedRelationsBlock('# Topic\n', relations);
@@ -119,6 +131,113 @@ function runWikiGovernanceTests() {
 	assert.equal(batches[0].reviewBatchId, 'task:task-batch');
 
 	console.log(JSON.stringify({ suite: 'core-wiki-governance', result: 'pass', checks: 20 }));
+}
+
+async function runMaintenanceSnapshotTests() {
+	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-maintenance-'));
+	const rootPath = '01_knowledge/wiki/index.md';
+	const mapPath = '01_knowledge/wiki/systems/map.md';
+	const topicPath = '01_knowledge/wiki/systems/topic.md';
+	const unknownPath = '01_knowledge/wiki/legacy.md';
+	const sourcePath = '01_knowledge/sources/files/source.md';
+	const unassociatedPath = '01_knowledge/sources/files/unassociated.md';
+	const root = scannedCharacterizationNote(rootPath, '# Wiki root');
+	const map = scannedCharacterizationNote(mapPath, `# Map\n\n${wikiGovernanceModule.renderManagedRelationsBlock({ parent: rootPath }, 'topic_map')}`);
+	const topic = scannedCharacterizationNote(topicPath, `# Topic\n\n${wikiGovernanceModule.renderManagedRelationsBlock({ parent: mapPath, sources: [sourcePath] }, 'topic')}`);
+	const unknown = scannedCharacterizationNote(unknownPath, `# Legacy\n\n${wikiGovernanceModule.renderManagedRelationsBlock({ parent: mapPath })}`);
+	const source = scannedCharacterizationNote(sourcePath, '---\ntype: source_capture\n---\n# Source');
+	const unassociated = scannedCharacterizationNote(unassociatedPath, '---\ntype: source_capture\n---\n# Unassociated');
+	const index = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+	await index.rebuild(characterizationScan(vaultRoot, [root, map, topic, unknown, source, unassociated]));
+	const view = await index.readView();
+	const snapshot = maintenanceModule.buildMaintenanceSnapshot(view);
+	assert.equal(snapshot.generation, view.generation);
+	assert.equal(snapshot.candidates.some((item) => item.category === 'wiki_role' && item.paths.includes(unknownPath)), true);
+	assert.equal(snapshot.candidates.some((item) => item.category === 'wiki_relation' && item.paths.includes(topicPath)), false);
+	assert.equal(snapshot.candidates.some((item) => item.category === 'unassociated_source' && item.paths.includes(unassociatedPath)), true);
+	assert.equal(snapshot.candidates.some((item) => item.category === 'unassociated_source' && item.paths.includes(sourcePath)), false);
+	const eligible = maintenanceModule.buildMaintenanceSnapshot(view, {
+		sourceArchiveEvidence: [{
+			migration_id: 'migration-one',
+			archive_path: '02_archive/source_migrations/migration-one/legacy.md',
+			archive_content_hash: 'a'.repeat(64),
+			archive_bytes: 42,
+			replacement_part_path: '01_knowledge/sources/files/source.parts/part-0001.md',
+			replacement_part_hash: 'b'.repeat(64),
+			replacement_index_path: sourcePath,
+			materialization_journal_completed: true,
+			archive_journal_completed: true,
+			archive_hash_matches_journal: true,
+			unique_replacement: true,
+			archive_body_occurrence_count: 1,
+			part_content_hash_matches: true,
+			part_manifest_valid: true,
+			output_hashes_valid: true,
+			managed_relations_use_source_index: true,
+			active_operation: false,
+			unknown_target_occupancy: false,
+			active_managed_archive_reference: false,
+		}],
+	});
+	const purge = eligible.candidates.find((item) => item.category === 'source_archive_purge');
+	assert.equal(purge?.state, 'actionable');
+	assert.equal(purge?.risk, 'destructive');
+	assert.equal(purge?.reclaimable_bytes, 42);
+	const cursor = maintenanceModule.encodeMaintenanceCursor({ version: 1, generation: view.generation, profile: 'advisory', page_size: 20, offset: 20 });
+	assert.deepEqual(maintenanceModule.decodeMaintenanceCursor(cursor), { version: 1, generation: view.generation, profile: 'advisory', page_size: 20, offset: 20 });
+	const tamperedCursor = `${cursor.slice(0, -2)}aa`;
+	assert.throws(() => maintenanceModule.decodeMaintenanceCursor(tamperedCursor), /cursor/i);
+	const graphRoot = scannedCharacterizationNote(
+		'01_knowledge/wiki/index.md',
+		'# Wiki\n\n[[01_knowledge/wiki/map]]',
+	);
+	const graphMap = scannedCharacterizationNote('01_knowledge/wiki/map.md', '# Map');
+	const graphSource = scannedCharacterizationNote(
+		'01_knowledge/sources/files/leaf.md',
+		'---\ntype: source_capture\n---\n# Leaf',
+	);
+	const healthyGraph = graphHealthModule.analyzeGraphHealth([graphRoot, graphMap, graphSource], { semanticOnly: true });
+	assert.equal(healthyGraph.component_count, 2);
+	assert.equal(healthyGraph.maintenance_component_count, 1);
+	assert.equal(healthyGraph.isolated_node_count, 1);
+	assert.equal(healthyGraph.actionable_isolated_node_count, 0);
+	assert.equal(healthyGraph.only_inbound_node_count, 1);
+	assert.equal(healthyGraph.only_outbound_node_count, 1);
+	assert.equal(healthyGraph.recommendation_count, 0);
+	assert.equal(graphHealthModule.evaluateGraphProfile(healthyGraph, 'advisory').profile_issues.length, 0);
+	const manifest = maintenanceModule.maintenanceRequestManifest([purge]);
+	const candidateIds = manifest.map((item) => item.candidate_id);
+	const requestBindingHash = maintenanceModule.maintenanceRequestBindingHash({
+		snapshot_generation: view.generation,
+		candidate_ids: candidateIds,
+		task_id: null,
+		manifest,
+	});
+	const requestMarkdown = [
+		'---',
+		'type: maintenance_request',
+		'schema_version: 1',
+		'request_id: maintenance-request-0123456789abcdef01234567',
+		'status: pending',
+		`snapshot_generation: ${view.generation}`,
+		`candidate_ids: ${JSON.stringify(candidateIds)}`,
+		'task_id: null',
+		`request_binding_hash: ${requestBindingHash}`,
+		`manifest_hash: ${maintenanceModule.maintenanceRequestManifestHash(manifest)}`,
+		`candidate_manifest: ${JSON.stringify(manifest)}`,
+		'created_at: 2026-09-02T00:00:00.000Z',
+		'---',
+		'# Maintenance request',
+	].join('\n');
+	const parsedRequest = maintenanceModule.parseMaintenanceRequestMarkdown(requestMarkdown);
+	assert.equal(parsedRequest.valid, true);
+	assert.equal(parsedRequest.valid && parsedRequest.request.candidate_manifest.length, 1);
+	assert.equal(parsedRequest.valid && parsedRequest.request.task_id, null);
+	assert.equal(
+		maintenanceModule.parseMaintenanceRequestMarkdown(requestMarkdown.replace(`manifest_hash: ${maintenanceModule.maintenanceRequestManifestHash(manifest)}`, `manifest_hash: ${'0'.repeat(64)}`)).valid,
+		false,
+	);
+	console.log(JSON.stringify({ suite: 'core-maintenance-snapshot', result: 'pass', checks: 23 }));
 }
 
 function runProposalWritebackTests() {
@@ -5304,7 +5423,7 @@ async function runKnowledgeReadIndexTests() {
 	}));
 }
 
-run().then(runProposalWritebackTests).then(runWikiGovernanceTests).then(runMemoryRecordV2Tests).then(runMemoryLifecycleTests).then(runSourceRecordTests).then(runLegacySourceSegmentTests).then(runLifecycleGraphFixtureTests).then(runLifecycleDiagnosticTests).then(runKnowledgeReadIndexTests).catch((error) => {
+run().then(runProposalWritebackTests).then(runWikiGovernanceTests).then(runMaintenanceSnapshotTests).then(runMemoryRecordV2Tests).then(runMemoryLifecycleTests).then(runSourceRecordTests).then(runLegacySourceSegmentTests).then(runLifecycleGraphFixtureTests).then(runLifecycleDiagnosticTests).then(runKnowledgeReadIndexTests).catch((error) => {
 	console.error(error);
 	process.exitCode = 1;
 });

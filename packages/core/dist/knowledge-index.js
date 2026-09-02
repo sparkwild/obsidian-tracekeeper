@@ -18,6 +18,7 @@ const memory_record_1 = require("./memory-record");
 const memory_lifecycle_1 = require("./memory-lifecycle");
 const project_memory_1 = require("./project-memory");
 const knowledge_architecture_1 = require("./knowledge-architecture");
+const wiki_governance_1 = require("./wiki-governance");
 exports.KNOWLEDGE_INDEX_VERSION = '1.0';
 const NOTES_EXTENSIONS = new Set(['.md', '.markdown']);
 const SNIPPET_MAX_LENGTH = 160;
@@ -338,6 +339,22 @@ function lexicalTerms(note) {
     return [...terms].sort();
 }
 function toCatalogEntry(note) {
+    const managed = (0, wiki_governance_1.parseManagedRelationsBlock)(note.text);
+    let managedParent = null;
+    let managedSources = [];
+    let managedRelated = [];
+    if (managed.status === 'valid') {
+        try {
+            const relations = (0, wiki_governance_1.readManagedWikiRelations)(managed.content.slice(managed.start, managed.end));
+            managedParent = relations.parent ?? null;
+            managedSources = [...(relations.sources ?? [])];
+            managedRelated = [...(relations.related ?? [])];
+        }
+        catch {
+            // A hash-valid block with an unsupported payload remains invalid for maintenance.
+            managed.status = 'invalid';
+        }
+    }
     return {
         path: note.path,
         fileVersion: note.fileVersion,
@@ -352,6 +369,12 @@ function toCatalogEntry(note) {
         excerpt: note.excerptSource,
         modifiedAt: note.modifiedAt,
         size: note.size,
+        managedRelationsStatus: managed.status,
+        managedRelationsSchemaVersion: managed.schemaVersion,
+        wikiRole: managed.role,
+        managedParent,
+        managedSources,
+        managedRelated,
     };
 }
 function cloneCatalogEntry(entry) {
@@ -361,6 +384,8 @@ function cloneCatalogEntry(entry) {
         tags: [...entry.tags],
         searchTokens: [...entry.searchTokens],
         frontmatter: (0, knowledge_note_1.cloneVaultFrontmatter)(entry.frontmatter),
+        managedSources: [...entry.managedSources],
+        managedRelated: [...entry.managedRelated],
     };
 }
 function addPosting(postings, term, notePath) {

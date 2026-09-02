@@ -1166,11 +1166,11 @@ function buildArchitectureStatus(vaultRoot, context) {
     const scan = scanVaultForContext(vaultRoot, context);
     const graphHealth = (0, core_1.analyzeGraphHealth)(scan.notes, { maxItems: 20, semanticOnly: true });
     const missingGraphBridges = [
-        ...graphHealth.missing_recommended_hubs,
         graphHealth.missing_recommended_entry,
     ].filter((value) => Boolean(value));
     const isHealthy = graphHealth.unresolved_edge_count === 0 &&
-        graphHealth.component_count <= 1 &&
+        graphHealth.maintenance_component_count <= 1 &&
+        graphHealth.actionable_isolated_node_count === 0 &&
         missingGraphBridges.length === 0;
     return {
         architecture_status: isHealthy ? 'healthy' : 'needs_attention',
@@ -5316,6 +5316,7 @@ const TOOL_HANDLERS = {
     'tracekeeper.apply_approved_writeback': (rawArgs, context) => handleApplyApprovedWriteback(rawArgs, context),
     'tracekeeper.build_context_pack': (rawArgs, context) => handleBuildContextPack(rawArgs, context),
     'tracekeeper.lint': (rawArgs, context) => handleLint(rawArgs, context),
+    'tracekeeper.request_maintenance': (rawArgs, context) => handleRequestMaintenance(rawArgs, context),
     'tracekeeper.finish_task': (rawArgs, context) => handleFinishTask(rawArgs, context),
     'tracekeeper.distill_session': (rawArgs, context) => handleDistillSession(rawArgs, context),
     'tracekeeper.write_context_pack': (rawArgs, context) => handleWriteContextPack(rawArgs, context),
@@ -7758,21 +7759,26 @@ async function handleBuildContextPack(rawArgs, context) {
 async function handleLint(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
     const maxItems = coercePositiveInt(rawArgs.max_items, 40, 1, 2000);
+    const pageSize = coercePositiveInt(rawArgs.page_size, maxItems, 1, 200);
     const profile = graphProfileFromArgs(rawArgs.graph_profile, context);
     const view = await knowledgeReadViewForContext(vaultRoot, context);
+    let offset = 0;
+    if (rawArgs.cursor !== undefined) {
+        const rawCursor = coerceNonEmptyString(rawArgs.cursor, true, 'cursor');
+        const cursor = (0, core_1.decodeMaintenanceCursor)(rawCursor);
+        if (cursor.generation !== view.generation) {
+            throw new safety_1.ToolInputError(`Maintenance cursor generation ${cursor.generation} is stale against ${view.generation}.`);
+        }
+        if (cursor.profile !== profile || cursor.page_size !== pageSize) {
+            throw new safety_1.ToolInputError('Maintenance cursor is invalid for the requested profile or page size.');
+        }
+        offset = cursor.offset;
+    }
     const notes = materializeLightweightNotes(view);
     const graphHealth = profile === 'off' ? undefined : (0, core_1.analyzeGraphHealth)(notes, { maxItems, semanticOnly: true });
     const profileEvaluation = graphHealth
         ? (0, core_1.evaluateGraphProfile)(graphHealth, profile)
         : { profile, disabled: true, profile_issues: [] };
-    const lintGraphHealth = graphHealth
-        ? {
-            disabled: profileEvaluation.disabled,
-            profile: profileEvaluation.profile,
-            profile_issues: profileEvaluation.profile_issues,
-            ...graphHealth,
-        }
-        : null;
     const staleAfterDays = coercePositiveInt(rawArgs.stale_after_days, 365, 1, 36500);
     const { issues, doctor } = (0, core_1.lintNotes)(vaultRoot, notes, {
         graphHealth,
@@ -7780,12 +7786,54 @@ async function handleLint(rawArgs, context) {
         staleAfterDays,
     });
     const limitedIssues = issues.slice(0, maxItems);
+    const maintenance = (0, core_1.buildMaintenanceSnapshot)(view, {
+        oldToNewParent: loadSourceConsolidationRelationMap(vaultRoot),
+        sourceArchiveEvidence: loadSourceArchiveMetadataEvidence(vaultRoot, view),
+    });
+    const effectiveMaintenanceCandidates = view.source === 'index'
+        ? maintenance.candidates
+        : maintenance.candidates.map((candidate) => ({
+            ...candidate,
+            requestable: false,
+            reasons: [...new Set([...candidate.reasons, 'requires_ready_knowledge_index'])].sort(),
+        }));
+    const wikiMaintenanceCandidates = effectiveMaintenanceCandidates.filter((candidate) => candidate.category === 'wiki_role' || candidate.category === 'wiki_relation');
+    const wikiProfileIssues = wikiMaintenanceCandidates
+        .filter((candidate) => candidate.state !== 'informational')
+        .map((candidate) => ({
+        severity: (candidate.state === 'blocked' || profile === 'strict' ? 'error' : 'warning'),
+        kind: candidate.category === 'wiki_role' ? 'graph_wiki_role' : 'graph_wiki_relation',
+        message: candidate.category === 'wiki_role'
+            ? `Wiki role requires review: ${candidate.paths[0] ?? 'unknown path'}.`
+            : `Wiki parent or relation requires review: ${candidate.paths[0] ?? 'unknown path'}.`,
+        count: 1,
+        paths: candidate.paths,
+    }));
+    const authoritativeProfileIssues = [...profileEvaluation.profile_issues, ...wikiProfileIssues];
+    const wikiRecommendations = wikiMaintenanceCandidates.map((candidate) => candidate.category === 'wiki_role'
+        ? `Review the declared Wiki role for ${candidate.paths[0] ?? 'the affected note'}.`
+        : `Review the managed Wiki relation for ${candidate.paths[0] ?? 'the affected note'}.`);
+    const lintGraphHealth = graphHealth
+        ? {
+            disabled: profileEvaluation.disabled,
+            profile: profileEvaluation.profile,
+            profile_issues: authoritativeProfileIssues,
+            ...graphHealth,
+            recommendations: [...graphHealth.recommendations, ...wikiRecommendations],
+            recommendation_count: graphHealth.recommendation_count + wikiRecommendations.length,
+        }
+        : null;
+    const maintenanceCandidates = effectiveMaintenanceCandidates.slice(offset, offset + pageSize);
+    const nextOffset = offset + maintenanceCandidates.length;
+    const maintenanceCursor = nextOffset < effectiveMaintenanceCandidates.length
+        ? (0, core_1.encodeMaintenanceCursor)({ version: 1, generation: view.generation, profile, page_size: pageSize, offset: nextOffset })
+        : null;
     return {
         ok: true,
         read_only: true,
         profile: profileEvaluation.profile,
         graph_profile_disabled: profileEvaluation.disabled,
-        profile_issues: profileEvaluation.profile_issues,
+        profile_issues: authoritativeProfileIssues,
         vault_root: vaultRoot,
         scanned_at: view.createdAt,
         ...readViewProvenance(view),
@@ -7804,7 +7852,263 @@ async function handleLint(rawArgs, context) {
                 suggestions: candidate.suggestions,
             })),
         },
+        maintenance: {
+            schema_version: maintenance.schema_version,
+            generation: maintenance.generation,
+            counts: maintenance.counts,
+            candidate_count: effectiveMaintenanceCandidates.length,
+            candidates: maintenanceCandidates,
+            cursor: maintenanceCursor,
+            page_size: pageSize,
+        },
         fix_plan_summary: buildFixPlanSummary(issues),
+    };
+}
+function loadSourceConsolidationRelationMap(vaultRoot) {
+    const root = path.join(vaultRoot, core_1.TRACEKEEPER_OPERATIONS_DIR, 'source-consolidations');
+    const relations = new Map();
+    let entries;
+    try {
+        entries = fs.readdirSync(root).filter((entry) => entry.endsWith('.json') && !entry.endsWith('.archive.json')).sort();
+    }
+    catch {
+        return relations;
+    }
+    for (const entry of entries) {
+        try {
+            const absolute = path.join(root, entry);
+            const stat = fs.statSync(absolute);
+            if (!stat.isFile() || stat.size > 2 * 1024 * 1024)
+                continue;
+            const journal = JSON.parse(fs.readFileSync(absolute, 'utf8'));
+            if (journal.status !== 'completed' || !Array.isArray(journal.outputs))
+                continue;
+            for (const output of journal.outputs) {
+                if (!(0, protocol_1.isRecord)(output) || typeof output.path !== 'string' || typeof output.legacyPath !== 'string')
+                    continue;
+                const parent = (0, core_1.sourceIndexPathForPart)(output.path);
+                if (!parent)
+                    continue;
+                const existing = relations.get(output.legacyPath);
+                if (existing && existing !== parent) {
+                    relations.delete(output.legacyPath);
+                    continue;
+                }
+                relations.set(output.legacyPath, parent);
+            }
+        }
+        catch {
+            // Invalid or oversized journals do not produce relation-replacement authority.
+        }
+    }
+    return relations;
+}
+function loadSourceArchiveMetadataEvidence(vaultRoot, view) {
+    const root = path.join(vaultRoot, core_1.TRACEKEEPER_OPERATIONS_DIR, 'source-consolidations');
+    let entries;
+    try {
+        entries = fs.readdirSync(root).filter((entry) => entry.endsWith('.archive.json')).sort();
+    }
+    catch {
+        return [];
+    }
+    const wikiEntries = [...view.catalog.values()].filter((entry) => (0, core_1.isKnowledgeWikiPath)(entry.path));
+    const managedSourceRefs = new Set(wikiEntries.flatMap((entry) => [...entry.managedSources]));
+    const result = [];
+    for (const archiveEntry of entries) {
+        try {
+            const migrationId = archiveEntry.replace(/\.archive\.json$/u, '');
+            const archivePath = path.join(root, archiveEntry);
+            const materializationPath = path.join(root, `${migrationId}.json`);
+            const archiveStat = fs.statSync(archivePath);
+            const materializationStat = fs.statSync(materializationPath);
+            if (!archiveStat.isFile() || !materializationStat.isFile() || archiveStat.size > 2 * 1024 * 1024 || materializationStat.size > 2 * 1024 * 1024)
+                continue;
+            const archiveJournal = JSON.parse(fs.readFileSync(archivePath, 'utf8'));
+            const materialization = JSON.parse(fs.readFileSync(materializationPath, 'utf8'));
+            if (archiveJournal.migrationId !== migrationId
+                || materialization.migrationId !== migrationId
+                || typeof archiveJournal.planHash !== 'string'
+                || archiveJournal.planHash !== materialization.planHash)
+                continue;
+            const archiveItems = Array.isArray(archiveJournal.archive) ? archiveJournal.archive.filter(protocol_1.isRecord) : [];
+            const outputs = Array.isArray(materialization.outputs) ? materialization.outputs.filter(protocol_1.isRecord) : [];
+            const partsByLegacy = new Map();
+            for (const output of outputs) {
+                if (typeof output.path !== 'string' || typeof output.legacyPath !== 'string')
+                    continue;
+                const parent = (0, core_1.sourceIndexPathForPart)(output.path);
+                if (!parent)
+                    continue;
+                const rows = partsByLegacy.get(output.legacyPath) ?? [];
+                rows.push({ path: output.path, expectedHash: typeof output.expectedHash === 'string' ? output.expectedHash : '' });
+                partsByLegacy.set(output.legacyPath, rows);
+            }
+            const outputsValid = outputs.every((output) => typeof output.path === 'string'
+                && typeof output.expectedHash === 'string'
+                && output.state === 'verified'
+                && view.catalog.get(output.path)?.contentHash === output.expectedHash);
+            for (const archiveItem of archiveItems) {
+                if (typeof archiveItem.oldPath !== 'string' || typeof archiveItem.destinationPath !== 'string')
+                    continue;
+                const parts = partsByLegacy.get(archiveItem.oldPath) ?? [];
+                const part = parts[0];
+                const parent = part ? (0, core_1.sourceIndexPathForPart)(part.path) ?? '' : '';
+                const parentEntry = view.catalog.get(parent);
+                const manifest = parentEntry?.frontmatter.part_manifest;
+                const partManifest = Array.isArray(manifest) ? manifest.filter((item) => typeof item === 'string') : [];
+                const archiveCatalog = view.catalog.get(archiveItem.destinationPath);
+                if (!archiveCatalog)
+                    continue;
+                const hasBadManagedReference = managedSourceRefs.has(archiveItem.oldPath)
+                    || managedSourceRefs.has(archiveItem.destinationPath)
+                    || (part ? managedSourceRefs.has(part.path) : false);
+                result.push({
+                    verification_level: 'metadata',
+                    migration_id: migrationId,
+                    archive_path: archiveItem.destinationPath,
+                    archive_content_hash: archiveCatalog?.contentHash ?? '',
+                    archive_bytes: archiveCatalog?.size ?? 0,
+                    replacement_part_path: part?.path ?? '',
+                    replacement_part_hash: part ? view.catalog.get(part.path)?.contentHash ?? '' : '',
+                    replacement_index_path: parent,
+                    materialization_journal_completed: materialization.status === 'completed',
+                    archive_journal_completed: archiveJournal.status === 'completed' && archiveItem.state === 'verified',
+                    archive_hash_matches_journal: Boolean(archiveCatalog && archiveCatalog.contentHash === archiveItem.expectedHash),
+                    unique_replacement: parts.length === 1,
+                    archive_body_occurrence_count: 0,
+                    part_content_hash_matches: false,
+                    part_manifest_valid: Boolean(part && parentEntry && partManifest.includes(part.path)),
+                    output_hashes_valid: outputsValid,
+                    managed_relations_use_source_index: Boolean(parent) && !hasBadManagedReference,
+                    active_operation: false,
+                    unknown_target_occupancy: !archiveCatalog || !part || !parentEntry,
+                    active_managed_archive_reference: hasBadManagedReference,
+                });
+            }
+        }
+        catch {
+            // Incomplete or malformed legacy journals never create requestable purge candidates.
+        }
+    }
+    return result;
+}
+async function handleRequestMaintenance(rawArgs, context) {
+    const allowedKeys = new Set(['snapshot_generation', 'candidate_ids', 'task_id', 'idempotency_key']);
+    const unexpected = Object.keys(rawArgs).filter((key) => !allowedKeys.has(key));
+    if (unexpected.length > 0) {
+        throw new safety_1.ToolInputError(`Unsupported maintenance request argument(s): ${unexpected.sort().join(', ')}.`);
+    }
+    const vaultRoot = configuredVaultRoot(context);
+    if (typeof rawArgs.snapshot_generation !== 'number'
+        || !Number.isSafeInteger(rawArgs.snapshot_generation)
+        || rawArgs.snapshot_generation < 0)
+        throw new safety_1.ToolInputError('snapshot_generation must be a non-negative safe integer.');
+    const candidateIds = normalizeMultiValueList(rawArgs.candidate_ids, 'candidate_ids', true);
+    if (candidateIds.length === 0 || candidateIds.length > 100) {
+        throw new safety_1.ToolInputError('candidate_ids must contain between 1 and 100 unique ids.');
+    }
+    if (candidateIds.some((candidateId) => !/^maintenance_[a-f0-9]{24}$/u.test(candidateId))) {
+        throw new safety_1.ToolInputError('candidate_ids contains an invalid maintenance candidate id.');
+    }
+    const taskId = coerceNonEmptyString(rawArgs.task_id, false, 'task_id') || null;
+    const idempotencyKey = coerceNonEmptyString(rawArgs.idempotency_key, true, 'idempotency_key');
+    if (idempotencyKey.length > 512)
+        throw new safety_1.ToolInputError('idempotency_key must be at most 512 characters.');
+    if (taskId && taskId.length > 256)
+        throw new safety_1.ToolInputError('task_id must be at most 256 characters.');
+    const requestId = `maintenance-request-${crypto.createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 24)}`;
+    const requestPath = `${core_1.TRACEKEEPER_AGENT_REQUESTS_DIR}/${requestId}.md`;
+    const existing = await readVaultNoteContent(vaultRoot, requestPath, context);
+    if (existing !== null) {
+        const parsedRequest = (0, core_1.parseMaintenanceRequestMarkdown)(existing);
+        if (!parsedRequest.valid) {
+            throw new safety_1.ToolInputError(`Existing maintenance request is invalid: ${parsedRequest.validationError}.`);
+        }
+        const stored = parsedRequest.request;
+        const storedGeneration = stored.snapshot_generation;
+        const storedCandidateIds = [...stored.candidate_ids].sort();
+        const storedTaskId = stored.task_id;
+        if (stored.request_id !== requestId
+            || storedGeneration !== rawArgs.snapshot_generation
+            || JSON.stringify(storedCandidateIds) !== JSON.stringify(candidateIds)
+            || storedTaskId !== taskId)
+            throw new safety_1.ToolInputError('Idempotency conflict: maintenance request has a different input binding.');
+        return {
+            read_only: false,
+            vault_root: vaultRoot,
+            request_id: requestId,
+            request_path: requestPath,
+            status: stored.status,
+            snapshot_generation: storedGeneration,
+            candidate_ids: storedCandidateIds,
+            task_id: taskId,
+            idempotency_key: idempotencyKey,
+            activity_path: AGENT_ACTIVITY_PATH,
+        };
+    }
+    if (taskId) {
+        const taskContent = await readVaultNoteContent(vaultRoot, buildTaskNotePath(taskId), context);
+        if (taskContent === null || readFrontmatterString((0, core_1.parseMarkdown)(taskContent).frontmatter.fields, ['task_id']) !== taskId) {
+            throw new safety_1.ToolInputError(`Maintenance request task is missing or does not match: ${taskId}.`);
+        }
+    }
+    const view = await knowledgeReadViewForContext(vaultRoot, context);
+    if (view.source !== 'index' || view.generation !== rawArgs.snapshot_generation) {
+        throw new safety_1.ToolInputError(`Maintenance snapshot generation ${rawArgs.snapshot_generation} is stale against ${view.generation}.`);
+    }
+    const snapshot = (0, core_1.buildMaintenanceSnapshot)(view, {
+        oldToNewParent: loadSourceConsolidationRelationMap(vaultRoot),
+        sourceArchiveEvidence: loadSourceArchiveMetadataEvidence(vaultRoot, view),
+    });
+    const byId = new Map(snapshot.candidates.map((item) => [item.candidate_id, item]));
+    const selected = candidateIds.map((candidateId) => {
+        const item = byId.get(candidateId);
+        if (!item)
+            throw new safety_1.ToolInputError(`Maintenance candidate is missing or stale: ${candidateId}.`);
+        if (!item.requestable || item.state === 'blocked') {
+            throw new safety_1.ToolInputError(`Maintenance candidate is not requestable: ${candidateId}.`);
+        }
+        return item;
+    });
+    const manifest = (0, core_1.maintenanceRequestManifest)(selected);
+    const requestBindingHash = (0, core_1.maintenanceRequestBindingHash)({
+        snapshot_generation: snapshot.generation,
+        candidate_ids: candidateIds,
+        task_id: taskId,
+        manifest,
+    });
+    const record = await buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.request_maintenance', core_1.TRACEKEEPER_AGENT_REQUESTS_DIR, `${requestId}.md`, {
+        type: 'maintenance_request',
+        schema_version: 1,
+        request_id: requestId,
+        status: 'pending',
+        snapshot_generation: snapshot.generation,
+        candidate_ids: candidateIds,
+        task_id: taskId,
+        request_binding_hash: requestBindingHash,
+        manifest_hash: (0, core_1.maintenanceRequestManifestHash)(manifest),
+        candidate_manifest: manifest,
+        created_at: new Date().toISOString(),
+    }, [
+        '# Maintenance request',
+        '',
+        `- snapshot_generation: ${snapshot.generation}`,
+        `- candidate_count: ${candidateIds.length}`,
+        '- authority: human_review_required',
+        '- destructive_execution: unavailable_to_agent',
+    ].join('\n'), taskId, context, { action: 'maintenance.request', candidate_count: candidateIds.length }, requestId);
+    return {
+        read_only: false,
+        vault_root: vaultRoot,
+        request_id: requestId,
+        request_path: record.path,
+        status: 'pending',
+        snapshot_generation: snapshot.generation,
+        candidate_ids: candidateIds,
+        task_id: taskId,
+        idempotency_key: idempotencyKey,
+        activity_path: AGENT_ACTIVITY_PATH,
     };
 }
 function buildLegacyStructureSummary(vaultRoot, notes) {
@@ -7829,8 +8133,10 @@ function buildGraphSummary(graphHealth) {
         resolved_edge_count: graphHealth.resolved_edge_count,
         unresolved_edge_count: graphHealth.unresolved_edge_count,
         component_count: graphHealth.component_count,
+        maintenance_component_count: graphHealth.maintenance_component_count,
         largest_component_node_count: graphHealth.largest_component_node_count,
         isolated_node_count: graphHealth.isolated_node_count,
+        actionable_isolated_node_count: graphHealth.actionable_isolated_node_count,
         only_inbound_node_count: graphHealth.only_inbound_node_count,
         only_outbound_node_count: graphHealth.only_outbound_node_count,
         hub_candidate_count: graphHealth.hub_candidate_count,

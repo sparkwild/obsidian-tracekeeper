@@ -728,7 +728,13 @@ export class ProposeMemoryApplicationService {
 					if (parsedRelations.status === 'valid') {
 						operationPayload.expectedManagedRelationsHash = parsedRelations.hash;
 					}
-					operationPayload.effectiveRisk = computeWikiEffectiveRisk({
+					const roleConflict = Boolean(
+						snapshot.wiki_role
+						&& parsedRelations.status === 'valid'
+						&& parsedRelations.role !== 'unknown'
+						&& parsedRelations.role !== snapshot.wiki_role
+					);
+					const computedRisk = computeWikiEffectiveRisk({
 					targetExists: !targetMissing,
 					writebackEffect: managedRelationsOnly
 						? 'update_managed_relations'
@@ -738,7 +744,14 @@ export class ProposeMemoryApplicationService {
 							? { relationsStatus: parsedRelations.status }
 							: {}),
 						hasUnresolvedRelations: unresolvedRelations.length > 0,
+						hasTargetConflict: roleConflict,
 					});
+					operationPayload.effectiveRisk = computedRisk === 'low'
+						&& managedRelationsOnly
+						&& Boolean(snapshot.wiki_role)
+						&& parsedRelations.role === 'unknown'
+						? 'medium'
+						: computedRisk;
 			}
 		}
 
@@ -836,11 +849,12 @@ export class ProposeMemoryApplicationService {
 			parent: operationPayload.resolvedWikiParent,
 			related: operationPayload.resolvedWikiRelated ?? [],
 			sources: bridgeMetadata.related_sources.filter((path) => !isSourcePartPath(path)),
-		}) : '';
+		}, snapshot.wiki_role ?? undefined) : '';
 		const proposedWritebackContent = writebackEffect === 'update_managed_relations'
 			? managedRelationsBlock
 			: wikiTarget && (
-			snapshot.parent_wiki
+			snapshot.wiki_role
+			|| snapshot.parent_wiki
 			|| snapshot.related_wiki.length > 0
 			|| bridgeMetadata.related_sources.length > 0
 		)

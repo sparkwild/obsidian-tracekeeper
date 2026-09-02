@@ -98,7 +98,7 @@ const parseLegacyWriteback = (body) => {
             continue;
         }
         const managedCandidate = lines.slice(index + 1).join('\n').trim();
-        const managedStarts = managedCandidate.match(/<!--\s*tracekeeper:relations:start\s+schema="1"\s+hash="sha256:[a-f0-9]{64}"\s*-->/g) ?? [];
+        const managedStarts = managedCandidate.match(/<!--\s*tracekeeper:relations:start\s+schema="(?:1"|2"\s+role="(?:topic|topic_map)")\s+hash="sha256:[a-f0-9]{64}"\s*-->/g) ?? [];
         const managedEnds = managedCandidate.match(/<!--\s*tracekeeper:relations:end\s*-->/g) ?? [];
         if (managedStarts.length === 1
             && managedEnds.length === 1

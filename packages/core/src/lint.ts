@@ -17,7 +17,7 @@ import {
 	isKnowledgeWikiPath,
 	KNW_RELATED_MEMORY_KEYS,
 	KNW_RELATED_WIKI_KEYS,
-	GRAPH_RECOMMENDED_ENTRY,
+	KNOWLEDGE_WIKI_INDEX_PATH,
 	resolvePreferredKnowledgePath,
 	normalizeKnowledgePath as normalizeVaultPath,
 } from './knowledge-architecture';
@@ -750,7 +750,7 @@ function buildGraphProfileLintIssues(report: GraphHealthReport, profile: unknown
 		const paths =
 			profileIssue.paths && profileIssue.paths.length > 0
 				? profileIssue.paths
-				: [GRAPH_RECOMMENDED_ENTRY];
+				: [KNOWLEDGE_WIKI_INDEX_PATH];
 		for (const issuePath of paths) {
 			issues.push({
 				severity: profileIssue.severity,

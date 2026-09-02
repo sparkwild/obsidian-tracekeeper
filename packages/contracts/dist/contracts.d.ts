@@ -3,7 +3,7 @@ export type ToolRisk = 'read-only' | 'low-risk-write' | 'review-gated-write';
 export type ToolEffect = 'read' | 'append' | 'bounded-update' | 'review-gated';
 export type ToolIdempotency = 'natural' | 'keyed' | 'none';
 export type ToolWorld = 'closed';
-export type ToolWorkflowRole = 'observe' | 'recall' | 'task-start' | 'task-finish' | 'review' | 'source' | 'memory';
+export type ToolWorkflowRole = 'observe' | 'recall' | 'task-start' | 'task-finish' | 'review' | 'source' | 'memory' | 'maintenance';
 export type ToolCapability = 'vault.read' | 'vault.write' | 'memory.propose' | 'memory.apply' | 'memory.review' | 'workflow.manage' | 'review-gated.apply';
 export interface ToolDeprecation {
     readonly replacement: string;
@@ -37,8 +37,8 @@ export interface ToolContract<Name extends string = string> {
     readonly deprecated?: ToolDeprecation;
     readonly description?: string;
 }
-export type TracekeeperToolName = 'tracekeeper.status' | 'tracekeeper.graph_health' | 'tracekeeper.start_task' | 'tracekeeper.recall' | 'tracekeeper.memory' | 'tracekeeper.project_context' | 'tracekeeper.project_history' | 'tracekeeper.read_note' | 'tracekeeper.review_queue' | 'tracekeeper.list_review_queue' | 'tracekeeper.list_source_requests' | 'tracekeeper.list_approved_writebacks' | 'tracekeeper.agent_activity_recent' | 'tracekeeper.source_request' | 'tracekeeper.analyze_source_request' | 'tracekeeper.apply_approved_writeback' | 'tracekeeper.build_context_pack' | 'tracekeeper.lint' | 'tracekeeper.finish_task' | 'tracekeeper.distill_session' | 'tracekeeper.write_context_pack' | 'tracekeeper.write_session_note' | 'tracekeeper.capture_source' | 'tracekeeper.propose_memory';
-export declare const PUBLIC_TOOL_NAME_ORDER: readonly ["tracekeeper.status", "tracekeeper.agent_activity_recent", "tracekeeper.lint", "tracekeeper.recall", "tracekeeper.memory", "tracekeeper.read_note", "tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.build_context_pack", "tracekeeper.review_queue", "tracekeeper.apply_approved_writeback", "tracekeeper.source_request", "tracekeeper.capture_source", "tracekeeper.propose_memory"];
+export type TracekeeperToolName = 'tracekeeper.status' | 'tracekeeper.graph_health' | 'tracekeeper.start_task' | 'tracekeeper.recall' | 'tracekeeper.memory' | 'tracekeeper.project_context' | 'tracekeeper.project_history' | 'tracekeeper.read_note' | 'tracekeeper.review_queue' | 'tracekeeper.list_review_queue' | 'tracekeeper.list_source_requests' | 'tracekeeper.list_approved_writebacks' | 'tracekeeper.agent_activity_recent' | 'tracekeeper.source_request' | 'tracekeeper.analyze_source_request' | 'tracekeeper.apply_approved_writeback' | 'tracekeeper.build_context_pack' | 'tracekeeper.lint' | 'tracekeeper.request_maintenance' | 'tracekeeper.finish_task' | 'tracekeeper.distill_session' | 'tracekeeper.write_context_pack' | 'tracekeeper.write_session_note' | 'tracekeeper.capture_source' | 'tracekeeper.propose_memory';
+export declare const PUBLIC_TOOL_NAME_ORDER: readonly ["tracekeeper.status", "tracekeeper.agent_activity_recent", "tracekeeper.lint", "tracekeeper.request_maintenance", "tracekeeper.recall", "tracekeeper.memory", "tracekeeper.read_note", "tracekeeper.start_task", "tracekeeper.finish_task", "tracekeeper.build_context_pack", "tracekeeper.review_queue", "tracekeeper.apply_approved_writeback", "tracekeeper.source_request", "tracekeeper.capture_source", "tracekeeper.propose_memory"];
 type PublicToolName = (typeof PUBLIC_TOOL_NAME_ORDER)[number];
 export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
@@ -339,7 +339,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.lint";
-    readonly version: 3;
+    readonly version: 4;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -348,7 +348,22 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "observe";
     readonly useCase: "lint";
-    readonly description: "[read-only] Run the single vault check entry for structure, links, sources, claims, and graph health.";
+    readonly description: "[read-only] Run the single vault check entry for structure, links, sources, claims, role-aware graph health, and generation-bound maintenance candidates.";
+    readonly inputSchema: ToolInputSchema;
+}, {
+    readonly outputSchema: ToolOutputSchema;
+    readonly resultSchema: ToolOutputSchema;
+    readonly name: "tracekeeper.request_maintenance";
+    readonly version: 1;
+    readonly visibility: "public";
+    readonly capability: "vault.write";
+    readonly risk: "low-risk-write";
+    readonly effect: "append";
+    readonly idempotency: "keyed";
+    readonly world: "closed";
+    readonly workflowRole: "maintenance";
+    readonly useCase: "request_maintenance";
+    readonly description: "[low-risk write] Request human review of current lint maintenance candidates. This tool cannot approve, trash, purge, or delete files.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly outputSchema: ToolOutputSchema;

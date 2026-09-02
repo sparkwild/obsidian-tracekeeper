@@ -215,6 +215,13 @@ import {
 	type LegacySourceConsolidationPreview,
 	type LegacySourceConsolidationResult,
 } from './features/sources/legacy-source-consolidation-controller';
+import {
+	SourceArchivePurgeController,
+	type SourceArchivePurgePreview,
+	type SourceArchivePurgeProgress,
+	type SourceArchivePurgeReceipt,
+} from './features/sources/source-archive-purge-controller';
+import { SourceArchivePurgeModal } from './features/sources/legacy-source-consolidation-modal';
 import { TracekeeperActivityView } from './features/activity/activity-view';
 import { TracekeeperReviewQueueView } from './features/review/review-queue-view';
 import { TracekeeperGraphHealthView } from './features/graph/graph-health-view';
@@ -288,6 +295,7 @@ import {
 	buildMemoryInspectorSnapshot,
 	buildSourceStatusSnapshot,
 	type KnowledgeIndexEvidence,
+	type MaintenanceSurfaceCandidate,
 	type MemoryInspectorQuery,
 	type MemoryInspectorSnapshot,
 	type SourceStatusQuery,
@@ -527,6 +535,7 @@ export default class TracekeeperPlugin extends Plugin {
 	private legacyMigrationController!: LegacyMigrationController;
 	private legacyMemoryMigrationController!: LegacyMemoryMigrationController;
 	private legacySourceConsolidationController!: LegacySourceConsolidationController;
+	private sourceArchivePurgeController!: SourceArchivePurgeController;
 	private activityDataController!: ActivityDataController;
 	private activityRecordRepository!: ActivityRecordRepository;
 	private nativeAuditRepository!: ObsidianAuditShardRepository;
@@ -535,6 +544,8 @@ export default class TracekeeperPlugin extends Plugin {
 	private proposalTransitionAdapter!: ObsidianProposalTransitionAdapter;
 	private autoRefreshIntervalId: number | null = null;
 	private autoRefreshDebounceId: number | null = null;
+	private maintenanceSurfaceCache: { generation: number; candidates: MaintenanceSurfaceCandidate[] } | null = null;
+	private maintenanceSurfaceInFlight: Promise<{ generation: number; candidates: MaintenanceSurfaceCandidate[] }> | null = null;
 	private autoRefreshInFlight = false;
 	private agentStateViewRefreshQueued = false;
 	private readonly agentStateListeners = new Set<() => void>();
@@ -626,7 +637,6 @@ export default class TracekeeperPlugin extends Plugin {
 		});
 		this.graphHealthController = new GraphHealthController({
 			executeLocalTool: (name, args) => this.executeLocalTool(name, args),
-			refreshGovernanceViews: () => this.refreshGovernanceViews(),
 			getVaultRoot: () => this.getVaultRoot(),
 			getGraphProfile: () => this.settings.graphProfile,
 		});
@@ -753,6 +763,62 @@ export default class TracekeeperPlugin extends Plugin {
 				.filter((file) => file.path.startsWith(`${LEGACY_SOURCE_CONSOLIDATION_JOURNAL_ROOT}/`))
 				.map((file) => file.path)
 				.sort(),
+			now: () => new Date().toISOString(),
+		});
+		this.sourceArchivePurgeController = new SourceArchivePurgeController({
+			readText: async (relativePath) => {
+				const file = this.app.vault.getAbstractFileByPath(this.normalizeVaultPath(relativePath));
+				return file instanceof TFile ? this.app.vault.read(file) : null;
+			},
+			createText: async (relativePath, content) => {
+				await this.vaultRepository.createText(this.normalizeVaultPath(relativePath), content);
+			},
+			writeText: async (relativePath, content) => {
+				const current = await this.vaultRepository.readText(this.normalizeVaultPath(relativePath));
+				if (!current) throw new Error(`Cannot update missing Source Archive purge record: ${relativePath}`);
+				await this.vaultRepository.replaceText(current.path, current.version, content);
+			},
+			listPaths: async (prefix) => {
+				const normalized = `${this.normalizeVaultPath(prefix)}/`;
+				return this.app.vault.getFiles().map((file) => file.path).filter((filePath) => filePath.startsWith(normalized)).sort();
+			},
+			trashFile: async (relativePath) => {
+				const file = this.app.vault.getAbstractFileByPath(this.normalizeVaultPath(relativePath));
+				if (!(file instanceof TFile)) throw new Error(`Source Archive purge target is unavailable: ${relativePath}`);
+				await this.app.fileManager.trashFile(file);
+			},
+			trashEmptyMigrationTree: async (relativePath) => {
+				const normalized = this.normalizeVaultPath(relativePath);
+				if (!/^02_archive\/source_migrations\/[^/]+$/u.test(normalized)) {
+					throw new Error(`Source Archive migration root is invalid: ${relativePath}`);
+				}
+				const folder = this.app.vault.getAbstractFileByPath(normalized);
+				if (!folder) return 'cleaned' as const;
+				if (!(folder instanceof TFolder)) {
+					throw new Error(`Source Archive migration root is occupied by a file: ${relativePath}`);
+				}
+				const pending = [folder];
+				while (pending.length > 0) {
+					const current = pending.pop();
+					if (!current) continue;
+					for (const child of current.children) {
+						if (child instanceof TFile) return 'retained' as const;
+						if (child instanceof TFolder) pending.push(child);
+					}
+				}
+				await this.app.fileManager.trashFile(folder);
+				return 'cleaned' as const;
+			},
+			knowledgeReadView: async () => {
+				const view = await this.knowledgeIndex?.knowledgeReadView(this.getVaultRoot());
+				if (!view || view.index_state !== 'ready') throw new Error('Knowledge index must be ready before Source Archive cleanup.');
+				return view;
+			},
+			rebuildKnowledgeIndex: async () => {
+				await this.rebuildKnowledgeIndex(true);
+				await this.refreshGovernanceViews();
+			},
+			getDeletionBehavior: () => this.getConfiguredTrashDescription(),
 			now: () => new Date().toISOString(),
 		});
 		this.knowledgeIndex = ObsidianKnowledgeIndexAdapter.create(this.app, this.getVaultRoot());
@@ -893,7 +959,10 @@ export default class TracekeeperPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			this.registerAutoRefreshEvents();
 			void this.rebuildKnowledgeIndex(false)
-				.then(() => this.openPendingWikiReviewBatchRecovery())
+				.then(async () => {
+					await this.openPendingWikiReviewBatchRecovery();
+					await this.openPendingSourceArchivePurgeRecovery();
+				})
 				.catch((error) => console.error('tracekeeper failed to recover Wiki review batch', error));
 			void this.openOnboardingEntryIfNeeded().catch((error) => {
 				console.error('tracekeeper failed to evaluate onboarding entry state', error);
@@ -1984,6 +2053,7 @@ export default class TracekeeperPlugin extends Plugin {
 		const evidence = await this.loadKnowledgeIndexEvidence();
 		return {
 			state: evidence.state,
+			generation: evidence.generation,
 			notes: evidence.notes.map((note) => ({
 				path: note.path,
 				title: note.title,
@@ -1996,18 +2066,19 @@ export default class TracekeeperPlugin extends Plugin {
 	async loadMemoryInspectorSnapshot(
 		query: MemoryInspectorQuery = {}
 	): Promise<MemoryInspectorSnapshot> {
-		const [index, proposals, tasks] = await Promise.all([
+		const [index, proposals, tasks, maintenance] = await Promise.all([
 			this.loadKnowledgeIndexEvidence(),
 			this.activityRecordRepository.readRecentMemoryProposals(KNOWLEDGE_RELATIONSHIP_READ_LIMIT),
 			this.activityRecordRepository.readRecentAgentTasks(KNOWLEDGE_RELATIONSHIP_READ_LIMIT),
+			this.loadMaintenanceSurfaceCandidates(['memory_lifecycle']),
 		]);
-		return buildMemoryInspectorSnapshot({
+		return { ...buildMemoryInspectorSnapshot({
 			index,
 			proposals,
 			tasks,
 			missingMemoryFolder: !(this.app.vault.getAbstractFileByPath(KNOWLEDGE_MEMORY_DIR) instanceof TFolder),
 			query,
-		});
+		}), maintenanceCandidates: maintenance };
 	}
 
 	async previewLegacyMemoryMigration(
@@ -2030,13 +2101,14 @@ export default class TracekeeperPlugin extends Plugin {
 	async loadSourceStatusSnapshot(
 		query: SourceStatusQuery = {}
 	): Promise<SourceStatusSnapshot> {
-		const [index, proposals, tasks, requests] = await Promise.all([
+		const [index, proposals, tasks, requests, maintenance] = await Promise.all([
 			this.loadKnowledgeIndexEvidence(),
 			this.activityRecordRepository.readRecentMemoryProposals(KNOWLEDGE_RELATIONSHIP_READ_LIMIT),
 			this.activityRecordRepository.readRecentAgentTasks(KNOWLEDGE_RELATIONSHIP_READ_LIMIT),
 			this.activityRecordRepository.readRecentSourceRequests(KNOWLEDGE_RELATIONSHIP_READ_LIMIT),
+			this.loadMaintenanceSurfaceCandidates(['unassociated_source', 'source_archive_purge']),
 		]);
-		return buildSourceStatusSnapshot({
+		return { ...buildSourceStatusSnapshot({
 			index,
 			proposals,
 			tasks,
@@ -2044,7 +2116,49 @@ export default class TracekeeperPlugin extends Plugin {
 			missingSourceFolder: !(this.app.vault.getAbstractFileByPath(KNOWLEDGE_SOURCES_DIR) instanceof TFolder),
 			missingRequestFolder: !(this.app.vault.getAbstractFileByPath(TRACEKEEPER_AGENT_REQUESTS_DIR) instanceof TFolder),
 			query,
-		});
+		}), maintenanceCandidates: maintenance };
+	}
+
+	private async loadMaintenanceSurfaceCandidates(categories: readonly string[]): Promise<MaintenanceSurfaceCandidate[]> {
+		const snapshot = await this.loadMaintenanceSurfaceSnapshot();
+		return snapshot.candidates.filter((candidate) => categories.includes(candidate.category));
+	}
+
+	private async loadMaintenanceSurfaceSnapshot(): Promise<{ generation: number; candidates: MaintenanceSurfaceCandidate[] }> {
+		try {
+			const currentGeneration = (await this.knowledgeIndex?.knowledgeSnapshot())?.generation ?? 0;
+			if (this.maintenanceSurfaceCache?.generation === currentGeneration) return this.maintenanceSurfaceCache;
+			if (this.maintenanceSurfaceInFlight) return this.maintenanceSurfaceInFlight;
+			this.maintenanceSurfaceInFlight = (async () => {
+				const result = await this.executeLocalTool('tracekeeper.lint', { graph_profile: 'advisory', page_size: 200 });
+				const maintenance = this.isRecord(result.maintenance) ? result.maintenance : {};
+				const candidates = Array.isArray(maintenance.candidates) ? maintenance.candidates : [];
+				const projected = candidates.flatMap((candidate) => {
+					if (!this.isRecord(candidate) || typeof candidate.candidate_id !== 'string' || typeof candidate.category !== 'string') return [];
+					return [{
+						candidateId: candidate.candidate_id,
+						category: candidate.category,
+						state: typeof candidate.state === 'string' ? candidate.state : '',
+						risk: typeof candidate.risk === 'string' ? candidate.risk : '',
+						paths: Array.isArray(candidate.paths) ? candidate.paths.filter((item): item is string => typeof item === 'string') : [],
+						reasons: Array.isArray(candidate.reasons) ? candidate.reasons.filter((item): item is string => typeof item === 'string') : [],
+						reclaimableBytes: typeof candidate.reclaimable_bytes === 'number' ? candidate.reclaimable_bytes : 0,
+					}];
+				});
+				const resolved = {
+					generation: typeof maintenance.generation === 'number' ? maintenance.generation : currentGeneration,
+					candidates: projected,
+				};
+				this.maintenanceSurfaceCache = resolved;
+				return resolved;
+			})();
+			return await this.maintenanceSurfaceInFlight;
+		} catch (error) {
+			console.error('tracekeeper failed to project maintenance candidates', error);
+			return { generation: 0, candidates: [] };
+		} finally {
+			this.maintenanceSurfaceInFlight = null;
+		}
 	}
 
 	async previewLegacySourceConsolidation(
@@ -2082,6 +2196,35 @@ export default class TracekeeperPlugin extends Plugin {
 		await this.rebuildKnowledgeIndex(true);
 		await this.refreshGovernanceViews();
 		return result;
+	}
+
+	async previewSourceArchivePurge(): Promise<SourceArchivePurgePreview> {
+		return this.sourceArchivePurgeController.preview();
+	}
+
+	async confirmSourceArchivePurge(
+		preview: SourceArchivePurgePreview,
+		confirmationToken: string,
+		onProgress?: (progress: SourceArchivePurgeProgress) => void,
+	): Promise<SourceArchivePurgeReceipt> {
+		const receipt = await this.sourceArchivePurgeController.confirm(preview, confirmationToken, onProgress);
+		void this.reviewQueueController.reconcileMaintenanceRequests().catch((error) => {
+			console.error('tracekeeper failed to reconcile maintenance requests after Source Archive cleanup', error);
+		});
+		return receipt;
+	}
+
+	async resumeSourceArchivePurge(
+		operationId: string,
+		onProgress?: (progress: SourceArchivePurgeProgress) => void,
+	): Promise<SourceArchivePurgeReceipt> {
+		return this.sourceArchivePurgeController.resume(operationId, onProgress);
+	}
+
+	private async openPendingSourceArchivePurgeRecovery(): Promise<void> {
+		const operationId = (await this.sourceArchivePurgeController.listRecoverableOperationIds())[0];
+		if (!operationId) return;
+		new SourceArchivePurgeModal(this.app, this, null, operationId).open();
 	}
 
 
@@ -2153,10 +2296,6 @@ export default class TracekeeperPlugin extends Plugin {
 
 	async loadGraphHealthSnapshot(): Promise<GraphHealthSnapshot> {
 		return this.graphHealthController.loadGraphHealthSnapshot();
-	}
-
-	async createGraphHealthReviewProposal(snapshot: GraphHealthSnapshot): Promise<string> {
-		return this.graphHealthController.createGraphHealthReviewProposal(snapshot);
 	}
 
 
@@ -2988,7 +3127,11 @@ export default class TracekeeperPlugin extends Plugin {
 		confirmationToken: string,
 		options: WikiReviewBatchConfirmOptions | ((progress: WikiReviewBatchProgress) => void) = {}
 	): Promise<WikiReviewBatchReceipt> {
-		return this.reviewQueueController.confirmWikiReviewBatch(preview, confirmationToken, options);
+		const receipt = await this.reviewQueueController.confirmWikiReviewBatch(preview, confirmationToken, options);
+		void this.reviewQueueController.reconcileMaintenanceRequests().catch((error) => {
+			console.error('tracekeeper failed to reconcile maintenance requests after Wiki review', error);
+		});
+		return receipt;
 	}
 
 	async resumeWikiReviewBatch(
@@ -3394,6 +3537,15 @@ export default class TracekeeperPlugin extends Plugin {
 		return this.reviewQueueController.loadMemoryReviewQueueSnapshot(offset);
 	}
 
+	async rejectMaintenanceRequest(request: MemoryReviewQueueSnapshot['maintenanceRequests'][number]): Promise<void> {
+		await this.reviewQueueController.rejectMaintenanceRequest(request);
+	}
+
+	async reconcileMaintenanceRequests(): Promise<void> {
+		await this.reviewQueueController.reconcileMaintenanceRequests();
+		await this.refreshReviewQueueViews();
+	}
+
 
 
 	async updateMemoryProposalStatus(
@@ -3591,6 +3743,7 @@ export default class TracekeeperPlugin extends Plugin {
 			write_context_pack: ui('写入上下文包', 'Write context pack'),
 			write_session_note: ui('写入会话记录', 'Write session note'),
 			lint: ui('检查笔记结构', 'Check note structure'),
+			request_maintenance: ui('请求知识库维护', 'Request vault maintenance'),
 			finish_task: ui('记录任务结果', 'Record task results'),
 			distill_session: ui('沉淀会话摘要', 'Summarize a session'),
 			capture_source: ui('保存来源资料', 'Save source material'),

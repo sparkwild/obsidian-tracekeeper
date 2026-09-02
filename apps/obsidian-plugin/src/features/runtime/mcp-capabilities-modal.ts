@@ -154,6 +154,14 @@ export const MCP_CAPABILITY_LOCALIZATIONS: Record<string, McpCapabilityLocalizat
 		},
 		category: { zh: '维护', en: 'Maintenance' },
 	},
+	'tracekeeper.request_maintenance': {
+		title: { zh: '请求知识库维护', en: 'Request vault maintenance' },
+		description: {
+			zh: '只引用当前 lint 返回的候选并创建待审请求；不能批准变更，也不能归档、清理或删除文件。',
+			en: 'Creates a pending request only from current lint candidates; it cannot approve changes or archive, purge, or delete files.',
+		},
+		category: { zh: '维护', en: 'Maintenance' },
+	},
 	'tracekeeper.finish_task': {
 		title: { zh: '结束任务', en: 'Finish task' },
 		description: {

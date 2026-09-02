@@ -281,13 +281,22 @@ the activity reader.
 
 ## Lint, Graph, And Migration
 
-`tracekeeper.lint` v3 is the read-only Doctor entry point for structure, links,
+`tracekeeper.lint` v4 is the read-only Doctor entry point for structure, links,
 Sources, claims, lifecycle, and graph health. It reports invalid v2 records,
 missing claim identity, unresolved evidence or Hub/Source relations, lifecycle
 cycles and conflicts, stale verification, Source-part integrity, bounded
 directory growth, and legacy Memory candidates. Graph profiles control
-reporting severity but never create notes or rewrite links. A selected graph
-suggestion may become a normal Knowledge Change Review proposal.
+reporting severity but never create notes or rewrite links. Graph Health no
+longer turns an aggregate statistical report into a Knowledge Change Review
+proposal. Only a concrete Wiki role or relation change can enter the normal
+reviewed proposal flow.
+
+Lint v4 also returns a generation-bound Maintenance Snapshot with deterministic
+candidate ids and cursors. An Agent may call `tracekeeper.request_maintenance`
+with only current requestable ids; it cannot supply a raw path, deletion mode,
+hash, or approval. The request is shown in Knowledge Change Review and becomes
+completed only after a separately governed repair or cleanup removes the
+underlying candidate; otherwise a newer generation marks it stale.
 
 Captured Source bodies are evidence, not authored knowledge relationships. Shell
 conditions, Markdown links, absolute paths, and other syntax copied into a
@@ -298,6 +307,15 @@ records. When older segmented captures are found, the plugin may offer an
 explicit, hash-bound consolidation preview that creates bounded Source indexes
 and parts first, then requires separate confirmations for relationship repair
 and moving the legacy files to `02_archive`.
+
+Redundant Source files already moved by that consolidation may later enter a
+third, separately confirmed cleanup preview. Eligibility requires completed
+materialization and archive journals, exact archive and Source-part coverage,
+valid current output hashes and manifests, repaired Wiki relations, and no
+active or ambiguous operation. Cleanup is limited to
+`02_archive/source_migrations/**`, uses `FileManager.trashFile()`, preserves
+current Source indexes and parts, and never includes MemoryRecord, Wiki body,
+unknown Archive content, proposal history, or operation journals.
 
 Managed proposal references in task and session records are one semantic
 relationship even though Tracekeeper mirrors them in frontmatter and the note

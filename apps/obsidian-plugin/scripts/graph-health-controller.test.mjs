@@ -96,76 +96,78 @@ try {
 
 	const { GraphHealthController } = require(output);
 	const calls = [];
-	let refreshCount = 0;
 	const host = {
 		async executeLocalTool(name, args) {
 			calls.push({ name, args });
-			if (name === 'tracekeeper.propose_memory') {
-				return { ok: true, path: '00_tracekeeper/inbox/review_queue/graph.md' };
-			}
 			return {
 				ok: true,
 				read_only: true,
-				profile: 'balanced',
+				profile: 'advisory',
 				vault_root: '/vault',
 				scanned_at: '2026-08-07T00:00:00.000Z',
 				graph_health: {
 					disabled: false,
-					profile: 'balanced',
+					profile: 'advisory',
 					note_count: 12,
 				edge_observation_count: 20,
 				ignored_edge_observation_count: 5,
 				ignored_unresolved_edge_count: 4,
 				wikilink_edge_count: 18,
 					resolved_edge_count: 17,
-					unresolved_edge_count: 1,
+					unresolved_edge_count: 0,
 					largest_component_node_count: 10,
 					component_count: 2,
-					isolated_nodes: ['orphan.md'],
+					maintenance_component_count: 1,
+					isolated_nodes: ['01_knowledge/sources/files/unassociated.md'],
 					isolated_node_count: 1,
-					only_inbound_nodes: [],
-					only_inbound_node_count: 0,
-					only_outbound_nodes: [],
-					only_outbound_node_count: 0,
+					actionable_isolated_nodes: [],
+					actionable_isolated_node_count: 0,
+					only_inbound_nodes: ['01_knowledge/sources/files/leaf.md'],
+					only_inbound_node_count: 1,
+					only_outbound_nodes: ['01_knowledge/wiki/index.md'],
+					only_outbound_node_count: 1,
 					hub_candidates: [],
 					hub_candidate_count: 0,
 					missing_recommended_entry: '',
 					missing_recommended_hubs: ['01_knowledge/memory/global/index.md'],
 					missing_recommended_hub_count: 1,
-					recommendations: ['Create the missing global memory hub.'],
-					recommendation_count: 1,
+					recommendations: [],
+					recommendation_count: 0,
 					profile_issues: [],
 				},
+				maintenance: {
+					candidates: [],
+				},
 			};
-		},
-		async refreshGovernanceViews() {
-			refreshCount += 1;
 		},
 		getVaultRoot() {
 			return '/vault';
 		},
 		getGraphProfile() {
-			return 'balanced';
+		return 'advisory';
 		},
 	};
 
 	const controller = new GraphHealthController(host);
 	const snapshot = await controller.loadGraphHealthSnapshot();
 	assert.equal(calls[0].name, 'tracekeeper.lint');
-	assert.deepEqual(calls[0].args, { max_items: 20, graph_profile: 'balanced' });
+	assert.deepEqual(calls[0].args, { max_items: 20, graph_profile: 'advisory' });
 	assert.equal(snapshot.noteCount, 12);
 	assert.equal(snapshot.edgeObservationCount, 20);
 	assert.equal(snapshot.ignoredEdgeObservationCount, 5);
 	assert.equal(snapshot.ignoredUnresolvedEdgeCount, 4);
-	assert.equal(snapshot.unresolvedEdgeCount, 1);
+	assert.equal(snapshot.unresolvedEdgeCount, 0);
 	assert.deepEqual(snapshot.missingRecommendedHubs, ['01_knowledge/memory/global/index.md']);
-	assert.equal(snapshot.profileIssues.length > 0, true);
-
-	const proposalPath = await controller.createGraphHealthReviewProposal(snapshot);
-	assert.equal(proposalPath, '00_tracekeeper/inbox/review_queue/graph.md');
-	assert.equal(calls[1].name, 'tracekeeper.propose_memory');
-	assert.match(calls[1].args.evidence, /^tracekeeper\.lint /);
-	assert.equal(refreshCount, 1);
+	assert.equal(snapshot.profileIssues.length, 0);
+	assert.equal(snapshot.recommendationCount, 0);
+	assert.equal(snapshot.componentCount, 2);
+	assert.equal(snapshot.maintenanceComponentCount, 1);
+	assert.equal(snapshot.isolatedNodeCount, 1);
+	assert.equal(snapshot.actionableIsolatedNodeCount, 0);
+	assert.equal(snapshot.onlyInboundNodeCount, 1);
+	assert.equal(snapshot.onlyOutboundNodeCount, 1);
+	assert.equal(snapshot.maintenanceCandidates.length, 0);
+	assert.equal(calls.some((call) => call.name === 'tracekeeper.propose_memory'), false);
 
 	const { TracekeeperGraphHealthView } = require(viewOutput);
 	const view = new TracekeeperGraphHealthView({}, {});
@@ -190,35 +192,6 @@ try {
 		unresolvedEdgeCount: 7,
 	}), 7);
 
-	const localizedRecommendations = view.graphRecommendationDisplays({
-		unresolvedEdgeCount: 2,
-		componentCount: 2,
-		isolatedNodeCount: 0,
-		onlyInboundNodeCount: 0,
-		onlyOutboundNodeCount: 0,
-		missingRecommendedEntry: '01_knowledge/index.md',
-		missingRecommendedHubs: ['01_knowledge/wiki/index.md'],
-		missingRecommendedHubCount: 1,
-		recommendations: ['Future raw graph recommendation.'],
-		recommendationCount: 4,
-	});
-	assert.equal(localizedRecommendations.some((item) => item.text.includes('Fix')), false);
-	assert.deepEqual(localizedRecommendations.at(-1)?.paths, ['01_knowledge/wiki/index.md']);
-
-	const unknownRecommendation = view.graphRecommendationDisplays({
-		unresolvedEdgeCount: 0,
-		componentCount: 0,
-		isolatedNodeCount: 0,
-		onlyInboundNodeCount: 0,
-		onlyOutboundNodeCount: 0,
-		missingRecommendedEntry: '',
-		missingRecommendedHubs: [],
-		missingRecommendedHubCount: 0,
-		recommendations: ['Future raw graph recommendation.'],
-		recommendationCount: 1,
-	});
-	assert.equal(unknownRecommendation[0].text, '图谱检查还返回了 1 项其他建议，请展开技术信息查看。');
-
 	globalThis.__tracekeeperGraphTestLanguage = 'en';
 	assert.equal(view.graphIssueKindLabel('graph_disconnected'), 'Disconnected graph');
 	assert.equal(view.graphIssueMessage({
@@ -230,7 +203,8 @@ try {
 	}), 'The graph has 3 disconnected component(s).');
 	assert.ok(viewSource.includes('this.graphIssueSeverityLabel(issue.severity)'));
 	assert.ok(viewSource.includes('this.graphIssueMessage(issue, issueCount)'));
-	assert.ok(viewSource.includes('this.graphRecommendationDisplays(snapshot)'));
+	assert.equal(viewSource.includes('graphRecommendationDisplays'), false);
+	assert.ok(viewSource.includes('snapshot.recommendations.map'));
 	assert.ok(viewSource.includes('path:01_knowledge -path:.parts -path:02_archive'));
 	assert.equal(viewSource.includes("ui('Profile Issues', 'Profile Issues')"), false);
 	assert.equal(viewSource.includes("ui('Hub Candidates', 'Hub Candidates')"), false);
@@ -246,7 +220,7 @@ try {
 	unavailableView.contentEl = unavailableRoot;
 	await unavailableView.render({
 		ok: false,
-		profile: 'balanced',
+		profile: 'advisory',
 		updatedAt: new Date().toISOString(),
 		errorMessage: 'RAW_GRAPH_SENTINEL',
 	});
@@ -255,59 +229,10 @@ try {
 	assert.ok(technicalDetails);
 	assert.ok(collectText(technicalDetails).includes('RAW_GRAPH_SENTINEL'));
 
-	globalThis.__tracekeeperGraphTestLanguage = 'zh-CN';
-	globalThis.__tracekeeperGraphTestNotices = [];
-	let createProposalCalls = 0;
-	const createdThenStaleView = new TracekeeperGraphHealthView({}, {
-		async createGraphHealthReviewProposal() {
-			createProposalCalls += 1;
-			return '00_tracekeeper/inbox/review_queue/created.md';
-		},
-	});
-	createdThenStaleView.refresh = async () => {
-		throw new Error('RAW_REFRESH_AFTER_CREATE_SENTINEL');
-	};
-	const createdButton = new FakeElement('button');
-	const originalConsoleError = console.error;
-	const loggedErrors = [];
-	console.error = (...args) => loggedErrors.push(args);
-	try {
-		await createdThenStaleView.handleCreateProposalClick({}, createdButton);
-	} finally {
-		console.error = originalConsoleError;
-	}
-	assert.equal(createProposalCalls, 1);
-	assert.equal(globalThis.__tracekeeperGraphTestNotices.length, 2);
-	assert.ok(globalThis.__tracekeeperGraphTestNotices[0].includes('已创建知识变更提案'));
-	assert.ok(globalThis.__tracekeeperGraphTestNotices[1].includes('提案已创建，但图谱健康视图刷新失败'));
-	assert.equal(globalThis.__tracekeeperGraphTestNotices[1].includes('创建知识变更提案失败'), false);
-	assert.equal(createdButton.disabled, true);
-	assert.equal(createdButton.text, '提案已创建，请刷新');
-	assert.ok(loggedErrors.some((args) => String(args[1]).includes('RAW_REFRESH_AFTER_CREATE_SENTINEL')));
+	assert.equal(viewSource.includes('createGraphHealthReviewProposal'), false);
+	assert.ok(viewSource.includes('renderMaintenanceCandidates'));
 
-	globalThis.__tracekeeperGraphTestNotices = [];
-	let refreshAfterCreateFailure = 0;
-	const createFailureView = new TracekeeperGraphHealthView({}, {
-		async createGraphHealthReviewProposal() {
-			throw new Error('RAW_CREATE_SENTINEL');
-		},
-	});
-	createFailureView.refresh = async () => {
-		refreshAfterCreateFailure += 1;
-	};
-	const failedCreateButton = new FakeElement('button');
-	console.error = () => {};
-	try {
-		await createFailureView.handleCreateProposalClick({}, failedCreateButton);
-	} finally {
-		console.error = originalConsoleError;
-	}
-	assert.equal(refreshAfterCreateFailure, 0);
-	assert.deepEqual(globalThis.__tracekeeperGraphTestNotices, ['创建知识变更提案失败。']);
-	assert.equal(failedCreateButton.disabled, false);
-	assert.equal(failedCreateButton.text, '创建知识变更提案');
-
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 45 })}\n`);
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 47 })}\n`);
 } finally {
 	delete globalThis.__tracekeeperGraphTestLanguage;
 	delete globalThis.__tracekeeperGraphTestNotices;

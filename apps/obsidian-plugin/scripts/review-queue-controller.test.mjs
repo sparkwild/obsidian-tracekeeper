@@ -894,6 +894,9 @@ try {
 	const {
 		computeProposalContentHash,
 		computeProposalRevision,
+		maintenanceRequestBindingHash,
+		maintenanceRequestManifestHash,
+		parseMaintenanceRequestMarkdown,
 		proposalTransitionReceiptFromFrontmatter,
 		transitionProposal,
 	} = require('@tracekeeper/core');
@@ -902,6 +905,27 @@ try {
 	proposalTransitionReceiptFromFrontmatterForTest =
 		proposalTransitionReceiptFromFrontmatter;
 	transitionProposalForTest = transitionProposal;
+
+	function maintenanceRequestMarkdown({ requestId, status = 'pending', candidate, manifestHashOverride = '' }) {
+		const manifest = [candidate];
+		const candidateIds = [candidate.candidate_id];
+		return [
+			'---',
+			'type: maintenance_request',
+			'schema_version: 1',
+			`request_id: ${requestId}`,
+			`status: ${status}`,
+			'snapshot_generation: 7',
+			`candidate_ids: ${JSON.stringify(candidateIds)}`,
+			'task_id: null',
+			`request_binding_hash: ${maintenanceRequestBindingHash({ snapshot_generation: 7, candidate_ids: candidateIds, task_id: null, manifest })}`,
+			`manifest_hash: ${manifestHashOverride || maintenanceRequestManifestHash(manifest)}`,
+			`candidate_manifest: ${JSON.stringify(manifest)}`,
+			'created_at: 2026-09-02T00:00:00.000Z',
+			'---',
+			'# Maintenance request',
+		].join('\n');
+	}
 
 	function createRealBatchHarness(t) {
 		const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tracekeeper-real-wiki-batch-'));
@@ -1802,6 +1826,121 @@ try {
 			/receipt metadata is incomplete/i
 		);
 		assert.equal(harness.frontmatterWrites, 0);
+	});
+
+	test('maintenance request YAML round-trips and reconciles pending through stale to completed', async () => {
+		const candidate = {
+			candidate_id: `maintenance_${'1'.repeat(24)}`,
+			category: 'wiki_relation',
+			state: 'actionable',
+			risk: 'low',
+			paths: ['01_knowledge/wiki/topic.md', '01_knowledge/wiki/map.md'],
+			content_hashes: ['a'.repeat(64)],
+			dependencies: ['01_knowledge/wiki/map.md'],
+			reasons: ['topic_parent_missing'],
+		};
+		const requestPath = '00_tracekeeper/inbox/agent_requests/maintenance-request-111111111111111111111111.md';
+		const requestFile = {
+			__tracekeeper_kind: 'file', path: requestPath, extension: 'md', basename: 'request',
+			stat: { mtime: Date.parse('2026-09-02T00:00:00.000Z') },
+			content: maintenanceRequestMarkdown({ requestId: 'maintenance-request-111111111111111111111111', candidate }),
+		};
+		const requestFolder = {
+			__tracekeeper_kind: 'folder', path: '00_tracekeeper/inbox/agent_requests', children: [requestFile],
+		};
+		const entries = new Map([[requestPath, requestFile], [requestFolder.path, requestFolder]]);
+		let currentCandidates = [candidate];
+		const app = {
+			vault: {
+				getAbstractFileByPath(filePath) { return entries.get(filePath) || null; },
+				async cachedRead(file) { return file.content; },
+				async process(file, updater) { file.content = updater(file.content); return file.content; },
+			},
+		};
+		const host = {
+			async executeLocalTool() { return { maintenance: { candidates: currentCandidates, cursor: '' } }; },
+			async refreshGovernanceViews() {},
+			async appendToAuditLog() {},
+			async appendWikiBatchActivity() {},
+			getVaultRoot() { return tempRoot; },
+		};
+		const controller = new ReviewQueueController(app, {}, host, {});
+		const initial = await controller.loadMemoryReviewQueueSnapshot();
+		assert.equal(initial.maintenanceRequests.length, 1);
+		assert.equal(initial.maintenanceRequests[0].valid, true);
+		assert.equal(initial.maintenanceRequests[0].candidates.length, 1);
+		assert.equal(initial.maintenanceRequests[0].taskId, '');
+		await controller.reconcileMaintenanceRequests();
+		assert.equal(parseMaintenanceRequestMarkdown(requestFile.content).request.status, 'stale');
+		currentCandidates = [];
+		await controller.reconcileMaintenanceRequests();
+		assert.equal(parseMaintenanceRequestMarkdown(requestFile.content).request.status, 'completed');
+	});
+
+	test('maintenance reconciliation requires exact paths and invalid records remain untouched', async () => {
+		const candidate = {
+			candidate_id: `maintenance_${'2'.repeat(24)}`,
+			category: 'wiki_relation', state: 'actionable', risk: 'medium',
+			paths: ['01_knowledge/wiki/a.md', '01_knowledge/wiki/b.md'],
+			content_hashes: ['b'.repeat(64)], dependencies: [], reasons: ['topic_parent_missing'],
+		};
+		const validPath = '00_tracekeeper/inbox/agent_requests/maintenance-request-222222222222222222222222.md';
+		const invalidPath = '00_tracekeeper/inbox/agent_requests/maintenance-request-333333333333333333333333.md';
+		const validFile = {
+			__tracekeeper_kind: 'file', path: validPath, extension: 'md', basename: 'valid', stat: { mtime: 2 },
+			content: maintenanceRequestMarkdown({ requestId: 'maintenance-request-222222222222222222222222', candidate }),
+		};
+		const invalidFile = {
+			__tracekeeper_kind: 'file', path: invalidPath, extension: 'md', basename: 'invalid', stat: { mtime: 1 },
+			content: maintenanceRequestMarkdown({ requestId: 'maintenance-request-333333333333333333333333', candidate, manifestHashOverride: '0'.repeat(64) }),
+		};
+		const folder = { __tracekeeper_kind: 'folder', path: '00_tracekeeper/inbox/agent_requests', children: [validFile, invalidFile] };
+		const entries = new Map([[validPath, validFile], [invalidPath, invalidFile], [folder.path, folder]]);
+		const invalidBefore = invalidFile.content;
+		const app = { vault: {
+			getAbstractFileByPath(filePath) { return entries.get(filePath) || null; },
+			async cachedRead(file) { return file.content; },
+			async process(file, updater) { file.content = updater(file.content); return file.content; },
+		} };
+		const host = {
+			async executeLocalTool() {
+				return { maintenance: { candidates: [{ ...candidate, paths: ['01_knowledge/wiki/a.md', '01_knowledge/wiki/c.md'] }], cursor: '' } };
+			},
+			async refreshGovernanceViews() {}, async appendToAuditLog() {}, async appendWikiBatchActivity() {},
+			getVaultRoot() { return tempRoot; },
+		};
+		const controller = new ReviewQueueController(app, {}, host, {});
+		const snapshot = await controller.loadMemoryReviewQueueSnapshot();
+		assert.equal(snapshot.maintenanceRequests.find((item) => item.path === invalidPath).valid, false);
+		await controller.reconcileMaintenanceRequests();
+		assert.equal(parseMaintenanceRequestMarkdown(validFile.content).request.status, 'completed');
+		assert.equal(invalidFile.content, invalidBefore);
+	});
+
+	test('stale maintenance requests remain user-rejectable', async () => {
+		const candidate = {
+			candidate_id: `maintenance_${'4'.repeat(24)}`,
+			category: 'unassociated_source', state: 'informational', risk: 'low',
+			paths: ['01_knowledge/sources/files/unassociated.md'],
+			content_hashes: ['c'.repeat(64)], dependencies: [], reasons: ['source_index_has_no_inbound_knowledge_relation'],
+		};
+		const requestPath = '00_tracekeeper/inbox/agent_requests/maintenance-request-444444444444444444444444.md';
+		const requestFile = {
+			__tracekeeper_kind: 'file', path: requestPath, extension: 'md', basename: 'request', stat: { mtime: 1 },
+			content: maintenanceRequestMarkdown({ requestId: 'maintenance-request-444444444444444444444444', status: 'stale', candidate }),
+		};
+		const folder = { __tracekeeper_kind: 'folder', path: '00_tracekeeper/inbox/agent_requests', children: [requestFile] };
+		const entries = new Map([[requestPath, requestFile], [folder.path, folder]]);
+		const app = { vault: {
+			getAbstractFileByPath(filePath) { return entries.get(filePath) || null; },
+			async cachedRead(file) { return file.content; },
+			async process(file, updater) { file.content = updater(file.content); return file.content; },
+		} };
+		const host = { async refreshGovernanceViews() {}, async appendToAuditLog() {}, async appendWikiBatchActivity() {}, getVaultRoot() { return tempRoot; } };
+		const controller = new ReviewQueueController(app, {}, host, {});
+		const request = (await controller.loadMemoryReviewQueueSnapshot()).maintenanceRequests[0];
+		await controller.rejectMaintenanceRequest(request);
+		assert.equal(parseMaintenanceRequestMarkdown(requestFile.content).request.status, 'rejected');
 	});
 
 	test('preview requires an opaque confirmation token and expiry', async () => {

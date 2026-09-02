@@ -1,10 +1,13 @@
 import { App, TFile, TFolder } from 'obsidian';
 import {
 	ARCHIVE_REVIEW_QUEUE_DIR,
+	TRACEKEEPER_AGENT_REQUESTS_DIR,
 	TRACEKEEPER_SESSIONS_DIR,
 	TRACEKEEPER_TASKS_DIR,
 	computePayloadHash,
 	hashVaultContent,
+	parseMaintenanceRequestMarkdown,
+	parseMarkdown,
 	type OperationFailureInjection,
 	type ProposalTransitionDecision,
 } from '@tracekeeper/core';
@@ -26,6 +29,7 @@ import {
 	REVIEW_QUEUE_PATH,
 	isReviewQueueArchiveCandidate,
 	type MemoryReviewQueueSnapshot,
+	type MaintenanceRequestSummary,
 } from './review-queue-model';
 import {
 	buildReviewProposalContexts,
@@ -600,6 +604,7 @@ export class ReviewQueueController {
 				indexState: 'initializing',
 				missingReviewQueueFolder: true,
 				updatedAt: new Date().toISOString(),
+				maintenanceRequests: await this.readMaintenanceRequests(),
 			};
 		}
 
@@ -639,7 +644,111 @@ export class ReviewQueueController {
 			indexState: knowledge.state,
 			missingReviewQueueFolder: false,
 			updatedAt: new Date().toISOString(),
+			maintenanceRequests: await this.readMaintenanceRequests(),
 		};
+	}
+
+	async rejectMaintenanceRequest(request: MaintenanceRequestSummary): Promise<void> {
+		if (!request.valid || (request.status !== 'pending' && request.status !== 'stale')) {
+			throw new Error('Only valid pending or stale maintenance requests can be rejected.');
+		}
+		const file = this.app.vault.getAbstractFileByPath(request.path);
+		if (!(file instanceof TFile)) throw new Error(`Maintenance request is missing: ${request.path}.`);
+		await this.updateMaintenanceRequestStatus(file, request.requestId, request.status, 'rejected');
+		await this.host.refreshGovernanceViews();
+	}
+
+	async reconcileMaintenanceRequests(): Promise<void> {
+		const currentCandidates: Record<string, unknown>[] = [];
+		let cursor = '';
+		for (let page = 0; page < 100; page += 1) {
+			const current = await this.host.executeLocalTool('tracekeeper.lint', {
+				graph_profile: 'advisory',
+				page_size: 200,
+				...(cursor ? { cursor } : {}),
+			});
+			const maintenance = isRecord(current.maintenance) ? current.maintenance : {};
+			if (Array.isArray(maintenance.candidates)) currentCandidates.push(...maintenance.candidates.filter(isRecord));
+			cursor = typeof maintenance.cursor === 'string' ? maintenance.cursor : '';
+			if (!cursor) break;
+		}
+		if (cursor) throw new Error('Maintenance candidate reconciliation exceeded its bounded page limit.');
+		const requests = await this.readMaintenanceRequests();
+		for (const request of requests.filter((item) => item.valid && (item.status === 'pending' || item.status === 'stale'))) {
+			const currentStatus = request.status === 'stale' ? 'stale' : 'pending';
+			const remains = request.candidates.some((expected) => currentCandidates.some((candidate) => {
+				const paths = Array.isArray(candidate.paths)
+					? candidate.paths.filter((item): item is string => typeof item === 'string').sort()
+					: [];
+				return candidate.category === expected.category
+					&& JSON.stringify([...expected.paths].sort()) === JSON.stringify(paths);
+			}));
+			const file = this.app.vault.getAbstractFileByPath(request.path);
+			if (!(file instanceof TFile)) continue;
+			const persisted = parseMaintenanceRequestMarkdown(await this.app.vault.cachedRead(file));
+			if (!persisted.valid || persisted.request.status !== currentStatus) continue;
+			await this.updateMaintenanceRequestStatus(file, request.requestId, currentStatus, remains ? 'stale' : 'completed');
+		}
+	}
+
+	private async updateMaintenanceRequestStatus(
+		file: TFile,
+		requestId: string,
+		expected: 'pending' | 'stale',
+		next: 'completed' | 'rejected' | 'stale',
+	): Promise<void> {
+		await this.app.vault.process(file, (content) => {
+			const parsed = readFrontmatter(content);
+			if (firstString(parsed.fields, ['request_id']) !== requestId) {
+				throw new Error('Maintenance request identity changed.');
+			}
+			if (firstString(parsed.fields, ['status']) !== expected) {
+				throw new Error('Maintenance request status changed.');
+			}
+			const statusPattern = expected === 'pending' ? '(?:"pending"|pending)' : '(?:"stale"|stale)';
+			return content.replace(new RegExp(`(^---\\s*[\\s\\S]*?^status:\\s*)${statusPattern}(\\s*$)`, 'mu'), `$1"${next}"$2`);
+		});
+	}
+
+	private async readMaintenanceRequests(): Promise<MaintenanceRequestSummary[]> {
+		const folder = this.app.vault.getAbstractFileByPath(TRACEKEEPER_AGENT_REQUESTS_DIR);
+		if (!(folder instanceof TFolder)) return [];
+		const files: TFile[] = [];
+		for (const child of folder.children) if (child instanceof TFile && child.extension.toLowerCase() === 'md') files.push(child);
+		const requests: MaintenanceRequestSummary[] = [];
+		for (const file of files.sort((left, right) => right.stat.mtime - left.stat.mtime || left.path.localeCompare(right.path))) {
+			const content = await this.app.vault.cachedRead(file);
+			const rawFields = parseMarkdown(content).frontmatter.fields;
+			if (rawFields.type !== 'maintenance_request') continue;
+			const parsed = parseMaintenanceRequestMarkdown(content);
+			if (!parsed.valid) {
+				requests.push({
+					path: file.path,
+					requestId: typeof rawFields.request_id === 'string' ? rawFields.request_id : file.basename,
+					status: rawFields.status === 'stale' ? 'stale' : 'pending',
+					valid: false,
+					validationError: parsed.validationError,
+					snapshotGeneration: -1,
+					taskId: '',
+					manifestHash: '',
+					candidates: [],
+				});
+				continue;
+			}
+			const record = parsed.request;
+			requests.push({
+				path: file.path,
+				requestId: record.request_id,
+				status: record.status,
+				valid: true,
+				validationError: '',
+				snapshotGeneration: record.snapshot_generation,
+				taskId: record.task_id ?? '',
+				manifestHash: record.manifest_hash,
+				candidates: record.candidate_manifest,
+			});
+		}
+		return requests.slice(0, 100);
 	}
 
 	async updateMemoryProposalStatus(

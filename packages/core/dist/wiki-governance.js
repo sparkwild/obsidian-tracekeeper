@@ -20,10 +20,10 @@ exports.isWikiPath = isWikiPath;
 const node_crypto_1 = __importDefault(require("node:crypto"));
 const knowledge_architecture_1 = require("./knowledge-architecture");
 exports.WIKI_PROPOSAL_SCHEMA_VERSION = 2;
-exports.MANAGED_RELATIONS_SCHEMA_VERSION = 1;
+exports.MANAGED_RELATIONS_SCHEMA_VERSION = 2;
 exports.WIKI_REVIEW_BATCH_MAX_ITEMS = 100;
 exports.WIKI_REVIEW_BATCH_MAX_BYTES = 2 * 1024 * 1024;
-const START_PATTERN = /<!--\s*tracekeeper:relations:start\s+schema="1"\s+hash="(sha256:[a-f0-9]{64})"\s*-->/g;
+const START_PATTERN = /<!--\s*tracekeeper:relations:start\s+schema="([12])"(?:\s+role="(topic|topic_map)")?\s+hash="(sha256:[a-f0-9]{64})"\s*-->/g;
 const END_PATTERN = /<!--\s*tracekeeper:relations:end\s*-->/g;
 const FORBIDDEN_RELATION_PATH_PATTERN = /[\u0000-\u001f\u007f\[\]|#^]/;
 /**
@@ -47,12 +47,13 @@ const normalizedUniquePaths = (values, predicate) => {
 };
 const wikiLink = (path) => `[[${(0, knowledge_architecture_1.normalizeKnowledgePath)(path).replace(/\.md$/i, '')}]]`;
 const managedPayloadHash = (payload) => `sha256:${node_crypto_1.default.createHash('sha256').update(payload, 'utf8').digest('hex')}`;
+const managedBlockHash = (schemaVersion, role, payload) => managedPayloadHash(schemaVersion === 1 ? payload : `schema=2\nrole=${role}\n${payload}`);
 /**
  * 渲染由 Tracekeeper 独占维护的关系区块。
  *
  * @description 区块使用稳定排序、完整 Vault 相对 wikilink 与内容哈希，便于后续只替换该边界内的关系。
  */
-function renderManagedRelationsBlock(relations) {
+function renderManagedRelationsBlock(relations, role) {
     const parent = relations.parent ? normalizeManagedRelationPath(relations.parent) : '';
     if (parent && !(0, knowledge_architecture_1.isKnowledgeWikiPath)(parent)) {
         throw new Error('Managed Wiki parent must be a Wiki path.');
@@ -67,9 +68,13 @@ function renderManagedRelationsBlock(relations) {
     for (const path of related)
         lines.push(`- related: ${wikiLink(path)}`);
     const payload = lines.join('\n');
-    const hash = managedPayloadHash(payload);
+    const schemaVersion = role ? exports.MANAGED_RELATIONS_SCHEMA_VERSION : 1;
+    const effectiveRole = role ?? 'unknown';
+    const hash = managedBlockHash(schemaVersion, effectiveRole, payload);
     return [
-        `<!-- tracekeeper:relations:start schema="${exports.MANAGED_RELATIONS_SCHEMA_VERSION}" hash="${hash}" -->`,
+        schemaVersion === 2
+            ? `<!-- tracekeeper:relations:start schema="2" role="${role}" hash="${hash}" -->`
+            : `<!-- tracekeeper:relations:start schema="1" hash="${hash}" -->`,
         payload,
         '<!-- tracekeeper:relations:end -->',
     ].join('\n');
@@ -82,10 +87,10 @@ function parseManagedRelationsBlock(content) {
     const starts = [...normalized.matchAll(START_PATTERN)];
     const ends = [...normalized.matchAll(END_PATTERN)];
     if (starts.length === 0 && ends.length === 0) {
-        return { status: 'missing', content: normalized, payload: '', hash: '', start: -1, end: -1 };
+        return { status: 'missing', schemaVersion: null, role: 'unknown', content: normalized, payload: '', hash: '', start: -1, end: -1 };
     }
     if (starts.length !== 1 || ends.length !== 1) {
-        return { status: 'invalid', content: normalized, payload: '', hash: '', start: -1, end: -1 };
+        return { status: 'invalid', schemaVersion: null, role: 'unknown', content: normalized, payload: '', hash: '', start: -1, end: -1 };
     }
     const startMatch = starts[0];
     const endMatch = ends[0];
@@ -93,13 +98,18 @@ function parseManagedRelationsBlock(content) {
     const payloadStart = start + startMatch[0].length;
     const endStart = endMatch.index ?? -1;
     if (start < 0 || endStart <= payloadStart) {
-        return { status: 'invalid', content: normalized, payload: '', hash: '', start: -1, end: -1 };
+        return { status: 'invalid', schemaVersion: null, role: 'unknown', content: normalized, payload: '', hash: '', start: -1, end: -1 };
     }
     const payload = normalized.slice(payloadStart, endStart).replace(/^\n/, '').replace(/\n$/, '');
-    const hash = startMatch[1] || '';
+    const schemaVersion = Number.parseInt(startMatch[1] || '', 10);
+    const role = (startMatch[2] || 'unknown');
+    const hash = startMatch[3] || '';
     const end = endStart + endMatch[0].length;
+    const markerValid = schemaVersion === 1 ? role === 'unknown' : role !== 'unknown';
     return {
-        status: managedPayloadHash(payload) === hash ? 'valid' : 'invalid',
+        status: markerValid && managedBlockHash(schemaVersion, role, payload) === hash ? 'valid' : 'invalid',
+        schemaVersion,
+        role,
         content: normalized,
         payload,
         hash,
@@ -174,9 +184,22 @@ function mergeManagedWikiRelationsBlocks(currentContent, proposedBlocks) {
         relations.push(readManagedWikiRelations(block));
     }
     let parent = null;
+    let role = current.status === 'valid' && current.role !== 'unknown'
+        ? current.role
+        : undefined;
     const sources = [];
     const related = [];
-    for (const relation of relations) {
+    for (let index = 0; index < relations.length; index += 1) {
+        const parsed = index === 0 && current.status === 'valid'
+            ? current
+            : parseManagedRelationsBlock(proposedBlocks[index - (current.status === 'valid' ? 1 : 0)]?.trim() ?? '');
+        if (parsed.status === 'valid' && parsed.role !== 'unknown') {
+            if (role && role !== parsed.role) {
+                throw new Error('Managed relations contain conflicting Wiki roles.');
+            }
+            role = parsed.role;
+        }
+        const relation = relations[index];
         if (relation.parent) {
             if (parent && parent !== relation.parent) {
                 throw new Error('Managed relations contain conflicting parent targets.');
@@ -190,17 +213,17 @@ function mergeManagedWikiRelationsBlocks(currentContent, proposedBlocks) {
         parent,
         sources,
         related,
-    });
+    }, role);
 }
 /**
  * 在不触碰边界外正文的前提下插入或替换托管关系区块。
  */
-function upsertManagedRelationsBlock(content, relations) {
+function upsertManagedRelationsBlock(content, relations, role) {
     const parsed = parseManagedRelationsBlock(content);
     if (parsed.status === 'invalid') {
         throw new Error('Managed relations block is invalid or was edited outside Tracekeeper.');
     }
-    const block = renderManagedRelationsBlock(relations);
+    const block = renderManagedRelationsBlock(relations, role);
     if (parsed.status === 'missing') {
         const base = parsed.content.replace(/\s+$/g, '');
         return base ? `${base}\n\n${block}\n` : `${block}\n`;

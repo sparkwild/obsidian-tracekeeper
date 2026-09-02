@@ -22,3 +22,4 @@ export * from './project-memory';
 export * from './memory-record';
 export * from './memory-lifecycle';
 export * from './lifecycle-diagnostics';
+export * from './maintenance';
