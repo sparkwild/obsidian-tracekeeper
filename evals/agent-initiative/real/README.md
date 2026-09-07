@@ -144,7 +144,7 @@ Per-run files are currently:
 
 The runtime binds to `127.0.0.1` on an ephemeral port and uses a random bearer
 token. This isolated, non-production harness injects that ephemeral token
-directly into its one temporary Codex process so an unattended evaluator does
+through process-specific environment variables into its temporary server and Codex processes so an unattended evaluator does
 not open the interactive product pairing flow. Production Obsidian-hosted setup
 uses local OAuth discovery, authorization code, and PKCE pairing instead. Raw
 stdout, diagnostics, Agent messages, tokens, temporary roots, and user-home
@@ -160,3 +160,26 @@ treated as local evaluation artifacts.
 - Lower `project_identity_recovery_rate`, `duplicate_recall_rate`, `average_tool_calls_per_run`, and `average_tool_calls_before_effective_recall` are better. Other rates are success rates where higher is better.
 - This runner is not a CI gate. Only its local parser/configuration tests belong in ordinary verification.
 - A good result characterizes this client/model/scenario set; it does not prove that every Agent will select the Skill or that every user Vault has adequate knowledge quality.
+
+
+## Frozen-build repair comparison
+
+`compare-builds.mjs` retains the original Skill A/B runner and adds a separate
+six-scenario baseline/candidate comparison. Both sides use the candidate Skill,
+GPT-6 Astra with max reasoning, fresh synthetic Vaults, and their own Runtime and
+index implementation. `--preflight` verifies both loopback hosts without calling
+a model; `--execute` performs the preflight and allows at most twelve model runs,
+including failures, with a 120-second timeout each and no automatic retry.
+
+```bash
+node evals/agent-initiative/real/compare-builds.mjs --baseline-root <frozen-source-root>
+node evals/agent-initiative/real/compare-builds.mjs --preflight --baseline-root <frozen-source-root> --output-dir <new-evidence-directory>
+node evals/agent-initiative/real/compare-builds.mjs --execute --baseline-root <frozen-source-root> --output-dir <another-new-evidence-directory>
+```
+
+Output directories must be new. Results bind both compiled Runtime fingerprints,
+the shared Skill, raw redacted traces, observed tool outputs, usage when available,
+and correctness checks. This small sample is diagnostic, not a statistically
+significant claim or a release gate. No-track, tail Recall, bounded reads,
+changed-note continuation, Memory/maintenance, and direct Auto closeout are fixed
+scenarios. The comparison host is test-only and does not change production auth.

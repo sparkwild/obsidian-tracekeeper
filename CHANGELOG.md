@@ -4,6 +4,23 @@ All notable changes to Tracekeeper will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.1] - Compatibility and Runtime Fixes
+
+### Fixed
+
+- Keep Memory pagination and maintenance candidates valid across their own Agent Activity writes, and reject incomplete Memory snapshots explicitly.
+- Include task-linked direct Auto Memory/Wiki writes in durable closeout through verified operation receipts, and serialize concurrent same-task closeout preparation.
+- Avoid decrypting unrelated historical journals for new retry keys, skip authenticated terminal records during recovery, and isolate damaged recovery candidates.
+- Keep journal writes compatible with v1 readers while retaining authenticated v2 reads; reuse bounded metadata catalogs without expiring retry identities or deleting recovery files.
+- Improve index construction and same-content updates, refresh affected rename/delete references, and handle folder rename/delete events.
+- Rank title matches before Recall candidate truncation, search long-note tails, and return excerpts near matches.
+- Add bounded, hash-consistent note reading windows and reject changed-note continuation.
+- Preserve newer view requests and focused review input during refresh, label historical connection verification accurately, and show bounded read-only historical-reference diagnostics.
+- Preserve historical-diagnostic expansion and keyboard focus across refreshes; reset changed evidence previews to their current state.
+- Resolve verified historical Source migrations in the source view and write managed proposal links as YAML arrays.
+- Apply consistent project-name and project-id checks to unregistered repository paths.
+- Align the companion Skill with bounded note reads, update evaluation authentication, add frozen-build comparison, and add a pinned 0.5.0 upgrade fixture.
+
 ## [0.5.0] - Knowledge Maintenance Lifecycle
 
 ### Added

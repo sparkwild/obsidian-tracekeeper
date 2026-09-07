@@ -1,3 +1,4 @@
+import type { OperationJournalProvider } from './infrastructure/operation-journal-provider';
 import { type OperationFailureInjection, type ProposalTransitionCommand, type ProposalTransitionDecision, type ScanResult, type KnowledgeReadView, type VaultRepository } from '@tracekeeper/core';
 import { type McpPrompt, type McpStructuredToolResult, type McpToolDefinition } from './protocol';
 import { type OperationRecoveryReport } from './application/recovery';
@@ -16,6 +17,7 @@ interface ToolContext {
     defaultVaultRoot?: string;
     vaultConfigDir?: string;
     vaultRepository?: VaultRepository;
+    operationJournalProvider?: OperationJournalProvider;
     knowledgeSnapshotProvider?: (vaultRoot: string) => ScanResult | null;
     knowledgeReadViewProvider?: (vaultRoot: string) => Promise<KnowledgeReadView | null>;
     graphProfile?: unknown;

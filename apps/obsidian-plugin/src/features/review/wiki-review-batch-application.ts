@@ -1,3 +1,4 @@
+import type { OperationJournalProvider } from '@tracekeeper/mcp-runtime';
 import path from 'node:path';
 import { App, TFile } from 'obsidian';
 import {
@@ -179,6 +180,7 @@ interface WikiReviewBatchHost {
 	appendWikiBatchActivity(operationId: string, entry: string): Promise<void>;
 	refreshGovernanceViews(): Promise<void>;
 	getVaultRoot(): string;
+	operationJournalProvider?: OperationJournalProvider;
 }
 
 interface WikiReviewBatchTransitionOwner {
@@ -1326,7 +1328,7 @@ export class WikiReviewBatchApplication {
 	}
 
 	private createJournal(): NodeFileOperationJournal {
-		return new NodeFileOperationJournal({
+		return this.host.operationJournalProvider?.(this.host.getVaultRoot()) ?? new NodeFileOperationJournal({
 			directory: path.join(this.host.getVaultRoot(), TRACEKEEPER_OPERATIONS_DIR),
 		});
 	}

@@ -124,7 +124,7 @@ export class RuntimeRecoveryController {
 
 	async recover(vaultRoot: string): Promise<OperationRecoveryReport> {
 		const records = await this.journal.listRecoverable();
-		const report: OperationRecoveryReport = { recovered: [], failed: [], skipped: [] };
+		const report: OperationRecoveryReport = { recovered: [], failed: [...(this.journal.getRecoveryIssues?.() ?? [])], skipped: [] };
 
 		for (const record of records) {
 			const incompatibleWriteback =

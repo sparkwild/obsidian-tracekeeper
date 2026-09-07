@@ -1,3 +1,4 @@
+import { captureHistoricalDisclosureState, renderHistoricalDiagnostics } from '../observability/historical-record-diagnostics';
 import { ItemView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import {
@@ -96,6 +97,7 @@ export const reviewStatusFailureMessage = (error: unknown): string => {
 };
 
 export class TracekeeperReviewQueueView extends ItemView {
+	private refreshVersion = 0;
 	private activeFilter: ReviewInboxFilter = 'needs_completion';
 	private activeSort: ReviewQueueSort = 'attention';
 	private filterExplicitlySelected = false;
@@ -143,6 +145,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 
 	private async render(snapshot: MemoryReviewQueueSnapshot): Promise<void> {
 		const { contentEl } = this;
+		const disclosureState = captureHistoricalDisclosureState(contentEl);
 		contentEl.empty();
 		contentEl.addClass('tracekeeper-view-root');
 		const actionableProposals = snapshot.proposals.filter((proposal) =>
@@ -186,6 +189,7 @@ export class TracekeeperReviewQueueView extends ItemView {
 		}
 
 		this.renderMaintenanceRequests(contentEl, snapshot.maintenanceRequests ?? []);
+		renderHistoricalDiagnostics(contentEl, snapshot.historicalDiagnostics, ui, disclosureState);
 		if (!this.showingDetail && archiveCandidates.length > 0) {
 			const archiveButton = headerActions.createEl('button', {
 				text: ui('整理已处理记录', 'Organize processed records'),
@@ -447,13 +451,26 @@ export class TracekeeperReviewQueueView extends ItemView {
 		}
 	}
 
+	private hasEditableFocus(): boolean {
+		const active = this.contentEl.ownerDocument?.activeElement;
+		return Boolean(active && this.contentEl.contains(active)
+			&& (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.getAttribute('contenteditable') === 'true'));
+	}
+
+	async onClose(): Promise<void> {
+		this.refreshVersion += 1;
+		await super.onClose();
+	}
+
 	async refresh(options: { automatic?: boolean } = {}): Promise<void> {
-		if (options.automatic && this.showingDetail) {
+		if (options.automatic && (this.showingDetail || this.hasEditableFocus())) {
 			this.automaticRefreshDeferred = true;
 			return;
 		}
+		const version = ++this.refreshVersion;
 		const snapshot = await this.plugin.loadMemoryReviewQueueSnapshot(this.windowOffset);
-		if (options.automatic && this.showingDetail) {
+		if (version !== this.refreshVersion) return;
+		if (options.automatic && (this.showingDetail || this.hasEditableFocus())) {
 			this.automaticRefreshDeferred = true;
 			return;
 		}

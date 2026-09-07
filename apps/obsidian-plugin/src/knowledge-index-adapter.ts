@@ -266,6 +266,10 @@ export class ObsidianKnowledgeIndexAdapter {
 	}
 
 	async applyDelete(file: TAbstractFile): Promise<void> {
+		if ('children' in file) {
+			await this.applyFolderEvent(file.path);
+			return;
+		}
 		if (!isMarkdownFile(file)) {
 			return;
 		}
@@ -276,17 +280,37 @@ export class ObsidianKnowledgeIndexAdapter {
 				this.queuePendingEvent({ kind: 'delete', path: file.path, sequence });
 				return;
 			}
-			await this.index.applySemantic({
-				schemaVersion: NORMALIZED_VAULT_NOTE_VERSION,
-				sequence,
-				kind: 'delete',
-				path: file.path,
-				exists: false,
-			});
+			try {
+				const affected = this.index.deleteAffectedPaths(file.path);
+				if (affected.length > ObsidianKnowledgeIndexAdapter.MAX_PENDING_INDEX_EVENTS) {
+					await this.rebuildThroughEvent({ kind: 'delete', path: file.path, sequence });
+					return;
+				}
+				const refreshed: ScannedNote[] = [];
+				for (const notePath of affected) {
+					if (notePath === file.path) continue;
+					const source = this.findMarkdownFile(notePath);
+					if (source) refreshed.push(await readNativeScannedNote(this.app, this.vaultRoot, source));
+				}
+				await this.index.applySemantic({
+					schemaVersion: NORMALIZED_VAULT_NOTE_VERSION,
+					sequence,
+					kind: 'delete',
+					path: file.path,
+					exists: false,
+				}, refreshed);
+			} catch (error) {
+				if (!(error instanceof MetadataUnavailableError)) throw error;
+				await this.rebuildThroughEvent({ kind: 'delete', path: file.path, sequence });
+			}
 		});
 	}
 
 	async applyRename(file: TAbstractFile, oldPath: string): Promise<void> {
+		if ('children' in file) {
+			await this.applyFolderEvent(oldPath);
+			return;
+		}
 		if (!isMarkdownPath(oldPath)) {
 			if (isMarkdownFile(file)) {
 				await this.applyCreate(file);
@@ -319,7 +343,17 @@ export class ObsidianKnowledgeIndexAdapter {
 				const note = await readNativeScannedNote(this.app, this.vaultRoot, file);
 				this.unavailablePaths.delete(oldPath);
 				this.unavailablePaths.delete(file.path);
-				await this.refreshNativeGraph();
+				const affected = this.index.renameAffectedPaths(oldPath, file.path, note);
+				if (affected.length > ObsidianKnowledgeIndexAdapter.MAX_PENDING_INDEX_EVENTS) {
+					await this.rebuildThroughEvent({ kind: 'rename', path: oldPath, newPath: file.path, sequence });
+					return;
+				}
+				const refreshed: ScannedNote[] = [];
+				for (const notePath of affected) {
+					if (notePath === oldPath || notePath === file.path) continue;
+					const source = this.findMarkdownFile(notePath);
+					if (source) refreshed.push(await readNativeScannedNote(this.app, this.vaultRoot, source));
+				}
 				await this.index.applySemantic({
 					schemaVersion: NORMALIZED_VAULT_NOTE_VERSION,
 					sequence,
@@ -329,26 +363,29 @@ export class ObsidianKnowledgeIndexAdapter {
 					exists: true,
 					contentHash: note.contentHash,
 					note,
-				});
+				}, refreshed);
 			} catch (error) {
 				if (!(error instanceof MetadataUnavailableError)) {
 					throw error;
 				}
-				this.unavailablePaths.delete(oldPath);
-				this.unavailablePaths.add(file.path);
-				await this.index.applySemantic({
-					schemaVersion: NORMALIZED_VAULT_NOTE_VERSION,
-					sequence,
-					kind: 'delete',
-					path: oldPath,
-					exists: false,
-				});
+				await this.rebuildThroughEvent({ kind: 'rename', path: oldPath, newPath: file.path, sequence });
 			}
 		});
 	}
 
 	generateMarkdownLink(target: TFile, sourcePath: string, subpath = '', alias = ''): string {
 		return this.app.fileManager.generateMarkdownLink(target, sourcePath, subpath, alias);
+	}
+
+	private async applyFolderEvent(folderPath: string): Promise<void> {
+		const event: PendingIndexEvent = { kind: 'delete', path: folderPath, sequence: this.allocateSequence() };
+		await this.enqueueEvent(async () => {
+			if (this.shouldQueueEvents()) {
+				this.pendingRescanEvent = laterPendingEvent(this.pendingRescanEvent, event);
+				return;
+			}
+			await this.rebuildThroughEvent(event);
+		});
 	}
 
 	async waitForRename(
@@ -660,7 +697,14 @@ function normalizeNativeEdges(
 	for (const reference of cache.embeds ?? []) {
 		edges.push(normalizeNativeReference(app, sourcePath, content, reference, 'embed', 'body'));
 	}
+	const oldProposalLinks = cache.frontmatter?.proposal_links;
+	const legacyMatches = typeof oldProposalLinks === 'string'
+		? [...oldProposalLinks.matchAll(/\[\[([^\]\n]+)\]\]/g)]
+		: [];
+	const splitLegacyLinks = legacyMatches.length > 1 && typeof oldProposalLinks === 'string'
+		&& oldProposalLinks.replace(/\[\[([^\]\n]+)\]\]/g, '').replace(/[,\s]/g, '') === '';
 	for (const reference of cache.frontmatterLinks ?? []) {
+		if (splitLegacyLinks && reference.key === 'proposal_links') continue;
 		edges.push(normalizeNativeReference(
 			app,
 			sourcePath,
@@ -669,6 +713,15 @@ function normalizeNativeEdges(
 			'frontmatter',
 			'frontmatter'
 		));
+	}
+	if (splitLegacyLinks) {
+		for (const match of legacyMatches) {
+			const [link, displayText] = match[1].split('|');
+			edges.push(normalizeNativeReference(app, sourcePath, content, {
+				key: 'proposal_links', link, original: match[0], displayText,
+				position: cache.frontmatterPosition,
+			}, 'frontmatter', 'frontmatter'));
+		}
 	}
 	for (const reference of cache.referenceLinks ?? []) {
 		edges.push(normalizeNativeReference(app, sourcePath, content, reference, 'reference', 'body'));

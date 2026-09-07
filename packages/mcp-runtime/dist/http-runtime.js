@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StreamableHttpMcpRuntime = exports.DEFAULT_MCP_PORT = void 0;
+const operation_journal_provider_1 = require("./infrastructure/operation-journal-provider");
 const node_buffer_1 = require("node:buffer");
 const node_http_1 = require("node:http");
 const crypto = __importStar(require("node:crypto"));
@@ -73,6 +74,7 @@ class StreamableHttpMcpRuntime {
         if (!options.writebackConfirmationSecret || (typeof options.writebackConfirmationSecret !== 'string' && !(options.writebackConfirmationSecret instanceof Uint8Array))) {
             throw new Error('MCP Runtime requires an explicit writebackConfirmationSecret.');
         }
+        this.operationJournalProvider = options.operationJournalProvider ?? (0, operation_journal_provider_1.createOperationJournalProvider)();
         this.host = options.host || DEFAULT_HOST;
         if (this.host !== DEFAULT_HOST) {
             throw new Error(`MCP Runtime local trust requires host ${DEFAULT_HOST}.`);
@@ -108,6 +110,7 @@ class StreamableHttpMcpRuntime {
             proposalTransitionPort: options.proposalTransitionPort,
             knowledgeSnapshotProvider: options.knowledgeSnapshotProvider,
             knowledgeReadViewProvider: options.knowledgeReadViewProvider,
+            operationJournalProvider: this.operationJournalProvider,
             graphProfile: options.graphProfile,
             memoryRules: options.memoryRules,
             contentLanguage: options.contentLanguage,
@@ -124,6 +127,7 @@ class StreamableHttpMcpRuntime {
             proposalTransitionPort: options.proposalTransitionPort,
             knowledgeSnapshotProvider: options.knowledgeSnapshotProvider,
             knowledgeReadViewProvider: options.knowledgeReadViewProvider,
+            operationJournalProvider: this.operationJournalProvider,
             graphProfile: options.graphProfile,
             memoryRules: options.memoryRules,
             contentLanguage: options.contentLanguage,
@@ -222,6 +226,7 @@ class StreamableHttpMcpRuntime {
         const stopPromise = this.stopServer();
         this.stopPromise = stopPromise;
         return stopPromise.finally(() => {
+            this.operationJournalProvider.clear?.();
             if (this.stopPromise === stopPromise) {
                 this.stopPromise = null;
             }

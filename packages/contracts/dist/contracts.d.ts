@@ -177,7 +177,7 @@ export declare const toolContracts: readonly [{
     readonly outputSchema: ToolOutputSchema;
     readonly resultSchema: ToolOutputSchema;
     readonly name: "tracekeeper.read_note";
-    readonly version: 2;
+    readonly version: 3;
     readonly visibility: "public";
     readonly capability: "vault.read";
     readonly risk: "read-only";
@@ -186,7 +186,7 @@ export declare const toolContracts: readonly [{
     readonly world: "closed";
     readonly workflowRole: "observe";
     readonly useCase: "read_note";
-    readonly description: "[read-only] Read one vault note only after recall excerpts are not enough. Does not write files.";
+    readonly description: "[read-only] Read a bounded note window after recall excerpts are insufficient. Defaults to 16384 characters. Follow next_offset with expected_hash when more content is needed; truncated content is not the complete note.";
     readonly inputSchema: ToolInputSchema;
 }, {
     readonly outputSchema: ToolOutputSchema;

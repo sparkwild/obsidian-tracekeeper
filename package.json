@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-tracekeeper",
-	"version": "0.5.0",
+	"version": "0.5.1",
 	"description": "Connect AI agents to your vault through a local MCP runtime, with scoped recall and governed memory updates.",
 	"private": true,
 	"workspaces": [
@@ -14,6 +14,7 @@
 		"community:check": "node ./scripts/check_community_plugin.mjs && node --test ./scripts/version_compatibility.test.mjs",
 		"eval:agent-initiative": "node ./evals/agent-initiative/evaluator/run-eval.mjs --check-baseline",
 		"eval:agent-initiative:real": "node ./evals/agent-initiative/real/runner.mjs",
+		"eval:agent-builds": "node ./evals/agent-initiative/real/compare-builds.mjs",
 		"eval:agent-initiative:real:test": "node --test ./evals/agent-initiative/real/*.test.mjs",
 		"eval:agent-initiative:compare": "node ./evals/agent-initiative/evaluator/run-eval.mjs --compare --check-baseline --strict",
 		"eval:agent-initiative:test": "node --test ./evals/agent-initiative/evaluator/*.test.mjs",

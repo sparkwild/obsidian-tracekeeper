@@ -1,3 +1,4 @@
+import { captureHistoricalDisclosureState, renderHistoricalDiagnostics } from '../observability/historical-record-diagnostics';
 import { ItemView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import type { SourceRequestRecord } from '../activity/activity-model';
@@ -96,6 +97,7 @@ export const sourceStatusRequestStatusLabel = (status: string): string => {
 };
 
 export class TracekeeperSourceStatusView extends ItemView {
+	private refreshVersion = 0;
 	private query: SourceStatusQuery = { page: 1 };
 
 	constructor(
@@ -131,6 +133,11 @@ export class TracekeeperSourceStatusView extends ItemView {
 		await this.refresh();
 	}
 
+	async onClose(): Promise<void> {
+		this.refreshVersion += 1;
+		await super.onClose();
+	}
+
 	async focus(query: Pick<SourceStatusQuery, 'focusPaths' | 'taskId'>): Promise<void> {
 		this.query = {
 			...this.query,
@@ -143,6 +150,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 
 	private async render(snapshot: SourceStatusSnapshot): Promise<void> {
 		const { contentEl } = this;
+		const disclosureState = captureHistoricalDisclosureState(contentEl);
 		contentEl.empty();
 		contentEl.addClass('tracekeeper-view-root');
 
@@ -178,6 +186,7 @@ export class TracekeeperSourceStatusView extends ItemView {
 		});
 
 		this.renderIndexStatus(contentEl, snapshot);
+		renderHistoricalDiagnostics(contentEl, snapshot.historicalDiagnostics, ui, disclosureState);
 		this.renderMaintenanceCandidates(contentEl, snapshot);
 
 		if (snapshot.focused) {
@@ -394,6 +403,14 @@ export class TracekeeperSourceStatusView extends ItemView {
 		}
 
 		const details = item.createDiv({ cls: 'tracekeeper-detail-grid' });
+		if (record.historicalPaths?.length) {
+			const migrated = item.createEl('details');
+			migrated.createEl('summary', { text: ui(
+				`${record.historicalPaths.length} 个历史引用已迁移到当前资料`,
+				`${record.historicalPaths.length} historical references resolve to this source`
+			) });
+			for (const oldPath of record.historicalPaths) migrated.createEl('p', { text: oldPath });
+		}
 		this.renderDetail(details, ui('资料类型', 'Source type'), sourceStatusKindLabel(record.sourceKind));
 		this.renderDetail(details, ui('捕获模式', 'Capture mode'), sourceStatusCaptureModeLabel(record.mode));
 		this.renderDetail(details, ui('来源标识', 'Source ID'), record.sourceId || ui('未记录', 'Not recorded'));
@@ -631,7 +648,9 @@ export class TracekeeperSourceStatusView extends ItemView {
 	}
 
 	async refresh(): Promise<void> {
+		const version = ++this.refreshVersion;
 		const snapshot = await this.plugin.loadSourceStatusSnapshot(this.query);
+		if (version !== this.refreshVersion) return;
 		await this.render(snapshot);
 	}
 }

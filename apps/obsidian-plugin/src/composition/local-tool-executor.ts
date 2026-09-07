@@ -16,6 +16,7 @@ export interface LocalToolExecutorContext {
 	vaultConfigDir: string;
 	vaultRepository: VaultRepository;
 	proposalTransitionPort: ProposalTransitionPort;
+	operationJournalProvider?: ToolInvocationContext['operationJournalProvider'];
 	knowledgeSnapshotProvider: (requestedVaultRoot: string) => ScanResult | null;
 	knowledgeReadViewProvider: (requestedVaultRoot: string) => Promise<KnowledgeReadView | null>;
 	graphProfile: string;
@@ -75,7 +76,7 @@ export class LocalToolExecutor {
 	private readonly sessionId = randomUUID();
 
 	constructor(private readonly options: LocalToolExecutorOptions) {
-		this.runtimeVersion = options.runtimeVersion?.trim() || '0.5.0';
+		this.runtimeVersion = options.runtimeVersion?.trim() || '0.5.1';
 	}
 
 	async executeLocalTool(
@@ -91,6 +92,7 @@ export class LocalToolExecutor {
 			proposalTransitionPort: context.proposalTransitionPort,
 			knowledgeSnapshotProvider: context.knowledgeSnapshotProvider,
 			knowledgeReadViewProvider: context.knowledgeReadViewProvider,
+			operationJournalProvider: context.operationJournalProvider,
 			graphProfile: context.graphProfile,
 			memoryRules: context.memoryRules,
 			contentLanguage: context.contentLanguage,
@@ -127,6 +129,7 @@ export class LocalToolExecutor {
 			proposalTransitionPort: context.proposalTransitionPort,
 			knowledgeSnapshotProvider: context.knowledgeSnapshotProvider,
 			knowledgeReadViewProvider: context.knowledgeReadViewProvider,
+			operationJournalProvider: context.operationJournalProvider,
 			graphProfile: context.graphProfile,
 			memoryRules: context.memoryRules,
 			contentLanguage: context.contentLanguage,

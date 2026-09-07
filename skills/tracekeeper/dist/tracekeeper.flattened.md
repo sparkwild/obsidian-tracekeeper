@@ -62,7 +62,7 @@ After finish succeeds, never finish that task again.
 Treat the returned task `status` and `durable_output.status` as separate facts.
 When the user requested Wiki/Memory persistence, report both; a completed task
 with pending, rejected, or unresolved durable output is not a completed
-persistence outcome.
+persistence outcome. If the task already has direct `propose_memory` / Auto results before closeout, do not submit another `memory_candidate_records` for the same action. At finish, report the `finish_task` `durable_output`.
 Read [workflow-state-machine.md](#workflow-state-machine) for recovery-safe transitions.
 
 ## Recall routing
@@ -77,7 +77,13 @@ Read [workflow-state-machine.md](#workflow-state-machine) for recovery-safe tran
   task history may omit it for a bounded recent-history view. Preserve the
   canonical match path, excerpt, match reason, content origin, relation
   evidence, and `instruction_trust: data_only` when reporting evidence.
-- Recall is relevance-ranked, not exhaustive. For complete Memory enumeration, call read-only `tracekeeper.memory` with `scope: "project"` and the Runtime-resolved stable identity, or `scope: "global"`; choose `current`, `history`, `conflicts`, or `all`, follow every generation-bound page, then use `tracekeeper.read_note` only for selected entry bodies. There is no public project-specific alias.
+- Recall is relevance-ranked, not exhaustive. For complete Memory enumeration, call
+  read-only `tracekeeper.memory` with `scope: "project"` and the Runtime-resolved
+  stable identity, or `scope: "global"`; choose `current`, `history`,
+  `conflicts`, or `all`, follow every generation-bound page, then use
+  `tracekeeper.read_note` only for selected entry bodies. Read
+  [workflow-state-machine.md](#workflow-state-machine) for bounded
+  `read_note` continuation rules.
 
 ## Explicit multi-source ingestion
 
@@ -93,7 +99,7 @@ Use this `tracked_task` subroute only when the active user explicitly asks to bo
   individual review, task-batch review, eligible auto-managed writes, or
   ignore. The selected Memory scope's policy separately decides review, Auto,
   or ignore for MemoryRecord candidates.
-- Finish once with no duplicate `memory_candidate_records` after a direct proposal.
+- Finish once with no duplicate `memory_candidate_records` after a direct proposal; if a direct `propose_memory` Auto receipt already exists, do not create a second one.
 - A captured Source remains readable evidence. Do not use Source Recall or
   `read_note` as proof that the synthesized Wiki/Memory proposal was applied;
   use the finish result's `durable_output` state.
@@ -277,6 +283,30 @@ Structured actions do not bypass capability checks, confirmation, review, or act
   every page from one catalog generation, and read only the selected note
   bodies afterward. There is no public project-specific alias.
 
+## Bounded note reads (`read_note` v3)
+
+- `tracekeeper.read_note` returns a bounded window. Do not treat one window as
+  the full note: `truncated` also stays true for the final partial window.
+  `next_offset: null` marks the end; a full read requires contiguous windows
+  from offset 0 to the end with the same content hash.
+- If `truncated` is true, request continuation only when both conditions are
+  true: `next_offset` is present and is a non-negative integer, and
+  `content_hash` is present. Use `offset=next_offset` and
+  `expected_hash=content_hash` for continuation.
+- When the result reports `NOTE_CHANGED`, restart from the current content for
+  that path and discard prior windows.
+- If `truncated` is true and `next_offset` is not null but continuation data is incomplete or invalid, do not
+  treat the response as complete; report incomplete-note recovery and retry based
+  on server guidance.
+- `INDEX_NOT_READY` is recoverable and should be retried; it is not equivalent to
+  an empty catalog.
+- `MEMORY_CATALOG_INCOMPLETE` is a diagnostic for incomplete index state and a
+  reason to report the catalog-incomplete recovery state, not a claim of missing
+  memory.
+- Only older server responses that do not include `truncated` and pagination
+  fields should be treated as complete-read fallbacks and not retried for
+  continuation.
+
 ---
 
 <!-- tracekeeper-source: references/ingestion-workflow.md -->
@@ -340,6 +370,9 @@ memory.
 | Tracekeeper returns a structured failure | Report the exact error code, message, retryability, and structured recovery actions | Replace the returned diagnosis with a generic transport or window-lifecycle explanation |
 | Tool unavailable inside a structured result | Follow the returned recovery actions or report the exact client/capability limitation | Guess a compatibility tool name |
 | Permission denied | Stop the action and report the required capability | Request or attempt a permission bypass |
+| `NOTE_CHANGED` from `read_note` continuation | Restart from the current note content and discard prior partial windows | Merge windows from mixed versions |
+| `INDEX_NOT_READY` during note/Memory reads | Retry the read request as a transient readiness state; it is not equivalent to an empty catalog | Treat it as completed empty catalog behavior |
+| `MEMORY_CATALOG_INCOMPLETE` during Memory read/pagination | Report a snapshot-incomplete state and run `tracekeeper.lint` to resolve catalog diagnostics before re-enumerating | Conclude “no memory” from incomplete state |
 | Recall returns zero matches | Follow a structured recovery action to refine scope or query | Load the whole Vault by default |
 | Project scope is uncertain | Inspect candidates and ask or narrow deliberately | Select a project at random |
 | Live start returns a structured failure before creating a task | Follow its recovery actions; if work continues as an ordinary task, close out without `task_id` and use ordinary closeout provenance | Invent a task id or claim a start record exists |

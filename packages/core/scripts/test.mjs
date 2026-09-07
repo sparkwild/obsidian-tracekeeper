@@ -5312,6 +5312,8 @@ async function runKnowledgeReadIndexTests() {
 	const modifiedRebuild = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
 	await modifiedRebuild.rebuild(characterizationScan(vaultRoot, [modifiedTarget, source, unrelated]));
 	assert.deepEqual(normalizeReadView(modifiedView), normalizeReadView(await modifiedRebuild.readView()));
+	assert.match(initialView.contentReader.excerpt(targetPath, ['Target'], 200), /Target body/);
+	assert.match(modifiedView.contentReader.excerpt(targetPath, ['Changed'], 200), /Changed body/);
 
 	const dynamicSource = scannedCharacterizationNote('01_knowledge/wiki/dynamic-source.md', '[[Dynamic Alias]]');
 	const dynamicTarget = scannedCharacterizationNote('01_knowledge/wiki/dynamic-target.md', '---\naliases: [Dynamic Alias]\n---\n# Dynamic');
@@ -5331,6 +5333,28 @@ async function runKnowledgeReadIndexTests() {
 	const deleteRebuild = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
 	await deleteRebuild.rebuild(characterizationScan(vaultRoot, [dynamicSource, unrelated]));
 	assert.deepEqual(normalizeReadView(afterDelete), normalizeReadView(await deleteRebuild.readView()));
+
+	const incomingSource = scannedCharacterizationNote('01_knowledge/wiki/incoming-source.md', '[[dynamic-source]]');
+	const batchedDelete = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+	await batchedDelete.rebuild(characterizationScan(vaultRoot, [dynamicTarget, dynamicSource, incomingSource]));
+	const cachedImpact = batchedDelete.deleteAffectedPaths(dynamicTarget.relativePath);
+	assert.equal(cachedImpact.includes(dynamicSource.relativePath), true);
+	// 对外返回值和缓存隔离，调用方不能缩小删除影响范围。
+	cachedImpact.length = 0;
+	await batchedDelete.applyScanned({
+		kind: 'delete', path: dynamicTarget.relativePath, sequence: 1, fileVersion: '',
+	}, null, [dynamicSource]);
+	const batchedSnapshot = await batchedDelete.snapshot();
+	assert.deepEqual(batchedSnapshot.notes.get(dynamicSource.relativePath).backlinks, [incomingSource.relativePath]);
+	const batchedRebuild = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+	await batchedRebuild.rebuild(characterizationScan(vaultRoot, [dynamicSource, incomingSource]));
+	assert.deepEqual(normalizeReadView(await batchedDelete.readView()), normalizeReadView(await batchedRebuild.readView()));
+	const invalidatedImpact = new knowledgeIndexModule.InMemoryKnowledgeIndex({ vaultRoot });
+	await invalidatedImpact.rebuild(characterizationScan(vaultRoot, [dynamicTarget, unrelated]));
+	invalidatedImpact.deleteAffectedPaths(dynamicTarget.relativePath);
+	await invalidatedImpact.applyScanned({ kind: 'create', path: dynamicSource.relativePath, fileVersion: '', sequence: 1 }, dynamicSource);
+	await invalidatedImpact.applyScanned({ kind: 'delete', path: dynamicTarget.relativePath, fileVersion: '', sequence: 2 });
+	assert.deepEqual((await invalidatedImpact.readView()).graph.outgoing.get(dynamicSource.relativePath), []);
 
 	const memoryPath = '01_knowledge/memory/global/memory-read-index.md';
 	const memoryMarkdown = memoryRecordModule.buildMemoryRecord({

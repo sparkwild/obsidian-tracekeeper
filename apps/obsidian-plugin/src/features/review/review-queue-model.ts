@@ -1,3 +1,4 @@
+import type { HistoricalDiagnostics } from '../observability/historical-record-diagnostics';
 import {
 	MaintenanceCandidateV1,
 	TRACEKEEPER_REVIEW_QUEUE_DIR,
@@ -153,6 +154,7 @@ export const buildReviewQueueBatchGroups = (
 };
 
 export interface MemoryReviewQueueSnapshot {
+	historicalDiagnostics?: HistoricalDiagnostics;
 	proposals: MemoryProposalRecord[];
 	totalProposalCount: number;
 	windowOffset: number;

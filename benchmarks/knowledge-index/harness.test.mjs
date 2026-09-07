@@ -397,6 +397,7 @@ test('tiny harness measures separate phases, converges, retains no fixture, and 
 		assert.equal(result.sample.incremental_events.length, 16);
 		assert.equal(result.sample.incremental_events.every((event) => event.status === 'passed'), true);
 		assert.equal(result.sample.recall.length, 6);
+		assert.ok(result.sample.recall.every((row) => row.read_path === 'knowledge_read_view'));
 		assert.equal(result.sample.replay.status, 'unavailable');
 		assert.match(result.sample.replay.reason, /does not expose direct/u);
 		assert.equal(result.fixtureManifest.note_count, 40);

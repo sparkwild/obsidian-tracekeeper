@@ -34,6 +34,7 @@ import { classifyProjectMemoryNote } from './project-memory';
 import {
 	KNOWLEDGE_GLOBAL_MEMORY_DIR,
 	LEGACY_MEMORY_DIRS,
+	TRACEKEEPER_AGENT_ACTIVITY_DIR,
 } from './knowledge-architecture';
 import {
 	parseManagedRelationsBlock,
@@ -157,6 +158,7 @@ export interface KnowledgeContentRead {
 export interface KnowledgeContentReader {
 	readonly generation: number;
 	read(notePath: VaultPath): Promise<KnowledgeContentRead | null>;
+	excerpt?(notePath: VaultPath, terms: readonly string[], maxLength: number): string;
 }
 
 export interface KnowledgeReadView {
@@ -164,6 +166,8 @@ export interface KnowledgeReadView {
 	source: 'index' | 'filesystem_scan';
 	createdAt: string;
 	generation: number;
+	/** 活动日志仍进入快照，但不使知识分页或维护候选失效。 */
+	knowledge_generation?: number;
 	event_sequence: number;
 	index_state: KnowledgeIndexState;
 	catalog: ReadonlyMap<VaultPath, KnowledgeCatalogEntry>;
@@ -181,6 +185,7 @@ export interface KnowledgeSnapshot {
 	version: string;
 	createdAt: string;
 	generation: number;
+	knowledge_generation?: number;
 	event_sequence: number;
 	index_state: KnowledgeIndexState;
 	notes: ReadonlyMap<VaultPath, IndexedKnowledgeNote>;
@@ -221,6 +226,7 @@ interface InternalKnowledgeState {
 	graph: KnowledgeGraphSnapshot;
 	scopes: KnowledgeScopeIndex;
 	generation: number;
+	knowledgeGeneration: number;
 	eventSequence: number;
 	indexState: KnowledgeIndexState;
 	lastEvent: VaultIndexEvent | null;
@@ -235,8 +241,12 @@ interface InternalKnowledgeState {
 
 const NOTES_EXTENSIONS = new Set(['.md', '.markdown']);
 const SNIPPET_MAX_LENGTH = 160;
-const MAX_LEXICAL_TERMS_PER_NOTE = 512;
 const DEFAULT_MAX_INCREMENTAL_RENAME_IMPACT = 256;
+
+function isActivityPath(notePath: string): boolean {
+	const normalized = normalizeVaultRelativePath(notePath);
+	return normalized === TRACEKEEPER_AGENT_ACTIVITY_DIR || normalized.startsWith(`${TRACEKEEPER_AGENT_ACTIVITY_DIR}/`);
+}
 
 export function computeFileVersion(size: number, modifiedAt: string): FileVersion {
 	return `${modifiedAt}|${size}`;
@@ -408,6 +418,7 @@ function snapshotToReadonly(state: InternalKnowledgeState): KnowledgeSnapshot {
 		version: KNOWLEDGE_INDEX_VERSION,
 		createdAt: state.createdAt,
 		generation: state.generation,
+		knowledge_generation: state.knowledgeGeneration,
 		event_sequence: state.eventSequence,
 		index_state: state.indexState,
 		notes: new Map(Array.from(state.notes.entries()).map(([notePath, note]) => [notePath, cloneNote(note)])),
@@ -588,7 +599,7 @@ function lexicalTerms(note: IndexedKnowledgeNote): string[] {
 	const terms = new Set<string>();
 	const add = (value: string): void => {
 		const normalized = value.normalize('NFC').trim().toLocaleLowerCase('en-US');
-		if (normalized && terms.size < MAX_LEXICAL_TERMS_PER_NOTE) terms.add(normalized);
+		if (normalized) terms.add(normalized);
 	};
 	for (const value of [...note.searchTokens, note.title, ...note.aliases, ...note.tags]) {
 		for (const token of value.split(/[^\p{L}\p{N}_-]+/u)) add(token);
@@ -597,7 +608,6 @@ function lexicalTerms(note: IndexedKnowledgeNote): string[] {
 			for (const width of [2, 3]) {
 				for (let offset = 0; offset + width <= characters.length; offset += 1) {
 					add(characters.slice(offset, offset + width).join(''));
-					if (terms.size >= MAX_LEXICAL_TERMS_PER_NOTE) break;
 				}
 			}
 		}
@@ -667,10 +677,16 @@ function removePosting(postings: Map<string, readonly string[]>, term: string, n
 }
 
 function buildLexicalPostings(catalog: ReadonlyMap<VaultPath, KnowledgeCatalogEntry>): Map<string, readonly VaultPath[]> {
-	const postings = new Map<string, readonly VaultPath[]>();
+	const postings = new Map<string, VaultPath[]>();
 	for (const [notePath, entry] of catalog) {
-		for (const term of entry.searchTokens) addPosting(postings, term, notePath);
+		for (const term of entry.searchTokens) {
+			const paths = postings.get(term) ?? [];
+			paths.push(notePath);
+			postings.set(term, paths);
+		}
 	}
+	// 每篇笔记的词项已去重；原地排序避免同时保留两套完整 postings 数组。
+	for (const paths of postings.values()) paths.sort();
 	return new Map([...postings.entries()].sort(([left], [right]) => left.localeCompare(right)));
 }
 
@@ -996,7 +1012,7 @@ function updateKnowledgeGraphIncrementally(
 			affectedTargets.add(targetPath);
 		}
 	}
-	for (const notePath of previousNotes.keys()) {
+	for (const notePath of incoming.keys()) {
 		if (!nextNotes.has(notePath) && (incoming.get(notePath)?.size ?? 0) === 0) incoming.delete(notePath);
 	}
 	return {
@@ -1032,6 +1048,7 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 	private sourceNotes = new Map<VaultPath, ScannedNote>();
 	private sourceErrors: ScanResult['errors'] = [];
 	private writeChain: Promise<void> = Promise.resolve();
+	private deleteImpact: { path: string; generation: number; paths: readonly string[] } | null = null;
 
 	constructor(options: KnowledgeIndexOptions) {
 		this.vaultRoot = resolveVaultRoot(options.vaultRoot);
@@ -1051,6 +1068,7 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 				byTag: new Map(),
 			},
 			generation: 0,
+			knowledgeGeneration: 0,
 			eventSequence: 0,
 			indexState: 'initializing',
 			lastEvent: null,
@@ -1080,6 +1098,8 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 
 	async readView(): Promise<KnowledgeReadView> {
 		const generation = this.state.generation;
+		// 写入会替换 notes Map；保留本代引用即可提供稳定片段，无需逐次复制全库正文映射。
+		const noteContents = this.state.notes;
 		const catalog = new Map(
 			[...this.state.catalog].map(([notePath, entry]) => [notePath, cloneCatalogEntry(entry)])
 		);
@@ -1088,6 +1108,7 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			source: 'index',
 			createdAt: this.state.createdAt,
 			generation,
+			knowledge_generation: this.state.knowledgeGeneration,
 			event_sequence: this.state.eventSequence,
 			index_state: this.state.indexState,
 			catalog,
@@ -1107,6 +1128,14 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			contentReader: {
 				generation,
 				read: async (notePath: VaultPath) => this.readContentForView(generation, catalog, notePath),
+				excerpt: (notePath, terms, maxLength) => {
+					const content = noteContents.get(normalizeVaultPath(notePath))?.content ?? '';
+					const lower = content.toLocaleLowerCase('en-US');
+					const hits = [...terms].sort((a, b) => b.length - a.length)
+						.map((term) => lower.indexOf(term.toLocaleLowerCase('en-US'))).filter((offset) => offset >= 0);
+					const start = Math.max(0, (hits[0] ?? 0) - Math.floor(maxLength / 4));
+					return `${start > 0 ? '…' : ''}${content.slice(start, start + maxLength)}${start + maxLength < content.length ? '…' : ''}`;
+				},
 			},
 		};
 	}
@@ -1149,6 +1178,7 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 				graph,
 				scopes,
 				generation,
+				knowledgeGeneration: this.state.knowledgeGeneration + 1,
 				eventSequence: this.state.eventSequence,
 				indexState: 'ready',
 				lastEvent: this.state.lastEvent,
@@ -1188,7 +1218,7 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 		await this.applyScanned(normalized, note);
 	}
 
-	async applySemantic(event: VaultSemanticEvent): Promise<void> {
+	async applySemantic(event: VaultSemanticEvent, refreshedNotes: readonly NormalizedVaultNote[] = []): Promise<void> {
 		if (
 			event.schemaVersion !== NORMALIZED_VAULT_NOTE_VERSION ||
 			!Number.isSafeInteger(event.sequence) ||
@@ -1237,7 +1267,7 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 					exists: event.exists,
 					contentHash: event.contentHash,
 			  };
-		await this.applyScanned(compatibilityEvent, note);
+		await this.applyScanned(compatibilityEvent, note, refreshedNotes.map((item) => scannedNoteFromNormalized(item, this.vaultRoot)));
 	}
 
 	async advanceEventSequenceAfterRebuild(sequence: number): Promise<void> {
@@ -1251,7 +1281,7 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 		});
 	}
 
-	async applyScanned(event: VaultIndexEvent, note?: ScannedNote | null): Promise<void> {
+	async applyScanned(event: VaultIndexEvent, note?: ScannedNote | null, refreshedNotes: readonly ScannedNote[] = []): Promise<void> {
 		await this.enqueueWrite(async () => {
 			const now = new Date().toISOString();
 			const normalized = normalizeVaultEvent(event);
@@ -1265,14 +1295,24 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			}
 
 			let changed = false;
+			let refreshedApplied = false;
 			if (normalized.kind === 'create' || normalized.kind === 'modify') {
 				changed = await this.applyCreateOrModify(normalized, note ?? null);
 			} else if (normalized.kind === 'delete') {
-				changed = await this.applyDelete(normalized);
+				changed = await this.applyDelete(normalized, refreshedNotes);
+				refreshedApplied = changed;
 			} else {
 				changed = await this.applyRename(normalized, note ?? null);
 			}
 			this.clearRecoveredSourceErrors(normalized, note ?? null);
+			for (const refreshed of refreshedNotes) {
+				const refreshEvent: ModifyVaultIndexEvent = {
+					kind: 'modify', path: refreshed.relativePath, exists: true, contentHash: refreshed.contentHash,
+					fileVersion: computeFileVersion(refreshed.size, refreshed.modifiedAt),
+				};
+				if (!refreshedApplied) changed = await this.applyCreateOrModify(refreshEvent, refreshed) || changed;
+				this.clearRecoveredSourceErrors(refreshEvent, refreshed);
+			}
 
 			if (changed) {
 				this.state.lastEvent = {
@@ -1281,6 +1321,12 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 				};
 				this.state.createdAt = now;
 				this.state.generation += 1;
+				const paths = normalized.kind === 'rename'
+					? [normalized.path, normalized.newPath]
+					: [normalized.path];
+				if (paths.some((notePath) => !isActivityPath(notePath))) {
+					this.state.knowledgeGeneration += 1;
+				}
 				this.state.eventSequence = normalized.sequence ?? this.state.eventSequence + 1;
 				this.state.memory = buildMemoryIndex(this.state.notes, this.state.generation, now);
 			} else if (normalized.sequence !== undefined) {
@@ -1304,6 +1350,26 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			}
 		);
 		return next;
+	}
+
+	/** 删除目标后，原生引用可能变为未解析或重新指向同名文件。 */
+	deleteAffectedPaths(notePath: string): readonly string[] {
+		notePath = normalizeVaultPath(notePath);
+		const next = new Map(this.state.notes);
+		next.delete(notePath);
+		const paths = [...collectAffectedSources(this.state.notes, next, this.state.notes.get(notePath) ?? null, null, [notePath])].sort();
+		this.deleteImpact = { path: notePath, generation: this.state.generation, paths };
+		return [...paths];
+	}
+
+	/** 返回改名可能影响的引用源，供原生适配器在同一次事件中刷新元数据。 */
+	renameAffectedPaths(oldPath: string, newPath: string, note: ScannedNote): readonly string[] {
+		const oldNote = this.state.notes.get(oldPath) ?? null;
+		const newNote = toIndexedKnowledgeNote(note);
+		const next = new Map(this.state.notes);
+		next.delete(oldPath);
+		next.set(newPath, newNote);
+		return [...collectAffectedSources(this.state.notes, next, oldNote, newNote, [oldPath, newPath])].sort();
 	}
 
 	private async readContentForView(
@@ -1375,9 +1441,12 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			if (event.contentHash && indexed.contentHash !== event.contentHash) {
 				return false;
 			}
+			if (existing && hasSameSemanticState(existing, indexed)) {
+				return false;
+			}
 			const candidateNotes = new Map(this.state.notes);
 			candidateNotes.set(normalizedPath, indexed);
-			const resolvedCandidate = resolveIndexedNoteEdges(candidateNotes).get(normalizedPath);
+			const resolvedCandidate = resolveAffectedNoteEdges(candidateNotes, new Set([normalizedPath])).get(normalizedPath);
 			if (existing && resolvedCandidate && hasSameSemanticState(existing, resolvedCandidate)) {
 				return false;
 			}
@@ -1390,14 +1459,15 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			}
 
 			const nextNotes = new Map(this.state.notes);
-			nextNotes.set(normalizedPath, indexed);
+			const resolvedNote = resolvedCandidate ?? indexed;
+			nextNotes.set(normalizedPath, resolvedNote);
 			this.sourceNotes.set(normalizedPath, cloneScannedNote(scanned));
-			this.updateIncrementally(nextNotes, existing ?? null, indexed, [normalizedPath]);
+			this.updateIncrementally(nextNotes, existing ?? null, resolvedNote, [normalizedPath]);
 			return true;
 		});
 	}
 
-	private applyDelete(event: DeleteVaultIndexEvent): Promise<boolean> {
+	private applyDelete(event: DeleteVaultIndexEvent, refreshedNotes: readonly ScannedNote[] = []): Promise<boolean> {
 		return Promise.resolve().then(() => {
 			const normalizedPath = normalizeVaultPath(event.path);
 			const existing = this.state.notes.get(normalizedPath);
@@ -1408,7 +1478,31 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			const nextNotes = new Map(this.state.notes);
 			nextNotes.delete(normalizedPath);
 			this.sourceNotes.delete(normalizedPath);
-			this.updateIncrementally(nextNotes, existing, null, [normalizedPath]);
+			const refreshedPairs: Array<{ previous: IndexedKnowledgeNote | null; next: IndexedKnowledgeNote }> = [];
+			for (const scanned of refreshedNotes) {
+				const notePath = normalizeVaultPath(scanned.relativePath);
+				if (notePath === normalizedPath) continue;
+				const previous = this.state.notes.get(notePath) ?? null;
+				const next = { ...toIndexedKnowledgeNote(scanned), backlinks: previous?.backlinks ?? [] };
+				if (previous && Date.parse(next.modifiedAt) < Date.parse(previous.modifiedAt)) continue;
+				nextNotes.set(notePath, next);
+				this.sourceNotes.set(notePath, cloneScannedNote(scanned));
+				refreshedPairs.push({ previous, next });
+			}
+			const impact = this.deleteImpact;
+			this.deleteImpact = null;
+			const affected = impact?.path === normalizedPath && impact.generation === this.state.generation
+				? new Set(impact.paths)
+				: collectAffectedSources(this.state.notes, nextNotes, existing, null, [normalizedPath]);
+			for (const pair of refreshedPairs) {
+				affected.add(pair.next.path);
+				if (!isDeepStrictEqual(noteLookupIdentities(pair.previous), noteLookupIdentities(pair.next))) {
+					for (const source of collectAffectedSources(this.state.notes, nextNotes, pair.previous, pair.next, [pair.next.path])) affected.add(source);
+				}
+			}
+			// 所有受影响的原生引用一起更新派生图，避免每个入链源重算一次全图。
+			this.updateIncrementally(nextNotes, existing, null, [normalizedPath], affected);
+			for (const pair of refreshedPairs) this.updateCatalogScopesAndPostings(pair.previous, pair.next, [pair.next.path]);
 			return true;
 		});
 	}
@@ -1506,6 +1600,16 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 		changedPaths: readonly string[],
 		knownAffected?: ReadonlySet<string>
 	): void {
+		if (oldNote && newNote && oldNote.path === newNote.path
+			&& isDeepStrictEqual(noteLookupIdentities(oldNote), noteLookupIdentities(newNote))
+			&& isDeepStrictEqual(oldNote.edges, newNote.edges)) {
+			notes.set(newNote.path, { ...newNote, backlinks: oldNote.backlinks });
+			this.updateCatalogScopesAndPostings(oldNote, newNote, changedPaths);
+			this.state.notes = notes;
+			this.state.lastUpdate = { mode: 'incremental', affectedPaths: [...changedPaths], reason: null };
+			this.state.warnings = [];
+			return;
+		}
 		const affected = knownAffected ?? collectAffectedSources(this.state.notes, notes, oldNote, newNote, changedPaths);
 		const resolvedNotes = resolveAffectedNoteEdges(notes, affected);
 		const graphUpdate = updateKnowledgeGraphIncrementally(this.state.graph, this.state.notes, resolvedNotes, affected);
@@ -1535,6 +1639,11 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 		newNote: IndexedKnowledgeNote | null,
 		changedPaths: readonly string[]
 	): void {
+		if (oldNote && newNote && oldNote.path === newNote.path
+			&& oldNote.contentHash === newNote.contentHash && oldNote.fileVersion === newNote.fileVersion
+			&& oldNote.title === newNote.title && oldNote.type === newNote.type
+			&& isDeepStrictEqual(oldNote.frontmatter, newNote.frontmatter)
+			&& isDeepStrictEqual(oldNote.aliases, newNote.aliases) && isDeepStrictEqual(oldNote.tags, newNote.tags)) return;
 		const catalog = new Map(this.state.catalog);
 		const postings = new Map(this.state.lexicalPostings);
 		const byType = new Map(this.state.scopes.byType);
@@ -1594,6 +1703,7 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 				byTag: new Map(snapshot.scopes.byTag),
 			},
 			generation: snapshot.generation,
+			knowledgeGeneration: snapshot.knowledge_generation ?? snapshot.generation,
 			eventSequence: snapshot.event_sequence,
 			indexState: snapshot.index_state,
 			lastEvent: snapshot.last_event,

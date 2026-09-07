@@ -494,7 +494,7 @@ export const toolContracts = [
 	},
 	{
 		name: 'tracekeeper.read_note',
-		version: 2,
+		version: 3,
 		visibility: 'public',
 		capability: 'vault.read',
 		risk: 'read-only',
@@ -504,9 +504,12 @@ export const toolContracts = [
 		workflowRole: 'observe',
 		useCase: 'read_note',
 		description:
-			'[read-only] Read one vault note only after recall excerpts are not enough. Does not write files.',
+			'[read-only] Read a bounded note window after recall excerpts are insufficient. Defaults to 16384 characters. Follow next_offset with expected_hash when more content is needed; truncated content is not the complete note.',
 		inputSchema: withToolInput({
 			path: { type: 'string', description: 'Vault-relative note path.' },
+			offset: { type: 'integer', minimum: 0, description: 'Character offset returned by next_offset; default 0.' },
+			max_chars: { type: 'integer', minimum: 1, maximum: 65536, description: 'Maximum characters in this window; default 16384.' },
+			expected_hash: { type: 'string', description: 'content_hash from the previous window; rejects a changed note.' },
 			recall_id: {
 				type: 'string',
 				description: 'Optional recall correlation id returned by tracekeeper.recall.',

@@ -289,7 +289,7 @@ export interface ProposeMemoryApplicationDependencies {
 		proposalId: string,
 		operationId: string
 	): Promise<void>;
-	updateTaskMemoryWrite(taskId: string | null, path: string): Promise<void>;
+	updateTaskMemoryWrite(taskId: string | null, path: string, operationId?: string): Promise<void>;
 	updateTaskProposalReference(
 		taskId: string,
 		proposal: { proposalId: string; path: string; linkTarget: string }
@@ -969,7 +969,7 @@ export class ProposeMemoryApplicationService {
 						proposal_id: immutable.memory_id,
 						proposal_path: immutable.path,
 					};
-					await dependencies.updateTaskMemoryWrite(taskId, immutable.path);
+					await dependencies.updateTaskMemoryWrite(taskId, immutable.path, identity.operationId);
 					return {
 						ok: true,
 						tool: 'tracekeeper.propose_memory',
@@ -1030,7 +1030,7 @@ export class ProposeMemoryApplicationService {
 					effect: writebackEffect,
 					expectedManagedRelationsHash: operationPayload.expectedManagedRelationsHash,
 				});
-			await dependencies.updateTaskMemoryWrite(taskId, written.path);
+			await dependencies.updateTaskMemoryWrite(taskId, written.path, identity.operationId);
 			return {
 				ok: true,
 				tool: 'tracekeeper.propose_memory' as const,

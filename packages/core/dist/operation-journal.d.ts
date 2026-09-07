@@ -23,7 +23,11 @@ export interface OperationJournal {
     loadByIdempotencyKey<TResult = unknown>(idempotencyKey: string): Promise<OperationRecord<TResult> | null>;
     loadById<TResult = unknown>(operationId: string): Promise<OperationRecord<TResult> | null>;
     listRecoverable<TResult = unknown>(): Promise<OperationRecord<TResult>[]>;
-    acquireLock?(idempotencyKey: string): Promise<() => Promise<void>>;
+    getRecoveryIssues?(): ReadonlyArray<{
+        operation_id: string;
+        error: string;
+    }>;
+    acquireLock?(idempotencyKey: string, domain?: 'idempotency' | 'finish-preparation'): Promise<() => Promise<void>>;
     claim?<TResult = unknown>(record: OperationRecord<TResult>): Promise<boolean>;
     save<TResult = unknown>(record: OperationRecord<TResult>): Promise<void>;
 }
@@ -70,6 +74,11 @@ export declare class NodeFileOperationJournal implements OperationJournal {
     private readonly lockWaitTimeoutMs;
     private readonly corruptLockGraceMs;
     private payloadKeyPromise;
+    private recoveryIssues;
+    private directoryCatalog;
+    private activeDirectoryRevision;
+    private activeDirectoryMutation;
+    private terminalAnchors;
     constructor(options: NodeFileOperationJournalOptions);
     private ensureValidOperationId;
     private recordPath;
@@ -78,6 +87,12 @@ export declare class NodeFileOperationJournal implements OperationJournal {
     private idempotencyReferencePath;
     private idempotencyLockPath;
     private ensureDirectory;
+    clearCache(): void;
+    private fileStamp;
+    private withDirectoryLock;
+    private markDirectoryMutation;
+    private loadDirectoryCatalog;
+    private rememberRecord;
     private parseOperationRecord;
     private readRecord;
     private payloadKey;
@@ -94,15 +109,24 @@ export declare class NodeFileOperationJournal implements OperationJournal {
     private verifyProgressAnchor;
     private assertMonotonicProgress;
     private buildTempPath;
-    acquireLock(idempotencyKey: string): Promise<() => Promise<void>>;
+    acquireLock(idempotencyKey: string, domain?: 'idempotency' | 'finish-preparation'): Promise<() => Promise<void>>;
     private removeStaleLock;
     private removeCorruptLockAfterGrace;
     loadById<TResult = unknown>(operationId: string): Promise<OperationRecord<TResult> | null>;
     loadByIdempotencyKey<TResult = unknown>(idempotencyKey: string): Promise<OperationRecord<TResult> | null>;
+    private lookupIdempotencyKey;
     private saveIdempotencyReference;
     claim<TResult = unknown>(record: OperationRecord<TResult>): Promise<boolean>;
+    private claimRecord;
     listRecoverable<TResult = unknown>(): Promise<OperationRecord<TResult>[]>;
+    private recoverableRecords;
+    getRecoveryIssues(): ReadonlyArray<{
+        operation_id: string;
+        error: string;
+    }>;
+    private hasAuthenticatedTerminalAnchor;
     save<TResult = unknown>(record: OperationRecord<TResult>): Promise<void>;
+    private saveRecord;
 }
 export declare function computePayloadHash(payload: unknown): string;
 export declare class RecoverableOperationRunner<TPayload, TResult> {

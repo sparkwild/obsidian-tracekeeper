@@ -22,6 +22,18 @@ export const PUBLISHED_023_ASSETS = Object.freeze({
 	}),
 });
 
+export const PUBLISHED_050_ASSETS = Object.freeze({
+	'main.js': Object.freeze({ bytes: 1720035, sha256: 'edf5982c709fdef8de5cf033c0e96329030f1a80430b765948442b23f20f6bf8' }),
+	'manifest.json': Object.freeze({ bytes: 328, sha256: '31afffca52bab8243df7f8660d43aaea6c7058e93c7b904f25fa2d459272f3f0' }),
+	'styles.css': Object.freeze({ bytes: 44452, sha256: '8c65498c346922cd4f72fe24c8fb956afc833faa1796a1a18f168b466a83ac6d' }),
+});
+
+const publishedAssetsForVersion = (version) => {
+	if (version === '0.5.0') return PUBLISHED_050_ASSETS;
+	if (version === PREVIOUS_PUBLIC_VERSION) return PUBLISHED_023_ASSETS;
+	throw new Error(`Unsupported previous release: ${version}`);
+};
+
 const RELEASE_ASSET_NAMES = Object.freeze(Object.keys(PUBLISHED_023_ASSETS));
 const PLUGIN_DIRECTORY = '.obsidian/plugins/tracekeeper';
 const PLUGIN_DATA_PATH = `${PLUGIN_DIRECTORY}/data.json`;
@@ -434,7 +446,7 @@ const writeRelativeFile = async (root, relativePath, content) => {
 const stableSyntheticLegacyToken = () =>
 	createHash('sha256').update('tracekeeper-0.2.3-upgrade-fixture-token').digest('base64url');
 
-const fixtureSettings = () => ({
+const legacyFixtureSettings = () => ({
 	memoryRulesVersion: 3,
 	defaultAgentScope: 'vault',
 	mcpRuntimeEnabled: false,
@@ -449,6 +461,18 @@ const fixtureSettings = () => ({
 	autoRefreshEnabled: false,
 	autoRefreshIntervalSeconds: 30,
 });
+
+const fixtureSettings = (previousVersion = PREVIOUS_PUBLIC_VERSION) => {
+	publishedAssetsForVersion(previousVersion);
+	const settings = legacyFixtureSettings();
+	if (previousVersion === PREVIOUS_PUBLIC_VERSION) return settings;
+	delete settings.runtimeToken;
+	delete settings.runtimeTokenCreatedAt;
+	delete settings.taskMemoryProposalMode;
+	return { ...settings, memoryRulesVersion: 6,
+		runtimeSecuritySecret: createHash('sha256').update('tracekeeper-0.5.0-upgrade-fixture-secret').digest('base64url'),
+		agentIntegrations: [], onboarding: { selectedClientId: 'codex' }, skillInstallReceipts: {}, noteContentLanguage: 'auto' };
+};
 
 const normalizeExpectedAssets = (expectedAssets) => {
 	assert(isRecord(expectedAssets), 'Expected asset metadata must be an object.');
@@ -465,7 +489,8 @@ const normalizeExpectedAssets = (expectedAssets) => {
 
 export async function validatePublishedAssets(
 	assetsDirectory,
-	expectedAssets = PUBLISHED_023_ASSETS
+	expectedAssets = PUBLISHED_023_ASSETS,
+	previousVersion = PREVIOUS_PUBLIC_VERSION
 ) {
 	const expected = normalizeExpectedAssets(expectedAssets);
 	const actual = {};
@@ -482,11 +507,13 @@ export async function validatePublishedAssets(
 		);
 	}
 	const manifest = await readJson(resolveInside(assetsDirectory, 'manifest.json'));
-	assert(manifest.version === PREVIOUS_PUBLIC_VERSION, `Published manifest version must be ${PREVIOUS_PUBLIC_VERSION}.`);
+	publishedAssetsForVersion(previousVersion);
+	assert(manifest.version === previousVersion, `Published manifest version must be ${previousVersion}.`);
 	return actual;
 }
 
-const buildFixtureManifest = (assets) => {
+const buildFixtureManifest = (assets, previousVersion = PREVIOUS_PUBLIC_VERSION) => {
+	const settings = fixtureSettings(previousVersion);
 	const seededFiles = SEEDED_RECORDS.map((record) => ({
 		path: record.path,
 		identity_field: 'fixture_record_id',
@@ -502,13 +529,13 @@ const buildFixtureManifest = (assets) => {
 	const base = {
 		schema_version: FIXTURE_SCHEMA_VERSION,
 		fixture_kind: 'tracekeeper_previous_release_upgrade',
-		previous_version: PREVIOUS_PUBLIC_VERSION,
-		previous_memory_rules_version: 3,
+		previous_version: previousVersion,
+		previous_memory_rules_version: settings.memoryRulesVersion,
 		fixture_time: FIXTURE_TIME,
 		vault_directory: 'vault',
 		published_assets: assets,
 		preserved_settings: Object.fromEntries(
-			PRESERVED_SETTING_KEYS.map((key) => [key, fixtureSettings()[key]])
+			PRESERVED_SETTING_KEYS.map((key) => [key, settings[key]])
 		),
 		seeded_files: seededFiles,
 		protected_vault_files: protectedVaultFiles,
@@ -523,11 +550,12 @@ const buildFixtureManifest = (assets) => {
 export async function createUpgradeFixture({
 	assetsDirectory,
 	outputDirectory,
-	expectedAssets = PUBLISHED_023_ASSETS,
+	previousVersion = PREVIOUS_PUBLIC_VERSION,
+	expectedAssets = publishedAssetsForVersion(previousVersion),
 }) {
 	const output = path.resolve(outputDirectory);
 	assert(output !== path.parse(output).root, 'Fixture output must not be a filesystem root.');
-	const assets = await validatePublishedAssets(path.resolve(assetsDirectory), expectedAssets);
+	const assets = await validatePublishedAssets(path.resolve(assetsDirectory), expectedAssets, previousVersion);
 	try {
 		await fs.lstat(output);
 		throw new Error(`Fixture output already exists: ${output}`);
@@ -549,7 +577,7 @@ export async function createUpgradeFixture({
 			await fs.mkdir(path.dirname(target), { recursive: true });
 			await fs.copyFile(source, target, fsConstants.COPYFILE_EXCL);
 		}
-		await writeRelativeFile(stagingVault, PLUGIN_DATA_PATH, `${JSON.stringify(fixtureSettings(), null, 2)}\n`);
+		await writeRelativeFile(stagingVault, PLUGIN_DATA_PATH, `${JSON.stringify(fixtureSettings(previousVersion), null, 2)}\n`);
 		await writeRelativeFile(stagingVault, '.obsidian/community-plugins.json', '["tracekeeper"]\n');
 		for (const record of SEEDED_RECORDS) {
 			await writeRelativeFile(stagingVault, record.path, record.content);
@@ -558,7 +586,7 @@ export async function createUpgradeFixture({
 			await writeRelativeFile(stagingVault, record.path, record.content);
 		}
 
-		const manifest = buildFixtureManifest(assets);
+		const manifest = buildFixtureManifest(assets, previousVersion);
 		await fs.writeFile(path.resolve(staging, 'fixture.json'), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
 		await fs.cp(staging, output, { recursive: true, force: false, errorOnExist: true });
 		await fs.rm(staging, { recursive: true, force: true });
@@ -641,6 +669,7 @@ const normalizeSettingsEvidence = (settings) => {
 		),
 		runtime_security_secret: {
 			present: Object.hasOwn(settings, 'runtimeSecuritySecret'),
+			sha256: typeof settings.runtimeSecuritySecret === 'string' ? sha256(settings.runtimeSecuritySecret) : null,
 			valid_32_byte_base64url: typeof settings.runtimeSecuritySecret === 'string'
 				&& /^[A-Za-z0-9_-]{43}$/.test(settings.runtimeSecuritySecret)
 				&& Buffer.from(settings.runtimeSecuritySecret, 'base64url').byteLength === 32
@@ -720,7 +749,7 @@ export async function snapshotUpgradeFixture({ fixturePath, vaultPath, phase }) 
 		fixtureId === `upgrade-${sha256(JSON.stringify(fixtureBase)).slice(0, 24)}`,
 		'Upgrade fixture manifest identity does not match its content.'
 	);
-	const canonicalFixture = buildFixtureManifest(normalizeExpectedAssets(fixture.published_assets));
+	const canonicalFixture = buildFixtureManifest(normalizeExpectedAssets(fixture.published_assets), fixture.previous_version);
 	assert(
 		JSON.stringify(fixture) === JSON.stringify(canonicalFixture),
 		'Upgrade fixture manifest does not match the canonical declaration.'
@@ -789,8 +818,8 @@ export function compareUpgradeSnapshots(
 	after,
 	{
 		expectedVersion = '0.3.0',
-		expectedMemoryRulesVersion = 4,
-		expectedPreviousAssets = PUBLISHED_023_ASSETS,
+		expectedMemoryRulesVersion = before.previous_version === '0.5.0' ? 6 : 4,
+		expectedPreviousAssets = publishedAssetsForVersion(before.previous_version),
 		expectedTargetAssets,
 	} = {}
 ) {
@@ -798,7 +827,9 @@ export function compareUpgradeSnapshots(
 	assert(after.schema_version === FIXTURE_SCHEMA_VERSION, 'Unsupported after snapshot schema.');
 	assert(before.fixture_id === after.fixture_id, 'Snapshot fixture identities do not match.');
 	assert(before.phase === 'before' && after.phase === 'after', 'Snapshots must use before then after phases.');
-	assert(before.release.version === PREVIOUS_PUBLIC_VERSION, `Before release must be ${PREVIOUS_PUBLIC_VERSION}.`);
+	const previousVersion = before.previous_version;
+	publishedAssetsForVersion(previousVersion);
+	assert(before.release.version === previousVersion, `Before release must be ${previousVersion}.`);
 	assert(after.release.version === expectedVersion, `After release must be ${expectedVersion}.`);
 
 	const previousAssets = normalizeExpectedAssets(expectedPreviousAssets);
@@ -809,8 +840,8 @@ export function compareUpgradeSnapshots(
 		const beforeAsset = before.release.assets[name];
 		const expectedAsset = previousAssets[name];
 		assert(beforeAsset.present, `Before snapshot is missing ${name}.`);
-		assert(beforeAsset.bytes === expectedAsset.bytes, `Before ${name} size does not match published ${PREVIOUS_PUBLIC_VERSION}.`);
-		assert(beforeAsset.sha256 === expectedAsset.sha256, `Before ${name} hash does not match published ${PREVIOUS_PUBLIC_VERSION}.`);
+		assert(beforeAsset.bytes === expectedAsset.bytes, `Before ${name} size does not match published ${previousVersion}.`);
+		assert(beforeAsset.sha256 === expectedAsset.sha256, `Before ${name} hash does not match published ${previousVersion}.`);
 		assert(after.release.assets[name].present, `After snapshot is missing ${name}.`);
 		assert(after.release.assets[name].bytes === targetAssets[name].bytes, `After ${name} size does not match the qualified target.`);
 		assert(after.release.assets[name].sha256 === targetAssets[name].sha256, `After ${name} hash does not match the qualified target.`);
@@ -897,16 +928,16 @@ export function compareUpgradeSnapshots(
 		after.settings.preserved,
 		'Upgrade changed a preserved plugin setting.'
 	);
-	assert(
-		before.settings.legacy_credentials.runtimeToken
-			&& before.settings.legacy_credentials.runtimeTokenCreatedAt,
-		'Before fixture must contain the published runtime token fields.'
-	);
-	assert(
-		Object.values(after.settings.legacy_credentials).every((present) => !present),
-		'Upgrade retained a legacy credential key.'
-	);
-	assert(!before.settings.runtime_security_secret.present, 'Before fixture unexpectedly contains a runtime security secret.');
+	if (previousVersion === PREVIOUS_PUBLIC_VERSION) {
+		assert(before.settings.legacy_credentials.runtimeToken && before.settings.legacy_credentials.runtimeTokenCreatedAt,
+			'Before fixture must contain the published runtime token fields.');
+		assert(!before.settings.runtime_security_secret.present, 'Before fixture unexpectedly contains a runtime security secret.');
+	} else {
+		assert(Object.values(before.settings.legacy_credentials).every((present) => !present), 'Current release fixture must not contain legacy credentials.');
+		assert(before.settings.runtime_security_secret.valid_32_byte_base64url, 'Current release fixture secret is invalid.');
+		assert(before.settings.runtime_security_secret.sha256 === after.settings.runtime_security_secret.sha256, 'Upgrade changed the existing runtime security secret.');
+	}
+	assert(Object.values(after.settings.legacy_credentials).every((present) => !present), 'Upgrade retained a legacy credential key.');
 	assert(
 		before.settings.memory_rules_version === before.previous_memory_rules_version,
 		'Before memory rules version does not match the fixture baseline.'
@@ -917,9 +948,13 @@ export function compareUpgradeSnapshots(
 	assert(after.settings.agent_integrations.present && after.settings.agent_integrations.count === 0, 'Upgrade did not initialize empty Agent integrations.');
 	const beforeAgentSkillState = before.settings.agent_skill_state;
 	const afterAgentSkillState = after.settings.agent_skill_state;
-	assert(!beforeAgentSkillState.onboarding_present, 'Published fixture unexpectedly contains candidate onboarding state.');
-	assert(!beforeAgentSkillState.skill_install_receipts_present, 'Published fixture unexpectedly contains managed Skill receipts.');
-	assert(beforeAgentSkillState.note_content_language === null, 'Published fixture unexpectedly contains candidate language state.');
+	if (previousVersion === PREVIOUS_PUBLIC_VERSION) {
+		assert(!beforeAgentSkillState.onboarding_present, 'Published fixture unexpectedly contains candidate onboarding state.');
+		assert(!beforeAgentSkillState.skill_install_receipts_present, 'Published fixture unexpectedly contains managed Skill receipts.');
+		assert(beforeAgentSkillState.note_content_language === null, 'Published fixture unexpectedly contains candidate language state.');
+	} else {
+		assertSameJson(beforeAgentSkillState, afterAgentSkillState, 'Upgrade changed current Agent or Skill evidence.');
+	}
 	assert(afterAgentSkillState.onboarding_present, 'Upgrade did not initialize bounded onboarding state.');
 	assert(afterAgentSkillState.selected_client_id === 'codex', 'Upgrade changed the default selected client unexpectedly.');
 	assert(!afterAgentSkillState.connection_evidence_present, 'Upgrade implicitly claimed Agent connection evidence.');
@@ -935,15 +970,15 @@ export function compareUpgradeSnapshots(
 	return {
 		result: 'pass',
 		fixture_id: before.fixture_id,
-		previous_version: PREVIOUS_PUBLIC_VERSION,
+		previous_version: previousVersion,
 		target_version: expectedVersion,
 		seeded_files_preserved: beforeFiles.size,
 		protected_vault_files_preserved: beforeProtectedFiles.size,
 		identities_unique: Object.keys(before.identity_occurrences).length,
-		legacy_credentials_removed: true,
+		legacy_credentials_removed: previousVersion === PREVIOUS_PUBLIC_VERSION,
 		legacy_token_rejected: true,
 		runtime_security_secret_valid: true,
-		agent_reauthorization_required: true,
+		agent_reauthorization_required: previousVersion === PREVIOUS_PUBLIC_VERSION,
 		managed_skill_ownership_claimed: false,
 		preserved_settings: Object.keys(before.settings.preserved),
 	};
@@ -979,6 +1014,7 @@ async function main() {
 		const result = await createUpgradeFixture({
 			assetsDirectory: requiredOption(options, 'assets'),
 			outputDirectory: requiredOption(options, 'output'),
+			previousVersion: options['previous-version'] || PREVIOUS_PUBLIC_VERSION,
 		});
 		console.log(JSON.stringify(result, null, 2));
 		return;
@@ -1001,7 +1037,7 @@ async function main() {
 			expectedVersion: options['expected-version'] || '0.3.0',
 			expectedMemoryRulesVersion: options['expected-memory-rules-version']
 				? Number.parseInt(options['expected-memory-rules-version'], 10)
-				: 4,
+				: undefined,
 			expectedTargetAssets,
 		});
 		if (options.output) {

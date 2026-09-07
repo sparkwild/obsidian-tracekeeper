@@ -3,7 +3,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -22,24 +21,28 @@ import {
 	collectProvenance,
 	configurationHash,
 } from './report.mjs';
+import {
+	REPLAY_REPORT_ROOT_DEFAULT,
+	parseOutputDir,
+	resolveOutputRoot,
+} from './output-options.mjs';
 
 const modulePath = fileURLToPath(import.meta.url);
 const moduleDirectory = path.dirname(modulePath);
-const reportRoot = path.join(
-	repositoryRoot,
-	'.specs/runtime-modularization/audits/index-replay-reports'
-);
+const defaultReportRoot = REPLAY_REPORT_ROOT_DEFAULT;
 
 function parseArgs(argv) {
+	const { outputDir, argv: parsedArgs } = parseOutputDir(argv, defaultReportRoot);
 	const options = {
 		tier: 'tiny',
 		seed: 'tracekeeper-index-v1',
 		allowScale: false,
 		retainFixtures: false,
+		outputDir,
 	};
-	for (let index = 0; index < argv.length; index += 1) {
-		const arg = argv[index];
-		const next = argv[index + 1];
+	for (let index = 0; index < parsedArgs.length; index += 1) {
+		const arg = parsedArgs[index];
+		const next = parsedArgs[index + 1];
 		if (arg === '--tier' && next) {
 			options.tier = next;
 			index += 1;
@@ -60,22 +63,14 @@ function parseArgs(argv) {
 	if (options.tier !== 'tiny' && !options.allowScale) {
 		throw new Error('Scale replay tiers require --allow-scale.');
 	}
-	return options;
+	return {
+		...options,
+		outputDir: resolveOutputRoot(outputDir),
+	};
 }
 
 function compactUtc(value) {
 	return value.replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');
-}
-
-function verifyReportRootIgnored() {
-	const result = spawnSync(
-		'git',
-		['check-ignore', '-q', '--no-index', path.join(reportRoot, 'probe', 'replay-stress.json')],
-		{ cwd: repositoryRoot, stdio: 'ignore', timeout: 5_000 }
-	);
-	if (result.status !== 0) {
-		throw new Error('Replay report root is not ignored by Git.');
-	}
 }
 
 async function sourceSha() {
@@ -86,6 +81,7 @@ async function sourceSha() {
 		'normalize.mjs',
 		'replay.mjs',
 		'report.mjs',
+		'output-options.mjs',
 	];
 	const contents = await Promise.all(
 		sourceFiles.map((filename) => fs.readFile(path.join(moduleDirectory, filename), 'utf8'))
@@ -127,8 +123,8 @@ function renderMarkdown(stress, provenance) {
 }
 
 async function main() {
-	verifyReportRootIgnored();
 	const options = parseArgs(process.argv.slice(2));
+	const reportRoot = options.outputDir;
 	const startedAt = new Date().toISOString();
 	const config = resolveFixtureConfig({ tier: options.tier, seed: options.seed });
 	const supportRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'tracekeeper-index-replay-support-'));
@@ -164,6 +160,8 @@ async function main() {
 			configurationHash(config),
 		].join('-');
 		const runDirectory = path.join(reportRoot, runGroupId);
+		await fs.mkdir(reportRoot, { recursive: true });
+		await fs.mkdir(runDirectory);
 		await Promise.all([
 			writeDurable(path.join(runDirectory, 'replay-stress.json'), canonicalJson(stress)),
 			writeDurable(path.join(runDirectory, 'provenance.json'), canonicalJson(provenance)),

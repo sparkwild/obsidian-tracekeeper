@@ -4,7 +4,7 @@ This directory provides the Phase 0 local static characterization for Tracekeepe
 
 ## Baselines
 
-The two baselines reuse the same 37 scenarios:
+The two baselines reuse the same scenario set:
 
 - `current-skill-v1.json` points only to `fixtures/skills/tracekeeper-v1/SKILL.md`. The fixture is an exact byte snapshot of Git blob `fd78ad6d8e9c36ba7ecca78f688b4858db6bd779` from commit `5114bfe37216816f45de5b575e8aada5b0897ca9`; `source.json` records the extraction command and SHA-256. It never reads the live Skill.
 - `current-skill-v2.json` fingerprints the live Skill v2 entrypoint and all

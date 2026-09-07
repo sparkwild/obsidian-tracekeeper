@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { gunzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import {
 	createCipheriv,
 	createDecipheriv,
@@ -17,10 +19,13 @@ const MAX_CORRUPT_LOCK_GRACE_MS = 250;
 const ENCRYPTED_PAYLOAD_VERSION = 1;
 const PROGRESS_ANCHOR_VERSION = 1;
 const operationLocks = new Map<string, Promise<void>>();
+const decompress = promisify(gunzip);
+const MAX_DECOMPRESSED_VALUE_BYTES = 64 * 1024 * 1024;
 
 interface EncryptedOperationPayload {
-	version: typeof ENCRYPTED_PAYLOAD_VERSION;
+	version: 1 | 2;
 	algorithm: 'aes-256-gcm';
+	compression?: 'gzip';
 	nonce: string;
 	auth_tag: string;
 	ciphertext: string;
@@ -66,7 +71,8 @@ export interface OperationJournal {
 	loadByIdempotencyKey<TResult = unknown>(idempotencyKey: string): Promise<OperationRecord<TResult> | null>;
 	loadById<TResult = unknown>(operationId: string): Promise<OperationRecord<TResult> | null>;
 	listRecoverable<TResult = unknown>(): Promise<OperationRecord<TResult>[]>;
-	acquireLock?(idempotencyKey: string): Promise<() => Promise<void>>;
+	getRecoveryIssues?(): ReadonlyArray<{ operation_id: string; error: string }>;
+	acquireLock?(idempotencyKey: string, domain?: 'idempotency' | 'finish-preparation'): Promise<() => Promise<void>>;
 	claim?<TResult = unknown>(record: OperationRecord<TResult>): Promise<boolean>;
 	save<TResult = unknown>(record: OperationRecord<TResult>): Promise<void>;
 }
@@ -129,11 +135,24 @@ export interface NodeFileOperationJournalOptions {
 	lockWaitTimeoutMs?: number;
 }
 
+interface JournalDirectoryCatalog {
+	stamp: string;
+	revision: string;
+	operations: Set<string>;
+	orphans: Set<string>;
+	references: Map<string, string>;
+}
+
 export class NodeFileOperationJournal implements OperationJournal {
 	private readonly directory: string;
 	private readonly lockWaitTimeoutMs: number;
 	private readonly corruptLockGraceMs: number;
 	private payloadKeyPromise: Promise<Buffer> | null = null;
+	private recoveryIssues: Array<{ operation_id: string; error: string }> = [];
+	private directoryCatalog: JournalDirectoryCatalog | null = null;
+	private activeDirectoryRevision = '';
+	private activeDirectoryMutation = false;
+	private terminalAnchors = new Map<string, { stamp: string; terminal: boolean }>();
 
 	constructor(options: NodeFileOperationJournalOptions) {
 		if (!path.isAbsolute(options.directory)) {
@@ -182,6 +201,123 @@ export class NodeFileOperationJournal implements OperationJournal {
 
 	private async ensureDirectory(): Promise<void> {
 		await fs.mkdir(this.directory, { recursive: true });
+	}
+
+	clearCache(): void {
+		this.directoryCatalog = null;
+		this.terminalAnchors.clear();
+		this.payloadKeyPromise = null;
+	}
+
+	private async fileStamp(filePath: string): Promise<string> {
+		const stat = await fs.stat(filePath, { bigint: true });
+		return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+	}
+
+	// 协调锁放在子目录，避免锁自身使目录快照失效；业务步骤不持有此锁。
+	private async withDirectoryLock<T>(action: () => Promise<T>, mutates = false): Promise<T> {
+		await this.ensureDirectory();
+		const lockDirectory = path.join(this.directory, '.coordination');
+		await fs.mkdir(lockDirectory, { recursive: true });
+		const lockDirectoryStat = await fs.lstat(lockDirectory);
+		if (!lockDirectoryStat.isDirectory() || lockDirectoryStat.isSymbolicLink()) throw new Error('Journal coordination path must be a real directory.');
+		const lockPath = path.join(lockDirectory, 'catalog.lock');
+		const deadline = Date.now() + this.lockWaitTimeoutMs;
+		let handle: Awaited<ReturnType<typeof fs.open>>;
+		while (true) {
+			try {
+				handle = await fs.open(lockPath, 'wx');
+				try {
+					await handle.writeFile(JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() }));
+				} catch (error) {
+					await handle.close().catch(() => undefined);
+					await fs.unlink(lockPath).catch(() => undefined);
+					throw error;
+				}
+				break;
+			} catch (error) {
+				if (!isNodeErrorCode(error, 'EEXIST')) throw error;
+				if (await this.removeStaleLock(lockPath)) continue;
+				if (Date.now() >= deadline) throw new OperationConflictError('Timed out waiting for the journal directory lock.');
+				await delay(10);
+			}
+		}
+		try {
+			const before = await this.fileStamp(this.directory);
+			const revisionPath = path.join(lockDirectory, 'revision');
+			let revision = '';
+			try {
+				const stat = await fs.lstat(revisionPath);
+				if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128) throw new Error('Invalid journal catalog revision file.');
+				revision = await fs.readFile(revisionPath, 'utf8');
+			} catch (error) { if (!isNodeErrorCode(error, 'ENOENT')) throw error; }
+			if (this.directoryCatalog?.stamp !== before || this.directoryCatalog?.revision !== revision) this.directoryCatalog = null;
+			this.activeDirectoryRevision = revision;
+			this.activeDirectoryMutation = false;
+			if (mutates) await this.markDirectoryMutation();
+			const result = await action();
+			if (this.directoryCatalog) {
+				this.directoryCatalog.stamp = await this.fileStamp(this.directory);
+				this.directoryCatalog.revision = this.activeDirectoryRevision;
+			}
+			return result;
+		} catch (error) {
+			this.directoryCatalog = null;
+			throw error;
+		} finally {
+			await handle.close().catch(() => undefined);
+			await fs.unlink(lockPath).catch(() => undefined);
+		}
+	}
+
+	private async markDirectoryMutation(): Promise<void> {
+		if (this.activeDirectoryMutation) return;
+		// 先标记再写入，进程中断与低精度时间戳也不能保留其他实例的旧快照。
+		const revisionPath = path.join(this.directory, '.coordination', 'revision');
+		const revision = randomBytes(16).toString('hex');
+		const temporary = this.buildTempPath(revisionPath);
+		try {
+			await fs.writeFile(temporary, revision, { flag: 'wx' });
+			await fs.rename(temporary, revisionPath);
+		} finally { await fs.unlink(temporary).catch(() => undefined); }
+		this.activeDirectoryRevision = revision;
+		this.activeDirectoryMutation = true;
+	}
+
+	private async loadDirectoryCatalog(): Promise<JournalDirectoryCatalog> {
+		if (this.directoryCatalog) return this.directoryCatalog;
+		const files = await fs.readdir(this.directory);
+		const references = new Map<string, string>();
+		const referenceFiles = files.filter((file) => /^\.idempotency-[a-f0-9]{64}\.ref$/.test(file));
+		for (let offset = 0; offset < referenceFiles.length; offset += 32) {
+			await Promise.all(referenceFiles.slice(offset, offset + 32).map(async (file) => {
+				const operationId = (await fs.readFile(path.join(this.directory, file), 'utf8')).trim();
+				if (OPERATION_ID_PATTERN.test(operationId)) references.set(file, operationId);
+			}));
+		}
+		const operations = new Set(files.filter((file) => file.endsWith('.json')).map((file) => file.slice(0, -5)));
+		const referencedOperations = new Set(references.values());
+		this.directoryCatalog = {
+			stamp: await this.fileStamp(this.directory),
+			revision: this.activeDirectoryRevision,
+			operations,
+			orphans: new Set([...operations].filter((operationId) => !referencedOperations.has(operationId))),
+			references,
+		};
+		return this.directoryCatalog;
+	}
+
+	private rememberRecord(record: OperationRecord): void {
+		const catalog = this.directoryCatalog;
+		if (catalog) {
+			const reference = path.basename(this.idempotencyReferencePath(record.idempotency_key));
+			const previous = catalog.references.get(reference);
+			catalog.operations.add(record.operation_id);
+			catalog.references.set(reference, record.operation_id);
+			catalog.orphans.delete(record.operation_id);
+			if (previous && previous !== record.operation_id && ![...catalog.references.values()].includes(previous)) catalog.orphans.add(previous);
+		}
+		this.terminalAnchors.delete(record.operation_id);
 	}
 
 	private async parseOperationRecord<TResult = unknown>(filePath: string, rawContent: string): Promise<OperationRecord<TResult>> {
@@ -332,8 +468,9 @@ export class NodeFileOperationJournal implements OperationJournal {
 		const key = await this.payloadKey();
 		const nonce = randomBytes(12);
 		const cipher = createCipheriv('aes-256-gcm', key, nonce);
-		cipher.setAAD(this.operationValueAdditionalData(record, kind));
 		const plaintext = Buffer.from(JSON.stringify(normalizePayload(value)), 'utf8');
+		const aad = this.operationValueAdditionalData(record, kind);
+		cipher.setAAD(aad);
 		const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
 		return {
 			version: ENCRYPTED_PAYLOAD_VERSION,
@@ -361,17 +498,21 @@ export class NodeFileOperationJournal implements OperationJournal {
 				key,
 				Buffer.from(encrypted.nonce, 'base64')
 			);
-			decipher.setAAD(this.operationValueAdditionalData({
+			const aad = this.operationValueAdditionalData({
 				operation_id: record.operation_id as string,
 				idempotency_key: record.idempotency_key as string,
 				payload_hash: record.payload_hash as string,
-			}, kind));
+			}, kind);
+			decipher.setAAD(encrypted.version === 2 ? Buffer.concat([aad, Buffer.from('\0gzip')]) : aad);
 			decipher.setAuthTag(Buffer.from(encrypted.auth_tag, 'base64'));
-			const plaintext = Buffer.concat([
+			const decoded = Buffer.concat([
 				decipher.update(Buffer.from(encrypted.ciphertext, 'base64')),
 				decipher.final(),
-			]).toString('utf8');
-			return JSON.parse(plaintext);
+			]);
+			const plaintext = encrypted.version === 2
+				? await decompress(decoded, { maxOutputLength: MAX_DECOMPRESSED_VALUE_BYTES })
+				: decoded;
+			return JSON.parse(plaintext.toString('utf8'));
 		} catch (error: unknown) {
 			throw new CorruptedOperationJournalError(
 				filePath,
@@ -532,23 +673,42 @@ export class NodeFileOperationJournal implements OperationJournal {
 		return `${recordPath}.${marker}.tmp`;
 	}
 
-	async acquireLock(idempotencyKey: string): Promise<() => Promise<void>> {
+	async acquireLock(idempotencyKey: string, domain: 'idempotency' | 'finish-preparation' = 'idempotency'): Promise<() => Promise<void>> {
 		await this.ensureDirectory();
-		const lockPath = this.idempotencyLockPath(idempotencyKey);
+		const lockPath = domain === 'finish-preparation'
+			? path.join(this.directory, `.finish-preparation-${createHash('sha256').update(idempotencyKey).digest('hex')}.lock`)
+			: this.idempotencyLockPath(idempotencyKey);
 		const deadline = Date.now() + this.lockWaitTimeoutMs;
 		while (true) {
 			try {
-				const handle = await fs.open(lockPath, 'wx');
-				await handle.writeFile(`${JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() })}\n`, 'utf8');
-				let released = false;
-				return async () => {
-					if (released) {
-						return;
+				return await this.withDirectoryLock(async () => {
+					const handle = await fs.open(lockPath, 'wx');
+					try {
+						await handle.writeFile(`${JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() })}\n`, 'utf8');
+					} catch (error) {
+						await handle.close().catch(() => undefined);
+						await fs.unlink(lockPath).catch(() => undefined);
+						throw error;
 					}
-					released = true;
-					await handle.close().catch(() => undefined);
-					await fs.unlink(lockPath).catch(() => undefined);
-				};
+					let released = false;
+					return async () => {
+						if (released) {
+							return;
+						}
+						released = true;
+						const release = async () => {
+							await handle.close().catch(() => undefined);
+							await fs.unlink(lockPath).catch(() => undefined);
+						};
+						try {
+							await this.withDirectoryLock(release);
+						} catch {
+							// 清理失败不能让存活进程永久占有业务锁；目录变化会使其他快照失效。
+							this.directoryCatalog = null;
+							await release();
+						}
+					};
+				});
 			} catch (error: unknown) {
 				if (!isNodeErrorCode(error, 'EEXIST')) {
 					throw error;
@@ -622,6 +782,10 @@ export class NodeFileOperationJournal implements OperationJournal {
 	}
 
 	async loadByIdempotencyKey<TResult = unknown>(idempotencyKey: string): Promise<OperationRecord<TResult> | null> {
+		return this.withDirectoryLock(() => this.lookupIdempotencyKey<TResult>(idempotencyKey));
+	}
+
+	private async lookupIdempotencyKey<TResult>(idempotencyKey: string): Promise<OperationRecord<TResult> | null> {
 		await this.ensureDirectory();
 		const referencePath = this.idempotencyReferencePath(idempotencyKey);
 		try {
@@ -640,15 +804,19 @@ export class NodeFileOperationJournal implements OperationJournal {
 			}
 		}
 
-		const files = await fs.readdir(this.directory);
+		const catalog = await this.loadDirectoryCatalog();
+		const previousOwner = catalog.references.get(path.basename(referencePath));
+		if (previousOwner) {
+			const recovered = await this.loadById<TResult>(previousOwner);
+			if (!recovered || recovered.idempotency_key !== idempotencyKey) throw new CorruptedOperationJournalError(referencePath, 'cached reference no longer matches its operation');
+			await this.saveIdempotencyReference(idempotencyKey, previousOwner);
+			return recovered;
+		}
 		let bestMatch: OperationRecord<TResult> | null = null;
 
-		for (const file of files) {
-			if (!file.endsWith('.json')) {
-				continue;
-			}
+		for (const operationId of catalog.orphans) {
 
-			const candidatePath = path.join(this.directory, file);
+			const candidatePath = this.recordPath(operationId);
 			const candidate = await this.readRecord<TResult>(candidatePath);
 			if (!candidate || candidate.idempotency_key !== idempotencyKey) {
 				continue;
@@ -661,12 +829,14 @@ export class NodeFileOperationJournal implements OperationJournal {
 
 		if (bestMatch) {
 			await this.saveIdempotencyReference(bestMatch.idempotency_key, bestMatch.operation_id);
+			this.rememberRecord(bestMatch);
 		}
 		return bestMatch;
 	}
 
 	private async saveIdempotencyReference(idempotencyKey: string, operationId: string): Promise<void> {
 		this.ensureValidOperationId(operationId);
+		await this.markDirectoryMutation();
 		const referencePath = this.idempotencyReferencePath(idempotencyKey);
 		const tempPath = this.buildTempPath(referencePath);
 		await fs.writeFile(tempPath, `${operationId}\n`, 'utf8');
@@ -679,6 +849,15 @@ export class NodeFileOperationJournal implements OperationJournal {
 	}
 
 	async claim<TResult = unknown>(record: OperationRecord<TResult>): Promise<boolean> {
+		return this.withDirectoryLock(async () => {
+			const claimed = await this.claimRecord(record);
+			if (claimed) this.rememberRecord(record);
+			else this.directoryCatalog = null;
+			return claimed;
+		}, true);
+	}
+
+	private async claimRecord<TResult>(record: OperationRecord<TResult>): Promise<boolean> {
 		await this.ensureDirectory();
 		const recordPath = this.recordPath(record.operation_id);
 		const recordTempPath = this.buildTempPath(recordPath);
@@ -723,22 +902,67 @@ export class NodeFileOperationJournal implements OperationJournal {
 	}
 
 	async listRecoverable<TResult = unknown>(): Promise<OperationRecord<TResult>[]> {
+		return this.withDirectoryLock(() => this.recoverableRecords<TResult>());
+	}
+
+	private async recoverableRecords<TResult>(): Promise<OperationRecord<TResult>[]> {
 		await this.ensureDirectory();
+		this.recoveryIssues = [];
 		const files = await fs.readdir(this.directory);
 		const records: OperationRecord<TResult>[] = [];
 		for (const file of files) {
 			if (!file.endsWith('.json')) {
 				continue;
 			}
-			const record = await this.readRecord<TResult>(path.join(this.directory, file));
-			if (record && record.status !== 'completed' && record.status !== 'conflicted') {
-				records.push(record);
+			try {
+				if (await this.hasAuthenticatedTerminalAnchor(file.slice(0, -5))) continue;
+				const record = await this.readRecord<TResult>(path.join(this.directory, file));
+				if (record && record.status !== 'completed' && record.status !== 'conflicted') records.push(record);
+			} catch (error) {
+				this.recoveryIssues.push({ operation_id: file.slice(0, -5), error: sanitizeJournalError(error) });
 			}
 		}
 		return records.sort((left, right) => left.created_at.localeCompare(right.created_at));
 	}
 
+	getRecoveryIssues(): ReadonlyArray<{ operation_id: string; error: string }> {
+		return this.recoveryIssues.map((issue) => ({ ...issue }));
+	}
+
+	private async hasAuthenticatedTerminalAnchor(operationId: string): Promise<boolean> {
+		let value: unknown;
+		let stamp: string;
+		try {
+			stamp = await this.fileStamp(this.progressAnchorPath(operationId));
+			const cached = this.terminalAnchors.get(operationId);
+			if (cached?.stamp === stamp) return cached.terminal;
+			value = JSON.parse(await fs.readFile(this.progressAnchorPath(operationId), 'utf8'));
+		} catch (error) {
+			if (isNodeErrorCode(error, 'ENOENT')) return false;
+			throw new CorruptedOperationJournalError(operationId, 'Invalid recovery anchor.');
+		}
+		if (!isOperationProgressAnchor(value) || value.operation_id !== operationId) {
+			throw new CorruptedOperationJournalError(operationId, 'Invalid recovery anchor binding.');
+		}
+		const { mac, ...unsigned } = value;
+		const expected = createHmac('sha256', await this.payloadKey()).update(this.anchorBinding(unsigned)).digest();
+		const received = Buffer.from(mac, 'hex');
+		if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+			throw new CorruptedOperationJournalError(operationId, 'Recovery anchor authentication failed.');
+		}
+		const terminal = value.terminal_status !== null;
+		this.terminalAnchors.set(operationId, { stamp, terminal });
+		return terminal;
+	}
+
 	async save<TResult = unknown>(record: OperationRecord<TResult>): Promise<void> {
+		return this.withDirectoryLock(async () => {
+			await this.saveRecord(record);
+			this.rememberRecord(record);
+		}, true);
+	}
+
+	private async saveRecord<TResult>(record: OperationRecord<TResult>): Promise<void> {
 		await this.ensureDirectory();
 		const recordPath = this.recordPath(record.operation_id);
 		const current = await this.readRecord<TResult>(recordPath);
@@ -1157,7 +1381,8 @@ function isEncryptedOperationPayload(value: unknown): value is EncryptedOperatio
 		return false;
 	}
 	if (
-		value.version !== ENCRYPTED_PAYLOAD_VERSION
+		!((value.version === ENCRYPTED_PAYLOAD_VERSION && value.compression === undefined)
+			|| (value.version === 2 && value.compression === 'gzip'))
 		|| value.algorithm !== 'aes-256-gcm'
 		|| typeof value.nonce !== 'string'
 		|| typeof value.auth_tag !== 'string'

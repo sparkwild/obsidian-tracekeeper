@@ -1,3 +1,4 @@
+import { inspectHistoricalRecords } from './features/observability/historical-record-diagnostics';
 import {
 	App,
 	FileSystemAdapter,
@@ -11,6 +12,7 @@ import {
 } from 'obsidian';
 import {
 	LOCAL_TRUST_CAPABILITIES,
+	createOperationJournalProvider,
 	StreamableHttpMcpRuntime,
 	type AgentAuthMode,
 	type AuthenticatedCredentialContext as RuntimeAuthenticatedCredentialContext,
@@ -529,6 +531,7 @@ export default class TracekeeperPlugin extends Plugin {
 		clientId: string;
 	}>();
 	private localToolExecutor!: LocalToolExecutor;
+	private readonly operationJournalProvider = createOperationJournalProvider();
 	private vaultRepository!: ObsidianVaultRepository;
 	private knowledgeIndex: ObsidianKnowledgeIndexAdapter | null = null;
 	private clientSkillAdapter: ClientSkillAdapter | null = null;
@@ -650,6 +653,7 @@ export default class TracekeeperPlugin extends Plugin {
 					this.localToolExecutor.previewWikiBatchApprovedWriteback(args, override),
 				refreshGovernanceViews: () => this.refreshGovernanceViews(),
 				appendToAuditLog: (entry) => this.appendToAuditLog(entry),
+				operationJournalProvider: this.operationJournalProvider,
 				appendWikiBatchActivity: (operationId, entry) =>
 					this.nativeAuditRepository.appendRawEvents(entry, { operationId }).then(() => undefined),
 				getVaultRoot: () => this.getVaultRoot(),
@@ -974,7 +978,7 @@ export default class TracekeeperPlugin extends Plugin {
 		this.stopAutoRefresh();
 		this.oauthApprovalContext = null;
 		this.clientSkillAdapter = null;
-		void this.closeMcpRuntime();
+		void this.closeMcpRuntime().finally(() => this.operationJournalProvider.clear?.());
 	}
 
 	private normalizeSettings(raw: unknown): TracekeeperSettings {
@@ -1409,6 +1413,7 @@ export default class TracekeeperPlugin extends Plugin {
 			proposalTransitionPort: this.proposalTransitionAdapter,
 			knowledgeSnapshotProvider: (requestedVaultRoot) => this.knowledgeIndex?.scanSnapshot(requestedVaultRoot) ?? null,
 			knowledgeReadViewProvider: (requestedVaultRoot) => this.knowledgeIndex?.knowledgeReadView(requestedVaultRoot) ?? Promise.resolve(null),
+			operationJournalProvider: this.operationJournalProvider,
 			contentLanguage: noteContentLanguage.language,
 			contentLanguageSource: noteContentLanguage.source,
 			graphProfile: this.settings.graphProfile,
@@ -2063,6 +2068,12 @@ export default class TracekeeperPlugin extends Plugin {
 		};
 	}
 
+	private async loadHistoricalDiagnostics(index: KnowledgeIndexEvidence, verifiedReplacements?: ReadonlyMap<string, string>) {
+		if (index.state !== 'ready' || index.errors.length > 0) return undefined;
+		const replacements = verifiedReplacements ?? await this.legacySourceConsolidationController.verifiedReplacements(new Map(index.notes.map((note) => [note.path, note.contentHash])));
+		return inspectHistoricalRecords(index.notes, replacements, (operationId) => this.operationJournalProvider(this.getVaultRoot()).loadById(operationId));
+	}
+
 	async loadMemoryInspectorSnapshot(
 		query: MemoryInspectorQuery = {}
 	): Promise<MemoryInspectorSnapshot> {
@@ -2078,7 +2089,7 @@ export default class TracekeeperPlugin extends Plugin {
 			tasks,
 			missingMemoryFolder: !(this.app.vault.getAbstractFileByPath(KNOWLEDGE_MEMORY_DIR) instanceof TFolder),
 			query,
-		}), maintenanceCandidates: maintenance };
+		}), maintenanceCandidates: maintenance, historicalDiagnostics: await this.loadHistoricalDiagnostics(index) };
 	}
 
 	async previewLegacyMemoryMigration(
@@ -2108,15 +2119,19 @@ export default class TracekeeperPlugin extends Plugin {
 			this.activityRecordRepository.readRecentSourceRequests(KNOWLEDGE_RELATIONSHIP_READ_LIMIT),
 			this.loadMaintenanceSurfaceCandidates(['unassociated_source', 'source_archive_purge']),
 		]);
+		const sourceReplacements = index.state === 'ready'
+			? await this.legacySourceConsolidationController.verifiedReplacements(new Map(index.notes.map((note) => [note.path, note.contentHash])))
+			: new Map<string, string>();
 		return { ...buildSourceStatusSnapshot({
 			index,
 			proposals,
 			tasks,
 			requests,
+			sourceReplacements,
 			missingSourceFolder: !(this.app.vault.getAbstractFileByPath(KNOWLEDGE_SOURCES_DIR) instanceof TFolder),
 			missingRequestFolder: !(this.app.vault.getAbstractFileByPath(TRACEKEEPER_AGENT_REQUESTS_DIR) instanceof TFolder),
 			query,
-		}), maintenanceCandidates: maintenance };
+		}), maintenanceCandidates: maintenance, historicalDiagnostics: await this.loadHistoricalDiagnostics(index, sourceReplacements) };
 	}
 
 	private async loadMaintenanceSurfaceCandidates(categories: readonly string[]): Promise<MaintenanceSurfaceCandidate[]> {
@@ -2126,7 +2141,8 @@ export default class TracekeeperPlugin extends Plugin {
 
 	private async loadMaintenanceSurfaceSnapshot(): Promise<{ generation: number; candidates: MaintenanceSurfaceCandidate[] }> {
 		try {
-			const currentGeneration = (await this.knowledgeIndex?.knowledgeSnapshot())?.generation ?? 0;
+			const snapshot = await this.knowledgeIndex?.knowledgeSnapshot();
+			const currentGeneration = snapshot?.knowledge_generation ?? snapshot?.generation ?? 0;
 			if (this.maintenanceSurfaceCache?.generation === currentGeneration) return this.maintenanceSurfaceCache;
 			if (this.maintenanceSurfaceInFlight) return this.maintenanceSurfaceInFlight;
 			this.maintenanceSurfaceInFlight = (async () => {
@@ -3083,6 +3099,7 @@ export default class TracekeeperPlugin extends Plugin {
 			proposalTransitionPort: this.proposalTransitionAdapter,
 			knowledgeSnapshotProvider: (requestedVaultRoot) => this.knowledgeIndex?.scanSnapshot(requestedVaultRoot) ?? null,
 			knowledgeReadViewProvider: (requestedVaultRoot) => this.knowledgeIndex?.knowledgeReadView(requestedVaultRoot) ?? Promise.resolve(null),
+			operationJournalProvider: this.operationJournalProvider,
 			graphProfile: this.settings.graphProfile,
 			memoryRules: {
 				globalMemoryRule: this.settings.globalMemoryRule,
@@ -3534,7 +3551,8 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	async loadMemoryReviewQueueSnapshot(offset = 0): Promise<MemoryReviewQueueSnapshot> {
-		return this.reviewQueueController.loadMemoryReviewQueueSnapshot(offset);
+		const [snapshot, index] = await Promise.all([this.reviewQueueController.loadMemoryReviewQueueSnapshot(offset), this.loadKnowledgeIndexEvidence()]);
+		return { ...snapshot, historicalDiagnostics: await this.loadHistoricalDiagnostics(index) };
 	}
 
 	async rejectMaintenanceRequest(request: MemoryReviewQueueSnapshot['maintenanceRequests'][number]): Promise<void> {
