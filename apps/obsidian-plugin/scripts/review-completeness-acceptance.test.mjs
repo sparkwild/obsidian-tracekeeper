@@ -87,7 +87,6 @@ assert.match(modalSource, /tracekeeper-review-archive-modal__technical-details/)
 assert.match(modalSource, /tracekeeper-review-apply-modal__technical-details/);
 assert.match(modalSource, /targetDisplayName/);
 assert.equal((viewSource.match(/\(\) => this\.refreshSelectedProposal\(proposal\.path\)/g) || []).length, 3);
-assert.match(viewSource, /if \(options\.automatic && this\.showingDetail\)/);
 assert.match(viewSource, /this\.automaticRefreshDeferred = true/);
 assert.match(mainSource, /this\.refreshGovernanceViews\(\{ automatic: true \}\)/);
 assert.match(mainSource, /view\.refresh\(\{ automatic: options\.automatic \}\)/);

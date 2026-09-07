@@ -93,3 +93,27 @@ Structured actions do not bypass capability checks, confirmation, review, or act
   identity, or `scope: "global"`; choose the required lifecycle view, consume
   every page from one catalog generation, and read only the selected note
   bodies afterward. There is no public project-specific alias.
+
+## Bounded note reads (`read_note` v3)
+
+- `tracekeeper.read_note` returns a bounded window. Do not treat one window as
+  the full note: `truncated` also stays true for the final partial window.
+  `next_offset: null` marks the end; a full read requires contiguous windows
+  from offset 0 to the end with the same content hash.
+- If `truncated` is true, request continuation only when both conditions are
+  true: `next_offset` is present and is a non-negative integer, and
+  `content_hash` is present. Use `offset=next_offset` and
+  `expected_hash=content_hash` for continuation.
+- When the result reports `NOTE_CHANGED`, restart from the current content for
+  that path and discard prior windows.
+- If `truncated` is true and `next_offset` is not null but continuation data is incomplete or invalid, do not
+  treat the response as complete; report incomplete-note recovery and retry based
+  on server guidance.
+- `INDEX_NOT_READY` is recoverable and should be retried; it is not equivalent to
+  an empty catalog.
+- `MEMORY_CATALOG_INCOMPLETE` is a diagnostic for incomplete index state and a
+  reason to report the catalog-incomplete recovery state, not a claim of missing
+  memory.
+- Only older server responses that do not include `truncated` and pagination
+  fields should be treated as complete-read fallbacks and not retried for
+  continuation.

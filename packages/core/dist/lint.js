@@ -263,6 +263,11 @@ function collectManagedProposalReferenceIssues(note, edges) {
     }
     const bodyLines = note.text.split(/\r?\n/u);
     const issues = [];
+    const oldLinks = note.frontmatter.proposal_links;
+    if (typeof oldLinks === 'string' && [...oldLinks.matchAll(/\[\[[^\]\n]+\]\]/g)].length > 1) {
+        issues.push({ severity: 'warning', kind: 'managed_proposal_reference_legacy_format', path: note.relativePath, line: 1,
+            message: 'Managed proposal links use the readable legacy comma format; use a YAML array on the next intentional edit.', context: 'proposal_links' });
+    }
     for (let index = 0; index < proposalIds.length; index += 1) {
         const proposalId = proposalIds[index] ?? '';
         const expectedPath = normalizeManagedProposalPath(proposalPaths[index] ?? '');

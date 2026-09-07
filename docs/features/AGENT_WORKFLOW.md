@@ -140,6 +140,15 @@ Only when `next_actions` is absent may an Agent use the compatibility text in `n
   There is no public project-specific alias. A successful empty project catalog
   is therefore evidence about one verified current Hub, never proof that an
   arbitrary id is valid.
+- An initializing or incomplete Memory index is an explicit failure, not a
+  complete empty catalog. Wait for indexing or resolve the reported diagnostics.
+- `read_note` returns a bounded window. When `truncated` is true, use its
+  structured continuation only if more content is needed; preserve the returned
+  `next_offset` and `content_hash` as `expected_hash`. A changed note requires
+  restarting the read, rather than combining windows from different versions.
+  `next_offset: null` marks the end, including when the final partial window
+  still reports `truncated: true`. Older responses lacking pagination fields
+  retain their original whole-note semantics.
 
 ## Source Ingestion
 
@@ -199,6 +208,9 @@ Only `tracked_task` has a closeout lifecycle.
 - A pending proposal is not durable memory.
 - Copy the returned `durable_output` state into the user-facing closeout. Do not
   replace it with an inference from task `status`, a Source path, or Recall.
+- Direct Auto writes linked to the task are included in closeout through their
+  verified operation receipts. Do not submit the same Memory candidate again
+  merely to make it appear in the finish result.
 - Apply an already approved proposal through public MCP only when the user explicitly requests the apply action. Obsidian's human Wiki review surface may combine exact approval and apply into one final preview confirmation; an Agent cannot invoke that internal approval path.
 - After a successful finish, treat the task as terminal and do not finish again.
 

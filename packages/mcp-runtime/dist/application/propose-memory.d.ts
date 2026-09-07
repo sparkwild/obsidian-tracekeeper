@@ -203,7 +203,7 @@ export interface ProposeMemoryApplicationDependencies {
     writeProposalNote(input: ProposeMemoryWriteInput): Promise<ProposeMemoryNote>;
     writeAutoWiki?(input: ProposeMemoryAutoWikiWriteInput): Promise<ProposeMemoryNote>;
     ensureOwnedProposalIdentity(path: string, proposalId: string, operationId: string): Promise<void>;
-    updateTaskMemoryWrite(taskId: string | null, path: string): Promise<void>;
+    updateTaskMemoryWrite(taskId: string | null, path: string, operationId?: string): Promise<void>;
     updateTaskProposalReference(taskId: string, proposal: {
         proposalId: string;
         path: string;

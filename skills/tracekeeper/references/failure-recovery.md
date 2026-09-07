@@ -7,6 +7,9 @@
 | Tracekeeper returns a structured failure | Report the exact error code, message, retryability, and structured recovery actions | Replace the returned diagnosis with a generic transport or window-lifecycle explanation |
 | Tool unavailable inside a structured result | Follow the returned recovery actions or report the exact client/capability limitation | Guess a compatibility tool name |
 | Permission denied | Stop the action and report the required capability | Request or attempt a permission bypass |
+| `NOTE_CHANGED` from `read_note` continuation | Restart from the current note content and discard prior partial windows | Merge windows from mixed versions |
+| `INDEX_NOT_READY` during note/Memory reads | Retry the read request as a transient readiness state; it is not equivalent to an empty catalog | Treat it as completed empty catalog behavior |
+| `MEMORY_CATALOG_INCOMPLETE` during Memory read/pagination | Report a snapshot-incomplete state and run `tracekeeper.lint` to resolve catalog diagnostics before re-enumerating | Conclude “no memory” from incomplete state |
 | Recall returns zero matches | Follow a structured recovery action to refine scope or query | Load the whole Vault by default |
 | Project scope is uncertain | Inspect candidates and ask or narrow deliberately | Select a project at random |
 | Live start returns a structured failure before creating a task | Follow its recovery actions; if work continues as an ordinary task, close out without `task_id` and use ordinary closeout provenance | Invent a task id or claim a start record exists |

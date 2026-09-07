@@ -18,13 +18,14 @@ import {
 	configurationHash,
 	createReportWriter,
 } from './report.mjs';
+import {
+	BENCHMARK_REPORT_ROOT_DEFAULT,
+	parseOutputDir,
+	resolveOutputRoot,
+} from './output-options.mjs';
 
 const modulePath = fileURLToPath(import.meta.url);
 const moduleDirectory = path.dirname(modulePath);
-const defaultReportRoot = path.join(
-	repositoryRoot,
-	'.specs/runtime-modularization/audits/index-benchmark-reports'
-);
 const WORKER_TIMEOUT_MS_BY_TIER = Object.freeze({
 	tiny: 10 * 60 * 1_000,
 	'1k': 10 * 60 * 1_000,
@@ -41,6 +42,7 @@ function parsePositiveInt(value, label) {
 }
 
 export function parseArgs(argv) {
+	const { outputDir, argv: parsedArgs } = parseOutputDir(argv, BENCHMARK_REPORT_ROOT_DEFAULT);
 	const options = {
 		tier: 'tiny',
 		seed: 'tracekeeper-index-v1',
@@ -54,10 +56,11 @@ export function parseArgs(argv) {
 		runId: '',
 		repetition: 0,
 		warmup: false,
+		outputDir,
 	};
-	for (let index = 0; index < argv.length; index += 1) {
-		const arg = argv[index];
-		const next = argv[index + 1];
+	for (let index = 0; index < parsedArgs.length; index += 1) {
+		const arg = parsedArgs[index];
+		const next = parsedArgs[index + 1];
 		if (arg === '--tier' && next) {
 			options.tier = next;
 			index += 1;
@@ -103,7 +106,10 @@ export function parseArgs(argv) {
 	if (options.tier !== 'tiny' && !options.allowScale && !options.worker) {
 		throw new Error('Scale tiers require --allow-scale and belong to Phase P2.');
 	}
-	return options;
+	return {
+		...options,
+		outputDir: resolveOutputRoot(outputDir),
+	};
 }
 
 function compactUtc(value) {
@@ -120,6 +126,7 @@ async function sourceSha() {
 		'normalize.mjs',
 		'report.mjs',
 		'run.mjs',
+		'output-options.mjs',
 	];
 	const contents = await Promise.all(
 		sourceFiles.map((filename) => fs.readFile(path.join(moduleDirectory, filename), 'utf8'))
@@ -167,26 +174,12 @@ async function runWorker(options) {
 	process.exitCode = result.sample.status === 'passed' ? 0 : 1;
 }
 
-function verifyReportRootIgnored(reportRoot) {
-	const result = spawnSync(
-		'git',
-		['check-ignore', '-q', '--no-index', path.join(reportRoot, 'probe', 'summary.json')],
-		{
-			cwd: repositoryRoot,
-			stdio: 'ignore',
-			timeout: 5_000,
-		}
-	);
-	if (result.status !== 0) {
-		throw new Error('Benchmark report root is not ignored by Git.');
-	}
-}
-
 function workerArgs(options, input) {
 	return [
 		'--expose-gc',
 		modulePath,
 		'--worker',
+		'--output-dir', options.outputDir,
 		'--tier',
 		options.tier,
 		'--seed',
@@ -240,7 +233,6 @@ async function executeWorker(options, input) {
 }
 
 export async function runBenchmark(options) {
-	verifyReportRootIgnored(defaultReportRoot);
 	const config = resolveFixtureConfig({ tier: options.tier, seed: options.seed });
 	const startedAt = new Date().toISOString();
 	const harnessSha256 = await sourceSha();
@@ -300,7 +292,7 @@ export async function runBenchmark(options) {
 			measured_repetition_count: options.repetitions,
 		};
 		const writer = await createReportWriter({
-			reportRoot: defaultReportRoot,
+			reportRoot: options.outputDir,
 			runGroupId,
 			forbiddenRoots: [
 				repositoryRoot,

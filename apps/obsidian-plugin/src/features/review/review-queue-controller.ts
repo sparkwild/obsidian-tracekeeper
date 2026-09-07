@@ -1,3 +1,4 @@
+import type { OperationJournalProvider } from '@tracekeeper/mcp-runtime';
 import { App, TFile, TFolder } from 'obsidian';
 import {
 	ARCHIVE_REVIEW_QUEUE_DIR,
@@ -405,6 +406,7 @@ export interface ReviewQueueControllerHost {
 	appendToAuditLog(entry: string): Promise<void>;
 	appendWikiBatchActivity(operationId: string, entry: string): Promise<void>;
 	getVaultRoot?: () => string;
+	operationJournalProvider?: OperationJournalProvider;
 	ensureFolderExists(path: string): Promise<void>;
 	normalizeVaultPath(path: string): string;
 	loadReviewKnowledgeSnapshot(): Promise<ReviewKnowledgeSnapshot>;
@@ -457,6 +459,7 @@ export class ReviewQueueController {
 				appendWikiBatchActivity: (operationId, entry) =>
 					this.host.appendWikiBatchActivity(operationId, entry),
 				refreshGovernanceViews: () => this.host.refreshGovernanceViews(),
+				operationJournalProvider: this.host.operationJournalProvider,
 				getVaultRoot: () => {
 					if (!this.host.getVaultRoot) {
 						throw new Error('Wiki batch operation requires the active Vault root.');

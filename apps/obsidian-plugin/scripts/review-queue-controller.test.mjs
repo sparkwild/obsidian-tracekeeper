@@ -43,6 +43,7 @@ const obsidianStub = {
 						this.cls = options.cls || '';
 						this.classes = new Set(String(this.cls).split(/\\s+/).filter(Boolean));
 						this.attributes = { ...(options.attr || {}) };
+						this.dataset = {};
 						this.children = [];
 						this.handlers = {};
 						this.disabled = false;
@@ -52,6 +53,23 @@ const obsidianStub = {
 					empty() {
 						this.children = [];
 						this.text = '';
+					}
+					contains(element) {
+						return this === element || this.children.some((child) => child.contains(element));
+					}
+					get ownerDocument() {
+						return { activeElement: globalThis.__tracekeeperFocusedElement || null };
+					}
+					querySelectorAll(selector) {
+						const descendants = this.children.flatMap(child => [child, ...child.querySelectorAll('*')]);
+						if (selector === '*') return descendants;
+						if (selector === 'details[data-tracekeeper-history-key]') {
+							return descendants.filter(child => child.tag === 'details' && child.dataset.tracekeeperHistoryKey !== undefined);
+						}
+						return descendants.filter(child => child.tag === selector);
+					}
+					querySelector(selector) {
+						return this.querySelectorAll(selector)[0] || null;
 					}
 					createEl(_tag, options = {}) {
 						const child = new FakeElement(options);

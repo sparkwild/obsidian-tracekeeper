@@ -5,7 +5,7 @@ import { type ObservedClientType } from './observed-client';
 import type { AgentAuthMode } from './agent-auth';
 export declare const MCP_PROTOCOL_VERSION = "2025-06-18";
 export declare const SUPPORTED_MCP_PROTOCOL_VERSIONS: readonly ["2025-11-25", "2025-06-18"];
-export declare const MCP_SERVER_VERSION = "0.5.0";
+export declare const MCP_SERVER_VERSION = "0.5.1";
 export declare const STREAMABLE_HTTP_TRANSPORT = "streamable-http";
 export interface McpConnectionState {
     sessionId: string;
@@ -28,6 +28,7 @@ export interface McpJsonRpcHandlerOptions {
     proposalTransitionPort?: ProposalTransitionPort;
     knowledgeSnapshotProvider?: ToolInvocationContext['knowledgeSnapshotProvider'];
     knowledgeReadViewProvider?: ToolInvocationContext['knowledgeReadViewProvider'];
+    operationJournalProvider?: ToolInvocationContext['operationJournalProvider'];
     graphProfile?: unknown;
     memoryRules?: ToolInvocationContext['memoryRules'];
     contentLanguage?: unknown;
@@ -43,6 +44,7 @@ export declare class McpJsonRpcHandler {
     private proposalTransitionPort?;
     private knowledgeSnapshotProvider?;
     private knowledgeReadViewProvider?;
+    private operationJournalProvider?;
     private graphProfile?;
     private memoryRules?;
     private contentLanguage?;

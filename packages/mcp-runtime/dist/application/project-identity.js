@@ -197,7 +197,8 @@ function resolveProjectIdentity(raw, notes = []) {
         }
         else if (hintMatches.length === 1) {
             candidate = hintMatches[0];
-            if (repoMatches.length > 0 && !repoMatches.includes(candidate)) {
+            if (repoPath && candidate.repoPaths.length > 0
+                && !candidate.repoPaths.some((candidatePath) => repoPathMatches(candidatePath, repoPath))) {
                 warnings.push('project_hint_conflicts_with_repo_path');
                 uncertain = true;
             }

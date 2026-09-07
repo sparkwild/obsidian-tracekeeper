@@ -18,13 +18,13 @@ const writeFile = async (root, relativePath, content) => {
 	await fs.writeFile(target, content);
 };
 
-const createTestAssets = async (root) => {
+const createTestAssets = async (root, version = '0.2.3') => {
 	const contents = {
 		'main.js': Buffer.from('synthetic published 0.2.3 main'),
 		'manifest.json': Buffer.from(`${JSON.stringify({
 			id: 'tracekeeper',
 			name: 'Tracekeeper',
-			version: '0.2.3',
+			version,
 			minAppVersion: '1.8.7',
 		}, null, 2)}\n`),
 		'styles.css': Buffer.from('.tracekeeper { color: inherit; }\n'),
@@ -382,4 +382,29 @@ test('rejects a tampered fixture manifest and a noncanonical before state', asyn
 			/Before seeded file (size|hash) is not canonical/
 		);
 	});
+});
+
+
+test('0.5.0 fixture preserves existing security and rejects rotation or changed evidence', async (t) => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tracekeeper-current-upgrade-'));
+	t.after(() => fs.rm(root, { recursive: true, force: true }));
+	const assets = path.join(root, 'assets');
+	const expectedAssets = await createTestAssets(assets, '0.5.0');
+	const created = await createUpgradeFixture({ assetsDirectory: assets, outputDirectory: path.join(root, 'fixture'), previousVersion: '0.5.0', expectedAssets });
+	const input = { fixturePath: created.manifest_path, vaultPath: created.vault_path };
+	const before = await snapshotUpgradeFixture({ ...input, phase: 'before' });
+	const after = await snapshotUpgradeFixture({ ...input, phase: 'after' });
+	const options = { expectedPreviousAssets: expectedAssets, expectedTargetAssets: expectedAssets, expectedVersion: '0.5.0' };
+	assert.equal(compareUpgradeSnapshots(before, after, options).result, 'pass');
+	assert.equal(before.settings.runtime_security_secret.valid_32_byte_base64url, true);
+	assert.equal(Object.hasOwn(before.fixture_preserved_settings, 'taskMemoryProposalMode'), false);
+	assert.equal(before.previous_memory_rules_version, 6);
+	assert.equal(before.settings.memory_rules_version, 6);
+	const changed = structuredClone(after);
+	changed.settings.runtime_security_secret.sha256 = 'f'.repeat(64);
+	assert.throws(() => compareUpgradeSnapshots(before, changed, options), /existing runtime security secret/);
+	changed.settings.runtime_security_secret.sha256 = before.settings.runtime_security_secret.sha256;
+	changed.settings.agent_skill_state.connection_evidence_present = true;
+	assert.throws(() => compareUpgradeSnapshots(before, changed, options), /evidence/);
+	await assert.rejects(createUpgradeFixture({ assetsDirectory: assets, outputDirectory: path.join(root, 'unsupported'), previousVersion: '9.9.9' }), /Unsupported previous release/);
 });

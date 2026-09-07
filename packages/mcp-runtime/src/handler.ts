@@ -44,7 +44,7 @@ import {
 
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
 export const SUPPORTED_MCP_PROTOCOL_VERSIONS = ['2025-11-25', MCP_PROTOCOL_VERSION] as const;
-export const MCP_SERVER_VERSION = '0.5.0';
+export const MCP_SERVER_VERSION = '0.5.1';
 export const STREAMABLE_HTTP_TRANSPORT = 'streamable-http';
 
 const MAX_RESOURCE_TEXT_CHARS = 128 * 1024;
@@ -133,6 +133,7 @@ export interface McpJsonRpcHandlerOptions {
 	proposalTransitionPort?: ProposalTransitionPort;
 	knowledgeSnapshotProvider?: ToolInvocationContext['knowledgeSnapshotProvider'];
 	knowledgeReadViewProvider?: ToolInvocationContext['knowledgeReadViewProvider'];
+	operationJournalProvider?: ToolInvocationContext['operationJournalProvider'];
 	graphProfile?: unknown;
 	memoryRules?: ToolInvocationContext['memoryRules'];
 	contentLanguage?: unknown;
@@ -149,6 +150,7 @@ export class McpJsonRpcHandler {
 	private proposalTransitionPort?: ProposalTransitionPort;
 	private knowledgeSnapshotProvider?: ToolInvocationContext['knowledgeSnapshotProvider'];
 	private knowledgeReadViewProvider?: ToolInvocationContext['knowledgeReadViewProvider'];
+	private operationJournalProvider?: ToolInvocationContext['operationJournalProvider'];
 	private graphProfile?: unknown;
 	private memoryRules?: ToolInvocationContext['memoryRules'];
 	private contentLanguage?: unknown;
@@ -164,6 +166,7 @@ export class McpJsonRpcHandler {
 		this.proposalTransitionPort = options.proposalTransitionPort;
 		this.knowledgeSnapshotProvider = options.knowledgeSnapshotProvider;
 		this.knowledgeReadViewProvider = options.knowledgeReadViewProvider;
+		this.operationJournalProvider = options.operationJournalProvider;
 		this.graphProfile = options.graphProfile;
 		this.memoryRules = options.memoryRules;
 		this.contentLanguage = options.contentLanguage;
@@ -459,6 +462,7 @@ export class McpJsonRpcHandler {
 			proposalTransitionPort: this.proposalTransitionPort,
 			knowledgeSnapshotProvider: this.knowledgeSnapshotProvider,
 			knowledgeReadViewProvider: this.knowledgeReadViewProvider,
+			operationJournalProvider: this.operationJournalProvider,
 			graphProfile: this.graphProfile,
 			memoryRules: this.memoryRules,
 			contentLanguage: this.contentLanguage,

@@ -821,7 +821,7 @@ function buildReadViewEntry(match, scope, view, dependencies) {
         matched_tokens: match.matchedTokens,
         score_reason: match.score_reason,
         why_matched: buildRecallWhyMatched(whyMatch, scope),
-        excerpt: compactNoteText(match.entry.excerpt),
+        excerpt: compactNoteText(view.contentReader.excerpt?.(match.entry.path, match.matchedTokens, MAX_RECALL_EXCERPT_LENGTH) ?? match.entry.excerpt),
         content_origin: dependencies.contentOrigin(match.entry.path, match.entry.type ?? undefined),
         instruction_trust: 'data_only',
         graph_links: buildKnowledgeGraphLinksFromReadView(match.entry, view),
@@ -922,6 +922,25 @@ function boundedReadViewMatches(view, entries, query, scope, nowMs) {
     const allowed = new Map(entries.map((entry) => [entry.path, entry]));
     const matchedByPath = new Map();
     const queryTerms = tokenizeReadViewQuery(query);
+    const queryPhrase = query.trim().normalize('NFKC').toLocaleLowerCase('en-US');
+    const priorities = new Map();
+    const candidatePriority = (entry, rawScore) => {
+        const key = `${entry.path}\0${rawScore}`;
+        const cached = priorities.get(key);
+        if (cached !== undefined)
+            return cached;
+        const title = entry.title.normalize('NFKC').toLocaleLowerCase('en-US');
+        const aliases = entry.aliases.map((alias) => alias.normalize('NFKC').toLocaleLowerCase('en-US'));
+        const exact = queryPhrase && (title.includes(queryPhrase) || aliases.some((alias) => alias.includes(queryPhrase)));
+        const titleHits = queryTerms.filter((term) => title.includes(term)).length;
+        const workRecord = isGeneratedWorkRecord({ relativePath: entry.path });
+        const priority = rawScore + (exact ? 8 : 0) + titleHits * 2
+            + (entry.path.startsWith(`${core_1.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`) ? PROJECT_MEMORY_RECALL_BOOST : 0)
+            + ((0, core_1.isKnowledgeWikiPath)(entry.path) ? KNOWLEDGE_WIKI_RECALL_BOOST : 0)
+            - (workRecord ? Math.max(0, rawScore - 2) + WORK_RECORD_RECALL_PENALTY : 0);
+        priorities.set(key, priority);
+        return priority;
+    };
     for (const term of queryTerms) {
         for (const notePath of view.lexical.postings.get(term) ?? []) {
             if (!allowed.has(notePath))
@@ -932,7 +951,8 @@ function boundedReadViewMatches(view, entries, query, scope, nowMs) {
         }
     }
     const lexical = [...matchedByPath.entries()]
-        .sort(([leftPath, left], [rightPath, right]) => right.size - left.size || leftPath.localeCompare(rightPath))
+        .sort(([leftPath, left], [rightPath, right]) => candidatePriority(allowed.get(rightPath), right.size) - candidatePriority(allowed.get(leftPath), left.size)
+        || leftPath.localeCompare(rightPath))
         .slice(0, exports.MAX_READ_VIEW_LEXICAL_CANDIDATES);
     const candidateScores = new Map();
     for (const [notePath, matched] of lexical) {
@@ -967,7 +987,8 @@ function boundedReadViewMatches(view, entries, query, scope, nowMs) {
         rawScore: candidate.rawScore,
         matchedTokens: [...candidate.tokens].sort(),
     }))
-        .sort((left, right) => right.rawScore - left.rawScore || left.entry.path.localeCompare(right.entry.path))
+        .sort((left, right) => candidatePriority(right.entry, right.rawScore) - candidatePriority(left.entry, left.rawScore)
+        || left.entry.path.localeCompare(right.entry.path))
         .slice(0, exports.MAX_READ_VIEW_RERANKED_ROWS);
     return {
         matches: rankCatalogMatches(rows, query, scope, nowMs),

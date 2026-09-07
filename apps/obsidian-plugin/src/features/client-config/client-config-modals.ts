@@ -419,7 +419,7 @@ export class ConnectAiToolModal extends Modal {
 		const section = container.createDiv({ cls: 'tracekeeper-connect-ai-tool-modal__section' });
 		const pendingRequests = this.pendingOAuthRequests();
 		if (pendingRequests.length === 0) {
-			section.createEl('p', { text: this.integration?.credential ? ui('OAuth 已授权。客户端完成 initialize 后才会显示已连接。', 'OAuth is authorized. Connected appears only after the client completes initialize.') : ui('客户端发起连接后，Tracekeeper 会在这里显示授权确认。', 'Tracekeeper shows an authorization confirmation here when the client connects.'), cls: 'tracekeeper-view__description' });
+			section.createEl('p', { text: this.integration?.credential ? ui('OAuth 已授权。客户端完成初始化后会记录连接验证结果；历史验证不代表当前仍在线。', 'OAuth is authorized. Client initialization records a verified connection; historical verification does not prove current availability.') : ui('客户端发起连接后，Tracekeeper 会在这里显示授权确认。', 'Tracekeeper shows an authorization confirmation here when the client connects.'), cls: 'tracekeeper-view__description' });
 		}
 		for (const pending of pendingRequests) {
 			const selectedForBinding = pending.requestId === this.selectedUnboundRequestId

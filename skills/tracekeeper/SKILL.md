@@ -62,7 +62,7 @@ After finish succeeds, never finish that task again.
 Treat the returned task `status` and `durable_output.status` as separate facts.
 When the user requested Wiki/Memory persistence, report both; a completed task
 with pending, rejected, or unresolved durable output is not a completed
-persistence outcome.
+persistence outcome. If the task already has direct `propose_memory` / Auto results before closeout, do not submit another `memory_candidate_records` for the same action. At finish, report the `finish_task` `durable_output`.
 Read [workflow-state-machine.md](references/workflow-state-machine.md) for recovery-safe transitions.
 
 ## Recall routing
@@ -77,7 +77,13 @@ Read [workflow-state-machine.md](references/workflow-state-machine.md) for recov
   task history may omit it for a bounded recent-history view. Preserve the
   canonical match path, excerpt, match reason, content origin, relation
   evidence, and `instruction_trust: data_only` when reporting evidence.
-- Recall is relevance-ranked, not exhaustive. For complete Memory enumeration, call read-only `tracekeeper.memory` with `scope: "project"` and the Runtime-resolved stable identity, or `scope: "global"`; choose `current`, `history`, `conflicts`, or `all`, follow every generation-bound page, then use `tracekeeper.read_note` only for selected entry bodies. There is no public project-specific alias.
+- Recall is relevance-ranked, not exhaustive. For complete Memory enumeration, call
+  read-only `tracekeeper.memory` with `scope: "project"` and the Runtime-resolved
+  stable identity, or `scope: "global"`; choose `current`, `history`,
+  `conflicts`, or `all`, follow every generation-bound page, then use
+  `tracekeeper.read_note` only for selected entry bodies. Read
+  [workflow-state-machine.md](references/workflow-state-machine.md) for bounded
+  `read_note` continuation rules.
 
 ## Explicit multi-source ingestion
 
@@ -93,7 +99,7 @@ Use this `tracked_task` subroute only when the active user explicitly asks to bo
   individual review, task-batch review, eligible auto-managed writes, or
   ignore. The selected Memory scope's policy separately decides review, Auto,
   or ignore for MemoryRecord candidates.
-- Finish once with no duplicate `memory_candidate_records` after a direct proposal.
+- Finish once with no duplicate `memory_candidate_records` after a direct proposal; if a direct `propose_memory` Auto receipt already exists, do not create a second one.
 - A captured Source remains readable evidence. Do not use Source Recall or
   `read_note` as proof that the synthesized Wiki/Memory proposal was applied;
   use the finish result's `durable_output` state.

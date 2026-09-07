@@ -570,6 +570,7 @@ try {
 			const rowApp = {
 				vault: {
 					getMarkdownFiles: () => [sourceFile, targetFile],
+					getAbstractFileByPath: (filePath) => [sourceFile, targetFile].find((file) => file.path === filePath) ?? null,
 					cachedRead: async (file) => rowContents.get(file.path) || '',
 					read: async (file) => rowContents.get(file.path) || '',
 				},

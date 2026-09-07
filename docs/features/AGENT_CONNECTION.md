@@ -117,6 +117,11 @@ approval button, or opaque handle beyond the waiting URL required for polling.
 
 ## Skill boundary and recovery
 
+Connection verification and usage labels describe observed history. They are
+not a liveness probe: an authorized credential or an old successful initialize
+does not establish that the client is currently online. Closing the owning
+Vault still unloads the plugin-hosted Runtime.
+
 The companion Skill teaches `no_track`, `recall_only`, and `tracked_task` habits;
 it never grants Runtime permissions or proves MCP use. Skill installation keeps
 the existing write-plan, recheck, backup, rollback, symlink, and receipt

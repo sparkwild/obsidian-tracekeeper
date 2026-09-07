@@ -100,12 +100,15 @@ export interface KnowledgeContentRead {
 export interface KnowledgeContentReader {
     readonly generation: number;
     read(notePath: VaultPath): Promise<KnowledgeContentRead | null>;
+    excerpt?(notePath: VaultPath, terms: readonly string[], maxLength: number): string;
 }
 export interface KnowledgeReadView {
     version: string;
     source: 'index' | 'filesystem_scan';
     createdAt: string;
     generation: number;
+    /** 活动日志仍进入快照，但不使知识分页或维护候选失效。 */
+    knowledge_generation?: number;
     event_sequence: number;
     index_state: KnowledgeIndexState;
     catalog: ReadonlyMap<VaultPath, KnowledgeCatalogEntry>;
@@ -122,6 +125,7 @@ export interface KnowledgeSnapshot {
     version: string;
     createdAt: string;
     generation: number;
+    knowledge_generation?: number;
     event_sequence: number;
     index_state: KnowledgeIndexState;
     notes: ReadonlyMap<VaultPath, IndexedKnowledgeNote>;
@@ -170,16 +174,21 @@ export declare class InMemoryKnowledgeIndex implements KnowledgeIndex {
     private sourceNotes;
     private sourceErrors;
     private writeChain;
+    private deleteImpact;
     constructor(options: KnowledgeIndexOptions);
     snapshot(): Promise<KnowledgeSnapshot>;
     readView(): Promise<KnowledgeReadView>;
     scanSnapshot(): ScanResult;
     rebuild(scanResult?: ScanResult): Promise<KnowledgeIndexReport>;
     apply(event: VaultIndexEvent): Promise<void>;
-    applySemantic(event: VaultSemanticEvent): Promise<void>;
+    applySemantic(event: VaultSemanticEvent, refreshedNotes?: readonly NormalizedVaultNote[]): Promise<void>;
     advanceEventSequenceAfterRebuild(sequence: number): Promise<void>;
-    applyScanned(event: VaultIndexEvent, note?: ScannedNote | null): Promise<void>;
+    applyScanned(event: VaultIndexEvent, note?: ScannedNote | null, refreshedNotes?: readonly ScannedNote[]): Promise<void>;
     private enqueueWrite;
+    /** 删除目标后，原生引用可能变为未解析或重新指向同名文件。 */
+    deleteAffectedPaths(notePath: string): readonly string[];
+    /** 返回改名可能影响的引用源，供原生适配器在同一次事件中刷新元数据。 */
+    renameAffectedPaths(oldPath: string, newPath: string, note: ScannedNote): readonly string[];
     private readContentForView;
     private clearRecoveredSourceErrors;
     private applyCreateOrModify;

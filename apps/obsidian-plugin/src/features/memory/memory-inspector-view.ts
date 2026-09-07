@@ -1,3 +1,4 @@
+import { captureHistoricalDisclosureState, renderHistoricalDiagnostics } from '../observability/historical-record-diagnostics';
 import { ItemView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
 import type TracekeeperPlugin from '../../main';
 import {
@@ -118,6 +119,7 @@ export const memoryInspectorIndexStateLabel = (state: string): string => {
 };
 
 export class TracekeeperMemoryInspectorView extends ItemView {
+	private refreshVersion = 0;
 	private migrationPreview: LegacyMemoryMigrationPreview | null = null;
 	private migrationResult: LegacyMemoryMigrationResult | null = null;
 	private migrationBusy = false;
@@ -161,6 +163,11 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		await this.refresh();
 	}
 
+	async onClose(): Promise<void> {
+		this.refreshVersion += 1;
+		await super.onClose();
+	}
+
 	async focus(query: Pick<MemoryInspectorQuery, 'focusPaths' | 'taskId'>): Promise<void> {
 		this.query = {
 			...this.query,
@@ -173,6 +180,7 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 
 	private async render(snapshot: MemoryInspectorSnapshot): Promise<void> {
 		const { contentEl } = this;
+		const disclosureState = captureHistoricalDisclosureState(contentEl);
 		contentEl.empty();
 		contentEl.addClass('tracekeeper-view-root');
 
@@ -191,6 +199,7 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 		});
 
 		this.renderIndexStatus(contentEl, snapshot);
+		renderHistoricalDiagnostics(contentEl, snapshot.historicalDiagnostics, ui, disclosureState);
 		this.renderMaintenanceCandidates(contentEl, snapshot);
 		this.renderLegacyMigrationStatus(contentEl, snapshot.lifecycleCounts.legacy_unkeyed);
 		this.renderFilters(contentEl, snapshot);
@@ -641,7 +650,9 @@ export class TracekeeperMemoryInspectorView extends ItemView {
 	}
 
 	async refresh(): Promise<void> {
+		const version = ++this.refreshVersion;
 		const snapshot = await this.plugin.loadMemoryInspectorSnapshot(this.query);
+		if (version !== this.refreshVersion) return;
 		await this.render(snapshot);
 	}
 }

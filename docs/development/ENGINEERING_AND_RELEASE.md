@@ -185,8 +185,14 @@ npm run release:upgrade-fixture -- snapshot --fixture <fixture.json> --vault <fi
 npm run release:upgrade-fixture -- compare --before <before.json> --after <after.json> --expected-target-assets <qualified-assets.json> --expected-version <x.y.z>
 ```
 
+For the current previous release, add `--previous-version 0.5.0` to `create`.
+That profile pins the published 0.5.0 asset bytes and hashes and verifies existing
+security-secret and Agent/Skill evidence preservation. The default 0.2.3 profile
+continues to verify legacy credential migration. Never substitute one profile's
+credential assertions for the other.
+
 The tool never downloads release assets or starts Obsidian. `create` accepts
-only the immutable published `0.2.3` sizes and SHA-256 values, writes a new
+only the selected immutable published `0.2.3` or `0.5.0` sizes and SHA-256 values, writes a new
 synthetic disposable Vault, and refuses an existing output path. The fixture
 contains sixteen task, session, context, memory, Wiki, source, review, legacy,
 Agent-observation, Agent activity, and receipt records plus two unrelated protected files. The

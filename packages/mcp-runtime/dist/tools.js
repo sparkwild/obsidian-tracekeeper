@@ -689,6 +689,17 @@ function buildProposeMemoryActions(payload) {
         }];
 }
 function classifyToolError(message) {
+    if (/note_content_changed/i.test(message))
+        return { code: 'NOTE_CHANGED', retryable: true };
+    if (/knowledge_index_not_ready/i.test(message)) {
+        return { code: 'INDEX_NOT_READY', retryable: true };
+    }
+    if (/memory_catalog_incomplete/i.test(message)) {
+        return { code: 'MEMORY_CATALOG_INCOMPLETE', retryable: false };
+    }
+    if (/Maintenance snapshot generation .* stale/i.test(message)) {
+        return { code: 'STALE_CURSOR', retryable: true };
+    }
     if (/lacks capability|permission denied/i.test(message)) {
         return { code: 'PERMISSION_DENIED', retryable: false, reasonCode: 'PERMISSION_DENIED' };
     }
@@ -717,6 +728,12 @@ function safeToolErrorDescription(code, reasonCode) {
         return 'The supplied project identity is not an exact current Vault identity; use Runtime-resolved identity evidence instead of guessing.';
     }
     switch (code) {
+        case 'NOTE_CHANGED':
+            return 'The note changed between windows. Restart the read with its current content hash.';
+        case 'INDEX_NOT_READY':
+            return 'The knowledge index is not ready. Retry after indexing completes; an empty result has not been established.';
+        case 'MEMORY_CATALOG_INCOMPLETE':
+            return 'Memory records could not be completely read or validated. Inspect lint diagnostics before relying on enumeration.';
         case 'PERMISSION_DENIED':
             return 'The current principal is not allowed to perform this action.';
         case 'FINISH_ALREADY_COMPLETED':
@@ -970,6 +987,10 @@ async function knowledgeReadViewForContext(vaultRoot, context) {
 async function freshKnowledgeReadViewForContext(vaultRoot, context) {
     const { knowledgeReadViewPromise: _cachedReadView, ...freshContext } = context;
     return knowledgeReadViewForContext(vaultRoot, freshContext);
+}
+async function stableKnowledgeReadViewForContext(vaultRoot, context) {
+    const view = await knowledgeReadViewForContext(vaultRoot, context);
+    return { ...view, generation: view.knowledge_generation ?? view.generation };
 }
 function projectMemoryRepository(vaultRoot, context) {
     if (context.vaultRepository) {
@@ -1986,8 +2007,8 @@ async function createFinishTaskProposal(vaultRoot, taskId, sessionNotePath, oper
         proposalId,
     }));
 }
-async function readFinishTaskProjectMemoryStepReceipt(vaultRoot, operationId) {
-    const record = await operationJournalForVault(vaultRoot).loadById(operationId);
+async function readFinishTaskProjectMemoryStepReceipt(vaultRoot, operationId, context) {
+    const record = await operationJournalForVault(vaultRoot, context).loadById(operationId);
     const result = record?.completed_steps.find((step) => step.name === 'finish-task:project-memory'
         || (step.name.startsWith('finish-task:')
             && (0, protocol_1.isRecord)(step.result)
@@ -2074,7 +2095,7 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
     const proposals = [];
     const suggestedMemoryUpdates = [];
     const autoAppliedMemoryUpdates = [];
-    const projectMemoryReceipt = await readFinishTaskProjectMemoryStepReceipt(vaultRoot, operationId);
+    const projectMemoryReceipt = await readFinishTaskProjectMemoryStepReceipt(vaultRoot, operationId, context);
     if (expectImmutableProjectMemory && !projectMemoryReceipt) {
         throw new core_1.OperationConflictError('Finish-task project-memory step receipt is missing.');
     }
@@ -3643,24 +3664,31 @@ function updateFrontmatterFields(content, fields) {
         return ['---', ...renderedFields, '---', normalized].join('\n');
     }
     const pending = new Map(Object.entries(fields));
+    const rootIndent = lines.slice(1, end).find((line) => /^\s*[^\s:#-][^:#]*:/.test(line))?.match(/^\s*/)?.[0] ?? '';
+    let replacingValue = false;
     const frontmatterLines = lines.slice(1, end).flatMap((line) => {
-        const pair = line.match(/^(\s*)([^:#]+):\s*(.*)$/);
-        if (!pair) {
+        const indent = line.match(/^\s*/)?.[0].length ?? 0;
+        if (replacingValue && (indent > rootIndent.length || /^\s*-\s/.test(line)))
+            return [];
+        const pair = line.match(/^(\s*)([^\s:#][^:#]*):\s*(.*)$/);
+        if (!pair || pair[1] !== rootIndent) {
             return [line];
         }
+        replacingValue = false;
         const key = pair[2]?.trim() || '';
         if (!pending.has(key)) {
             return [line];
         }
         const nextValue = pending.get(key);
         pending.delete(key);
+        replacingValue = true;
         return nextValue === null || nextValue === undefined
             ? []
-            : [`${pair[1] || ''}${key}: ${formatFrontmatterUpdateValue(nextValue)}`];
+            : [`${rootIndent}${key}: ${formatFrontmatterUpdateValue(nextValue)}`];
     });
     for (const [key, value] of pending) {
         if (value !== null) {
-            frontmatterLines.push(`${key}: ${formatFrontmatterUpdateValue(value)}`);
+            frontmatterLines.push(`${rootIndent}${key}: ${formatFrontmatterUpdateValue(value)}`);
         }
     }
     return ['---', ...frontmatterLines, '---', ...lines.slice(end + 1)].join('\n');
@@ -4330,7 +4358,7 @@ async function writeImmutableMemoryRecord(vaultRoot, input) {
         canonicalProjectId = preLockRoute.binding.project_id;
     }
     const claimLockKey = memoryClaimLockKey(input.scope, canonicalProjectId, claimKey);
-    const release = await operationJournalForVault(vaultRoot).acquireLock(claimLockKey);
+    const release = await operationJournalForVault(vaultRoot, input.context).acquireLock(claimLockKey);
     try {
         let projectId = null;
         let projectHub = null;
@@ -4589,6 +4617,8 @@ function emptyAgentTaskMetadata() {
         proposalIds: [],
         proposalPaths: [],
         sourceCaptures: [],
+        memoryWrites: [],
+        autoWriteOperationIds: [],
     };
 }
 function agentTaskMetadataFromFrontmatter(frontmatter) {
@@ -4633,6 +4663,8 @@ function agentTaskMetadataFromFrontmatter(frontmatter) {
         proposalIds: readFrontmatterStringList(frontmatter, 'proposal_ids'),
         proposalPaths: readFrontmatterStringList(frontmatter, 'proposal_paths'),
         sourceCaptures: readFrontmatterStringList(frontmatter, 'source_captures'),
+        memoryWrites: readFrontmatterStringList(frontmatter, 'memory_writes'),
+        autoWriteOperationIds: readFrontmatterStringList(frontmatter, 'auto_write_operation_ids'),
     };
 }
 function projectIdentityValueMatches(field, left, right) {
@@ -4891,10 +4923,48 @@ async function snapshotTaskDurableOutput(vaultRoot, taskId, metadata, context) {
         seenPairs.add(pairKey);
         proposals.push(await snapshotExactTaskProposal(vaultRoot, taskId, proposalId, rawPath, context));
     }
+    const autoWrites = await snapshotTaskAutoWrites(vaultRoot, taskId, metadata, context);
     return {
         sourceCapturePaths: normalizedTaskSourceCaptures(metadata.sourceCaptures, context),
         proposals,
+        ...(autoWrites.length > 0 ? { autoWrites } : {}),
     };
+}
+async function snapshotTaskAutoWrites(vaultRoot, taskId, metadata, context) {
+    const ids = new Set(metadata.autoWriteOperationIds);
+    // 旧任务未保存独立回执引用；只从规范 Memory 路径寻找并验证真实 journal。
+    for (const target of metadata.memoryWrites) {
+        if (!target.startsWith(`${core_1.KNOWLEDGE_MEMORY_DIR}/`))
+            continue;
+        const match = path.posix.basename(target).match(/^propose_memory-(propose-memory-[a-f0-9]{24})\.md$/);
+        if (match)
+            ids.add(match[1]);
+    }
+    const result = [];
+    for (const operationId of ids) {
+        let targetPath = '';
+        let status = 'unresolved';
+        try {
+            if (!/^propose-memory-[a-f0-9]{24}$/.test(operationId))
+                throw new Error('Invalid auto-write identity.');
+            const operation = await operationJournalForVault(vaultRoot, context).loadById(operationId);
+            const payload = operation?.payload;
+            const receipt = operation?.result;
+            if (operation?.status === 'completed' && (0, protocol_1.isRecord)(payload) && (0, protocol_1.isRecord)(payload.requestSnapshot)
+                && payload.requestSnapshot.task_id === taskId && (0, protocol_1.isRecord)(receipt) && receipt.auto_applied === true
+                && typeof receipt.path === 'string' && metadata.memoryWrites.includes(receipt.path)
+                && (0, core_1.isAllowedProposalTargetPath)(receipt.path)) {
+                targetPath = (0, safety_1.normalizeNotePath)(receipt.path, pathSafetyOptions(context));
+                if (await readVaultNoteContent(vaultRoot, targetPath, context) !== null)
+                    status = 'applied';
+            }
+        }
+        catch {
+            // 失去回执或目标时仍保留未解决状态，不能把一次持久化尝试报告成 none。
+        }
+        result.push({ operationId, path: targetPath, status });
+    }
+    return result;
 }
 function proposalReferenceMarker(proposalId) {
     const safeId = proposalId
@@ -4926,7 +4996,10 @@ async function updateManagedProposalReferences(vaultRoot, recordPath, proposals,
         proposal_link_targets: mergeFrontmatterList(frontmatter, 'proposal_link_targets', proposals.map((proposal) => proposal.linkTarget)),
     };
     if (links.length > 0) {
-        nextFields.proposal_links = mergeFrontmatterList(frontmatter, 'proposal_links', links.map((proposal) => proposal.link));
+        nextFields.proposal_links = [...new Set([
+                ...readFrontmatterStringList(frontmatter, 'proposal_links'),
+                ...links.map((proposal) => proposal.link),
+            ])];
     }
     let next = updateFrontmatterFields(current.content, nextFields);
     const missingBodyLinks = links.filter((proposal) => !current.content.includes(proposalReferenceMarker(proposal.proposalId)));
@@ -5759,7 +5832,7 @@ function isAgentActivityTransport(context) {
     return context.transport !== 'obsidian-direct';
 }
 async function recoverPendingOperations(vaultRoot, context = {}) {
-    const controller = new recovery_1.RuntimeRecoveryController(operationJournalForVault(vaultRoot), {
+    const controller = new recovery_1.RuntimeRecoveryController(operationJournalForVault(vaultRoot, context), {
         isApplyApprovedWritebackPayload,
         isProposeMemoryOperationPayload,
         isFinishTaskV2Payload: (payload) => isFinishTaskOperationPayload(payload)
@@ -5918,11 +5991,11 @@ async function handleGraphHealth(rawArgs, context) {
         ...graphHealth,
     };
 }
-function operationJournalForVault(vaultRoot) {
+function operationJournalForVault(vaultRoot, context) {
     const operationDirectory = path.resolve(vaultRoot, core_1.TRACEKEEPER_OPERATIONS_DIR);
     (0, safety_1.relativeFromAbsolute)(vaultRoot, operationDirectory);
     (0, safety_1.assertNoSymlinkSegments)(vaultRoot, operationDirectory);
-    return new core_1.NodeFileOperationJournal({ directory: operationDirectory });
+    return context?.operationJournalProvider?.(vaultRoot) ?? new core_1.NodeFileOperationJournal({ directory: operationDirectory });
 }
 function buildOperationIdFromIdempotencyKey(tool, idempotencyKey) {
     const identity = crypto
@@ -5975,7 +6048,7 @@ async function handleStartTask(rawArgs, context) {
         operationId: operationIdentity.operationId,
         idempotencyKey: operationIdentity.idempotencyKey,
         payload: operationPayload,
-        journal: operationJournalForVault(vaultRoot),
+        journal: operationJournalForVault(vaultRoot, context),
         failureInjection: context.operationFailureInjection,
         steps: [],
         finalize: async () => {
@@ -6127,7 +6200,13 @@ async function handleMemory(rawArgs, context) {
     if (scope === 'project' && !projectId) {
         throw new safety_1.ToolInputError('memory project scope requires project_id.');
     }
-    const readView = await knowledgeReadViewForContext(vaultRoot, context);
+    const readView = await stableKnowledgeReadViewForContext(vaultRoot, context);
+    if (readView.index_state !== 'ready') {
+        throw new safety_1.ToolInputError(`knowledge_index_not_ready: ${readView.index_state}.`);
+    }
+    if (readView.errors.length > 0 || readView.memory.invalidPaths.length > 0) {
+        throw new safety_1.ToolInputError('memory_catalog_incomplete: unreadable or invalid records require inspection.');
+    }
     if (scope === 'project') {
         const matchingHubs = [...readView.catalog.values()].filter((entry) => {
             const normalizedType = (entry.type || '').toLowerCase().replace(/-/g, '_');
@@ -6297,6 +6376,29 @@ async function handleReadNote(rawArgs, context) {
     }
     const parsed = (0, core_1.parseMarkdown)(data.text);
     const view = await knowledgeReadViewForContext(vaultRoot, context);
+    const contentHash = hashText(data.text);
+    if (rawArgs.expected_hash !== undefined && coerceOptionalString(rawArgs.expected_hash) !== contentHash) {
+        throw new safety_1.ToolInputError('note_content_changed: the note no longer matches the previous window.');
+    }
+    const offset = rawArgs.offset === undefined ? 0 : rawArgs.offset;
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset > data.text.length) {
+        throw new safety_1.ToolInputError('offset must be a non-negative character offset inside the note.');
+    }
+    const maxChars = coercePositiveInt(rawArgs.max_chars, 16384, 1, 65536);
+    let end = Math.min(data.text.length, offset + maxChars);
+    if (end < data.text.length && /[\uD800-\uDBFF]/.test(data.text[end - 1]))
+        end += 1;
+    const nextOffset = end < data.text.length ? end : null;
+    const content = data.text.slice(offset, end);
+    const nextActions = nextOffset === null ? [] : [{
+            action_id: `read-note:${contentHash}:${nextOffset}`,
+            kind: 'tool_call', tool: 'tracekeeper.read_note',
+            arguments: { path: data.path, offset: nextOffset, max_chars: maxChars, expected_hash: contentHash, ...(recallId ? { recall_id: recallId } : {}) },
+            priority: 60, required: false, timing: 'if_context_insufficient',
+            reason_code: 'RECALL_EXCERPT_MAY_BE_INSUFFICIENT',
+            reason: 'This is a partial note window. Read the next hash-bound window only when the remaining content is needed.',
+            capability_required: 'vault.read',
+        }];
     return {
         ok: true,
         read_only: true,
@@ -6307,8 +6409,14 @@ async function handleReadNote(rawArgs, context) {
         recall_id: recallId || null,
         content_origin: recallContentOrigin(data.path, typeof parsed.frontmatter.fields.type === 'string' ? parsed.frontmatter.fields.type : undefined),
         instruction_trust: 'data_only',
-        content: data.text,
-        excerpt: parsed.body.slice(0, 1024),
+        content,
+        content_hash: contentHash,
+        offset,
+        next_offset: nextOffset,
+        total_chars: data.text.length,
+        truncated: offset > 0 || nextOffset !== null,
+        next_actions: nextActions,
+        excerpt: offset === 0 ? parsed.body.slice(0, Math.min(content.length, 1024)) : content.slice(0, 1024),
         relation_evidence: view.catalog.has(data.path)
             ? (0, recall_1.buildKnowledgeRelationEvidenceFromReadView)(view.catalog.get(data.path), view)
             : { related_wiki: [], related_sources: [] },
@@ -7122,10 +7230,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
             confirmation_expires_at: new Date(prepared.binding.expiresAt).toISOString(),
         };
     }
-    const operationDirectory = path.resolve(vaultRoot, core_1.TRACEKEEPER_OPERATIONS_DIR);
-    (0, safety_1.relativeFromAbsolute)(vaultRoot, operationDirectory);
-    (0, safety_1.assertNoSymlinkSegments)(vaultRoot, operationDirectory);
-    const journal = new core_1.NodeFileOperationJournal({ directory: operationDirectory });
+    const journal = operationJournalForVault(vaultRoot, context);
     const rawConfirmationToken = coerceOptionalString(rawArgs.confirmation_token);
     const recoveryOperationId = context.writebackRecoveryOperationId || '';
     let identity;
@@ -7434,7 +7539,7 @@ async function handleCaptureSource(rawArgs, context) {
     const requestHash = (0, core_1.computePayloadHash)({ ...rawArgs });
     const normalizedIdempotencyKey = coerceOptionalString(rawArgs.idempotency_key);
     const application = new capture_source_1.CaptureSourceApplicationService({
-        journal: operationJournalForVault(vaultRoot),
+        journal: operationJournalForVault(vaultRoot, context),
         failureInjection: context.operationFailureInjection,
         createIdentity: (hash, idempotencyKey) => buildToolOperationIdentity('capture-source', idempotencyKey, { requestHash: hash }, context),
         now: () => new Date().toISOString(),
@@ -7491,7 +7596,7 @@ async function handleProposeMemory(rawArgs, context) {
     };
     const observed = context.observedClientType ?? (0, observed_client_1.normalizeObservedClientType)(context.clientName);
     const application = new propose_memory_1.ProposeMemoryApplicationService({
-        journal: operationJournalForVault(vaultRoot),
+        journal: operationJournalForVault(vaultRoot, context),
         failureInjection: context.operationFailureInjection,
         createIdentity: (requestHash, idempotencyKey) => buildToolOperationIdentity('propose-memory', idempotencyKey, { requestHash }, context),
         observedAgentType: observed === 'unknown' ? 'custom' : observed,
@@ -7629,9 +7734,10 @@ async function handleProposeMemory(rawArgs, context) {
             };
         },
         ensureOwnedProposalIdentity: (proposalPath, proposalId, operationId) => ensureOperationOwnedProposalIdentity(vaultRoot, proposalPath, proposalId, 'proposal_operation_id', operationId, context),
-        updateTaskMemoryWrite: async (taskId, memoryPath) => {
+        updateTaskMemoryWrite: async (taskId, memoryPath, operationId) => {
             await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
                 memory_writes: [memoryPath],
+                ...(operationId ? { auto_write_operation_ids: [operationId] } : {}),
             });
         },
         updateTaskProposalReference: async (taskId, proposal) => {
@@ -7761,7 +7867,7 @@ async function handleLint(rawArgs, context) {
     const maxItems = coercePositiveInt(rawArgs.max_items, 40, 1, 2000);
     const pageSize = coercePositiveInt(rawArgs.page_size, maxItems, 1, 200);
     const profile = graphProfileFromArgs(rawArgs.graph_profile, context);
-    const view = await knowledgeReadViewForContext(vaultRoot, context);
+    const view = await stableKnowledgeReadViewForContext(vaultRoot, context);
     let offset = 0;
     if (rawArgs.cursor !== undefined) {
         const rawCursor = coerceNonEmptyString(rawArgs.cursor, true, 'cursor');
@@ -8053,7 +8159,7 @@ async function handleRequestMaintenance(rawArgs, context) {
             throw new safety_1.ToolInputError(`Maintenance request task is missing or does not match: ${taskId}.`);
         }
     }
-    const view = await knowledgeReadViewForContext(vaultRoot, context);
+    const view = await stableKnowledgeReadViewForContext(vaultRoot, context);
     if (view.source !== 'index' || view.generation !== rawArgs.snapshot_generation) {
         throw new safety_1.ToolInputError(`Maintenance snapshot generation ${rawArgs.snapshot_generation} is stale against ${view.generation}.`);
     }
@@ -8312,6 +8418,8 @@ function isFinishTaskDurableOutputSnapshot(value) {
     }
     return Array.isArray(value.sourceCapturePaths)
         && value.sourceCapturePaths.every((entry) => typeof entry === 'string')
+        && (value.autoWrites === undefined || (Array.isArray(value.autoWrites) && value.autoWrites.every((entry) => (0, protocol_1.isRecord)(entry) && typeof entry.operationId === 'string' && typeof entry.path === 'string'
+            && (entry.status === 'applied' || entry.status === 'unresolved'))))
         && Array.isArray(value.proposals)
         && value.proposals.every((proposal) => {
             return (0, protocol_1.isRecord)(proposal)
@@ -8719,6 +8827,17 @@ async function buildFinishTaskDurableOutput(input, proposalResult, context) {
         .map((proposal) => proposal.targetPath)
         .filter(Boolean));
     const autoAppliedKeys = new Set();
+    let unresolvedAutoWriteCount = 0;
+    for (const write of snapshot.autoWrites ?? []) {
+        if (autoAppliedKeys.has(write.operationId))
+            continue;
+        autoAppliedKeys.add(write.operationId);
+        counts[write.status] += 1;
+        if (write.status === 'unresolved')
+            unresolvedAutoWriteCount += 1;
+        if (write.path)
+            targetPaths.add(write.path);
+    }
     for (const update of proposalResult.autoAppliedMemoryUpdates) {
         const key = update.operation_id || `${update.kind}\0${update.path}`;
         if (autoAppliedKeys.has(key)) {
@@ -8764,6 +8883,7 @@ async function buildFinishTaskDurableOutput(input, proposalResult, context) {
                 .map((proposal) => proposal.proposalId)
                 .filter(Boolean)),
         ],
+        unresolvedAutoWriteCount,
     };
 }
 function aggregateFinishTaskProposalReferences(input, proposalResult, sessionNotePath, context) {
@@ -8809,6 +8929,7 @@ function durableOutputFrontmatterFields(evidence) {
         durable_output_applied_count: String(durableOutput.applied_count),
         durable_output_rejected_count: String(durableOutput.rejected_count),
         durable_output_unresolved_count: String(durableOutput.unresolved_count),
+        durable_output_unresolved_auto_write_count: String(evidence.unresolvedAutoWriteCount ?? 0),
         durable_output_proposal_ids_at_finish: evidence.proposalIdsAtFinish.join(', '),
         durable_output_proposal_paths: durableOutput.proposal_paths.join(', '),
         durable_output_target_paths: durableOutput.target_paths.join(', '),
@@ -8833,11 +8954,14 @@ function isFinishTaskDurableOutputEvidenceConsistent(evidence, context) {
     if (summary.status !== expectedStatus) {
         return false;
     }
+    const unresolvedAutoWriteCount = evidence.unresolvedAutoWriteCount ?? 0;
+    if (!Number.isSafeInteger(unresolvedAutoWriteCount) || unresolvedAutoWriteCount < 0 || unresolvedAutoWriteCount > summary.unresolved_count)
+        return false;
     const nonAppliedProposalCount = summary.pending_review_count
         + summary.ready_to_apply_count
         + summary.revision_requested_count
         + summary.rejected_count
-        + summary.unresolved_count;
+        + summary.unresolved_count - unresolvedAutoWriteCount;
     const maximumProposalCount = nonAppliedProposalCount + summary.applied_count;
     if (!Number.isSafeInteger(nonAppliedProposalCount)
         || !Number.isSafeInteger(maximumProposalCount)
@@ -8851,7 +8975,7 @@ function isFinishTaskDurableOutputEvidenceConsistent(evidence, context) {
         || !uniqueList(summary.target_paths)
         || evidence.proposalIdsAtFinish.length > summary.proposal_count
         || summary.proposal_paths.length > summary.proposal_count
-        || summary.target_paths.length > summary.proposal_count + summary.applied_count) {
+        || summary.target_paths.length > summary.proposal_count + summary.applied_count + unresolvedAutoWriteCount) {
         return false;
     }
     const exactNonAppliedCount = summary.pending_review_count
@@ -8934,6 +9058,9 @@ function durableOutputFromFrontmatter(frontmatter, context) {
         return null;
     }
     const evidence = {
+        unresolvedAutoWriteCount: Object.prototype.hasOwnProperty.call(frontmatter, 'durable_output_unresolved_auto_write_count')
+            ? count('durable_output_unresolved_auto_write_count') ?? Number.NaN
+            : 0,
         summary: {
             status,
             source_capture_count: counts.source_capture_count,
@@ -9148,7 +9275,7 @@ async function resolveFinishTaskRecording(rawArgs, context, operationId, explici
         const startOperationId = buildOperationIdFromIdempotencyKey('start-task', startIdempotencyKey);
         const expectedTaskId = `obs_task_${startOperationId.slice('start-task-'.length)}`;
         let taskState = await readCurrentVaultTextState(vaultRoot, buildTaskNotePath(expectedTaskId), context);
-        let startRecord = await operationJournalForVault(vaultRoot).loadById(startOperationId);
+        let startRecord = await operationJournalForVault(vaultRoot, context).loadById(startOperationId);
         if (taskState) {
             const metadata = agentTaskMetadataFromFrontmatter((0, core_1.parseMarkdown)(taskState.content).frontmatter.fields);
             if (metadata.startOperationId !== startOperationId) {
@@ -9190,7 +9317,7 @@ async function resolveFinishTaskRecording(rawArgs, context, operationId, explici
                 idempotency_key: startIdempotencyKey,
             }, context);
             taskState = await readCurrentVaultTextState(vaultRoot, buildTaskNotePath(expectedTaskId), context);
-            startRecord = await operationJournalForVault(vaultRoot).loadById(startOperationId);
+            startRecord = await operationJournalForVault(vaultRoot, context).loadById(startOperationId);
             const metadata = taskState
                 ? agentTaskMetadataFromFrontmatter((0, core_1.parseMarkdown)(taskState.content).frontmatter.fields)
                 : emptyAgentTaskMetadata();
@@ -9456,7 +9583,7 @@ async function writeFinishTaskProjectMemoryArtifacts(input, context, operationId
     if (!plan) {
         throw new safety_1.ToolInputError('The finish-task project-memory step has no eligible immutable closeout groups.');
     }
-    const operationRecord = await operationJournalForVault(input.vaultRoot).loadById(operationId);
+    const operationRecord = await operationJournalForVault(input.vaultRoot, context).loadById(operationId);
     const createdAt = input.projectMemoryCreatedAt
         ?? operationRecord?.created_at;
     if (!createdAt) {
@@ -9771,6 +9898,21 @@ async function releaseIncompatibleFinishTaskBinding(vaultRoot, record, context) 
 }
 async function handleFinishTask(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
+    const taskIdentity = coerceOptionalString(rawArgs.task_id)
+        || coerceOptionalString(rawArgs.idempotency_key)
+        || context.sessionId || context.agentId || 'legacy-closeout';
+    const preparationKey = `finish-preparation:${(0, core_1.computePayloadHash)({ vaultRoot, taskIdentity })}`;
+    // 准备阶段也读取任务正文；与同任务的提交串行，避免精确重试撞上首个请求的写入。
+    const release = await operationJournalForVault(vaultRoot, context).acquireLock(preparationKey, 'finish-preparation');
+    try {
+        return await prepareAndFinishTask(rawArgs, context);
+    }
+    finally {
+        await release();
+    }
+}
+async function prepareAndFinishTask(rawArgs, context) {
+    const vaultRoot = configuredVaultRoot(context);
     const invocationContext = { ...context };
     const readView = await knowledgeReadViewForContext(vaultRoot, invocationContext);
     const preflightScan = lightweightScanFromReadView(vaultRoot, readView);
@@ -9780,7 +9922,7 @@ async function handleFinishTask(rawArgs, context) {
         knowledgeSnapshotProvider: () => preflightScan,
     };
     const application = new finish_task_1.FinishTaskApplicationService({
-        journal: operationJournalForVault(vaultRoot),
+        journal: operationJournalForVault(vaultRoot, context),
         failureInjection: context.operationFailureInjection,
         requestSnapshot: buildFinishTaskRequestSnapshot,
         requestIdempotencyKey: (args) => coerceOptionalString(args.idempotency_key),

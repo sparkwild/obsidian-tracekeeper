@@ -925,7 +925,8 @@ function recallAssertions(queryId, payload) {
 	}
 }
 
-async function measureRecallQueries(manifest, scan, fixtureRoot) {
+async function measureRecallQueries(manifest, adapter, fixtureRoot) {
+	let readViewCalls = 0;
 	const context = {
 		defaultVaultRoot: fixtureRoot,
 		principalId: runtime.LOCAL_TRUST_PRINCIPAL_ID,
@@ -933,17 +934,25 @@ async function measureRecallQueries(manifest, scan, fixtureRoot) {
 		agentId: 'index-benchmark-agent',
 		sessionId: 'index-benchmark-session',
 		clientName: 'index-benchmark',
-		knowledgeSnapshotProvider: (requestedRoot) =>
-			path.resolve(requestedRoot) === path.resolve(fixtureRoot) ? scan : null,
+		knowledgeReadViewProvider: async (requestedRoot) => {
+			readViewCalls++;
+			return adapter.knowledgeReadView(requestedRoot);
+		},
+		knowledgeSnapshotProvider: () => { throw new Error('Index Recall benchmark attempted the scan fallback.'); },
 	};
 	const results = [];
 	for (const [queryId, args] of Object.entries(manifest.queries)) {
+		const callsBefore = readViewCalls;
 		const startedAt = nowNs();
-		const result = await runtime.callTool('tracekeeper.recall', args, context);
+		const result = await runtime.callTool('tracekeeper.recall', args, { ...context });
 		const durationNs = elapsedNs(startedAt);
 		recallAssertions(queryId, result.structuredContent);
+		if (readViewCalls <= callsBefore || result.structuredContent.index_state !== 'ready' || !Number.isInteger(result.structuredContent.snapshot_generation)) {
+			throw new Error(`${queryId}: Recall did not consume a ready index read view.`);
+		}
 		results.push({
 			query_id: queryId,
+			read_path: 'knowledge_read_view',
 			duration_ns: durationNs,
 			status: 'passed',
 			matched_count: result.structuredContent.matched_count,
@@ -1041,12 +1050,13 @@ export async function runSingleRepetition(options) {
 		});
 		const convergence = incrementalDigest.content_sha256 === freshDigest.content_sha256;
 		if (!convergence) {
+			await options.onConvergenceMismatch?.(incrementalDigest.content, freshDigest.content);
 			throw new Error('Incremental index did not converge with a fresh full rebuild.');
 		}
 
 		const recallResults = await measureRecallQueries(
 			fixture.manifest,
-			freshAdapter.scanSnapshot(fixtureRoot),
+			freshAdapter,
 			fixtureRoot
 		);
 		await checkpoint('recall_complete', {

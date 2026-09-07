@@ -14,6 +14,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.createOperationJournalProvider = void 0;
 __exportStar(require("./protocol"), exports);
 __exportStar(require("./tools"), exports);
 __exportStar(require("./handler"), exports);
@@ -21,3 +22,5 @@ __exportStar(require("./http-runtime"), exports);
 __exportStar(require("./observed-client"), exports);
 __exportStar(require("./result-validation"), exports);
 __exportStar(require("./agent-auth"), exports);
+var operation_journal_provider_1 = require("./infrastructure/operation-journal-provider");
+Object.defineProperty(exports, "createOperationJournalProvider", { enumerable: true, get: function () { return operation_journal_provider_1.createOperationJournalProvider; } });

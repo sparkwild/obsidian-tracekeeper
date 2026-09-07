@@ -1,3 +1,4 @@
+import type { HistoricalDiagnostics } from './historical-record-diagnostics';
 import {
 	KNOWLEDGE_GLOBAL_MEMORY_DIR,
 	KNOWLEDGE_PROJECTS_MEMORY_DIR,
@@ -94,6 +95,7 @@ export interface MemoryInspectorRecord {
 }
 
 export interface MemoryInspectorSnapshot {
+	historicalDiagnostics?: HistoricalDiagnostics;
 	records: MemoryInspectorRecord[];
 	page: number;
 	pageSize: number;
@@ -165,9 +167,11 @@ export interface SourceStatusRecord {
 	finalNotePaths: string[];
 	summary: string;
 	sortTimestamp: number;
+	historicalPaths?: string[];
 }
 
 export interface SourceStatusSnapshot {
+	historicalDiagnostics?: HistoricalDiagnostics;
 	records: SourceStatusRecord[];
 	requests: SourceRequestRecord[];
 	page: number;
@@ -204,6 +208,7 @@ export interface BuildSourceStatusInput {
 	missingRequestFolder: boolean;
 	query?: SourceStatusQuery;
 	now?: string;
+	sourceReplacements?: ReadonlyMap<string, string>;
 }
 
 const asString = (value: unknown): string => {
@@ -1057,8 +1062,22 @@ export const buildSourceStatusSnapshot = (
 	}
 
 	const missingByPath = new Map<string, SourceStatusRecord>();
+	const recordsByPath = new Map(records.map((record) => [record.path, record]));
+	const attachMigratedReference = (sourcePath: string, task?: AgentTaskRecord, proposal?: MemoryProposalRecord): boolean => {
+		if (indexedSourcePaths.has(sourcePath)) return false;
+		const parent = input.sourceReplacements?.get(sourcePath);
+		const record = parent ? recordsByPath.get(parent) : undefined;
+		if (!record || record.state !== 'captured') return false;
+		record.historicalPaths = uniquePaths([...(record.historicalPaths ?? []), sourcePath]);
+		record.taskIds = [...new Set([...record.taskIds, task?.taskId, proposal?.taskId].filter((id): id is string => Boolean(id)))];
+		record.taskPaths = uniquePaths([...record.taskPaths, ...(task ? [task.path] : [])]);
+		record.proposalPaths = uniquePaths([...record.proposalPaths, ...(task?.proposals ?? []), ...(proposal ? [proposal.path] : [])]);
+		record.finalNotePaths = uniquePaths([...record.finalNotePaths, task?.sessionNote ?? '', proposal?.sourceSessionNote ?? '']);
+		return true;
+	};
 	for (const task of input.tasks) {
 		for (const sourcePath of task.sourceCaptures.map(normalizeRecordPath).filter(isSourcePath)) {
+			if (attachMigratedReference(sourcePath, task)) continue;
 			if (indexedSourcePaths.has(sourcePath) || missingByPath.has(sourcePath)) {
 				continue;
 			}
@@ -1089,6 +1108,7 @@ export const buildSourceStatusSnapshot = (
 	}
 	for (const proposal of input.proposals) {
 		for (const sourcePath of sourceReferencePaths(proposal)) {
+			if (attachMigratedReference(sourcePath, input.tasks.find((task) => task.taskId === proposal.taskId), proposal)) continue;
 			if (indexedSourcePaths.has(sourcePath) || missingByPath.has(sourcePath)) {
 				continue;
 			}

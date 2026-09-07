@@ -398,7 +398,8 @@ export async function createReportWriter(options) {
 		throw new Error('Run group id contains unsafe characters.');
 	}
 	const runDirectory = path.join(reportRoot, runGroupId);
-	await fs.mkdir(runDirectory, { recursive: true });
+	await fs.mkdir(reportRoot, { recursive: true });
+	await fs.mkdir(runDirectory);
 	const forbiddenRoots = [...new Set(options.forbiddenRoots ?? [])];
 	const samplesPath = path.join(runDirectory, 'samples.jsonl');
 

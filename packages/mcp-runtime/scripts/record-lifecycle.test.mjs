@@ -1410,3 +1410,42 @@ test('Agent activity reader ignores legacy audit history and reads canonical sha
 		fixture.cleanup();
 	}
 });
+
+
+test('same-task finish preparation waits for a concurrent task write to finish', async () => {
+ const fixture = createFixture();
+ try {
+  const task = await startTask(fixture, 'serialized-preparation');
+  let enteredWrite; let finishWrite;
+  const writing = new Promise(resolve => { enteredWrite = resolve; });
+  const released = new Promise(resolve => { finishWrite = resolve; });
+  const delayed = taskRepositoryWithPostWriteAction(fixture.repository, async () => { enteredWrite(); await released; }, 'replaceText');
+  const args = { task_id: task.task_id, status: 'completed', summary: 'One serialized closeout.', idempotency_key: 'serialized-preparation-finish' };
+  const first = invoke('tracekeeper.finish_task', args, { ...fixture.context, vaultRepository: delayed });
+  await writing;
+  let competingReads = 0;
+  const observer = new Proxy(fixture.repository, { get(target, property) {
+   if (property === 'readText') return async (...args) => { if (String(args[0]).includes(task.task_id)) competingReads++; return target.readText(...args); };
+   const value = Reflect.get(target, property, target); return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  const second = invoke('tracekeeper.finish_task', args, { ...fixture.context, vaultRepository: observer });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  const readsWhileWriting = competingReads;
+  finishWrite();
+  const results = await Promise.all([first, second]);
+  assert.equal(readsWhileWriting, 0);
+  assert.deepEqual(results[0], results[1]);
+ } finally { fixture.cleanup(); }
+});
+
+
+test('a caller retry key cannot alias the internal finish preparation lock', async () => {
+ const fixture = createFixture();
+ try {
+  const task = await startTask(fixture, 'preparation-namespace');
+  const key = `finish-preparation:${computePayloadHash({vaultRoot:fixture.vaultRoot,taskIdentity:task.task_id})}`;
+  const journal = new NodeFileOperationJournal({directory:path.join(fixture.vaultRoot,'00_tracekeeper/control/operations'),lockWaitTimeoutMs:1000});
+  const result = await invoke('tracekeeper.finish_task', {task_id:task.task_id,status:'completed',summary:'Distinct internal lock domain.',idempotency_key:key}, {...fixture.context,operationJournalProvider:()=>journal});
+  assert.equal(result.status,'completed');
+ } finally {fixture.cleanup();}
+});

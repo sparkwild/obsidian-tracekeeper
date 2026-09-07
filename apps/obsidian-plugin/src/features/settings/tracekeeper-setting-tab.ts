@@ -1100,7 +1100,7 @@ export class TracekeeperSettingTab extends PluginSettingTab {
 			case 'client_reached': return ui('客户端已触达', 'Client reached');
 			case 'pending_approval': return ui('待审批', 'Approval pending');
 			case 'authorized': return ui('已授权', 'Authorized');
-			case 'connected': return ui('已连接', 'Connected');
+			case 'connected': return ui('连接已验证', 'Connection verified');
 			case 'used': return ui('已使用', 'Used');
 			case 'revoked': return ui('已撤销', 'Revoked');
 			case 'needs_update': return ui('需要更新配置', 'Setup update needed');

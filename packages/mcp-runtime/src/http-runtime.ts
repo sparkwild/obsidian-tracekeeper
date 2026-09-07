@@ -1,3 +1,4 @@
+import { createOperationJournalProvider, type OperationJournalProvider } from './infrastructure/operation-journal-provider';
 import { Buffer } from 'node:buffer';
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -38,6 +39,7 @@ export type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'fa
 
 export interface StreamableHttpRuntimeOptions {
 	localTrust?: boolean;
+	operationJournalProvider?: OperationJournalProvider;
 	credentialVerifier: AgentCredentialVerifier;
 	writebackConfirmationSecret: string | Uint8Array;
 	oauthIntegration?: OAuthIntegrationPort;
@@ -113,6 +115,7 @@ const DEFAULT_CLIENT_REGISTRATION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_CLIENT_REGISTRATION_CAPACITY = 32;
 
 export class StreamableHttpMcpRuntime {
+	private operationJournalProvider: OperationJournalProvider;
 	private host: string;
 	private port: number;
 	private path: string;
@@ -145,6 +148,7 @@ export class StreamableHttpMcpRuntime {
 		if (!options.writebackConfirmationSecret || (typeof options.writebackConfirmationSecret !== 'string' && !(options.writebackConfirmationSecret instanceof Uint8Array))) {
 			throw new Error('MCP Runtime requires an explicit writebackConfirmationSecret.');
 		}
+		this.operationJournalProvider = options.operationJournalProvider ?? createOperationJournalProvider();
 		this.host = options.host || DEFAULT_HOST;
 		if (this.host !== DEFAULT_HOST) {
 			throw new Error(`MCP Runtime local trust requires host ${DEFAULT_HOST}.`);
@@ -216,6 +220,7 @@ export class StreamableHttpMcpRuntime {
 			proposalTransitionPort: options.proposalTransitionPort,
 			knowledgeSnapshotProvider: options.knowledgeSnapshotProvider,
 			knowledgeReadViewProvider: options.knowledgeReadViewProvider,
+			operationJournalProvider: this.operationJournalProvider,
 			graphProfile: options.graphProfile,
 			memoryRules: options.memoryRules,
 			contentLanguage: options.contentLanguage,
@@ -232,6 +237,7 @@ export class StreamableHttpMcpRuntime {
 			proposalTransitionPort: options.proposalTransitionPort,
 			knowledgeSnapshotProvider: options.knowledgeSnapshotProvider,
 			knowledgeReadViewProvider: options.knowledgeReadViewProvider,
+			operationJournalProvider: this.operationJournalProvider,
 			graphProfile: options.graphProfile,
 			memoryRules: options.memoryRules,
 			contentLanguage: options.contentLanguage,
@@ -340,6 +346,7 @@ export class StreamableHttpMcpRuntime {
 		const stopPromise = this.stopServer();
 		this.stopPromise = stopPromise;
 		return stopPromise.finally(() => {
+			this.operationJournalProvider.clear?.();
 			if (this.stopPromise === stopPromise) {
 				this.stopPromise = null;
 			}

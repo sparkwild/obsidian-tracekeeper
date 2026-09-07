@@ -19,6 +19,13 @@ import {
 	buildPairedOutcomes,
 	buildWorkingTreeMetadata,
 	resolveOutputPaths,
+	buildMcpAuthToken,
+	buildMcpServerStartupConfig,
+	buildCodexLaunchConfig,
+	buildRunLogRedactions,
+	buildCodexLaunchArgs,
+	buildMcpServerStartupArgs,
+	sanitizeForLog,
 	repositoryRoot,
 	mcpRuntimePath,
 } from './runner.mjs';
@@ -1204,4 +1211,75 @@ test('buildCodexPrompt is identical across arms and does not leak expectations',
 	const prompt = buildCodexPrompt(scenario);
 	assert.match(prompt, /Continue the project decision/);
 	assert.doesNotMatch(prompt, /tracked_task|mcp-only|mcp-skill|private-wiki|private-source/);
+});
+
+test('MCP auth token is generated as a 256-bit base64url bearer', () => {
+	const firstToken = buildMcpAuthToken();
+	const secondToken = buildMcpAuthToken();
+	assert.equal(firstToken === secondToken, false);
+	assert.match(firstToken, /^[A-Za-z0-9_-]{43}$/u);
+	assert.equal(Buffer.from(firstToken, 'base64url').byteLength, 32);
+	assert.equal(Buffer.from(secondToken, 'base64url').byteLength, 32);
+});
+
+test('MCP server startup config uses standalone bearer env var and no argv token', () => {
+	const token = buildMcpAuthToken();
+	const baseEnv = { PATH: '/usr/bin', TRACEKEEPER_STANDALONE_BEARER: 'legacy-token' };
+	const startup = buildMcpServerStartupConfig('/tmp/vault', token, '/tmp/run-root', baseEnv);
+	assert.equal(startup.cwd, '/tmp/run-root');
+	assert.deepEqual(startup.args, [
+		'--vault-root',
+		'/tmp/vault',
+		'--host',
+		'127.0.0.1',
+		'--port',
+		'0',
+	]);
+	assert.equal(startup.args.includes('--token'), false);
+	assert.equal(startup.args.includes(token), false);
+	assert.equal(startup.env.TRACEKEEPER_STANDALONE_BEARER, token);
+	assert.equal(baseEnv.TRACEKEEPER_STANDALONE_BEARER, 'legacy-token');
+	assert.equal(startup.args.some((entry) => entry.includes(token)), false);
+	assert.equal(buildMcpServerStartupArgs('/tmp/vault').length, startup.args.length);
+});
+
+test('Codex launch config uses bearer env var name and redacts secret from argv', () => {
+	const launch = buildCodexLaunchConfig({
+		endpoint: 'http://127.0.0.1:51601/mcp',
+		workingRoot: '/tmp/working-root',
+		model: 'o4-mini',
+		token: 'my-special-token',
+	}, 'continue project');
+	const launchedArgsText = launch.args.join(' ');
+	assert.equal(launch.args.includes('my-special-token'), false);
+	assert.equal(launch.args.some((arg) => arg.includes('bearer_token_env_var')), true);
+	assert.match(launchedArgsText, /mcp_servers\.tracekeeper\.bearer_token_env_var="TRACEKEEPER_STANDALONE_BEARER"/);
+	assert.equal(launch.env.TRACEKEEPER_STANDALONE_BEARER, 'my-special-token');
+	assert.equal(buildCodexLaunchArgs({
+		endpoint: 'http://127.0.0.1:51601/mcp',
+		workingRoot: '/tmp/working-root',
+		model: 'o4-mini',
+	}, 'continue project').length > 0, true);
+});
+
+test('artifact redaction replaces runtime bearer token and temp root placeholders', () => {
+	const tempRoot = '/tmp/tracekeeper-real-artifacts';
+	const token = 'very-secret-token';
+	const replacements = buildRunLogRedactions(token, tempRoot);
+	const message = `token:${token} ${os.homedir()} ${tempRoot} /private${tempRoot}`;
+	const redacted = sanitizeForLog(message, replacements);
+	assert.equal(redacted.includes(token), false);
+	assert.match(redacted, /\[REDACTED_TOKEN\]/u);
+	assert.match(redacted, /\[REDACTED_HOME\]/u);
+	assert.match(redacted, /\[REDACTED_TMP_ROOT\]/u);
+});
+
+test('buildRunLogRedactions handles missing runtime token without split/join corruption', () => {
+	const tempRoot = '/tmp/tracekeeper-real-artifacts';
+	const replacements = buildRunLogRedactions('', tempRoot);
+	const message = 'safe log line without token, no private path, no home path';
+	const redacted = sanitizeForLog(message, replacements);
+	assert.equal(redacted, message);
+	assert.equal(redacted.includes('[REDACTED_TOKEN]'), false);
+	assert.equal(replacements.some(([raw]) => raw.length === 0), false);
 });

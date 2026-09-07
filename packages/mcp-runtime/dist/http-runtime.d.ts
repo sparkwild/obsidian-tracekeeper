@@ -1,3 +1,4 @@
+import { type OperationJournalProvider } from './infrastructure/operation-journal-provider';
 import { type ServerResponse } from 'node:http';
 import type { VaultRepository } from '@tracekeeper/core';
 import { type ProposalTransitionPort } from './tools';
@@ -10,6 +11,7 @@ export type { AgentAuthMode, AuthenticatedCredentialContext, OAuthIntegrationPor
 export type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed' | 'port_conflict';
 export interface StreamableHttpRuntimeOptions {
     localTrust?: boolean;
+    operationJournalProvider?: OperationJournalProvider;
     credentialVerifier: AgentCredentialVerifier;
     writebackConfirmationSecret: string | Uint8Array;
     oauthIntegration?: OAuthIntegrationPort;
@@ -69,6 +71,7 @@ interface RuntimeSession extends McpConnectionState {
 /** MCP 服务的共享默认监听端口。 */
 export declare const DEFAULT_MCP_PORT = 51601;
 export declare class StreamableHttpMcpRuntime {
+    private operationJournalProvider;
     private host;
     private port;
     private path;

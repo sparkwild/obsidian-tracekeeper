@@ -95,6 +95,23 @@ from revision-bound proposals when recovery needs it.
 5. The Agent consumes excerpts, match reasons, and verified relations first,
    then reads a complete note only when necessary.
 
+The index retains an inventory generation and a separate `knowledge_generation`.
+Agent Activity-only events advance the inventory and event sequence, but do not
+invalidate Memory pagination or maintenance candidates. Those tools bind their
+public generation to the knowledge generation. Explicit rebuilds and other
+note changes still invalidate that generation. Memory enumeration refuses
+initializing, rebuilding, unreadable, or invalid snapshots instead of claiming
+an empty complete catalog.
+
+Lexical terms cover the complete indexed note. Field relevance participates
+before bounded candidate truncation, and excerpts use the matched location in
+the invocation's immutable in-memory content. `read_note` supplies 16,384-character
+windows by default, with a 65,536-character request maximum and hash-bound
+continuation; a surrogate pair may extend a window by one code unit.
+Same-content native events avoid graph recomputation. Single-file rename and deletion read
+the changed note when present and affected native references together; folder mutations and
+large rename impacts rebuild from the current Vault.
+
 Source candidates are durable provenance, not approved synthesis. Their
 presence in Recall or `read_note` does not imply that any linked Wiki/Memory
 proposal has been approved or applied; the finish-task durable-output summary
@@ -131,6 +148,16 @@ the legacy files until a separately confirmed Archive move succeeds.
 
 The index is disposable. Status exposes readiness and generation, and a rebuild
 can reproduce it from Markdown.
+
+Source Status resolves historical paths only through completed consolidation
+receipts whose index and part hashes still match the current snapshot. It joins
+those task/proposal references onto the current Source and shows the old paths
+as migration evidence. It does not rewrite historical task or proposal files;
+missing, changed, or ambiguous replacement evidence remains a missing reference.
+Memory, Source, and review views expose a bounded historical-record preview:
+up to 50 records and 20 Auto receipts per refresh, with partial coverage stated
+explicitly. It reports current content hashes and evidence without rewriting
+records or introducing a repair action.
 
 ## Memory Lifecycle
 
@@ -275,12 +302,45 @@ through the journal API. Legacy plaintext records are rewritten in sealed form
 on a subsequent safe save, while incompatible body-bearing writeback records
 are quarantined instead of replayed.
 
+An unmatched retry key consults reference ownership before opening orphan
+journals; records already referenced by other keys do not require body
+decryption. Startup recovery uses authenticated terminal anchors to skip
+completed/conflicted bodies and reports damaged recovery candidates individually.
+Exact access to a damaged record still fails closed. Production writes retain
+version 1 encoding for downgrade compatibility; the reader also accepts already
+written version 2 gzip envelopes with authenticated compression mode and bounded
+decompression. Compression writing is deferred. Neither retry identities nor
+historical `.json`, `.ref`, and `.anchor` files expire or get removed.
+
+The host owns a Vault-scoped journal provider shared by direct execution and MCP.
+Its metadata catalog retains reference ownership and orphan candidates, never
+plaintext payloads or results. Short filesystem sections coordinate through
+`.coordination/catalog.lock`; business steps retain their existing per-key locks
+and do not hold the catalog lock. The directory identity, change stamp, and an explicit revision written before
+journal mutations invalidate metadata after another writer changes the inventory; terminal-anchor
+cache entries additionally bind the actual anchor file stamp. Each hit still
+validates its real record. Runtime stop and plugin unload clear the provider.
+Cold initialization remains proportional to inventory size; this does not solve
+long-term file-count growth or introduce cold shards.
+
+Same-task finish preparation and commit share an outer task-scoped lock in a namespace separate from caller retry keys; exact
+retries cannot read a task midway through the winning closeout. The operation
+keeps its independent request binding and idempotency lock.
+
 A finish operation snapshots exact proposal ids and review-owner paths already
 managed by its task before journaling. That snapshot, plus any finish-generated
-or auto-applied output, produces the separate durable-output result. Missing,
+or auto-applied output, produces the separate durable-output result. Direct Auto
+Memory/Wiki writes also record their operation identities on the task; closeout
+validates the matching completed proposal-operation receipt and target. Older
+canonical Memory paths can recover that identity from the existing journal.
+Missing,
 mismatched, or out-of-owner references remain unresolved evidence. Exact finish
 retries return the original snapshot instead of reinterpreting a proposal after
 later human review.
+
+New managed `proposal_links` are YAML arrays. Native indexing recognizes the
+legacy comma-separated wikilink representation without rewriting the note;
+actual identity or target mismatches remain diagnostics.
 
 Proposal identity is independent of its current path. Active review enumerates
 only the review queue, while history lookup resolves the same explicit

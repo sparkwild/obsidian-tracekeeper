@@ -22,7 +22,7 @@ const tracekeeperManifestPath = path.resolve(repositoryRoot, 'skills', 'tracekee
 const contractsRuntimePath = path.resolve(repositoryRoot, 'packages', 'contracts', 'dist', 'contracts.js');
 const mcpRuntimeHandlerPath = path.resolve(repositoryRoot, 'packages', 'mcp-runtime', 'dist', 'handler.js');
 const codexBackupBinary = '/Applications/ChatGPT.app/Contents/Resources/codex';
-const tokenEnvName = 'TRACEKEEPER_REAL_EVAL_TOKEN';
+const bearerEnvName = 'TRACEKEEPER_STANDALONE_BEARER';
 const MCP_START_TIMEOUT_MS = 15000;
 const MCP_SHUTDOWN_TIMEOUT_MS = 2000;
 const MCP_PORT = '0';
@@ -40,6 +40,10 @@ const REPRODUCIBLE_START_EPOCH = '1970-01-01T00:00:00.000Z';
 
 function normalizeText(value) {
 	return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildMcpAuthToken() {
+	return crypto.randomBytes(32).toString('base64url');
 }
 
 function splitArgList(raw) {
@@ -671,11 +675,75 @@ function parseMcpEndpointLine(line) {
 	return null;
 }
 
-async function startMcpServer(vaultRoot, token, runRoot) {
-	const args = ['--vault-root', vaultRoot, '--host', MCP_HOST, '--port', MCP_PORT, '--token', token];
-	const server = spawn('node', [mcpRuntimePath, ...args], {
+function buildMcpServerStartupEnv(token, baseEnv = process.env) {
+	return {
+		...baseEnv,
+		[bearerEnvName]: token,
+	};
+}
+
+function buildMcpServerStartupArgs(vaultRoot) {
+	return ['--vault-root', vaultRoot, '--host', MCP_HOST, '--port', MCP_PORT];
+}
+
+function buildMcpServerStartupConfig(vaultRoot, token, runRoot, baseEnv = process.env) {
+	return {
 		cwd: runRoot,
-		env: { ...process.env },
+		args: buildMcpServerStartupArgs(vaultRoot),
+		env: buildMcpServerStartupEnv(token, baseEnv),
+	};
+}
+
+function buildCodexLaunchArgs(options, prompt) {
+	return [
+		'exec',
+		'--ephemeral',
+		'--json',
+		'--ignore-user-config',
+		'--sandbox',
+		'read-only',
+		'--cd',
+		options.workingRoot,
+		'--skip-git-repo-check',
+		'-c',
+		`mcp_servers.tracekeeper.url=${JSON.stringify(options.endpoint)}`,
+		'-c',
+		`mcp_servers.tracekeeper.bearer_token_env_var=${JSON.stringify(bearerEnvName)}`,
+		'-c',
+		'mcp_servers.tracekeeper.required=true',
+		...(options.model ? ['-m', options.model] : []),
+		prompt,
+	];
+}
+
+function buildCodexLaunchConfig(options, prompt, baseEnv = process.env) {
+	return {
+		args: buildCodexLaunchArgs(options, prompt),
+		env: {
+			...baseEnv,
+			[bearerEnvName]: options.token,
+		},
+	};
+}
+
+function buildRunLogRedactions(token, tempRoot) {
+	return [
+		[token, TOKEN_REDACT],
+		[`/private${tempRoot}`, TMP_ROOT_REDACT],
+		[tempRoot, TMP_ROOT_REDACT],
+		[os.homedir(), HOME_REDACT],
+	].filter(([raw]) => typeof raw === 'string' && raw.length > 0);
+}
+
+async function startMcpServer(vaultRoot, token, runRoot) {
+	const {
+		args,
+		env,
+		cwd,
+	} = buildMcpServerStartupConfig(vaultRoot, token, runRoot);
+	const server = spawn('node', [mcpRuntimePath, ...args], {
+		cwd,
+		env,
 		stdio: ['ignore', 'pipe', 'pipe'],
 	});
 
@@ -1290,29 +1358,7 @@ function buildDelta(armSummaries) {
 
 async function runCodexOnce(scenario, codexBinary, options) {
 	const prompt = buildCodexPrompt(scenario);
-	const args = [
-		'exec',
-		'--ephemeral',
-		'--json',
-		'--ignore-user-config',
-		'--sandbox',
-		'read-only',
-		'--cd',
-		options.workingRoot,
-		'--skip-git-repo-check',
-		'-c',
-		`mcp_servers.tracekeeper.url=${JSON.stringify(options.endpoint)}`,
-		'-c',
-		`mcp_servers.tracekeeper.bearer_token_env_var=${JSON.stringify(tokenEnvName)}`,
-		'-c',
-		'mcp_servers.tracekeeper.required=true',
-		...(options.model ? ['-m', options.model] : []),
-		prompt,
-	];
-	const env = {
-		...process.env,
-		[tokenEnvName]: options.token,
-	};
+	const { args, env } = buildCodexLaunchConfig(options, prompt);
 	let stdout = '';
 	let stderr = '';
 	let exitCode = 1;
@@ -1392,7 +1438,7 @@ async function runSingle(scenario, options, runOutputDir) {
 	await fs.mkdir(runOutputDir, { recursive: true });
 
 	try {
-		token = crypto.randomBytes(16).toString('hex');
+		token = buildMcpAuthToken();
 		const started = await startMcpServer(vaultRoot, token, tempRoot);
 		server = started.server;
 		endpoint = started.endpoint;
@@ -1411,12 +1457,7 @@ async function runSingle(scenario, options, runOutputDir) {
 			timeoutMs: options.timeoutMs,
 		};
 		codexResult = await runCodexOnce(scenario, options.codexBinary, tokenized);
-		const replacements = [
-			[token, TOKEN_REDACT],
-			[`/private${tempRoot}`, TMP_ROOT_REDACT],
-			[tempRoot, TMP_ROOT_REDACT],
-			[os.homedir(), HOME_REDACT],
-		];
+		const replacements = buildRunLogRedactions(token, tempRoot);
 		safeRaw = sanitizeForLog(codexResult.stdout, replacements);
 		if (codexResult.exitCode !== 0) {
 			const safeStderr = sanitizeForLog(codexResult.stderr, replacements);
@@ -1454,12 +1495,7 @@ async function runSingle(scenario, options, runOutputDir) {
 	summary.execution_ok = executionOk;
 	summary.passed = evaluation.passed;
 
-	const fileReplacements = [
-		...(token ? [[token, TOKEN_REDACT]] : []),
-		[`/private${tempRoot}`, TMP_ROOT_REDACT],
-		[tempRoot, TMP_ROOT_REDACT],
-		[os.homedir(), HOME_REDACT],
-	];
+	const fileReplacements = buildRunLogRedactions(token, tempRoot);
 	const safeTrace = sanitizeForLog(JSON.stringify(trace, null, 2), fileReplacements);
 	const safeMessage = sanitizeForLog(trace.agent_message || '', fileReplacements);
 	const safeDiagnostics = sanitizeForLog(JSON.stringify(trace.diagnostics || [], null, 2), fileReplacements);
@@ -1940,6 +1976,14 @@ export {
 	parseEvaluationAndSummary,
 	replayRealReport,
 	runFailureTrace,
+	buildMcpAuthToken,
+	buildMcpServerStartupConfig,
+	buildMcpServerStartupArgs,
+	buildMcpServerStartupEnv,
+	buildCodexLaunchConfig,
+	buildCodexLaunchArgs,
+	sanitizeForLog,
+	buildRunLogRedactions,
 	repositoryRoot,
 	mcpRuntimePath,
 };

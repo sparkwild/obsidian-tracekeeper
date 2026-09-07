@@ -43,6 +43,7 @@ export type LintIssueKind =
 	| 'graph_yaml_only_relation'
 	| 'managed_proposal_reference_ambiguous'
 	| 'managed_proposal_reference_mismatch'
+	| 'managed_proposal_reference_legacy_format'
 	| 'write_policy_unstable_target'
 	| LifecycleDiagnosticKind
 	| GraphProfileIssue['kind'];
@@ -365,6 +366,7 @@ function collectManagedProposalReferenceIssues(
 	const proposalIds = readManagedProposalValues(note, 'proposal_ids');
 	const proposalPaths = readManagedProposalValues(note, 'proposal_paths');
 	const proposalLinks = readManagedProposalValues(note, 'proposal_links');
+
 	if (proposalIds.length === 0 && proposalPaths.length === 0 && proposalLinks.length === 0) {
 		return [];
 	}
@@ -391,6 +393,11 @@ function collectManagedProposalReferenceIssues(
 
 	const bodyLines = note.text.split(/\r?\n/u);
 	const issues: LintIssue[] = [];
+	const oldLinks = note.frontmatter.proposal_links;
+	if (typeof oldLinks === 'string' && [...oldLinks.matchAll(/\[\[[^\]\n]+\]\]/g)].length > 1) {
+		issues.push({ severity: 'warning', kind: 'managed_proposal_reference_legacy_format', path: note.relativePath, line: 1,
+			message: 'Managed proposal links use the readable legacy comma format; use a YAML array on the next intentional edit.', context: 'proposal_links' });
+	}
 	for (let index = 0; index < proposalIds.length; index += 1) {
 		const proposalId = proposalIds[index] ?? '';
 		const expectedPath = normalizeManagedProposalPath(proposalPaths[index] ?? '');

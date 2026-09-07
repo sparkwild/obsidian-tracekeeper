@@ -14,3 +14,7 @@ apps/obsidian-plugin/node_modules/
 packages/**/node_modules
 
 .specs/
+
+# Local benchmark evidence.
+/tmp/knowledge-index-reports/
+/tmp/index-replay-reports/
