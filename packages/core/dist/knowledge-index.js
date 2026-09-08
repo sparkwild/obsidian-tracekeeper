@@ -786,6 +786,13 @@ class InMemoryKnowledgeIndex {
             },
             warnings: [...this.state.warnings],
             errors: this.sourceErrors.map((error) => ({ ...error })),
+            diagnosticReader: {
+                generation,
+                read: (notePath) => {
+                    const note = noteContents.get(normalizeVaultPath(notePath));
+                    return note ? (0, scan_1.scannedNoteFromNormalized)(note, this.vaultRoot) : null;
+                },
+            },
             contentReader: {
                 generation,
                 read: async (notePath) => this.readContentForView(generation, catalog, notePath),

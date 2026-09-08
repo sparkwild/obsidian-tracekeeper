@@ -639,8 +639,8 @@ exports.toolContracts = [
         useCase: 'lint',
         description: '[read-only] Run the single vault check entry for structure, links, sources, claims, role-aware graph health, and generation-bound maintenance candidates.',
         inputSchema: withToolInput({
-            max_items: { type: 'integer', description: 'Maximum number of issues to return.' },
-            page_size: { type: 'integer', minimum: 1, maximum: 200, description: 'Maintenance candidates per page.' },
+            max_items: { type: 'integer', minimum: 1, maximum: 2000, description: 'Maximum number of issues to return. Defaults to 40; independent of maintenance candidate pagination.' },
+            page_size: { type: 'integer', minimum: 1, maximum: 200, description: 'Maintenance candidates per page. Defaults to min(max_items, 200), with max_items defaulting to 40. Continue a cursor with the same effective page size and graph profile.' },
             cursor: { type: 'string', minLength: 1, description: 'Generation-bound cursor from a previous lint v4 page.' },
             stale_after_days: {
                 type: 'integer',

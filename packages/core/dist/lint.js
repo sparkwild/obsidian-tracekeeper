@@ -273,7 +273,7 @@ function collectManagedProposalReferenceIssues(note, edges) {
         const expectedPath = normalizeManagedProposalPath(proposalPaths[index] ?? '');
         const markers = managedProposalMarkers(proposalId);
         const bodyLineIndexes = bodyLines
-            .map((line, lineIndex) => markers.some((marker) => line.includes(marker)) ? lineIndex + 1 : 0)
+            .map((line, lineIndex) => line.split(/\s+/u).some((token) => markers.includes(token)) ? lineIndex + 1 : 0)
             .filter((line) => line > 0);
         const frontmatterMatches = edges.filter((edge) => edge.source === 'frontmatter'
             && edge.resolution.status === 'resolved'

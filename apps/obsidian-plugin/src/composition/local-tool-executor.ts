@@ -76,7 +76,7 @@ export class LocalToolExecutor {
 	private readonly sessionId = randomUUID();
 
 	constructor(private readonly options: LocalToolExecutorOptions) {
-		this.runtimeVersion = options.runtimeVersion?.trim() || '0.6.0';
+		this.runtimeVersion = options.runtimeVersion?.trim() || '0.6.1';
 	}
 
 	async executeLocalTool(
