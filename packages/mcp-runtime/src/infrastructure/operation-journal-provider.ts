@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { NodeFileOperationJournal, TRACEKEEPER_OPERATIONS_DIR } from '@tracekeeper/core';
+import { NodeFileOperationJournal, logDirectory, createVaultOperationJournal } from '@tracekeeper/core';
 import { assertNoSymlinkSegments, relativeFromAbsolute } from '../safety';
 
 export type OperationJournalProvider = ((vaultRoot: string) => NodeFileOperationJournal) & { clear?: () => void };
@@ -7,12 +7,12 @@ export type OperationJournalProvider = ((vaultRoot: string) => NodeFileOperation
 export function createOperationJournalProvider(): OperationJournalProvider {
 	const journals = new Map<string, NodeFileOperationJournal>();
 	const provider: OperationJournalProvider = (vaultRoot) => {
-		const directory = path.resolve(vaultRoot, TRACEKEEPER_OPERATIONS_DIR);
+		const directory = logDirectory(vaultRoot);
 		relativeFromAbsolute(vaultRoot, directory);
 		assertNoSymlinkSegments(vaultRoot, directory);
 		let journal = journals.get(directory);
 		if (!journal) {
-			journal = new NodeFileOperationJournal({ directory });
+			journal = createVaultOperationJournal(vaultRoot);
 			journals.set(directory, journal);
 		}
 		return journal;

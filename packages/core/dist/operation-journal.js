@@ -9,6 +9,8 @@ const promises_1 = __importDefault(require("node:fs/promises"));
 const node_path_1 = __importDefault(require("node:path"));
 const promises_2 = require("node:timers/promises");
 const node_zlib_1 = require("node:zlib");
+const log_archive_1 = require("./log-archive");
+const log_files_1 = require("./log-files");
 const node_util_1 = require("node:util");
 const node_crypto_1 = require("node:crypto");
 const OPERATION_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -19,6 +21,7 @@ const ENCRYPTED_PAYLOAD_VERSION = 1;
 const PROGRESS_ANCHOR_VERSION = 1;
 const operationLocks = new Map();
 const decompress = (0, node_util_1.promisify)(node_zlib_1.gunzip);
+const compress = (0, node_util_1.promisify)(node_zlib_1.gzip);
 const MAX_DECOMPRESSED_VALUE_BYTES = 64 * 1024 * 1024;
 class OperationConflictError extends Error {
     constructor(message) {
@@ -46,6 +49,9 @@ class NodeFileOperationJournal {
             throw new Error(`Operation journal directory must be an absolute path: ${options.directory}`);
         }
         this.directory = node_path_1.default.normalize(options.directory);
+        this.archive = new log_archive_1.LogArchive(this.directory);
+        this.beforeWrite = options.beforeWrite;
+        this.onKeyCreated = options.onKeyCreated;
         this.lockWaitTimeoutMs = options.lockWaitTimeoutMs ?? 30000;
         if (!Number.isSafeInteger(this.lockWaitTimeoutMs) || this.lockWaitTimeoutMs <= 0) {
             throw new Error('Operation journal lockWaitTimeoutMs must be a positive safe integer.');
@@ -77,6 +83,8 @@ class NodeFileOperationJournal {
         return node_path_1.default.join(this.directory, `.idempotency-${keyHash}.lock`);
     }
     async ensureDirectory() {
+        await this.beforeWrite?.();
+        await (0, log_files_1.assertLogPath)(this.directory);
         await promises_1.default.mkdir(this.directory, { recursive: true });
     }
     clearCache() {
@@ -123,6 +131,7 @@ class NodeFileOperationJournal {
             }
         }
         try {
+            await this.beforeWrite?.();
             const before = await this.fileStamp(this.directory);
             const revisionPath = node_path_1.default.join(lockDirectory, 'revision');
             let revision = '';
@@ -286,7 +295,9 @@ class NodeFileOperationJournal {
     }
     async readRecord(recordPath) {
         try {
-            const raw = await promises_1.default.readFile(recordPath, 'utf8');
+            const raw = await (0, log_files_1.readLogFile)(this.directory, recordPath) ?? await this.archive.read(node_path_1.default.relative(this.directory, recordPath));
+            if (raw === null)
+                return null;
             const record = await this.parseOperationRecord(recordPath, raw);
             return await this.verifyProgressAnchor(record);
         }
@@ -301,38 +312,49 @@ class NodeFileOperationJournal {
         }
     }
     async payloadKey() {
-        if (!this.payloadKeyPromise) {
-            this.payloadKeyPromise = this.loadOrCreatePayloadKey();
-        }
-        return this.payloadKeyPromise;
+        return this.loadOrCreatePayloadKey();
     }
     async loadOrCreatePayloadKey() {
+        await (0, log_files_1.assertLogPath)(this.directory, this.payloadKeyPath());
+        const current = await (0, log_files_1.readLogFile)(this.directory, this.payloadKeyPath(), 128);
+        if (current !== null) {
+            const key = Buffer.from(current.trim(), 'base64');
+            if (key.length !== 32 || key.toString('base64') !== current.trim())
+                throw new CorruptedOperationJournalError('storage', 'invalid encryption key');
+            return key;
+        }
+        const files = await promises_1.default.readdir(this.directory).catch(error => {
+            if (isNodeErrorCode(error, 'ENOENT'))
+                return [];
+            throw error;
+        });
+        if (files.includes('.cold'))
+            throw new CorruptedOperationJournalError('storage', 'encryption key missing; restore the matching backup');
+        for (const file of files.filter(file => file.endsWith('.json'))) {
+            const raw = await (0, log_files_1.readLogFile)(this.directory, node_path_1.default.join(this.directory, file));
+            const metadata = JSON.parse(raw);
+            if (metadata.payload_encrypted || metadata.result_encrypted)
+                throw new CorruptedOperationJournalError('storage', 'encryption key missing; restore the matching backup');
+        }
         await this.ensureDirectory();
-        const keyPath = this.payloadKeyPath();
         const created = (0, node_crypto_1.randomBytes)(32);
         try {
-            await promises_1.default.writeFile(keyPath, `${created.toString('base64')}\n`, {
-                encoding: 'utf8',
-                flag: 'wx',
-                mode: 0o600,
-            });
+            const handle = await promises_1.default.open(this.payloadKeyPath(), 'wx', 0o600);
+            try {
+                await handle.writeFile(created.toString('base64') + '\n');
+                await handle.sync();
+            }
+            finally {
+                await handle.close();
+            }
+            await this.onKeyCreated?.(created);
             return created;
         }
         catch (error) {
-            if (!isNodeErrorCode(error, 'EEXIST')) {
+            if (!isNodeErrorCode(error, 'EEXIST'))
                 throw error;
-            }
+            return this.loadOrCreatePayloadKey();
         }
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-            const encoded = (await promises_1.default.readFile(keyPath, 'utf8')).trim();
-            const key = Buffer.from(encoded, 'base64');
-            if (key.length === 32 && key.toString('base64') === encoded) {
-                await promises_1.default.chmod(keyPath, 0o600).catch(() => undefined);
-                return key;
-            }
-            await (0, promises_2.setTimeout)(10);
-        }
-        throw new CorruptedOperationJournalError(keyPath, 'payload encryption key is invalid');
     }
     operationValueAdditionalData(record, kind) {
         return Buffer.from(`${record.operation_id}\0${record.idempotency_key}\0${record.payload_hash}\0${kind}`, 'utf8');
@@ -342,11 +364,16 @@ class NodeFileOperationJournal {
         const nonce = (0, node_crypto_1.randomBytes)(12);
         const cipher = (0, node_crypto_1.createCipheriv)('aes-256-gcm', key, nonce);
         const plaintext = Buffer.from(JSON.stringify(normalizePayload(value)), 'utf8');
+        if (plaintext.length > MAX_DECOMPRESSED_VALUE_BYTES)
+            throw new Error('Operation value exceeds the decoded size limit.');
+        const candidate = plaintext.length >= 4096 ? await compress(plaintext) : null;
+        const compressed = candidate !== null && Math.ceil(candidate.length / 3) * 4 + 21 <= (Math.ceil(plaintext.length / 3) * 4) * 0.9;
         const aad = this.operationValueAdditionalData(record, kind);
-        cipher.setAAD(aad);
-        const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+        cipher.setAAD(compressed ? Buffer.concat([aad, Buffer.from('\0gzip')]) : aad);
+        const ciphertext = Buffer.concat([cipher.update(compressed ? candidate : plaintext), cipher.final()]);
         return {
-            version: ENCRYPTED_PAYLOAD_VERSION,
+            version: compressed ? 2 : ENCRYPTED_PAYLOAD_VERSION,
+            ...(compressed ? { compression: 'gzip' } : {}),
             algorithm: 'aes-256-gcm',
             nonce: nonce.toString('base64'),
             auth_tag: cipher.getAuthTag().toString('base64'),
@@ -435,24 +462,19 @@ class NodeFileOperationJournal {
         const anchorPath = this.progressAnchorPath(record.operation_id);
         const tempPath = this.buildTempPath(anchorPath);
         const anchor = await this.buildProgressAnchor(record);
-        await promises_1.default.writeFile(tempPath, `${JSON.stringify(anchor, null, 2)}\n`, 'utf8');
-        try {
-            await promises_1.default.rename(tempPath, anchorPath);
-        }
-        catch (error) {
-            await promises_1.default.unlink(tempPath).catch(() => undefined);
-            throw error;
-        }
+        await (0, log_files_1.writeLogFile)(this.directory, anchorPath, `${JSON.stringify(anchor, null, 2)}\n`);
     }
     async verifyProgressAnchor(record) {
         const anchorPath = this.progressAnchorPath(record.operation_id);
         let parsed;
         try {
-            parsed = JSON.parse(await promises_1.default.readFile(anchorPath, 'utf8'));
+            const raw = await (0, log_files_1.readLogFile)(this.directory, anchorPath, 8 * 1024 * 1024) ?? await this.archive.read(node_path_1.default.basename(anchorPath));
+            if (raw === null)
+                return record;
+            parsed = JSON.parse(raw);
         }
         catch (error) {
             if (isNodeErrorCode(error, 'ENOENT')) {
-                await this.saveProgressAnchor(record);
                 return record;
             }
             throw new CorruptedOperationJournalError(anchorPath, error instanceof Error ? error.message : 'invalid progress anchor');
@@ -482,10 +504,6 @@ class NodeFileOperationJournal {
                 ...record,
                 completed_steps: parsed.completed_steps.map(cloneStepExecutionRecord),
             };
-        }
-        if (parsed.completed_step_count < currentStepCount
-            || parsed.terminal_status !== this.terminalStatus(record)) {
-            await this.saveProgressAnchor(record);
         }
         return record;
     }
@@ -625,7 +643,10 @@ class NodeFileOperationJournal {
         await this.ensureDirectory();
         const referencePath = this.idempotencyReferencePath(idempotencyKey);
         try {
-            const operationId = (await promises_1.default.readFile(referencePath, 'utf8')).trim();
+            const reference = await (0, log_files_1.readLogFile)(this.directory, referencePath, 1024) ?? await this.archive.read(node_path_1.default.basename(referencePath));
+            if (reference === null)
+                throw Object.assign(new Error('Reference not found.'), { code: 'ENOENT' });
+            const operationId = reference.trim();
             if (!OPERATION_ID_PATTERN.test(operationId)) {
                 throw new CorruptedOperationJournalError(referencePath, 'idempotency reference is invalid');
             }
@@ -692,6 +713,8 @@ class NodeFileOperationJournal {
     }
     async claimRecord(record) {
         await this.ensureDirectory();
+        if (await this.archive.read(`${record.operation_id}.json`) !== null)
+            return false;
         const recordPath = this.recordPath(record.operation_id);
         const recordTempPath = this.buildTempPath(recordPath);
         const payload = `${JSON.stringify(await this.persistedRecord(record), null, 2)}\n`;
@@ -745,7 +768,7 @@ class NodeFileOperationJournal {
         const files = await promises_1.default.readdir(this.directory);
         const records = [];
         for (const file of files) {
-            if (!file.endsWith('.json')) {
+            if (!file.endsWith('.json') || file.startsWith('archive-')) {
                 continue;
             }
             try {
@@ -801,22 +824,220 @@ class NodeFileOperationJournal {
     async saveRecord(record) {
         await this.ensureDirectory();
         const recordPath = this.recordPath(record.operation_id);
+        const archived = await this.archive.read(node_path_1.default.basename(recordPath));
         const current = await this.readRecord(recordPath);
+        if (archived !== null && current) {
+            if (JSON.stringify(prepareOperationRecordForPersistence(current)) !== JSON.stringify(prepareOperationRecordForPersistence(record)))
+                throw new OperationConflictError('Archived terminal records are immutable.');
+            return;
+        }
         if (current) {
             this.assertMonotonicProgress(current, record);
         }
         const tempPath = this.buildTempPath(recordPath);
         const payload = JSON.stringify(await this.persistedRecord(record), null, 2);
-        await promises_1.default.writeFile(tempPath, `${payload}\n`, 'utf8');
-        try {
-            await promises_1.default.rename(tempPath, recordPath);
-        }
-        catch (error) {
-            await promises_1.default.unlink(tempPath).catch(() => undefined);
-            throw error;
-        }
+        await (0, log_files_1.writeLogFile)(this.directory, recordPath, `${payload}\n`);
         await this.saveProgressAnchor(record);
         await this.saveIdempotencyReference(record.idempotency_key, record.operation_id);
+    }
+    /** 元数据检查不初始化或修复存储。 */
+    async inspect() {
+        await (0, log_files_1.assertLogPath)(this.directory);
+        const states = {}, issues = [], attention = [];
+        let hot = 0, hotFiles = 0, hotBytes = 0, coldFiles = 0, coldBytes = 0;
+        const walk = async (directory, cold = false) => {
+            for (const entry of await promises_1.default.readdir(directory, { withFileTypes: true }).catch(error => {
+                if (isNodeErrorCode(error, 'ENOENT'))
+                    return [];
+                throw error;
+            })) {
+                if (entry.name.endsWith('.lock') || entry.name.includes('.tmp-'))
+                    continue;
+                const file = node_path_1.default.join(directory, entry.name);
+                await (0, log_files_1.assertLogPath)(this.directory, file);
+                if (entry.isDirectory()) {
+                    await walk(file, cold || entry.name === '.cold');
+                    continue;
+                }
+                if (!entry.isFile())
+                    continue;
+                const size = (await promises_1.default.stat(file)).size;
+                if (cold) {
+                    coldFiles++;
+                    coldBytes += size;
+                    continue;
+                }
+                hotFiles++;
+                hotBytes += size;
+                if (!entry.name.endsWith('.json'))
+                    continue;
+                hot++;
+                try {
+                    const raw = await (0, log_files_1.readLogFile)(this.directory, file), row = JSON.parse(raw);
+                    const state = ['completed', 'failed', 'conflicted', 'in_progress', 'activity_pending', 'running', 'partial', 'blocked'].includes(row.status) ? row.status : 'unknown';
+                    states[state] = (states[state] ?? 0) + 1;
+                    if (!['completed', 'conflicted'].includes(state) && attention.length < 100)
+                        attention.push({ id: entry.name.slice(0, 160), status: state });
+                }
+                catch {
+                    if (issues.length < 100)
+                        issues.push('Invalid operational JSON record.');
+                }
+            }
+        };
+        await walk(this.directory);
+        const snapshot = await this.archive.snapshot();
+        const revision = await (0, log_files_1.readLogFile)(this.directory, node_path_1.default.join(this.directory, '.coordination', 'revision'), 128) ?? '0';
+        if (hot && await (0, log_files_1.readLogFile)(this.directory, this.payloadKeyPath(), 128) === null)
+            issues.push('Encryption key missing; restore the matching backup.');
+        return { maintenance: await this.archive.maintenanceState(), hot, cold: [...(await this.archive.entries()).keys()].filter(name => name.endsWith('.json')).length, segments: snapshot.segments, generation: `${revision}:${snapshot.generation}`, states, issues, hot_files: hotFiles, hot_bytes: hotBytes, cold_files: coldFiles, cold_bytes: coldBytes, attention };
+    }
+    async recoverStorage() { await this.withDirectoryLock(async () => { await this.archive.recoverPreparation(); this.clearCache(); }, true); }
+    async coordinate(action) { return this.withDirectoryLock(action, true); }
+    async initializeStorage() { await this.payloadKey(); }
+    async pendingActivityDates() {
+        const dates = new Set();
+        const names = await promises_1.default.readdir(this.directory).catch(error => {
+            if (isNodeErrorCode(error, 'ENOENT'))
+                return [];
+            throw error;
+        });
+        for (const name of names.filter(name => name.endsWith('.json'))) {
+            const raw = await (0, log_files_1.readLogFile)(this.directory, node_path_1.default.join(this.directory, name));
+            if (raw === null)
+                continue;
+            const record = JSON.parse(raw);
+            if (record.status === 'completed' || record.status === 'conflicted')
+                continue;
+            for (const value of [record.created_at, record.updated_at, ...(Array.isArray(record.completed_steps) ? record.completed_steps.map((step) => step.completed_at) : [])])
+                if (typeof value === 'string' && !Number.isNaN(Date.parse(value)))
+                    dates.add(new Date(value).toISOString().slice(0, 10));
+        }
+        return [...dates];
+    }
+    async archiveReceipts(now = Date.now()) {
+        return this.withDirectoryLock(async () => {
+            const rows = [];
+            const scan = async (directory) => {
+                for (const entry of await promises_1.default.readdir(directory, { withFileTypes: true })) {
+                    if (entry.name.startsWith('.') || entry.name === 'legacy-link-probes')
+                        continue;
+                    const file = node_path_1.default.join(directory, entry.name);
+                    await (0, log_files_1.assertLogPath)(this.directory, file);
+                    if (entry.isDirectory()) {
+                        await scan(file);
+                        continue;
+                    }
+                    if (!entry.isFile() || !entry.name.endsWith('.json'))
+                        continue;
+                    const raw = await (0, log_files_1.readLogFile)(this.directory, file);
+                    if (raw === null)
+                        continue;
+                    const row = JSON.parse(raw), name = node_path_1.default.relative(this.directory, file).split(node_path_1.default.sep).join('/');
+                    if (row.operation_id || row.status !== 'completed')
+                        continue;
+                    if (!/^(source-consolidations|source-archive-purges|legacy-migrations|agent-activity-cleanups|archive-target-claims)\//.test(name) && !/^archive-[A-Za-z0-9_-]+\.json$/.test(name))
+                        continue;
+                    if (name.startsWith('legacy-migrations/') && !row.cleanup?.completedAt)
+                        continue;
+                    const at = Date.parse(row.updatedAt ?? row.completedAt ?? row.createdAt ?? '');
+                    if (Number.isFinite(at))
+                        rows.push({ name, raw, at });
+                }
+            };
+            await scan(this.directory);
+            // 有未闭环操作时，保留其可能依赖的原生回执；不从不完整元数据推断可回收性。
+            const pending = await this.recoverableRecords();
+            if (pending.length || this.recoveryIssues.length)
+                return { archived: 0 };
+            rows.sort((a, b) => a.at - b.at);
+            const selected = rows.filter((row, index) => row.at <= now - 7 * 86400000 || index < rows.length - 1000).slice(0, 500);
+            await this.initializeStorage();
+            await this.archive.commit(selected.map(row => ({ name: row.name, content: row.raw, originalHash: (0, log_files_1.logHash)(row.raw) })));
+            this.clearCache();
+            return { archived: selected.length };
+        }, true);
+    }
+    async repairArchive() {
+        await this.withDirectoryLock(async () => { await this.archive.recoverPreparation(); await this.archive.rebuildIndex(); await this.archive.retire(); this.clearCache(); }, true);
+    }
+    async verifyStorage() {
+        if (await this.archive.maintenanceState() === 'invalid')
+            throw new Error('Archive preparation integrity check failed.');
+        await this.archive.verify();
+        const names = await promises_1.default.readdir(this.directory).catch(error => {
+            if (isNodeErrorCode(error, 'ENOENT'))
+                return [];
+            throw error;
+        });
+        for (const name of names.filter(name => name.endsWith('.json'))) {
+            const raw = await (0, log_files_1.readLogFile)(this.directory, node_path_1.default.join(this.directory, name));
+            const row = JSON.parse(raw);
+            if (typeof row.operation_id === 'string')
+                await this.loadById(name.slice(0, -5));
+        }
+    }
+    /** 压缩准备在写锁外完成；提交前重新校验原始内容。 */
+    async archiveCompleted(now = Date.now(), force = false) {
+        await this.recoverStorage();
+        const names = await promises_1.default.readdir(this.directory).catch(error => {
+            if (isNodeErrorCode(error, 'ENOENT'))
+                return [];
+            throw error;
+        });
+        const completed = [];
+        const pinned = new Set();
+        for (const name of names.filter(name => name.endsWith('.json'))) {
+            const raw = await (0, log_files_1.readLogFile)(this.directory, node_path_1.default.join(this.directory, name));
+            if (raw === null)
+                continue;
+            const meta = JSON.parse(raw);
+            if (typeof meta.operation_id !== 'string')
+                continue;
+            if (meta.status === 'completed' || meta.status === 'conflicted')
+                completed.push({ name, operationId: meta.operation_id, updatedAt: meta.updated_at });
+            else {
+                const pending = await this.readRecord(node_path_1.default.join(this.directory, name));
+                for (const id of JSON.stringify(pending).match(/(?:start-task|finish-task|capture-source|propose-memory|writeback|wiki-review-batch)-[A-Za-z0-9_-]+/g) ?? [])
+                    pinned.add(id);
+            }
+        }
+        completed.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+        const selected = completed.filter((row, index) => !pinned.has(row.operationId) && (force || Date.parse(row.updatedAt) <= now - 7 * 86400000 || index < completed.length - 1000)).slice(0, 500);
+        const items = [];
+        let preparedCount = 0, preparedBytes = 0;
+        for (const row of selected) {
+            const raw = await (0, log_files_1.readLogFile)(this.directory, node_path_1.default.join(this.directory, row.name));
+            if (raw === null)
+                throw new OperationConflictError('Log disappeared while archival was prepared.');
+            const record = await this.readRecord(node_path_1.default.join(this.directory, row.name));
+            if (!record || !['completed', 'conflicted'].includes(record.status))
+                throw new OperationConflictError('Log is no longer terminal.');
+            const content = JSON.stringify(await this.persistedRecord(record));
+            if (items.length && preparedBytes + Buffer.byteLength(content) > 32 * 1024 * 1024)
+                break;
+            items.push({ name: row.name, content, originalHash: (0, log_files_1.logHash)(raw) });
+            preparedBytes += Buffer.byteLength(content);
+            preparedCount++;
+            for (const file of [this.progressAnchorPath(record.operation_id), this.idempotencyReferencePath(record.idempotency_key)]) {
+                const raw = await (0, log_files_1.readLogFile)(this.directory, file);
+                if (raw === null)
+                    throw new OperationConflictError('A recovery reference is missing; repair before archival.');
+                items.push({ name: node_path_1.default.basename(file), content: raw, originalHash: (0, log_files_1.logHash)(raw) });
+            }
+        }
+        if (!items.length)
+            return { archived: 0 };
+        await this.withDirectoryLock(async () => {
+            for (const item of items) {
+                const raw = await (0, log_files_1.readLogFile)(this.directory, node_path_1.default.join(this.directory, item.name));
+                if (raw === null || (0, log_files_1.logHash)(raw) !== item.originalHash)
+                    throw new OperationConflictError('Log changed while archive was prepared.');
+            }
+            await this.archive.commit(items);
+            this.clearCache();
+        }, true);
+        return { archived: preparedCount };
     }
 }
 exports.NodeFileOperationJournal = NodeFileOperationJournal;

@@ -23,3 +23,7 @@ export * from './memory-record';
 export * from './memory-lifecycle';
 export * from './lifecycle-diagnostics';
 export * from './maintenance';
+
+export * from './log-files';
+export * from './log-archive';
+export * from './log-storage';

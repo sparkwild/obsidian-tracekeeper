@@ -1,3 +1,4 @@
+import { createVaultOperationJournal, OperationalLogRepository } from '@tracekeeper/core';
 import type { OperationJournalProvider } from './infrastructure/operation-journal-provider';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -7956,7 +7957,9 @@ export async function recoverPendingOperations(
 	vaultRoot: string,
 	context: ToolInvocationContext = {}
 ): Promise<OperationRecoveryReport> {
-	const controller = new RuntimeRecoveryController(operationJournalForVault(vaultRoot, context), {
+	const journal = operationJournalForVault(vaultRoot, context);
+	await journal.recoverStorage();
+	const controller = new RuntimeRecoveryController(journal, {
 		isApplyApprovedWritebackPayload,
 		isProposeMemoryOperationPayload,
 		isFinishTaskV2Payload: (payload) =>
@@ -8083,6 +8086,7 @@ async function handleStatus(rawArgs: StatusArgs, context: ToolInvocationContext)
 	return {
 		ok: true,
 		read_only: true,
+		log_storage: await createVaultOperationJournal(vaultRoot).inspect().catch(() => ({ issues: ['Log storage verification required.'] })),
 		vault_root: vaultRoot,
 		scanned_at: view.createdAt,
 		...readViewProvenance(view),
@@ -8136,7 +8140,7 @@ function operationJournalForVault(vaultRoot: string, context?: ToolContext): Nod
 	const operationDirectory = path.resolve(vaultRoot, TRACEKEEPER_OPERATIONS_DIR);
 	relativeFromAbsolute(vaultRoot, operationDirectory);
 	assertNoSymlinkSegments(vaultRoot, operationDirectory);
-	return context?.operationJournalProvider?.(vaultRoot) ?? new NodeFileOperationJournal({ directory: operationDirectory });
+	return context?.operationJournalProvider?.(vaultRoot) ?? createVaultOperationJournal(vaultRoot);
 }
 
 function buildOperationIdFromIdempotencyKey(
@@ -10235,7 +10239,15 @@ async function handleWriteSessionNote(rawArgs: WriteSessionNoteArgs, context: To
 
 async function handleCaptureSource(rawArgs: CaptureSourceArgs, context: ToolInvocationContext) {
 	const vaultRoot = configuredVaultRoot(context);
-	const requestHash = computePayloadHash({ ...rawArgs });
+	let requestHash = computePayloadHash({ ...rawArgs });
+ if (context.writebackRecoveryOperationId?.startsWith('capture-source-')) {
+  const owned = await operationJournalForVault(vaultRoot, context).loadById(context.writebackRecoveryOperationId);
+  const payload = owned?.payload as { request_hash?: string; requestSnapshot?: Record<string, unknown> } | undefined;
+  const { idempotency_key: _key, ...requestBody } = rawArgs;
+  const { idempotency_key: _originalKey, ...originalBody } = payload?.requestSnapshot ?? {};
+  if (!owned || owned.idempotency_key !== rawArgs.idempotency_key || !payload?.request_hash || computePayloadHash(requestBody) !== computePayloadHash(originalBody)) throw new Error('Source recovery request does not match its saved operation.');
+  requestHash = payload.request_hash;
+ }
 	const normalizedIdempotencyKey = coerceOptionalString(rawArgs.idempotency_key);
 	const application = new CaptureSourceApplicationService({
 		journal: operationJournalForVault(vaultRoot, context),
@@ -10684,8 +10696,8 @@ async function handleLint(rawArgs: LintArgs, context: ToolInvocationContext) {
 	});
 	const limitedIssues = issues.slice(0, maxItems);
 	const maintenance = buildMaintenanceSnapshot(view, {
-		oldToNewParent: loadSourceConsolidationRelationMap(vaultRoot),
-		sourceArchiveEvidence: loadSourceArchiveMetadataEvidence(vaultRoot, view),
+		oldToNewParent: await loadSourceConsolidationRelationMap(vaultRoot),
+		sourceArchiveEvidence: await loadSourceArchiveMetadataEvidence(vaultRoot, view),
 	});
 	const effectiveMaintenanceCandidates = view.source === 'index'
 		? maintenance.candidates
@@ -10733,6 +10745,7 @@ async function handleLint(rawArgs: LintArgs, context: ToolInvocationContext) {
 	return {
 		ok: true,
 		read_only: true,
+		log_storage: await createVaultOperationJournal(vaultRoot).inspect().catch(() => ({ issues: ['Log storage verification required.'] })),
 		profile: profileEvaluation.profile,
 		graph_profile_disabled: profileEvaluation.disabled,
 		profile_issues: authoritativeProfileIssues,
@@ -10767,21 +10780,22 @@ async function handleLint(rawArgs: LintArgs, context: ToolInvocationContext) {
 	};
 }
 
-function loadSourceConsolidationRelationMap(vaultRoot: string): ReadonlyMap<string, string> {
-	const root = path.join(vaultRoot, TRACEKEEPER_OPERATIONS_DIR, 'source-consolidations');
+async function loadSourceConsolidationRelationMap(vaultRoot: string): Promise<ReadonlyMap<string, string>> {
+	const root = `${TRACEKEEPER_OPERATIONS_DIR}/source-consolidations`;
+	const repository = new OperationalLogRepository(vaultRoot);
 	const relations = new Map<string, string>();
 	let entries: string[];
 	try {
-		entries = fs.readdirSync(root).filter((entry) => entry.endsWith('.json') && !entry.endsWith('.archive.json')).sort();
+		entries = (await repository.list(root)).map(entry => path.basename(entry)).filter((entry) => entry.endsWith('.json') && !entry.endsWith('.archive.json')).sort();
 	} catch {
 		return relations;
 	}
 	for (const entry of entries) {
 		try {
-			const absolute = path.join(root, entry);
-			const stat = fs.statSync(absolute);
-			if (!stat.isFile() || stat.size > 2 * 1024 * 1024) continue;
-			const journal = JSON.parse(fs.readFileSync(absolute, 'utf8')) as {
+			const absolute = `${root}/${entry}`;
+			const raw = await repository.readText(absolute);
+			if (raw === null || Buffer.byteLength(raw) > 2 * 1024 * 1024) continue;
+			const journal = JSON.parse(raw) as {
 				status?: unknown;
 				outputs?: unknown;
 			};
@@ -10804,30 +10818,31 @@ function loadSourceConsolidationRelationMap(vaultRoot: string): ReadonlyMap<stri
 	return relations;
 }
 
-function loadSourceArchiveMetadataEvidence(
+async function loadSourceArchiveMetadataEvidence(
 	vaultRoot: string,
 	view: KnowledgeReadView,
-): SourceArchiveEligibilityEvidenceV1[] {
-	const root = path.join(vaultRoot, TRACEKEEPER_OPERATIONS_DIR, 'source-consolidations');
+): Promise<SourceArchiveEligibilityEvidenceV1[]> {
+	const root = `${TRACEKEEPER_OPERATIONS_DIR}/source-consolidations`;
+	const repository = new OperationalLogRepository(vaultRoot);
 	let entries: string[];
 	try {
-		entries = fs.readdirSync(root).filter((entry) => entry.endsWith('.archive.json')).sort();
+		entries = (await repository.list(root)).map(entry => path.basename(entry)).filter((entry) => entry.endsWith('.archive.json')).sort();
 	} catch {
 		return [];
 	}
+	if (entries.length === 0) return [];
 	const wikiEntries = [...view.catalog.values()].filter((entry) => isKnowledgeWikiPath(entry.path));
 	const managedSourceRefs = new Set(wikiEntries.flatMap((entry) => [...entry.managedSources]));
 	const result: SourceArchiveEligibilityEvidenceV1[] = [];
 	for (const archiveEntry of entries) {
 		try {
 			const migrationId = archiveEntry.replace(/\.archive\.json$/u, '');
-			const archivePath = path.join(root, archiveEntry);
-			const materializationPath = path.join(root, `${migrationId}.json`);
-			const archiveStat = fs.statSync(archivePath);
-			const materializationStat = fs.statSync(materializationPath);
-			if (!archiveStat.isFile() || !materializationStat.isFile() || archiveStat.size > 2 * 1024 * 1024 || materializationStat.size > 2 * 1024 * 1024) continue;
-			const archiveJournal = JSON.parse(fs.readFileSync(archivePath, 'utf8')) as Record<string, unknown>;
-			const materialization = JSON.parse(fs.readFileSync(materializationPath, 'utf8')) as Record<string, unknown>;
+			const archivePath = `${root}/${archiveEntry}`;
+			const materializationPath = `${root}/${migrationId}.json`;
+			const archiveRaw = await repository.readText(archivePath), materializationRaw = await repository.readText(materializationPath);
+			if (archiveRaw === null || materializationRaw === null || Buffer.byteLength(archiveRaw) > 2 * 1024 * 1024 || Buffer.byteLength(materializationRaw) > 2 * 1024 * 1024) continue;
+			const archiveJournal = JSON.parse(archiveRaw) as Record<string, unknown>;
+			const materialization = JSON.parse(materializationRaw) as Record<string, unknown>;
 			if (
 				archiveJournal.migrationId !== migrationId
 				|| materialization.migrationId !== migrationId
@@ -10964,8 +10979,8 @@ async function handleRequestMaintenance(
 		);
 	}
 	const snapshot = buildMaintenanceSnapshot(view, {
-		oldToNewParent: loadSourceConsolidationRelationMap(vaultRoot),
-		sourceArchiveEvidence: loadSourceArchiveMetadataEvidence(vaultRoot, view),
+		oldToNewParent: await loadSourceConsolidationRelationMap(vaultRoot),
+		sourceArchiveEvidence: await loadSourceArchiveMetadataEvidence(vaultRoot, view),
 	});
 	const byId = new Map(snapshot.candidates.map((item) => [item.candidate_id, item]));
 	const selected = candidateIds.map((candidateId) => {

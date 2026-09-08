@@ -1,3 +1,5 @@
+import { LogManagementModal } from './features/runtime/log-management-modal';
+import { OperationalLogRepository, isOperationalLogPath, logHash, createVaultOperationJournal, logStorageIsActive } from '@tracekeeper/core';
 import { inspectHistoricalRecords } from './features/observability/historical-record-diagnostics';
 import {
 	App,
@@ -475,6 +477,7 @@ type StreamableHttpRuntimeOptionsWithGraphProfile = ConstructorParameters<typeof
 
 
 interface TracekeeperSettings {
+	logAutoArchive?: boolean;
 	memoryRulesVersion: number;
 	defaultAgentScope: string;
 	mcpRuntimeEnabled: boolean;
@@ -533,6 +536,9 @@ export default class TracekeeperPlugin extends Plugin {
 	private localToolExecutor!: LocalToolExecutor;
 	private readonly operationJournalProvider = createOperationJournalProvider();
 	private vaultRepository!: ObsidianVaultRepository;
+	private logMaintenanceBusy = false;
+	private logMaintenanceStopped = false;
+	private lastLogMaintenance = 0;
 	private knowledgeIndex: ObsidianKnowledgeIndexAdapter | null = null;
 	private clientSkillAdapter: ClientSkillAdapter | null = null;
 	private legacyMigrationController!: LegacyMigrationController;
@@ -577,6 +583,7 @@ export default class TracekeeperPlugin extends Plugin {
 	async onload() {
 		this.settings = this.normalizeSettings(await this.loadData());
 		this.legacyMigrationController = new LegacyMigrationController(this.app, {
+			operationalLogs: () => new OperationalLogRepository(this.getVaultRoot()),
 			initializeMemoryStructure: (plan) => this.initializeMemoryStructure(plan),
 			buildInitializationPlan: () => this.buildInitializationPlan(),
 			ensureFolderExists: (path) => this.ensureFolderExists(path),
@@ -676,6 +683,7 @@ export default class TracekeeperPlugin extends Plugin {
 			this.proposalTransitionAdapter
 		);
 		this.activityDataController = new ActivityDataController(this.app, {
+			operationalLogs: () => new OperationalLogRepository(this.getVaultRoot()),
 			readRecentAgentTasks: (limit) => this.activityRecordRepository.readRecentAgentTasks(limit),
 			readRecentContextPacks: (limit) => this.activityRecordRepository.readRecentContextPacks(limit),
 			readRecentSourceCaptures: (limit) => this.activityRecordRepository.readRecentSourceCaptures(limit),
@@ -714,7 +722,8 @@ export default class TracekeeperPlugin extends Plugin {
 			: null;
 		this.vaultRepository = new ObsidianVaultRepository(
 			this.app.vault,
-			this.app.fileManager
+			this.app.fileManager, new OperationalLogRepository(this.getVaultRoot()),
+   entry => this.nativeAuditRepository.appendRuntimeEvent(entry)
 		);
 		this.legacySourceConsolidationController = new LegacySourceConsolidationController({
 			loadSourceNotes: async () => {
@@ -738,6 +747,7 @@ export default class TracekeeperPlugin extends Plugin {
 			},
 			listMarkdownPaths: async () => this.app.vault.getMarkdownFiles().map((file) => file.path).sort(),
 			readText: async (relativePath) => {
+				if (isOperationalLogPath(relativePath)) return new OperationalLogRepository(this.getVaultRoot()).readText(relativePath);
 				const file = this.app.vault.getAbstractFileByPath(this.normalizeVaultPath(relativePath));
 				return file instanceof TFile ? this.app.vault.read(file) : null;
 			},
@@ -763,14 +773,12 @@ export default class TracekeeperPlugin extends Plugin {
 				await this.ensureFolderExists(destinationPath.split('/').slice(0, -1).join('/'));
 				await this.app.fileManager.renameFile(source, this.normalizeVaultPath(destinationPath));
 			},
-			listJournalPaths: async () => this.app.vault.getFiles()
-				.filter((file) => file.path.startsWith(`${LEGACY_SOURCE_CONSOLIDATION_JOURNAL_ROOT}/`))
-				.map((file) => file.path)
-				.sort(),
+			listJournalPaths: () => new OperationalLogRepository(this.getVaultRoot()).list(LEGACY_SOURCE_CONSOLIDATION_JOURNAL_ROOT),
 			now: () => new Date().toISOString(),
 		});
 		this.sourceArchivePurgeController = new SourceArchivePurgeController({
 			readText: async (relativePath) => {
+				if (isOperationalLogPath(relativePath)) return new OperationalLogRepository(this.getVaultRoot()).readText(relativePath);
 				const file = this.app.vault.getAbstractFileByPath(this.normalizeVaultPath(relativePath));
 				return file instanceof TFile ? this.app.vault.read(file) : null;
 			},
@@ -783,6 +791,7 @@ export default class TracekeeperPlugin extends Plugin {
 				await this.vaultRepository.replaceText(current.path, current.version, content);
 			},
 			listPaths: async (prefix) => {
+				if (isOperationalLogPath(prefix)) return new OperationalLogRepository(this.getVaultRoot()).list(prefix);
 				const normalized = `${this.normalizeVaultPath(prefix)}/`;
 				return this.app.vault.getFiles().map((file) => file.path).filter((filePath) => filePath.startsWith(normalized)).sort();
 			},
@@ -826,7 +835,17 @@ export default class TracekeeperPlugin extends Plugin {
 			now: () => new Date().toISOString(),
 		});
 		this.knowledgeIndex = ObsidianKnowledgeIndexAdapter.create(this.app, this.getVaultRoot());
+		try { await this.operationJournalProvider(this.getVaultRoot()).recoverStorage(); } catch { /* 日志管理保留故障诊断入口，不能因恢复失败卸载整个插件。 */ }
 		await this.startMcpRuntime();
+  this.addCommand({ id: 'manage-log-storage', name: ui('日志管理', 'Manage log storage'), callback: () => this.openLogManagement() });
+  this.registerInterval(window.setInterval(() => {
+   if (this.settings.logAutoArchive === false || this.logMaintenanceBusy || !logStorageIsActive(this.getVaultRoot())) return;
+   void (async () => {
+    const summary = await createVaultOperationJournal(this.getVaultRoot()).inspect();
+    if (Date.now() - this.lastLogMaintenance >= 86400000 || summary.hot > 1000) await this.maintainLogs();
+   })().catch(() => { this.lastLogMaintenance = Date.now(); });
+  }, 60000));
+
 		this.localToolExecutor = new LocalToolExecutor({
 			getContext: () => this.buildLocalToolExecutionContext(),
 		});
@@ -974,7 +993,60 @@ export default class TracekeeperPlugin extends Plugin {
 		});
 	}
 
+	async maintainLogs(manual = false): Promise<number> {
+		if (this.logMaintenanceStopped)
+			return 0;
+		if (!logStorageIsActive(this.getVaultRoot())) {
+			if (manual)
+				throw new Error('Migrate log storage before archival.');
+			return 0;
+		}
+		if (this.logMaintenanceBusy || (!manual && this.settings.logAutoArchive === false))
+			return 0;
+		this.logMaintenanceBusy = true;
+		let total = 0;
+		try {
+			const journal = createVaultOperationJournal(this.getVaultRoot());
+			do {
+				const result = await journal.archiveCompleted();
+				total += result.archived;
+				if (result.archived === 0)
+					break;
+				await new Promise(resolve => window.setTimeout(resolve, 0));
+			} while (!this.logMaintenanceStopped && (manual || this.settings.logAutoArchive !== false));
+			for (; !this.logMaintenanceStopped;) {
+				const result = await journal.archiveReceipts();
+				total += result.archived;
+				if (result.archived === 0)
+					break;
+				await new Promise(resolve => window.setTimeout(resolve, 0));
+			}
+			this.lastLogMaintenance = Date.now();
+			return total;
+		}
+		finally {
+			this.logMaintenanceBusy = false;
+		}
+	}
+
+	openLogManagement(): void {
+		new LogManagementModal(this.app, {
+			getVaultRoot: () => this.getVaultRoot(), automatic: () => this.settings.logAutoArchive !== false,
+			setAutomatic: async (enabled) => { this.settings.logAutoArchive = enabled; await this.saveSettings(); },
+			archive: () => this.maintainLogs(true),
+			pickFolder: async () => { const api = this.getDesktopNodeApi(); if (!api?.dialog)
+				throw new Error('Directory selection is unavailable.'); const result = await api.dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] }); return result.canceled ? null : result.filePaths[0] ?? null; },
+			activityStats: () => { const files = this.app.vault.getMarkdownFiles().filter(file => file.path.startsWith(TRACEKEEPER_AGENT_ACTIVITY_DIR + '/') && /\d{4}-\d{2}-\d{2}(?:-\d+)?\.md$/.test(file.path)); return { files: files.length, bytes: files.reduce((sum, file) => sum + file.stat.size, 0) }; },
+			history: query => this.activityDataController.queryLogHistory(query),
+			pause: async () => { if (this.logMaintenanceBusy)
+				throw new Error('Log maintenance is already running.'); this.logMaintenanceBusy = true; await this.stopMcpRuntime(); },
+			resume: async () => { this.operationJournalProvider.clear?.(); this.logMaintenanceBusy = false; if (!this.logMaintenanceStopped)
+				await this.startMcpRuntime(); },
+		}).open();
+	}
+
 	onunload(): void {
+		this.logMaintenanceStopped = true;
 		this.stopAutoRefresh();
 		this.oauthApprovalContext = null;
 		this.clientSkillAdapter = null;
@@ -1631,6 +1703,7 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private async ensureFolderExists(folderPath: string): Promise<void> {
+		if (isOperationalLogPath(folderPath)) return;
 		const normalized = this.normalizeVaultPath(folderPath);
 		await ensureObsidianVaultFolderPath(
 			this.app.vault,
@@ -1663,87 +1736,22 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private async readArchiveReceipt(operationId: string): Promise<unknown> {
-		const path = this.archiveReceiptPath(operationId);
-		const file = this.app.vault.getAbstractFileByPath(path);
-		if (!file) {
-			return null;
-		}
-		if (!(file instanceof TFile)) {
-			throw new Error(`Archive receipt path is not a file: ${path}.`);
-		}
-		const content = await this.app.vault.read(file);
-		try {
-			return JSON.parse(content) as unknown;
-		} catch {
-			throw new Error(`Archive receipt is invalid: ${path}.`);
-		}
+		const content = await new OperationalLogRepository(this.getVaultRoot()).readText(this.archiveReceiptPath(operationId));
+		return content === null ? null : JSON.parse(content);
 	}
 
-	private async writeArchiveReceipt(
-		receipt: ArchiveMemoryProposalReceipt,
-		expectedBindingHash: string | null
-	): Promise<void> {
-		const path = this.archiveReceiptPath(receipt.operationId);
-		const content = `${JSON.stringify(receipt, null, 2)}\n`;
-		if (content.length > ARCHIVE_RECEIPT_MAX_LENGTH) {
-			throw new Error('Archive receipt exceeds the bounded record size.');
-		}
-		await this.ensureFolderExists(TRACEKEEPER_OPERATIONS_DIR);
-		await withObsidianVaultPathLock(this.app.vault, path, async () => {
-			let existing = this.app.vault.getAbstractFileByPath(path);
-			if (!existing) {
-				if (expectedBindingHash !== null) {
-					throw new Error(`Archive receipt disappeared before update: ${path}.`);
-				}
-				try {
-					await this.app.vault.create(path, content);
-					return;
-				} catch (error: unknown) {
-					existing = this.app.vault.getAbstractFileByPath(path);
-					if (!(existing instanceof TFile)) {
-						throw error;
-					}
-					const racedContent = await this.app.vault.read(existing);
-					if (racedContent.trim() === content.trim()) {
-						return;
-					}
-					throw new Error(
-						`Archive receipt creation lost a concurrent race: ${path}.`
-					);
-				}
-			}
-			if (!(existing instanceof TFile)) {
-				throw new Error(`Archive receipt path is not a file: ${path}.`);
-			}
-			await this.app.vault.process(existing, (current) => {
-				if (current.trim() === content.trim()) {
-					return current;
-				}
-				if (expectedBindingHash === null) {
-					throw new Error(
-						`Archive receipt already exists with different content: ${path}.`
-					);
-				}
-				let parsed: unknown;
-				try {
-					parsed = JSON.parse(current) as unknown;
-				} catch {
-					throw new Error(`Archive receipt changed outside the operation: ${path}.`);
-				}
-				if (
-					!parsed
-					|| typeof parsed !== 'object'
-					|| Array.isArray(parsed)
-					|| (parsed as Record<string, unknown>).operationId
-						!== receipt.operationId
-					|| (parsed as Record<string, unknown>).bindingHash
-						!== expectedBindingHash
-				) {
-					throw new Error(`Archive receipt changed outside the operation: ${path}.`);
-				}
-				return content;
-			});
-		});
+	private async writeArchiveReceipt(receipt: ArchiveMemoryProposalReceipt, expectedBindingHash: string | null): Promise<void> {
+		const logical = this.archiveReceiptPath(receipt.operationId);
+		const logs = new OperationalLogRepository(this.getVaultRoot());
+		const content = JSON.stringify(receipt) + '\n';
+		if (content.length > ARCHIVE_RECEIPT_MAX_LENGTH)
+			throw new Error('Operational receipt exceeds its limit.');
+		const previous = await logs.readText(logical);
+		if (previous !== null && JSON.stringify(JSON.parse(previous)) === JSON.stringify(receipt))
+			return;
+		if ((previous === null ? null : JSON.parse(previous).bindingHash) !== expectedBindingHash)
+			throw new Error('Operational receipt binding changed.');
+		await logs.replaceText(logical, previous === null ? null : logHash(previous), content);
 	}
 
 	private archiveTargetClaimPath(targetHash: string): string {
@@ -1756,93 +1764,22 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private async readArchiveTargetClaim(targetHash: string): Promise<unknown> {
-		const path = this.archiveTargetClaimPath(targetHash);
-		const file = this.app.vault.getAbstractFileByPath(path);
-		if (!file) {
-			return null;
-		}
-		if (!(file instanceof TFile)) {
-			throw new Error(`Archive target claim path is not a file: ${path}.`);
-		}
-		const content = await this.app.vault.read(file);
-		try {
-			return JSON.parse(content) as unknown;
-		} catch {
-			throw new Error(`Archive target claim is invalid: ${path}.`);
-		}
+		const content = await new OperationalLogRepository(this.getVaultRoot()).readText(this.archiveTargetClaimPath(targetHash));
+		return content === null ? null : JSON.parse(content);
 	}
 
-	private async writeArchiveTargetClaim(
-		claim: ArchiveMemoryProposalTargetClaim,
-		expectedBindingHash: string | null
-	): Promise<void> {
-		const path = this.archiveTargetClaimPath(claim.targetHash);
-		const content = `${JSON.stringify(claim, null, 2)}\n`;
-		if (content.length > ARCHIVE_TARGET_CLAIM_MAX_LENGTH) {
-			throw new Error('Archive target claim exceeds the bounded record size.');
-		}
-		await this.ensureFolderExists(ARCHIVE_TARGET_CLAIMS_DIR);
-		await withObsidianVaultPathLock(this.app.vault, path, async () => {
-			let existing = this.app.vault.getAbstractFileByPath(path);
-			if (!existing) {
-				if (expectedBindingHash !== null) {
-					throw new Error(`Archive target claim disappeared before update: ${path}.`);
-				}
-				try {
-					await this.app.vault.create(path, content);
-					return;
-				} catch (error: unknown) {
-					existing = this.app.vault.getAbstractFileByPath(path);
-					if (!(existing instanceof TFile)) {
-						throw error;
-					}
-					const racedContent = await this.app.vault.read(existing);
-					if (racedContent.trim() === content.trim()) {
-						return;
-					}
-					throw new Error(
-						`Archive target claim creation lost a concurrent race: ${path}.`
-					);
-				}
-			}
-			if (!(existing instanceof TFile)) {
-				throw new Error(`Archive target claim path is not a file: ${path}.`);
-			}
-			await this.app.vault.process(existing, (current) => {
-				if (current.trim() === content.trim()) {
-					return current;
-				}
-				if (expectedBindingHash === null) {
-					throw new Error(
-						`Archive target claim already exists with different content: ${path}.`
-					);
-				}
-				let parsed: unknown;
-				try {
-					parsed = JSON.parse(current) as unknown;
-				} catch {
-					throw new Error(
-						`Archive target claim changed outside the operation: ${path}.`
-					);
-				}
-				if (
-					!parsed
-					|| typeof parsed !== 'object'
-					|| Array.isArray(parsed)
-					|| (parsed as Record<string, unknown>).operationId
-						!== claim.operationId
-					|| (parsed as Record<string, unknown>).targetHash
-						!== claim.targetHash
-					|| (parsed as Record<string, unknown>).bindingHash
-						!== expectedBindingHash
-				) {
-					throw new Error(
-						`Archive target claim changed outside the operation: ${path}.`
-					);
-				}
-				return content;
-			});
-		});
+	private async writeArchiveTargetClaim(claim: ArchiveMemoryProposalTargetClaim, expectedBindingHash: string | null): Promise<void> {
+		const logical = this.archiveTargetClaimPath(claim.targetHash);
+		const logs = new OperationalLogRepository(this.getVaultRoot());
+		const content = JSON.stringify(claim) + '\n';
+		if (content.length > ARCHIVE_TARGET_CLAIM_MAX_LENGTH)
+			throw new Error('Operational receipt exceeds its limit.');
+		const previous = await logs.readText(logical);
+		if (previous !== null && JSON.stringify(JSON.parse(previous)) === JSON.stringify(claim))
+			return;
+		if ((previous === null ? null : JSON.parse(previous).bindingHash) !== expectedBindingHash)
+			throw new Error('Operational receipt binding changed.');
+		await logs.replaceText(logical, previous === null ? null : logHash(previous), content);
 	}
 
 	private async waitForNativePath(

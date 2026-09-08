@@ -19,7 +19,7 @@ import { TRACEKEEPER_RUNTIME_LOG_VIEW } from '../../ui/view-types';
 import { trimText } from '../shared/markdown-record-parser';
 
 export class RuntimeLogCleanupModal extends Modal {
-	private selectedScope: RuntimeLogCleanupScope = 'older-than-week';
+	private selectedScope: RuntimeLogCleanupScope = 'older-than-three-months';
 	private preview: RuntimeLogCleanupPreview | null = null;
 
 	constructor(
@@ -237,6 +237,8 @@ export class RuntimeLogCleanupModal extends Modal {
 				return ui('包含新旧混合事件', 'contains mixed old and new events');
 			case 'too-new':
 				return ui('事件未早于截止时间', 'events are not older than the cutoff');
+			case 'pending-operation':
+				return ui('未完成操作仍需要此活动记录', 'required by an unfinished operation');
 			case 'empty-or-unparseable':
 				return ui('空文件或时间不可解析', 'empty or unparseable timestamps');
 		}
@@ -311,6 +313,8 @@ export class TracekeeperRuntimeLogView extends ItemView {
 			cls: 'tracekeeper-view__description',
 		});
 		const actions = header.createDiv({ cls: 'tracekeeper-action-row' });
+		const manage = actions.createEl('button', { text: ui('日志管理', 'Log management') });
+		manage.addEventListener('click', () => this.plugin.openLogManagement());
 		const cleanupButton = actions.createEl('button', {
 			text: ui('清理', 'Clear'),
 		});

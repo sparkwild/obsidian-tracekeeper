@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { logDirectory } from '@tracekeeper/core';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -564,7 +565,7 @@ function createHarness(options = {}) {
 					});
 					const { NodeFileOperationJournal } = require('@tracekeeper/core');
 					await new NodeFileOperationJournal({
-						directory: path.join(batchJournalRoot, '00_tracekeeper/control/operations'),
+						directory: logDirectory(batchJournalRoot),
 					}).save({
 						operation_id: prepared.batch_writeback_operation_id,
 						idempotency_key: prepared.batch_writeback_idempotency_key,
@@ -2182,13 +2183,13 @@ try {
 			.join('\n');
 		assert.equal((activityText.match(/action: wiki\.review_batch/g) || []).length, 1);
 		const batchRecord = await new NodeFileOperationJournal({
-			directory: path.join(harness.vaultRoot, '00_tracekeeper/control/operations'),
+			directory: logDirectory(harness.vaultRoot),
 		}).loadById(preview.operationId);
 		assert.equal(batchRecord.status, 'completed');
 		assert.equal(batchRecord.payload.items.some((item) => 'writebackPreview' in item), false);
 		assert.equal(batchRecord.payload.targets.some((target) => 'writebackBlock' in target), false);
 		const rawBatchJournal = fs.readFileSync(
-			path.join(harness.vaultRoot, '00_tracekeeper/control/operations', `${preview.operationId}.json`),
+			path.join(logDirectory(harness.vaultRoot), `${preview.operationId}.json`),
 			'utf8'
 		);
 		assert.doesNotMatch(rawBatchJournal, /Programming map|Topic 1|confirmation_token|tracekeeper:relations:start/);
@@ -2293,7 +2294,7 @@ try {
 				native.proposalFile.content = renderNativeProposal(applied.fields, applied.body);
 				native.proposalFile.frontmatter = applied.fields;
 				await new (require('@tracekeeper/core').NodeFileOperationJournal)({
-					directory: path.join(journalRoot, '00_tracekeeper/control/operations'),
+					directory: logDirectory(journalRoot),
 				}).save({
 					operation_id: preparedBatchWriteback.batch_writeback_operation_id,
 					idempotency_key: preparedBatchWriteback.batch_writeback_idempotency_key,
@@ -2463,7 +2464,7 @@ try {
 		const harness = createHarness();
 		const operationId = 'wiki-review-batch-legacy-v2';
 		await new (require('@tracekeeper/core').NodeFileOperationJournal)({
-			directory: path.join(harness.batchJournalRoot, '00_tracekeeper/control/operations'),
+			directory: logDirectory(harness.batchJournalRoot),
 		}).save({
 			operation_id: operationId,
 			idempotency_key: 'wiki-review-batch:legacy-v2',

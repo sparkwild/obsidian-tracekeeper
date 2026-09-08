@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { logDirectory } from '@tracekeeper/core';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -100,12 +101,7 @@ function finishArgs(taskId, suffix) {
 
 function operationJournal(fixture) {
 	return new NodeFileOperationJournal({
-		directory: path.join(
-			fixture.vaultRoot,
-			'00_tracekeeper',
-			'control',
-			'operations'
-		),
+		directory: logDirectory(fixture.vaultRoot),
 	});
 }
 

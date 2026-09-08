@@ -752,6 +752,8 @@ async function appendAuditEventAsync(vaultRoot, input, context) {
     if (!isAgentActivityEventInput(input)) {
         return { path: event.shardPath };
     }
+    if (context.vaultRepository.appendActivityEvent)
+        return context.vaultRepository.appendActivityEvent(event.entry);
     await ensureRepositoryAuditHub(context.vaultRepository, event.timestamp);
     await withRepositoryAuditLock(context.vaultRepository, event.shardPath, async () => {
         for (let attempt = 0; attempt < 3; attempt += 1) {

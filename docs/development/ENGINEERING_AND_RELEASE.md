@@ -122,6 +122,16 @@ overwrite earlier evidence.
 Rendered Obsidian UI changes require relevant desktop verification in addition
 to pure feature and ViewModel tests.
 
+Log-storage changes additionally require v1/v2 round-trip, missing-key,
+interrupted publication, exact-retry, and whole-Vault backup/restore fixtures.
+The previous-package upgrade row must use the published 0.5.1 package when
+qualifying the hidden-log migration. Compare protected knowledge bytes separately
+from the explicitly migrated operational inventory; do not relax the general
+upgrade fixture's inventory checks. Scale evidence uses 1k, 10k, and 20k records,
+reports file counts, compression, latency, I/O, and memory, and verifies that cold
+records preserve the original retry results. Keep generated evidence outside
+`docs/` and never run migrations against the developer's real Vault as a test.
+
 Changes to native Vault lifecycles require an isolated real-plugin acceptance
 row before release qualification. Build one change-impact map first, then select
 only the applicable rows:

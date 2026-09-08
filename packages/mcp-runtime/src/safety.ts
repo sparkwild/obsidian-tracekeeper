@@ -66,6 +66,10 @@ function isVaultConfigPath(relativePath: string, options: VaultPathSafetyOptions
 }
 
 function assertNotVaultConfigPath(relativePath: string, action: 'Reading' | 'Writing', options: VaultPathSafetyOptions = {}): void {
+	const logical = relativePath.replace(/\\/g, '/').toLowerCase();
+	if (logical === '.tracekeeper' || logical.startsWith('.tracekeeper/') || logical === '00_tracekeeper/control/operations' || logical.startsWith('00_tracekeeper/control/operations/')) {
+		throw new VaultPathError('Operational log storage is only available through native log management.');
+	}
 	if (isVaultConfigPath(relativePath.replace(/\\/g, '/'), options)) {
 		throw new VaultPathError(`${action} Obsidian configuration paths are not allowed.`);
 	}

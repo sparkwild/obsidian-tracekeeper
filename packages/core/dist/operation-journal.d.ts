@@ -68,9 +68,14 @@ export declare class CorruptedOperationJournalError extends Error {
 export interface NodeFileOperationJournalOptions {
     directory: string;
     lockWaitTimeoutMs?: number;
+    beforeWrite?: () => Promise<void>;
+    onKeyCreated?: (key: Buffer) => Promise<void>;
 }
 export declare class NodeFileOperationJournal implements OperationJournal {
     private readonly directory;
+    private readonly archive;
+    private readonly beforeWrite?;
+    private readonly onKeyCreated?;
     private readonly lockWaitTimeoutMs;
     private readonly corruptLockGraceMs;
     private payloadKeyPromise;
@@ -127,6 +132,37 @@ export declare class NodeFileOperationJournal implements OperationJournal {
     private hasAuthenticatedTerminalAnchor;
     save<TResult = unknown>(record: OperationRecord<TResult>): Promise<void>;
     private saveRecord;
+    /** 元数据检查不初始化或修复存储。 */
+    inspect(): Promise<{
+        maintenance: 'idle' | 'preparing' | 'publishing' | 'invalid';
+        hot: number;
+        cold: number;
+        segments: number;
+        generation: string;
+        states: Record<string, number>;
+        issues: string[];
+        hot_files: number;
+        hot_bytes: number;
+        cold_files: number;
+        cold_bytes: number;
+        attention: Array<{
+            id: string;
+            status: string;
+        }>;
+    }>;
+    recoverStorage(): Promise<void>;
+    coordinate<T>(action: () => Promise<T>): Promise<T>;
+    initializeStorage(): Promise<void>;
+    pendingActivityDates(): Promise<string[]>;
+    archiveReceipts(now?: number): Promise<{
+        archived: number;
+    }>;
+    repairArchive(): Promise<void>;
+    verifyStorage(): Promise<void>;
+    /** 压缩准备在写锁外完成；提交前重新校验原始内容。 */
+    archiveCompleted(now?: number, force?: boolean): Promise<{
+        archived: number;
+    }>;
 }
 export declare function computePayloadHash(payload: unknown): string;
 export declare class RecoverableOperationRunner<TPayload, TResult> {

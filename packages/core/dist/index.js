@@ -39,3 +39,6 @@ __exportStar(require("./memory-record"), exports);
 __exportStar(require("./memory-lifecycle"), exports);
 __exportStar(require("./lifecycle-diagnostics"), exports);
 __exportStar(require("./maintenance"), exports);
+__exportStar(require("./log-files"), exports);
+__exportStar(require("./log-archive"), exports);
+__exportStar(require("./log-storage"), exports);

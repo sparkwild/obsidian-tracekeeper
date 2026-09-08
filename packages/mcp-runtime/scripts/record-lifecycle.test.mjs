@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { logDirectory } from '@tracekeeper/core';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -302,9 +303,12 @@ test('finish task atomically creates and exactly replays a closeout-only canonic
 test('concurrent changed closeout-only payload leaves no losing task content', async () => {
 	const fixture = createFixture();
 	try {
+		let reachedWrite, resumeWrite;
+		const reached = new Promise(resolve => { reachedWrite = resolve; });
+		const resume = new Promise(resolve => { resumeWrite = resolve; });
 		const delayedRepository = taskRepositoryWithPostWriteAction(
 			fixture.repository,
-			() => new Promise((resolve) => setTimeout(resolve, 120)),
+			async () => { reachedWrite(); await resume; },
 			'createText'
 		);
 		const common = {
@@ -321,12 +325,13 @@ test('concurrent changed closeout-only payload leaves no losing task content', a
 			...fixture.context,
 			vaultRepository: delayedRepository,
 		});
-		await new Promise((resolve) => setTimeout(resolve, 20));
+		await Promise.race([reached, firstPromise.then(result => { throw new Error(`First closeout ended before the write barrier: ${JSON.stringify(result.structuredContent)}`); })]);
 		const secondPromise = callTool('tracekeeper.finish_task', {
 			...common,
 			summary: 'CLOSEOUT-LOSER-SUMMARY',
 			outcomes: ['CLOSEOUT-LOSER-OUTCOME'],
 		}, fixture.context);
+		resumeWrite();
 		const [first, second] = await Promise.all([firstPromise, secondPromise]);
 		assert.notEqual(first.isError, true);
 		assert.equal(second.isError, true);
@@ -539,10 +544,7 @@ test('start-unavailable closeout falls back only when no start identity exists',
 		assert.doesNotMatch(taskText, /^start_operation_id:/m);
 		const storedBindingHash = taskText.match(/^finish_request_hash: "?([a-f0-9]{64})"?$/m)?.[1];
 		assert.ok(storedBindingHash);
-		const operationDirectory = path.join(
-			fixture.vaultRoot,
-			'00_tracekeeper/control/operations'
-		);
+		const operationDirectory = logDirectory(fixture.vaultRoot);
 		const operation = await new NodeFileOperationJournal({ directory: operationDirectory })
 			.loadById(finished.operation_id);
 		assert.ok(operation);
@@ -797,10 +799,7 @@ test('unfinished legacy finish operation keeps its original session-note recover
 		);
 		assert.doesNotMatch(fixture.read(task.path), /^finish_request_hash:/m);
 
-		const operationDirectory = path.join(
-			fixture.vaultRoot,
-			'00_tracekeeper/control/operations'
-		);
+		const operationDirectory = logDirectory(fixture.vaultRoot);
 		const operationFile = fs.readdirSync(operationDirectory)
 			.find((entry) => entry.startsWith('finish-task-') && entry.endsWith('.json'));
 		assert.ok(operationFile);
@@ -1444,7 +1443,7 @@ test('a caller retry key cannot alias the internal finish preparation lock', asy
  try {
   const task = await startTask(fixture, 'preparation-namespace');
   const key = `finish-preparation:${computePayloadHash({vaultRoot:fixture.vaultRoot,taskIdentity:task.task_id})}`;
-  const journal = new NodeFileOperationJournal({directory:path.join(fixture.vaultRoot,'00_tracekeeper/control/operations'),lockWaitTimeoutMs:1000});
+  const journal = new NodeFileOperationJournal({directory:logDirectory(fixture.vaultRoot),lockWaitTimeoutMs:1000});
   const result = await invoke('tracekeeper.finish_task', {task_id:task.task_id,status:'completed',summary:'Distinct internal lock domain.',idempotency_key:key}, {...fixture.context,operationJournalProvider:()=>journal});
   assert.equal(result.status,'completed');
  } finally {fixture.cleanup();}

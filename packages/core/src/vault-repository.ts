@@ -42,6 +42,7 @@ export interface VaultTextMetadata {
 }
 
 export interface VaultRepository {
+	appendActivityEvent?: (entry: string) => Promise<{ path: string }>;
 	readText(relativePath: VaultPath): Promise<VaultTextFile | null>;
 	createText(relativePath: VaultPath, content: string): Promise<VaultWriteReceipt>;
 	replaceText(relativePath: VaultPath, expectedVersion: VaultFileVersion, content: string): Promise<VaultWriteReceipt>;

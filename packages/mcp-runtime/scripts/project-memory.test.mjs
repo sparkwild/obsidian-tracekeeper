@@ -1,3 +1,4 @@
+import { logDirectory } from '@tracekeeper/core';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -666,12 +667,7 @@ function findAgentEntries(fixture) {
 }
 
 async function finishTaskOperationRecords(fixture) {
-	const operationRoot = path.join(
-		fixture.vaultRoot,
-		'00_tracekeeper',
-		'control',
-		'operations'
-	);
+	const operationRoot = logDirectory(fixture.vaultRoot);
 	if (!fs.existsSync(operationRoot)) {
 		return [];
 	}
@@ -689,12 +685,7 @@ async function finishTaskOperationRecord(fixture) {
 }
 
 function finishTaskOperationPath(fixture) {
-	const operationRoot = path.join(
-		fixture.vaultRoot,
-		'00_tracekeeper',
-		'control',
-		'operations'
-	);
+	const operationRoot = logDirectory(fixture.vaultRoot);
 	const entries = fs.readdirSync(operationRoot)
 		.filter((entry) => entry.startsWith('finish-task-') && entry.endsWith('.json'));
 	assert.equal(entries.length, 1);
@@ -702,12 +693,7 @@ function finishTaskOperationPath(fixture) {
 }
 
 async function proposeMemoryOperationRecord(fixture) {
-	const operationRoot = path.join(
-		fixture.vaultRoot,
-		'00_tracekeeper',
-		'control',
-		'operations'
-	);
+	const operationRoot = logDirectory(fixture.vaultRoot);
 	const journal = new NodeFileOperationJournal({ directory: operationRoot });
 	const records = (await Promise.all(fs.readdirSync(operationRoot)
 		.filter((entry) => entry.startsWith('propose-memory-') && entry.endsWith('.json'))

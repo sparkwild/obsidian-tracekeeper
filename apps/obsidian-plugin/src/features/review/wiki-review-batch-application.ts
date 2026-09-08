@@ -1,3 +1,4 @@
+import { createVaultOperationJournal } from '@tracekeeper/core';
 import type { OperationJournalProvider } from '@tracekeeper/mcp-runtime';
 import path from 'node:path';
 import { App, TFile } from 'obsidian';
@@ -1328,9 +1329,7 @@ export class WikiReviewBatchApplication {
 	}
 
 	private createJournal(): NodeFileOperationJournal {
-		return this.host.operationJournalProvider?.(this.host.getVaultRoot()) ?? new NodeFileOperationJournal({
-			directory: path.join(this.host.getVaultRoot(), TRACEKEEPER_OPERATIONS_DIR),
-		});
+		return this.host.operationJournalProvider?.(this.host.getVaultRoot()) ?? createVaultOperationJournal(this.host.getVaultRoot());
 	}
 
 	private async readCurrentProposal(proposalPath: string): Promise<MemoryProposalRecord> {

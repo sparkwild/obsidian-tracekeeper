@@ -5,12 +5,13 @@ Vault and coordinates bounded writes without creating a second knowledge store.
 
 ## Vault Model
 
-Tracekeeper uses three top-level roots:
+Tracekeeper keeps human-readable records in three top-level roots and operational storage in a separate hidden directory:
 
 ```text
-00_tracekeeper/   operational control, inbox, work records, Agent activity, and journals
+00_tracekeeper/   operational control, inbox, work records, and Agent activity
 01_knowledge/     durable Memory, Wiki, and Sources owned by the user
 02_archive/       inactive or completed artifacts
+.tracekeeper/logs/ hidden operational records, indexes, and archive segments
 ```
 
 The explicit structure-repair flow creates only the base owner directories and
@@ -302,26 +303,62 @@ through the journal API. Legacy plaintext records are rewritten in sealed form
 on a subsequent safe save, while incompatible body-bearing writeback records
 are quarantined instead of replayed.
 
-An unmatched retry key consults reference ownership before opening orphan
-journals; records already referenced by other keys do not require body
-decryption. Startup recovery uses authenticated terminal anchors to skip
-completed/conflicted bodies and reports damaged recovery candidates individually.
-Exact access to a damaged record still fails closed. Production writes retain
-version 1 encoding for downgrade compatibility; the reader also accepts already
-written version 2 gzip envelopes with authenticated compression mode and bounded
-decompression. Compression writing is deferred. Neither retry identities nor
-historical `.json`, `.ref`, and `.anchor` files expire or get removed.
+Operational log references retain their stable logical identifiers under the
+legacy control path. The shared repository resolves them to the active store;
+consumers must not join that path to the Vault root or scan physical JSON files.
+Existing stores continue to use their legacy directory until an explicit,
+backed-up migration activates `.tracekeeper/logs/`. Fresh stores initialize the
+hidden layout. Activation binds the encryption key; a missing data directory or
+mismatched key is a recovery error, not an empty store.
 
-The host owns a Vault-scoped journal provider shared by direct execution and MCP.
-Its metadata catalog retains reference ownership and orphan candidates, never
-plaintext payloads or results. Short filesystem sections coordinate through
-`.coordination/catalog.lock`; business steps retain their existing per-key locks
-and do not hold the catalog lock. The directory identity, change stamp, and an explicit revision written before
-journal mutations invalidate metadata after another writer changes the inventory; terminal-anchor
-cache entries additionally bind the actual anchor file stamp. Each hit still
-validates its real record. Runtime stop and plugin unload clear the provider.
-Cold initialization remains proportional to inventory size; this does not solve
-long-term file-count growth or introduce cold shards.
+Values of at least 4 KiB are gzip-compressed before authenticated encryption when
+the serialized envelope saves at least ten percent. Uncompressed values retain
+v1 envelopes; compressed values use v2 with authenticated compression mode and
+a 64 MiB decoded-value bound. Reads support both formats and do not rewrite
+history. Metadata inspection neither creates a key nor repairs an anchor.
+
+The hot store retains mutable records and recent terminal records. Activated
+stores support automatic lossless archival after seven days, or earlier when
+more than 1,000 terminal records remain hot. Maintenance prepares at most 500
+records per batch and yields between batches. Referenced unfinished work is
+retained; native receipts without a proven terminal lifetime remain hot.
+
+Cold storage consists of immutable frames, hash-partitioned lookup indexes,
+and an authenticated current-generation manifest. Frames retain the original
+record, progress proof, and idempotency references. Segments rotate at 1,000
+frames or 32 MiB; a bounded oversized frame occupies its own segment. Exact
+retries read their indexed record and return its original result without
+executing business effects. Logical retry identities and results do not expire.
+
+Archive preparation is journaled before publication. New segment bytes and
+indexes are verified before the manifest is replaced. Only byte-matching hot
+copies covered by the committed manifest are retired. Restart resumes or
+abandons only the owned preparation. Missing or damaged indexes never mean a
+request is absent; explicit index rebuilding reads only segments authenticated
+by the committed manifest. A damaged manifest or key requires matching recovery
+material rather than speculative adoption of loose files.
+
+Migration pauses Tracekeeper execution, previews the operational inventory, and
+creates a complete verified file backup in a new user-selected directory outside
+the Vault. This includes attachments, plugin configuration, and keys, but excludes
+transient locks and staging files. Source changes invalidate the backup or
+pre-activation check. Staged records are verified before one activation switch;
+old system copies are removed only after the new store verifies. Interrupted
+migration retains its owned phase and original backup. Inactive staging may be
+cancelled without deleting original records or the backup.
+
+Rollback restores the whole backup into a new Vault directory. It never replaces
+only old logs in a Vault containing newer knowledge writes. Backups do not expire
+automatically. The plugin exposes migration, maintenance, integrity checking,
+index rebuilding, and history through native log-management controls. MCP status
+and lint expose bounded, read-only log health rather than encrypted payloads,
+keys, or maintenance execution authority.
+
+The Vault-scoped provider remains shared by direct execution and MCP. Writer
+coordination protects claims and publication; ordinary compression preparation
+runs outside the catalog lock. Provider instances are invalidated at layout
+switches and cleared on unload. A provider bound to the old directory cannot
+continue writing after activation.
 
 Same-task finish preparation and commit share an outer task-scoped lock in a namespace separate from caller retry keys; exact
 retries cannot read a task midway through the winning closeout. The operation
@@ -369,8 +406,8 @@ The persisted operation start time remains the archive receipt timestamp. Human
 archive actions do not create Agent activity events, so retries do not affect
 the activity timeline.
 
-Legacy-structure migration uses a separate Vault-local journal under
-`00_tracekeeper/control/operations/legacy-migrations/`. Its immutable identity
+Legacy-structure migration uses the logical journal namespace
+`00_tracekeeper/control/operations/legacy-migrations/`, resolved through the shared operational repository. Its immutable identity
 binds the mapping, fresh source and target hashes, resolved-edge baseline,
 MetadataCache generation, effective link-update capability, and displayed
 confirmation. The journal stores bounded paths, hashes, edge shapes, states,
@@ -395,7 +432,7 @@ journal state and may be refreshed after recovery.
 Empty legacy roots have their own preview-bound cleanup attempt state and use
 `FileManager.trashFile()` only after all planned descendants are verified.
 
-New Agent activity events append to canonical UTC daily Markdown shards under
+New Agent activity events append to canonical UTC-dated Markdown shards under
 `00_tracekeeper/control/agent_activity/` through `Vault.process()`. Stable
 activity ids suppress exact retries, Vault-scoped path locks coordinate plugin
 and Runtime writers, and a generated link from each shard to the Agent Activity

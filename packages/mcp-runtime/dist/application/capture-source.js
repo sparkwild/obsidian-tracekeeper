@@ -29,10 +29,17 @@ class CaptureSourceApplicationService {
     }
     async execute(request) {
         const identity = this.dependencies.createIdentity(request.requestHash, request.idempotencyKey);
+        const previous = await this.dependencies.journal.loadById(identity.operationId);
+        if (previous?.status !== 'completed')
+            this.dependencies.assertSafeText(['source', 'content', 'text', 'title', 'capture_reason'].map(label => ({ label, value: optionalString(request.rawArgs[label]) })));
+        const previousPayload = previous?.payload;
+        const payload = previousPayload?.request_hash === request.requestHash
+            ? previousPayload
+            : { request_hash: request.requestHash, requestSnapshot: request.rawArgs };
         const runner = new core_1.RecoverableOperationRunner({
             operationId: identity.operationId,
             idempotencyKey: identity.idempotencyKey,
-            payload: { request_hash: request.requestHash },
+            payload,
             journal: this.dependencies.journal,
             failureInjection: this.dependencies.failureInjection,
             steps: [],
@@ -67,12 +74,6 @@ class CaptureSourceApplicationService {
         if (mode === 'external_reference' && sourceText) {
             warnings.push('content/text is ignored for external_reference mode.');
         }
-        this.dependencies.assertSafeText([
-            { label: 'source', value: source },
-            { label: 'capture_reason', value: captureReason },
-            { label: 'content', value: sourceText },
-            { label: 'title', value: title },
-        ]);
         let body = `${this.dependencies.renderText('## 来源捕获', '## Source capture')}\n\n`;
         if (mode === 'external_reference') {
             body += `- mode: external_reference\n- source: ${source}\n`;

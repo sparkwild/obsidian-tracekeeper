@@ -26,8 +26,10 @@ product and a bounded Agent integration.
   truth.
 - Rebuildable in-memory indexes accelerate reads but do not become a database or
   independent knowledge store.
-- JSON operation journals under Tracekeeper's control area may coordinate local
-  recovery; they are operational state rather than knowledge.
+- Operational journals and lossless archive segments remain Vault-local files
+  under the activated hidden log store. Node.js gzip and authenticated encryption
+  provide bounded compression; no database is introduced. See
+  [recoverable writes](../architecture/KNOWLEDGE_RUNTIME.md#recoverable-writes).
 - No hosted database, remote vector store, or cloud control plane is required.
 
 ## Agent Protocol

@@ -7,6 +7,9 @@ function recoveryRequestForRecord(record, dependencies) {
         return null;
     }
     const payload = record.payload;
+    if (record.operation_id.startsWith('capture-source-') && payload.requestSnapshot && typeof payload.requestSnapshot === 'object') {
+        return { tool: 'tracekeeper.capture_source', args: { ...payload.requestSnapshot, idempotency_key: record.idempotency_key } };
+    }
     if (record.operation_id.startsWith('start-task-')) {
         return {
             tool: 'tracekeeper.start_task',
@@ -132,6 +135,9 @@ class RuntimeRecoveryController {
             const request = recoveryRequestForRecord(record, this.dependencies);
             if (!request) {
                 report.skipped.push(record.operation_id);
+                (report.attention ?? (report.attention = [])).push({ operation_id: record.operation_id, reason: record.operation_id.startsWith('wiki-review-batch-')
+                        ? 'Resume this reviewed batch in the Obsidian review surface.'
+                        : 'This record has no safe automatic recovery request; inspect it in log management.' });
                 continue;
             }
             const result = await this.dependencies.invoke(request, record, vaultRoot);

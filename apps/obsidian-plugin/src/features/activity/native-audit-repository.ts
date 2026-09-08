@@ -143,8 +143,21 @@ export class ObsidianAuditShardRepository {
 
 		return {
 			eventIds: events.map((event) => event.auditEventId),
-			shardPaths: [...groups.keys()].sort(),
+			shardPaths: [...new Set(events.map(event => event.shardPath))].sort(),
 		};
+	}
+
+	async appendRuntimeEvent(entry: string): Promise<{
+		path: string;
+	}> {
+		// Runtime 已完成字段投影与脱敏；共用原生分片写入器，保留列表型元数据。
+		const id = entry.match(/^- activity_event_id:\s*"?(audit-[a-f0-9]+)"?\s*$/m)?.[1];
+		const timestamp = entry.match(/^- timestamp:\s*"?([^"\n]+)"?\s*$/m)?.[1];
+		if (!id || !timestamp || !/^- type:\s*"?mcp\.(tool-call|connection|authentication-rejected)"?\s*$/m.test(entry) || Buffer.byteLength(entry) > 64 * 1024)
+			throw new Error('Invalid prepared activity event.');
+		const event: PreparedAuditEvent = { auditEventId: id, timestamp, content: entry, shardPath: auditShardPath(timestamp) };
+		await withObsidianVaultPathLock(this.app.vault, event.shardPath, () => this.appendToShard(event.shardPath, [event]));
+		return { path: event.shardPath };
 	}
 
 	private createOperationId(): string {
@@ -347,7 +360,45 @@ export class ObsidianAuditShardRepository {
 		return rendered;
 	}
 
-	private async appendToShard(
+	private async appendToShard(shardPath: string, events: PreparedAuditEvent[]): Promise<void> {
+		const prefix = shardPath.slice(0, -3);
+		const paths: string[] = [];
+		let ordinal = 0;
+		const ids = new Map<string, string>();
+		// 同一天的写入共享基础路径锁；轮转前检查旧分片，保持跨分片重试幂等。
+		for (;;) {
+			const candidate = ordinal === 0 ? shardPath : `${prefix}-${String(ordinal).padStart(3, '0')}.md`;
+			const file = this.app.vault.getAbstractFileByPath(candidate);
+			if (!file)
+				break;
+			if (!(file instanceof TFile))
+				throw new Error('Activity shard path is occupied.');
+			const content = await this.app.vault.read(file);
+			this.validateShard(content, candidate);
+			for (const match of content.matchAll(/^\s*-?\s*activity_event_id:\s*["']?([A-Za-z0-9._:-]+)/gm))
+				ids.set(match[1], candidate);
+			paths.push(candidate);
+			ordinal++;
+		}
+		if (ordinal > 999999)
+			throw new Error('Activity rotation limit reached; maintenance is required.');
+		ordinal = Math.max(1, ordinal);
+		let target = paths.at(-1) ?? shardPath;
+		for (const event of events) {
+			if (ids.has(event.auditEventId)) {
+				event.shardPath = ids.get(event.auditEventId)!;
+				continue;
+			}
+			const file = this.app.vault.getAbstractFileByPath(target);
+			if (file instanceof TFile && file.stat.size + Buffer.byteLength(event.content) + 512 > 1024 * 1024)
+				target = `${prefix}-${String(ordinal++).padStart(3, '0')}.md`;
+			await this.appendToShardPart(target, [event]);
+			event.shardPath = target;
+			ids.set(event.auditEventId, target);
+		}
+	}
+
+	private async appendToShardPart(
 		shardPath: string,
 		events: PreparedAuditEvent[]
 	): Promise<void> {
@@ -380,7 +431,7 @@ export class ObsidianAuditShardRepository {
 		await this.app.vault.process(shard, (current) => {
 			this.validateShard(current, shardPath);
 			const existingIds = new Set(
-				[...current.matchAll(/^activity_event_id:\s*([A-Za-z0-9._:-]+)\s*$/gm)]
+				[...current.matchAll(/^\s*-?\s*activity_event_id:\s*["']?([A-Za-z0-9._:-]+)["']?\s*$/gm)]
 					.map((match) => match[1])
 			);
 			const pending = events.filter((event) => !existingIds.has(event.auditEventId));
@@ -435,7 +486,7 @@ export class ObsidianAuditShardRepository {
 		timestamp: string,
 		hubLink: string
 	): string {
-		const day = shardPath.slice(shardPath.lastIndexOf('/') + 1, -3);
+		const day = shardPath.slice(shardPath.lastIndexOf('/') + 1).slice(0, 10);
 		return [
 			'---',
 			'type: tracekeeper_agent_activity_shard',
@@ -452,7 +503,7 @@ export class ObsidianAuditShardRepository {
 	}
 
 	private validateShard(content: string, shardPath: string): void {
-		const day = shardPath.slice(shardPath.lastIndexOf('/') + 1, -3);
+		const day = shardPath.slice(shardPath.lastIndexOf('/') + 1).slice(0, 10);
 		if (
 			!/^type:\s*tracekeeper_agent_activity_shard\s*$/m.test(content)
 			|| !new RegExp(`^activity_date_utc:\\s*${day}\\s*$`, 'm').test(content)
