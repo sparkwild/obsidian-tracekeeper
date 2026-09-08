@@ -1,3 +1,4 @@
+import { logDirectory } from '@tracekeeper/core';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -839,7 +840,7 @@ function taskAppliedProposalIds(fixture) {
 }
 
 async function operationRecords(fixture) {
-	const directory = fixture.absolute('00_tracekeeper/control/operations');
+	const directory = logDirectory(fixture.vaultRoot);
 	if (!fs.existsSync(directory)) {
 		return [];
 	}
@@ -857,7 +858,7 @@ async function operationRecord(fixture) {
 }
 
 function rawOperationRecord(fixture) {
-	const directory = fixture.absolute('00_tracekeeper/control/operations');
+	const directory = logDirectory(fixture.vaultRoot);
 	const entries = fs.readdirSync(directory).filter((entry) => entry.endsWith('.json'));
 	assert.equal(entries.length, 1);
 	return JSON.parse(fs.readFileSync(path.join(directory, entries[0]), 'utf8'));
@@ -865,7 +866,7 @@ function rawOperationRecord(fixture) {
 
 function writeRawOperationRecord(fixture, operation) {
 	fs.writeFileSync(
-		fixture.absolute(`00_tracekeeper/control/operations/${operation.operation_id}.json`),
+		path.join(logDirectory(fixture.vaultRoot), `${operation.operation_id}.json`),
 		`${JSON.stringify(operation, null, 2)}\n`,
 		'utf8'
 	);

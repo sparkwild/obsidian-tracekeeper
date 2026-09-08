@@ -59,7 +59,8 @@ export type AuditCleanupRetainedReason =
 	| 'non-audit'
 	| 'mixed-age'
 	| 'too-new'
-	| 'empty-or-unparseable';
+	| 'empty-or-unparseable'
+	| 'pending-operation';
 
 export interface AuditCleanupRetainedFile extends Omit<
 	AuditCleanupPreviewFile,
@@ -175,6 +176,11 @@ const normalizeAgentActivityTimestamp = (timestamp: string): string => {
 	}
 	return parsed.toISOString();
 };
+
+export function compareActivityShardPaths(left: string, right: string): number {
+ const key = (value:string) => { const match=value.match(/(\d{4}-\d{2}-\d{2})(?:-(\d{3,6}))?\.md$/); return match?`${match[1]}-${(match[2]??'0').padStart(6,'0')}`:value; };
+ return key(left).localeCompare(key(right));
+}
 
 export function auditShardPath(timestamp: string): string {
 	const parsed = new Date(timestamp);
@@ -482,14 +488,14 @@ const auditCleanupSourceKind = (
 	);
 	const match = filePath.match(
 		new RegExp(
-			`^${escapedDirectory}/(\\d{4})/(\\d{4}-\\d{2}-\\d{2})\\.md$`
+			`^${escapedDirectory}/(\\d{4})/(\\d{4}-\\d{2}-\\d{2})(?:-[0-9]{3,6})?\\.md$`
 		)
 	);
 	if (!match || match[1] !== match[2]?.slice(0, 4)) {
 		return null;
 	}
 	try {
-		return auditShardPath(`${match[2]}T00:00:00.000Z`) === filePath
+		return auditShardPath(`${match[2]}T00:00:00.000Z`).slice(0, -3) === filePath.replace(/(?:-[0-9]{3,6})?\.md$/, '')
 			? 'shard'
 			: null;
 	} catch {

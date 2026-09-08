@@ -52,14 +52,14 @@ test('terminal anchors avoid loading historical bodies and damaged active record
 	assert.equal(journal.getRecoveryIssues().length, 1);
 });
 
-test('writes remain v1 while existing authenticated compressed v2 payloads remain readable', async (t) => {
+test('writes compress useful values while existing authenticated compressed v2 payloads remain readable', async (t) => {
 	const { directory, journal, record } = fixture(t);
 	const expected = record('large', 'completed', 'Private fixture content. '.repeat(10_000));
 	await journal.save(expected);
 	const raw = fs.readFileSync(path.join(directory, 'operation-large.json'), 'utf8');
 	const stored = JSON.parse(raw);
-	assert.equal(stored.payload_encrypted.version, 1);
-	assert.equal(stored.payload_encrypted.compression, undefined);
+	assert.equal(stored.payload_encrypted.version, 2);
+	assert.equal(stored.payload_encrypted.compression, 'gzip');
 	assert.equal(raw.includes('Private fixture content'), false);
 	const reloaded = await new NodeFileOperationJournal({ directory }).loadByIdempotencyKey('key-large');
 	assert.deepEqual(reloaded.payload, expected.payload);

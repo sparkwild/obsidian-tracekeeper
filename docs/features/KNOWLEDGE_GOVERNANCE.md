@@ -272,12 +272,24 @@ aggregate lifecycle metrics remain available as advanced local diagnostics.
 Metrics cover only calls that reached Tracekeeper and are never a missed-call
 denominator.
 
-The Agent Activity display reads only the latest 2,000 retained MCP activity
-events and states when older rows are omitted. This is a presentation window,
-not a retention or cleanup boundary: cleanup independently enumerates and
-freshly reads the full current set of canonical daily activity shards before
-producing its bound preview. Legacy audit history is not migrated or read by
-the activity reader.
+The recent Agent Activity display remains a bounded window. Log management also
+provides date, operation-id, and status filters with generation-bound pagination
+across retained history. New activity shards rotate at 1 MiB and keep their UTC
+date; existing date-only files remain readable. Runtime and native activity use
+the same production shard writer and preserve stable event identities across
+rotation.
+
+Activity deletion remains explicit and preview-bound, defaulting to records older
+than 90 days. Cleanup independently enumerates the complete retained shard set.
+Mixed-age, changed, and recovery-pinned files remain retained. This never deletes
+operational results, idempotency indexes, or proof receipts. Automatic log
+maintenance is lossless and operates only on an activated store; it may be paused
+in log management.
+
+The log-management entry also presents integrity checks, archive maintenance,
+explicit migration with whole-Vault backup, and restore-to-new-directory
+controls. Its storage and recovery contract is owned by
+[Knowledge Runtime](../architecture/KNOWLEDGE_RUNTIME.md#recoverable-writes).
 
 ## Lint, Graph, And Migration
 
@@ -378,7 +390,7 @@ and never permanently deletes a user file.
 MCP may report legacy structure but never moves or deletes it.
 
 Agent activity retention follows the same human-governed rule. Activity reads
-only canonical UTC daily shards under the Agent Activity hub; legacy audit
+canonical UTC-dated shards, including rotated siblings, under the Agent Activity hub; legacy audit
 history is not migrated or read. Cleanup previews every current activity shard
 from fresh content and sends only wholly eligible files to the configured
 Obsidian system trash. Partial,

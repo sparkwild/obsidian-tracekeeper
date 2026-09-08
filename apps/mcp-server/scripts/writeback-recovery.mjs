@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { logDirectory } from '@tracekeeper/core';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -202,7 +203,7 @@ async function apply(fixture, confirmationToken, context = fixture.context) {
 }
 
 function operationRecord(fixture) {
-	const operationDirectory = fixture.absolute('00_tracekeeper/control/operations');
+	const operationDirectory = logDirectory(fixture.vaultRoot);
 	const operationFiles = fs.readdirSync(operationDirectory)
 		.filter((entry) => entry.endsWith('.json'));
 	assert.equal(operationFiles.length, 1);

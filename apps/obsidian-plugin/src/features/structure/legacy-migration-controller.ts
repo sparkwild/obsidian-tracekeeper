@@ -1,3 +1,4 @@
+import type { OperationalLogRepository } from '@tracekeeper/core';
 import { createHash } from 'node:crypto';
 import { App, Notice, TFile, TFolder } from 'obsidian';
 import {
@@ -167,6 +168,7 @@ export interface LegacyCleanupResult {
 }
 
 export interface LegacyMigrationControllerHost {
+	operationalLogs?: () => OperationalLogRepository;
 	initializeMemoryStructure(plan: MemoryInitializationPlan): Promise<void>;
 	buildInitializationPlan(): Promise<MemoryInitializationPlan>;
 	ensureFolderExists(path: string): Promise<void>;
@@ -204,7 +206,7 @@ export class LegacyMigrationController {
 	) {
 		this.journalRepository = new LegacyMigrationJournalRepository(
 			app,
-			(path) => host.ensureFolderExists(path)
+			(path) => host.ensureFolderExists(path), host.operationalLogs?.()
 		);
 	}
 

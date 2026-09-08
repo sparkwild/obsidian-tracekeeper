@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { logDirectory } from '@tracekeeper/core';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -54,7 +55,7 @@ function collectMatches(dir, matcher) {
 }
 
 function findFinishTaskOperation(vaultRoot) {
-	const operationDir = path.join(vaultRoot, '00_tracekeeper/control/operations');
+	const operationDir = logDirectory(vaultRoot);
 	if (!fs.existsSync(operationDir)) {
 		throw new Error(`Missing operation directory: ${operationDir}`);
 	}
@@ -78,7 +79,7 @@ async function main() {
 	const taskPath = path.join(vaultRoot, '00_tracekeeper/work/tasks/recovery-task.md');
 	const sessionDir = path.join(vaultRoot, '00_tracekeeper/work/sessions');
 	const reviewQueueDir = path.join(vaultRoot, '00_tracekeeper/inbox/review_queue');
-	const operationDir = path.join(vaultRoot, '00_tracekeeper/control/operations');
+	const operationDir = logDirectory(vaultRoot);
 	const vaultRepository = new NodeFsVaultRepository({ vaultRoot });
 
 	try {

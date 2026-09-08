@@ -36,7 +36,8 @@ export type RuntimeLogCleanupFileReason =
 	| 'clear-all'
 	| 'mixed-age'
 	| 'too-new'
-	| 'empty-or-unparseable';
+	| 'empty-or-unparseable'
+	| 'pending-operation';
 
 export interface RuntimeLogCleanupFile {
 	path: string;

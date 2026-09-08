@@ -28,7 +28,14 @@ export const PUBLISHED_050_ASSETS = Object.freeze({
 	'styles.css': Object.freeze({ bytes: 44452, sha256: '8c65498c346922cd4f72fe24c8fb956afc833faa1796a1a18f168b466a83ac6d' }),
 });
 
+export const PUBLISHED_051_ASSETS = Object.freeze({
+ 'main.js': Object.freeze({bytes:1752211,sha256:'9b06bf4c2ce92428fdfeef9c8fa3c83f1e652ffd422df9bb0130118f9b8d7d22'}),
+ 'manifest.json': Object.freeze({bytes:328,sha256:'2ecdb3658096e3271b514d55bde497e98002b7b4c5a7ae7546f5506c3238f4e2'}),
+ 'styles.css': Object.freeze({bytes:44452,sha256:'8c65498c346922cd4f72fe24c8fb956afc833faa1796a1a18f168b466a83ac6d'}),
+});
+
 const publishedAssetsForVersion = (version) => {
+	if (version === '0.5.1') return PUBLISHED_051_ASSETS;
 	if (version === '0.5.0') return PUBLISHED_050_ASSETS;
 	if (version === PREVIOUS_PUBLIC_VERSION) return PUBLISHED_023_ASSETS;
 	throw new Error(`Unsupported previous release: ${version}`);
@@ -818,7 +825,7 @@ export function compareUpgradeSnapshots(
 	after,
 	{
 		expectedVersion = '0.3.0',
-		expectedMemoryRulesVersion = before.previous_version === '0.5.0' ? 6 : 4,
+		expectedMemoryRulesVersion = before.previous_version === PREVIOUS_PUBLIC_VERSION ? 4 : 6,
 		expectedPreviousAssets = publishedAssetsForVersion(before.previous_version),
 		expectedTargetAssets,
 	} = {}

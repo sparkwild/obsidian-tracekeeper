@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AGENT_ACTIVITY_HUB_TYPE = exports.AGENT_ACTIVITY_SCHEMA_VERSION = void 0;
 exports.renderAgentActivityHub = renderAgentActivityHub;
 exports.validateAgentActivityHubMarkdown = validateAgentActivityHubMarkdown;
+exports.compareActivityShardPaths = compareActivityShardPaths;
 exports.auditShardPath = auditShardPath;
 exports.buildStableAuditEventId = buildStableAuditEventId;
 exports.mergeAuditEvents = mergeAuditEvents;
@@ -48,6 +49,10 @@ const normalizeAgentActivityTimestamp = (timestamp) => {
     }
     return parsed.toISOString();
 };
+function compareActivityShardPaths(left, right) {
+    const key = (value) => { const match = value.match(/(\d{4}-\d{2}-\d{2})(?:-(\d{3,6}))?\.md$/); return match ? `${match[1]}-${(match[2] ?? '0').padStart(6, '0')}` : value; };
+    return key(left).localeCompare(key(right));
+}
 function auditShardPath(timestamp) {
     const parsed = new Date(timestamp);
     if (!timestamp.trim() || Number.isNaN(parsed.getTime())) {
@@ -296,12 +301,12 @@ const auditCleanupSourceKind = (filePath) => {
         return 'legacy';
     }
     const escapedDirectory = knowledge_architecture_1.TRACEKEEPER_AGENT_ACTIVITY_DIR.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const match = filePath.match(new RegExp(`^${escapedDirectory}/(\\d{4})/(\\d{4}-\\d{2}-\\d{2})\\.md$`));
+    const match = filePath.match(new RegExp(`^${escapedDirectory}/(\\d{4})/(\\d{4}-\\d{2}-\\d{2})(?:-[0-9]{3,6})?\\.md$`));
     if (!match || match[1] !== match[2]?.slice(0, 4)) {
         return null;
     }
     try {
-        return auditShardPath(`${match[2]}T00:00:00.000Z`) === filePath
+        return auditShardPath(`${match[2]}T00:00:00.000Z`).slice(0, -3) === filePath.replace(/(?:-[0-9]{3,6})?\.md$/, '')
             ? 'shard'
             : null;
     }

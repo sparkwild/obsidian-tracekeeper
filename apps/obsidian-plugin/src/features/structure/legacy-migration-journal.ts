@@ -1,3 +1,4 @@
+import { OperationalLogRepository, logHash } from '@tracekeeper/core';
 import { TFile, TFolder, type App } from 'obsidian';
 import { hashVaultContent } from '@tracekeeper/core';
 import { withObsidianVaultPathLock } from '../../adapters/obsidian-vault-path-lock';
@@ -186,7 +187,8 @@ export function parseLegacyMigrationJournal(value: unknown): LegacyMigrationJour
 export class LegacyMigrationJournalRepository {
 	constructor(
 		private readonly app: App,
-		private readonly ensureFolderExists: (path: string) => Promise<void>
+		private readonly ensureFolderExists: (path: string) => Promise<void>,
+		private readonly logs?: OperationalLogRepository
 	) {}
 
 	pathFor(migrationId: string): string {
@@ -196,6 +198,7 @@ export class LegacyMigrationJournalRepository {
 
 	async read(migrationId: string): Promise<LegacyMigrationJournal | null> {
 		const path = this.pathFor(migrationId);
+  if (this.logs) { const content = await this.logs.readText(path); if (content === null) return null; if (Buffer.byteLength(content) > MAX_JOURNAL_BYTES) throw new Error('Migration journal exceeds its bound.'); return parseLegacyMigrationJournal(JSON.parse(content)); }
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!file) {
 			return null;
@@ -219,6 +222,7 @@ export class LegacyMigrationJournalRepository {
 	}
 
 	async list(): Promise<LegacyMigrationJournal[]> {
+  if (this.logs) { const result: LegacyMigrationJournal[] = []; for (const name of await this.logs.list(LEGACY_MIGRATION_JOURNAL_DIR)) { const journal = await this.read(name.split('/').at(-1)!.replace(/\.json$/, '')); if (journal) result.push(journal); } return result.sort((a,b) => b.updatedAt.localeCompare(a.updatedAt)); }
 		const folder = this.app.vault.getAbstractFileByPath(
 			LEGACY_MIGRATION_JOURNAL_DIR
 		);
@@ -258,6 +262,13 @@ export class LegacyMigrationJournalRepository {
 			throw new Error('Migration journal exceeds the bounded record size.');
 		}
 		const path = this.pathFor(journal.migrationId);
+  if (this.logs) {
+   const raw = await this.logs.readText(path), previous = raw === null ? null : parseLegacyMigrationJournal(JSON.parse(raw));
+   if (previous?.bindingHash === journal.bindingHash) return journal;
+   if ((previous?.bindingHash ?? null) !== expectedBindingHash || (!previous && journal.revision !== 1)) throw new Error('Migration journal binding changed.');
+   if (previous) assertJournalUpdate(previous, journal);
+   await this.logs.replaceText(path, raw === null ? null : logHash(raw), content); return journal;
+  }
 		await this.ensureFolderExists(LEGACY_MIGRATION_JOURNAL_DIR);
 		await withObsidianVaultPathLock(this.app.vault, path, async () => {
 			let existing = this.app.vault.getAbstractFileByPath(path);

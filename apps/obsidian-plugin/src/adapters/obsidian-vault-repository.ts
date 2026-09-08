@@ -1,6 +1,7 @@
 import { TFile, Vault, normalizePath, type FileManager } from 'obsidian';
 import {
 	OperationConflictError,
+	OperationalLogRepository, isOperationalLogPath, logHash,
 	VaultPathError,
 	computeFileVersion,
 	hashVaultContent,
@@ -21,7 +22,9 @@ const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
 export class ObsidianVaultRepository implements VaultRepository {
 	constructor(
 		private readonly vault: Vault,
-		private readonly fileManager: FileManager
+		private readonly fileManager: FileManager,
+		private readonly logs?: OperationalLogRepository,
+		readonly appendActivityEvent?: (entry: string) => Promise<{ path: string }>
 	) {}
 
 	generateMarkdownLink(
@@ -45,6 +48,10 @@ export class ObsidianVaultRepository implements VaultRepository {
 	}
 
 	async readText(relativePath: VaultPath): Promise<VaultTextFile | null> {
+  if (this.logs && isOperationalLogPath(relativePath)) {
+   const content = await this.logs.readText(relativePath);
+   return content === null ? null : { path: relativePath, content, version: logHash(content), size: Buffer.byteLength(content), modifiedAt: '' };
+  }
 		const safePath = this.normalizeRelativePath(relativePath);
 		const file = this.vault.getAbstractFileByPath(safePath);
 		if (!file) {
@@ -64,6 +71,7 @@ export class ObsidianVaultRepository implements VaultRepository {
 	}
 
 	async createText(relativePath: VaultPath, content: string): Promise<VaultWriteReceipt> {
+  if (this.logs && isOperationalLogPath(relativePath)) { await this.logs.replaceText(relativePath, null, content); return { path: relativePath, version: logHash(content), size: Buffer.byteLength(content), modifiedAt: new Date().toISOString() }; }
 		const safePath = this.normalizeRelativePath(relativePath);
 		return withObsidianVaultPathLock(this.vault, safePath, async () => {
 			if (this.vault.getAbstractFileByPath(safePath)) {
@@ -88,6 +96,7 @@ export class ObsidianVaultRepository implements VaultRepository {
 		expectedVersion: string,
 		content: string
 	): Promise<VaultWriteReceipt> {
+		if (this.logs && isOperationalLogPath(relativePath)) { await this.logs.replaceText(relativePath, expectedVersion, content); return { path: relativePath, version: logHash(content), size: Buffer.byteLength(content), modifiedAt: new Date().toISOString() }; }
 		const safePath = this.normalizeRelativePath(relativePath);
 		return withObsidianVaultPathLock(this.vault, safePath, async () => {
 			const file = this.vault.getAbstractFileByPath(safePath);
@@ -105,6 +114,7 @@ export class ObsidianVaultRepository implements VaultRepository {
 	}
 
 	async deleteText(relativePath: VaultPath, expectedVersion: string): Promise<void> {
+		if (isOperationalLogPath(relativePath)) throw new Error('Operational logs require lossless maintenance.');
 		const safePath = this.normalizeRelativePath(relativePath);
 		await withObsidianVaultPathLock(this.vault, safePath, async () => {
 			const file = this.vault.getAbstractFileByPath(safePath);

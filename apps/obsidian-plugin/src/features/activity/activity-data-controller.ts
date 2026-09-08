@@ -1,3 +1,4 @@
+import { OperationalLogRepository, logHash, createVaultOperationJournal, compareActivityShardPaths } from '@tracekeeper/core';
 import { App, TFile, TFolder } from 'obsidian';
 import {
 	TRACEKEEPER_AGENT_ACTIVITY_DIR,
@@ -70,6 +71,7 @@ type ParsedRecordValue = string | string[];
 type ParsedRecord = Record<string, ParsedRecordValue>;
 
 export interface ActivityDataControllerHost {
+	operationalLogs?: () => OperationalLogRepository;
 	readRecentAgentTasks(limit: number): Promise<AgentTaskRecord[]>;
 	readRecentContextPacks(limit: number): Promise<ContextPackRecord[]>;
 	readRecentSourceCaptures(limit: number): Promise<SourceCaptureRecord[]>;
@@ -883,7 +885,7 @@ private async readRuntimeLogCleanupRows(
 			eventCount: file.eventCount,
 			reason: cutoff === null ? 'clear-all' as const : 'wholly-eligible' as const,
 		}));
-		const retainedFiles = corePreview.retained.map((file) => {
+		const retainedFiles: RuntimeLogCleanupFile[] = corePreview.retained.map((file) => {
 			if (!file.sourceKind || file.reason === 'non-audit') {
 				throw new Error(`Runtime log cleanup found a non-audit path: ${file.path}.`);
 			}
@@ -898,7 +900,11 @@ private async readRuntimeLogCleanupRows(
 				reason: file.reason,
 			};
 		});
-		return { eligibleFiles, retainedFiles };
+		if (this.host.operationalLogs) {
+   const pinned = new Set(await createVaultOperationJournal(this.host.getVaultRoot()).pendingActivityDates());
+   for (let index = eligibleFiles.length - 1; index >= 0; index--) if (pinned.has(eligibleFiles[index].path.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? '')) retainedFiles.push({ ...eligibleFiles.splice(index, 1)[0], reason: 'pending-operation' });
+  }
+  return { eligibleFiles, retainedFiles };
 	}
 
 	private async readRuntimeLogCleanupInputs(): Promise<Array<{
@@ -1009,7 +1015,7 @@ private runtimeLogCleanupFileVersion(file: TFile): string {
 		);
 		const match = path.match(
 			new RegExp(
-				`^${escapedDirectory}/(\\d{4})/(\\d{4}-\\d{2}-\\d{2})\\.md$`
+				`^${escapedDirectory}/(\\d{4})/(\\d{4}-\\d{2}-\\d{2})(?:-[0-9]{3,6})?\\.md$`
 			)
 		);
 		if (!match || match[1] !== match[2]?.slice(0, 4)) {
@@ -1129,6 +1135,7 @@ private runtimeLogCleanupSourceKind(path: string): 'shard' | null {
 					file.reason !== 'mixed-age'
 					&& file.reason !== 'too-new'
 					&& file.reason !== 'empty-or-unparseable'
+     && file.reason !== 'pending-operation'
 				) {
 					throw new Error(
 						`Runtime log cleanup retained reason is invalid: ${file.path}.`
@@ -1297,6 +1304,8 @@ private runtimeLogCleanupReceiptPath(operationId: string): string {
 		operationId: string
 	): Promise<RuntimeLogCleanupReceiptState | null> {
 		const path = this.runtimeLogCleanupReceiptPath(operationId);
+  const logs = this.host.operationalLogs?.();
+  if (logs) { const raw = await logs.readText(path); if (raw === null) return null; if (raw.length > RUNTIME_LOG_CLEANUP_RECEIPT_MAX_LENGTH) throw new Error('Activity receipt exceeds its limit.'); return JSON.parse(raw) as RuntimeLogCleanupReceiptState; }
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!file) {
 			return null;
@@ -1347,7 +1356,14 @@ private runtimeLogCleanupReceiptPath(operationId: string): string {
 		if (content.length > RUNTIME_LOG_CLEANUP_RECEIPT_MAX_LENGTH) {
 			throw new Error('Runtime log cleanup receipt exceeds the bounded size.');
 		}
-		await this.host.ensureFolderExists(`${TRACEKEEPER_OPERATIONS_DIR}/agent-activity-cleanups`);
+		const logs = this.host.operationalLogs?.();
+  if (logs) {
+   const raw = await logs.readText(path);
+   if (receipt.revision === 0 ? raw !== null : raw === null) throw new Error('Activity receipt creation or update conflicts.');
+   if (raw !== null) { const current = JSON.parse(raw) as RuntimeLogCleanupReceiptState; this.assertRuntimeLogCleanupReceipt(current, preview, previewHash); if (current.revision !== receipt.revision || current.bindingHash !== receipt.bindingHash) throw new Error('Activity receipt changed concurrently.'); }
+   await logs.replaceText(path, raw === null ? null : logHash(raw), content); Object.assign(receipt, nextReceipt); return;
+  }
+  await this.host.ensureFolderExists(`${TRACEKEEPER_OPERATIONS_DIR}/agent-activity-cleanups`);
 		const existing = this.app.vault.getAbstractFileByPath(path);
 		if (receipt.revision === 0) {
 			if (existing) {
@@ -1800,6 +1816,48 @@ buildRecentAgentConnections(
 		return buildRecentObservedClientConnections(auditEvents, toolCalls);
 	}
 
+	async queryLogHistory(query: {
+		from?: string;
+		until?: string;
+		operation?: string;
+		status?: string;
+		cursor?: string;
+		limit?: number;
+	} = {}): Promise<{
+		items: RuntimeLogItem[];
+		cursor: string | null;
+		generation: string;
+	}> {
+		const limit = query.limit ?? 50;
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+			throw new Error('History page size must be between 1 and 100.');
+		const folder = this.app.vault.getAbstractFileByPath(TRACEKEEPER_AGENT_ACTIVITY_DIR);
+		const from = query.from ? Date.parse(query.from) : -Infinity, until = query.until ? Date.parse(query.until + (query.until.length === 10 ? 'T23:59:59.999Z' : '')) : Infinity;
+		if (Number.isNaN(from) || Number.isNaN(until) || from > until)
+			throw new Error('Invalid activity date range.');
+		const files = folder instanceof TFolder ? this.collectMarkdownFiles(folder).filter(file => this.isRuntimeLogCleanupPath(file.path)).sort((a, b) => compareActivityShardPaths(b.path, a.path)) : [];
+		const generation = logHash(JSON.stringify(files.map(file => [file.path, file.stat.mtime, file.stat.size])));
+		const binding = logHash(JSON.stringify([query.from ?? '', query.until ?? '', query.operation ?? '', query.status ?? '', limit]));
+		let fileIndex = 0, offset = 0;
+		if (query.cursor) {
+			const decoded = JSON.parse(Buffer.from(query.cursor, 'base64url').toString('utf8'));
+			if (decoded.generation !== generation || decoded.binding !== binding || !Number.isSafeInteger(decoded.fileIndex) || decoded.fileIndex < 0 || !Number.isSafeInteger(decoded.offset) || decoded.offset < 0)
+				throw new Error('Activity history cursor is stale or invalid.');
+			fileIndex = decoded.fileIndex;
+			offset = decoded.offset;
+		}
+		const items: RuntimeLogItem[] = [];
+		for (; fileIndex < files.length; fileIndex++, offset = 0) {
+			const rows = (await this.readAuditMarkdownFile(files[fileIndex], Number.MAX_SAFE_INTEGER)).filter(event => this.isAgentActivityEvent(event) && event.sortTimestamp >= from && event.sortTimestamp <= until && (!query.operation || event.operationId === query.operation) && (!query.status || event.resultStatus === query.status));
+			for (; offset < rows.length; offset++) {
+				if (items.length === limit)
+					return { items, generation, cursor: Buffer.from(JSON.stringify({ generation, binding, fileIndex, offset })).toString('base64url') };
+				items.push(this.toRuntimeLogItem(rows[offset]));
+			}
+		}
+		return { items, cursor: null, generation };
+	}
+
 async readRecentAuditEvents(limit: number): Promise<AuditEventRecord[]> {
 		const safeLimit = Math.max(0, Math.floor(limit));
 		if (safeLimit === 0) {
@@ -1838,7 +1896,7 @@ private async readAuditFolderEvents(limit: number): Promise<AuditEventRecord[]> 
 
 		const files = this.collectMarkdownFiles(folder)
 			.filter((file) => this.isRuntimeLogCleanupPath(file.path))
-			.sort((left, right) => right.path.localeCompare(left.path));
+			.sort((left, right) => compareActivityShardPaths(right.path,left.path));
 		const events: AuditEventRecord[] = [];
 		for (const file of files) {
 			const remaining = limit - events.length;
@@ -1888,6 +1946,7 @@ private async readAuditMarkdownFile(file: TFile, limit: number): Promise<AuditEv
 			return [
 				{
 					path: file.path,
+					operationId: this.host.firstString(data, ['operation_id', 'operationId']),
 					auditId: this.host.firstString(data, [
 						'activity_event_id',
 						'auditEventId',
@@ -1991,7 +2050,8 @@ private parseAuditLogSections(
 			);
 			events.push({
 				path: sourcePath,
-				auditId: this.host.firstString(row, [
+				operationId: this.host.firstString(row, ['operation_id', 'operationId']),
+					auditId: this.host.firstString(row, [
 					'activity_event_id',
 					'auditEventId',
 					'audit_id',

@@ -3287,6 +3287,31 @@ test('cleanup truthfully explains the public Obsidian deletion contract', () => 
 	assert.match(description, /verify/i);
 });
 
+test('native activity rotates at one MiB and exact retries retain their original shard', async () => {
+ const base = '00_tracekeeper/control/agent_activity/2026/2026-07-30.md';
+ const original = auditMarkdown('2026-07-30T09:00:00.000Z') + 'x'.repeat(1024 * 1024);
+ const harness = createNativeVaultFixture({ files: { [base]: original } });
+ const make = () => new ObsidianAuditShardRepository(harness.app, { async ensureFolderExists() {} });
+ const entry = auditEventSection({id:'rotation-event',timestamp:'2026-07-30T10:00:00.000Z',action:'fixture.rotation'});
+ const first = await make().appendRawEvents(entry,{operationId:'rotation-operation'});
+ const second = await make().appendRawEvents(entry,{operationId:'rotation-operation'});
+ assert.deepEqual(second.shardPaths,first.shardPaths);
+ assert.deepEqual(first.shardPaths,['00_tracekeeper/control/agent_activity/2026/2026-07-30-001.md']);
+ assert.equal(harness.read(base),original);
+ assert.equal((harness.read(first.shardPaths[0]).match(/activity_event_id: rotation-event/g)||[]).length,1);
+});
+
+test('prepared Runtime activity preserves list metadata through the native writer',async()=>{
+ const harness=createActivityHarness();
+ const repository=new ObsidianAuditShardRepository(harness.app,{async ensureFolderExists(){}});
+ const entry='## 2026-07-30T10:00:00.000Z mcp.tool-call\n- type: "mcp.tool-call"\n- event: "mcp.tool-call"\n- timestamp: "2026-07-30T10:00:00.000Z"\n- activity_event_id: "audit-1234abcd"\n- operation_id: "operation-example"\n- target_paths:\n  - "01_knowledge/wiki/example.md"\n- result_status: "success"\n';
+ const first=await repository.appendRuntimeEvent(entry);await repository.appendRuntimeEvent(entry);
+ assert.match(harness.read(first.path),/target_paths:\n  - "01_knowledge\/wiki\/example.md"/);
+ assert.equal((harness.read(first.path).match(/audit-1234abcd/g)||[]).length,1);
+ const result=await harness.createController().queryLogHistory({operation:'operation-example',limit:1});
+ assert.equal(result.items.length,1);assert.equal(result.cursor,null);
+});
+
 process.on('exit', () => {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 	delete globalThis.__tracekeeperRecordLifecycleTFile;

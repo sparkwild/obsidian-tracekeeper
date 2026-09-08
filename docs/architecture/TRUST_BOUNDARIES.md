@@ -310,6 +310,21 @@ messages contain neither raw confirmation tokens nor note bodies. Legacy
 plaintext records are migrated on a subsequent safe journal write or, when
 their body-bearing schema is not safe to replay, quarantined.
 
+The activated operational store is inside `.tracekeeper/logs/` in the current
+Vault. Logical legacy paths are resolved by the shared operational repository;
+MCP cannot use them to read hidden payloads or choose a backup destination.
+The native, explicitly confirmed backup flow is an additional Vault-outside
+write: its destination must be new, local, and outside the source Vault. Backups
+include private configuration and encryption keys and are created with private
+permissions. Restore verifies the backup and writes a new directory; it does not
+overwrite the active Vault or mix historical logs with newer knowledge.
+
+Only authenticated cold-storage publication authorizes retirement of matching
+system copies. It does not authorize deletion of logical history, activity,
+Memory, Sources, or Wiki content. A missing key, activation binding, index, or
+committed frame cannot be treated as a missing operation and silently recreated.
+Read-only diagnostics do not initialize or repair storage.
+
 The journal key is local to the journal directory and permission-restricted.
 Sealing prevents accidental raw-record disclosure and detects corruption or
 unauthenticated replacement under the supported recovery model. It does not

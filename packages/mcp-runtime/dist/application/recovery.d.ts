@@ -10,6 +10,10 @@ export interface OperationRecoveryReport {
         error: string;
     }>;
     skipped: string[];
+    attention?: Array<{
+        operation_id: string;
+        reason: string;
+    }>;
 }
 export interface RecoveryInvocationResult {
     isError: boolean;

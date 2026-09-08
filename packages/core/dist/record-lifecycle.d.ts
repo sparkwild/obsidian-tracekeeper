@@ -36,7 +36,7 @@ export interface AuditCleanupPreviewFile {
     latestEventTime: string | null;
     eventCount: number;
 }
-export type AuditCleanupRetainedReason = 'non-audit' | 'mixed-age' | 'too-new' | 'empty-or-unparseable';
+export type AuditCleanupRetainedReason = 'non-audit' | 'mixed-age' | 'too-new' | 'empty-or-unparseable' | 'pending-operation';
 export interface AuditCleanupRetainedFile extends Omit<AuditCleanupPreviewFile, 'sourceKind'> {
     sourceKind: AuditEventSourceKind | null;
     reason: AuditCleanupRetainedReason;
@@ -101,6 +101,7 @@ export type ProposalReferenceBackfillPlan = {
 };
 export declare function renderAgentActivityHub(timestamp: string): string;
 export declare function validateAgentActivityHubMarkdown(content: string): boolean;
+export declare function compareActivityShardPaths(left: string, right: string): number;
 export declare function auditShardPath(timestamp: string): string;
 export declare function buildStableAuditEventId(event: StableAuditEventIdentity): string;
 export declare function mergeAuditEvents<T extends MergeableAuditEvent>(events: readonly T[]): T[];

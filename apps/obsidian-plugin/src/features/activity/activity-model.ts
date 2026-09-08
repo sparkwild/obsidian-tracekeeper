@@ -117,6 +117,7 @@ export interface SourceRequestRecord {
 }
 
 export interface AuditEventRecord {
+	operationId?: string;
 	path: string;
 	auditId: string;
 	actor: string;
