@@ -95,10 +95,12 @@ jobs:
         run: npm run verify
 
       - name: Run release-scale 1k knowledge benchmark
+        # The maintainer explicitly waived performance qualification for 0.6.0 only.
+        if: steps.semver.outputs.version != '0.6.0'
         run: npm run benchmark:index -- --tier 1k --allow-scale --warmups 1 --repetitions 5
 
       - name: Upload release-scale 1k benchmark report
-        if: always()
+        if: always() && steps.semver.outputs.version != '0.6.0'
         uses: actions/upload-artifact@v4
         with:
           name: knowledge-index-1k-${{ steps.semver.outputs.version }}-${{ steps.checkout.outputs.sha }}
@@ -106,6 +108,11 @@ jobs:
           retention-days: 14
           include-hidden-files: true
           path: tmp/knowledge-index-reports/**
+
+      - name: Record 0.6.0 qualification exception
+        if: steps.semver.outputs.version == '0.6.0'
+        run: |
+          echo 'Maintainer-authorized 0.6.0 exception: compatibility matrices and performance benchmarks are not rerun for this release. These checks are waived, not passed. Build, regression, asset-integrity, and attestation checks remain required.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check generated package artifacts
         run: git diff --exit-code -- apps/mcp-server/dist packages/core/dist packages/contracts/dist packages/mcp-runtime/dist
