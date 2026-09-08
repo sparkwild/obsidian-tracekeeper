@@ -169,7 +169,6 @@ test('status, source listing, and review listing use the lightweight read view',
 	for (const [tool, args] of [
 		['tracekeeper.status', {}],
 		['tracekeeper.graph_health', {}],
-		['tracekeeper.lint', {}],
 		['tracekeeper.list_source_requests', {}],
 		['tracekeeper.review_queue', { action: 'list_pending' }],
 	]) {
@@ -178,6 +177,15 @@ test('status, source listing, and review listing use the lightweight read view',
 		assert.equal(result.isError, false, `${tool} should succeed: ${JSON.stringify(result.structuredContent)}`);
 		assert.equal(counter.calls, 1, `${tool} should bind one read view`);
 	}
+});
+
+test('lint rejects a metadata-only read view without requesting a fresh full scan', async () => {
+	const counter = { calls: 0 };
+	const result = await callTool('tracekeeper.lint', {}, context(counter));
+	assert.equal(result.isError, true);
+	assert.equal(result.structuredContent.error_detail.code, 'INDEX_NOT_READY');
+	assert.equal(result.structuredContent.error_detail.retryable, true);
+	assert.equal(counter.calls, 1);
 });
 
 test('read_note performs one targeted body read and gets relations from the read view', async () => {

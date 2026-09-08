@@ -3834,6 +3834,29 @@ function materializeLightweightNotes(view) {
         };
     });
 }
+function materializeDiagnosticNotes(view) {
+    const unavailable = () => new safety_1.ToolInputError('knowledge_index_not_ready: complete diagnostic snapshot unavailable.');
+    if (view.index_state !== 'ready' || view.errors.length > 0
+        || !view.diagnosticReader || view.diagnosticReader.generation !== view.generation) {
+        throw unavailable();
+    }
+    return [...view.catalog].map(([notePath, entry]) => {
+        let note;
+        try {
+            note = view.diagnosticReader.read(notePath);
+        }
+        catch {
+            throw unavailable();
+        }
+        if (!note || note.path !== notePath || note.relativePath !== notePath
+            || entry.path !== notePath || note.contentHash !== entry.contentHash
+            || typeof note.text !== 'string'
+            || crypto.createHash('sha256').update(note.text).digest('hex') !== entry.contentHash) {
+            throw unavailable();
+        }
+        return note;
+    });
+}
 function lightweightScanFromReadView(vaultRoot, view) {
     return {
         vaultRoot,
@@ -5622,8 +5645,20 @@ function buildFixPlanSummary(issues) {
     if (issueKinds.some((kind) => kind.startsWith('graph_'))) {
         summary.push('Review graph profile findings by adding explicit entry, hub, or wikilink structure; Tracekeeper does not auto-fix graph structure.');
     }
-    if (summary.length === 1) {
+    if (issueKinds.includes('managed_proposal_reference_mismatch')) {
+        summary.push('Check proposal paths and their matching frontmatter links and body markers against the current records.');
+    }
+    if (issueKinds.includes('managed_proposal_reference_ambiguous')) {
+        summary.push('Check proposal identity and ordering; ids, paths and links must be unique and positionally aligned.');
+    }
+    if (issueKinds.includes('managed_proposal_reference_legacy_format')) {
+        summary.push('Convert legacy comma-separated proposal links to a YAML array, preserving values and order.');
+    }
+    if (issues.length === 0) {
         summary.push('No fix plan generated because no lint issues were found.');
+    }
+    else if (summary.length === 1) {
+        summary.push('Review the reported issue details; no category-specific repair suggestion is available.');
     }
     return summary;
 }
@@ -7878,9 +7913,12 @@ async function handleBuildContextPack(rawArgs, context) {
 async function handleLint(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
     const maxItems = coercePositiveInt(rawArgs.max_items, 40, 1, 2000);
-    const pageSize = coercePositiveInt(rawArgs.page_size, maxItems, 1, 200);
+    const pageSize = coercePositiveInt(rawArgs.page_size, Math.min(maxItems, 200), 1, 200);
     const profile = graphProfileFromArgs(rawArgs.graph_profile, context);
-    const view = await stableKnowledgeReadViewForContext(vaultRoot, context);
+    const inventoryView = await knowledgeReadViewForContext(vaultRoot, context);
+    const notes = materializeDiagnosticNotes(inventoryView);
+    // 先验证库存代数，再转换公开分页代数，避免活动写入使诊断错误失效。
+    const view = { ...inventoryView, generation: inventoryView.knowledge_generation ?? inventoryView.generation };
     let offset = 0;
     if (rawArgs.cursor !== undefined) {
         const rawCursor = coerceNonEmptyString(rawArgs.cursor, true, 'cursor');
@@ -7893,7 +7931,6 @@ async function handleLint(rawArgs, context) {
         }
         offset = cursor.offset;
     }
-    const notes = materializeLightweightNotes(view);
     const graphHealth = profile === 'off' ? undefined : (0, core_2.analyzeGraphHealth)(notes, { maxItems, semanticOnly: true });
     const profileEvaluation = graphHealth
         ? (0, core_2.evaluateGraphProfile)(graphHealth, profile)

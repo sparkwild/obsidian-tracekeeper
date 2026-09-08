@@ -543,6 +543,7 @@ export function decodeMaintenanceCursor(value: string): MaintenanceCursorV1 {
 		|| typeof cursor.profile !== 'string'
 		|| !Number.isSafeInteger(cursor.page_size)
 		|| cursor.page_size < 1
+		|| cursor.page_size > 200
 		|| !Number.isSafeInteger(cursor.offset)
 		|| cursor.offset < 0
 	) throw new Error('Maintenance cursor is invalid.');

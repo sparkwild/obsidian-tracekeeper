@@ -150,6 +150,17 @@ the legacy files until a separately confirmed Archive move succeeds.
 The index is disposable. Status exposes readiness and generation, and a rebuild
 can reproduce it from Markdown.
 
+Lint uses the read view's separate, inventory-generation-bound diagnostic
+reader. It converts the captured immutable indexed notes into complete scanned
+notes, retaining text, callouts, native edge resolution and source positions,
+without rereading note bodies from disk. Runtime validates the reader generation
+and each catalog path/content hash before normalizing the public maintenance
+generation to `knowledge_generation`. Metadata-only note projections are not
+valid lint inputs. Missing diagnostic data, read errors or an index that is not
+ready produce retryable `INDEX_NOT_READY`, rather than an empty healthy result.
+The live content reader used by note reads retains its existing freshness checks;
+it is not substituted for the immutable diagnostic reader.
+
 Source Status resolves historical paths only through completed consolidation
 receipts whose index and part hashes still match the current snapshot. It joins
 those task/proposal references onto the current Source and shows the old paths

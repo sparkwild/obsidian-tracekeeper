@@ -303,12 +303,27 @@ longer turns an aggregate statistical report into a Knowledge Change Review
 proposal. Only a concrete Wiki role or relation change can enter the normal
 reviewed proposal flow.
 
+Body-dependent lint checks consume complete notes from the same immutable index
+view as the catalog and native link evidence. A missing diagnostic snapshot is
+reported as retryable `INDEX_NOT_READY`; it is never interpreted as missing body
+markers or absent Claim blocks. Repair summaries distinguish a clean result from
+findings without a category-specific suggestion. Lint does not rewrite records
+to clear diagnostics, and Source evidence syntax remains excluded from semantic
+broken-link checks.
+
 Lint v4 also returns a generation-bound Maintenance Snapshot with deterministic
 candidate ids and cursors. An Agent may call `tracekeeper.request_maintenance`
 with only current requestable ids; it cannot supply a raw path, deletion mode,
 hash, or approval. The request is shown in Knowledge Change Review and becomes
 completed only after a separately governed repair or cleanup removes the
 underlying candidate; otherwise a newer generation marks it stale.
+
+Lint's `max_items` limits returned issues (1–2000, default 40); `page_size`
+separately limits maintenance candidates (1–200). When omitted, `page_size`
+defaults to `min(max_items, 200)`. Explicit out-of-range values are rejected.
+`issue_count` and `candidate_count` remain full totals, not page lengths.
+Continue a cursor with the same effective page size and graph profile; a changed
+knowledge generation invalidates the cursor, while activity-only writes do not.
 
 Captured Source bodies are evidence, not authored knowledge relationships. Shell
 conditions, Markdown links, absolute paths, and other syntax copied into a

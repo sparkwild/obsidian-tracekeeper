@@ -161,6 +161,12 @@ export interface KnowledgeContentReader {
 	excerpt?(notePath: VaultPath, terms: readonly string[], maxLength: number): string;
 }
 
+/** 绑定原始库存代数的完整诊断输入；读取不访问磁盘正文。 */
+export interface KnowledgeDiagnosticReader {
+	readonly generation: number;
+	read(notePath: VaultPath): ScannedNote | null;
+}
+
 export interface KnowledgeReadView {
 	version: string;
 	source: 'index' | 'filesystem_scan';
@@ -179,6 +185,7 @@ export interface KnowledgeReadView {
 	warnings: readonly string[];
 	errors: ReadonlyArray<ScanResult['errors'][number]>;
 	contentReader: KnowledgeContentReader;
+	diagnosticReader: KnowledgeDiagnosticReader;
 }
 
 export interface KnowledgeSnapshot {
@@ -1125,6 +1132,13 @@ export class InMemoryKnowledgeIndex implements KnowledgeIndex {
 			},
 			warnings: [...this.state.warnings],
 			errors: this.sourceErrors.map((error) => ({ ...error })),
+			diagnosticReader: {
+				generation,
+				read: (notePath) => {
+					const note = noteContents.get(normalizeVaultPath(notePath));
+					return note ? scannedNoteFromNormalized(note, this.vaultRoot) : null;
+				},
+			},
 			contentReader: {
 				generation,
 				read: async (notePath: VaultPath) => this.readContentForView(generation, catalog, notePath),

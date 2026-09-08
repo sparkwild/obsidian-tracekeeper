@@ -102,6 +102,11 @@ export interface KnowledgeContentReader {
     read(notePath: VaultPath): Promise<KnowledgeContentRead | null>;
     excerpt?(notePath: VaultPath, terms: readonly string[], maxLength: number): string;
 }
+/** 绑定原始库存代数的完整诊断输入；读取不访问磁盘正文。 */
+export interface KnowledgeDiagnosticReader {
+    readonly generation: number;
+    read(notePath: VaultPath): ScannedNote | null;
+}
 export interface KnowledgeReadView {
     version: string;
     source: 'index' | 'filesystem_scan';
@@ -120,6 +125,7 @@ export interface KnowledgeReadView {
     warnings: readonly string[];
     errors: ReadonlyArray<ScanResult['errors'][number]>;
     contentReader: KnowledgeContentReader;
+    diagnosticReader: KnowledgeDiagnosticReader;
 }
 export interface KnowledgeSnapshot {
     version: string;
