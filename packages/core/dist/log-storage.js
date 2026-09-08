@@ -8,6 +8,7 @@ exports.logDirectory = logDirectory;
 exports.isOperationalLogPath = isOperationalLogPath;
 exports.createVaultOperationJournal = createVaultOperationJournal;
 exports.backupVault = backupVault;
+exports.verifyVaultBackup = verifyVaultBackup;
 exports.restoreVaultBackup = restoreVaultBackup;
 exports.previewLogMigration = previewLogMigration;
 exports.logStorageIsActive = logStorageIsActive;
@@ -274,8 +275,8 @@ async function backupVault(vault, destination) {
     await (0, log_files_1.writeLogFile)(destination, node_path_1.default.join(destination, 'backup.json'), JSON.stringify(manifest));
     return manifest;
 }
-async function restoreVaultBackup(backup, destination) {
-    requireSeparateDirectory(backup, destination);
+/** Read-only validation shared by migration continuation and full restore. */
+async function verifyVaultBackup(backup) {
     const raw = await (0, log_files_1.readLogFile)(backup, node_path_1.default.join(backup, 'backup.json'), 32 * 1024 * 1024);
     if (!raw)
         throw new Error('A verified backup manifest is required.');
@@ -284,6 +285,11 @@ async function restoreVaultBackup(backup, destination) {
     const actual = await inventory(node_path_1.default.join(backup, 'vault'), directories);
     if (manifest.version !== 1 || !Array.isArray(manifest.files) || JSON.stringify(actual) !== JSON.stringify(manifest.files) || (manifest.directories && JSON.stringify([...directories].sort()) !== JSON.stringify(manifest.directories)))
         throw new Error('Backup verification failed.');
+    return manifest;
+}
+async function restoreVaultBackup(backup, destination) {
+    requireSeparateDirectory(backup, destination);
+    const manifest = await verifyVaultBackup(backup);
     await (0, log_files_1.assertLogPath)(node_path_1.default.dirname(destination), destination);
     await promises_1.default.mkdir(destination, { mode: 0o700 });
     for (const directory of manifest.directories ?? []) {

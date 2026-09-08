@@ -252,7 +252,7 @@ const DEFAULT_MAX_INCREMENTAL_RENAME_IMPACT = 256;
 
 function isActivityPath(notePath: string): boolean {
 	const normalized = normalizeVaultRelativePath(notePath);
-	return normalized === TRACEKEEPER_AGENT_ACTIVITY_DIR || normalized.startsWith(`${TRACEKEEPER_AGENT_ACTIVITY_DIR}/`);
+	return normalized === '00_tracekeeper/work/index.md' || normalized.startsWith('00_tracekeeper/work/task_index/') || normalized === TRACEKEEPER_AGENT_ACTIVITY_DIR || normalized.startsWith(`${TRACEKEEPER_AGENT_ACTIVITY_DIR}/`);
 }
 
 export function computeFileVersion(size: number, modifiedAt: string): FileVersion {

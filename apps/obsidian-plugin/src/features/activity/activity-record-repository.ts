@@ -1,3 +1,4 @@
+import { parseMarkdown, parseTaskRecord, taskPresentationFields } from '@tracekeeper/core';
 import { App, TFile, TFolder } from 'obsidian';
 import {
 	ARCHIVE_REVIEW_QUEUE_DIR,
@@ -636,6 +637,10 @@ async backfillManagedProposalReferences(
 				unresolvedPaths: [],
 			};
 		}
+		if (parseTaskRecord(parseMarkdown(content).frontmatter.fields)) {
+			const fields = taskPresentationFields(content);
+			return { status: 'unchanged', recordPath, proposalIds: readStringList(fields, ['proposal_ids']), proposalPaths: readStringList(fields, ['proposal_paths']) };
+		}
 		const legacyPaths = readStringList(parsed.fields, ['proposals']);
 		const existingProposalIds = readStringList(parsed.fields, ['proposal_ids']);
 		const existingProposalPaths = readStringList(parsed.fields, ['proposal_paths']);
@@ -936,7 +941,17 @@ async readAgentTaskFile(file: TFile): Promise<AgentTaskRecord> {
 			content = '';
 		}
 		const parsed = readFrontmatter(content);
-		const data = parsed.fields;
+		let data: ParsedRecord;
+		let relationWarning = '';
+		try {
+			if (!content) throw new Error('Task content is unavailable.');
+			const record = parseTaskRecord(parseMarkdown(content).frontmatter.fields);
+			const targets = record ? this.app.vault.getMarkdownFiles().map((target) => ({ path: target.path, frontmatter: this.app.metadataCache?.getFileCache(target)?.frontmatter ?? {} })) : undefined;
+			data = taskPresentationFields(content, targets);
+		} catch {
+			data = { task_id: file.basename, type: 'agent-task', status: 'unknown' };
+			relationWarning = 'Task relations could not be verified. Open Task relation maintenance.';
+		}
 		const objective = firstString(data, ['objective']);
 		const path = file.path;
 
@@ -952,6 +967,8 @@ async readAgentTaskFile(file: TFile): Promise<AgentTaskRecord> {
 		const durableOutputStatusAtFinish = this.parseDurableOutputStatusAtFinish(data);
 
 		return {
+			...(relationWarning ? { relationWarning } : {}),
+			navigationPending: data.task_projection_pending === 'true',
 			path,
 			type: firstString(data, ['type']) || 'agent-task',
 			taskId: firstString(data, ['task_id', 'taskId']) || file.basename,

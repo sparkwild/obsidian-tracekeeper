@@ -33,8 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LOCAL_TRUST_CAPABILITIES = exports.LOCAL_TRUST_PRINCIPAL_ID = exports.readMergedAuditSections = void 0;
-exports.planApprovedWritebackTaskLink = planApprovedWritebackTaskLink;
+exports.planApprovedWritebackTaskLink = exports.LOCAL_TRUST_CAPABILITIES = exports.LOCAL_TRUST_PRINCIPAL_ID = exports.readMergedAuditSections = void 0;
 exports.appendConnectionAuditEvent = appendConnectionAuditEvent;
 exports.appendRuntimeDiagnosticAuditEvent = appendRuntimeDiagnosticAuditEvent;
 exports.recordToolCallAuditEvent = recordToolCallAuditEvent;
@@ -45,10 +44,17 @@ exports.callTool = callTool;
 exports.recoverPendingOperations = recoverPendingOperations;
 exports.previewObsidianWikiBatchWriteback = previewObsidianWikiBatchWriteback;
 const core_1 = require("@tracekeeper/core");
+const core_2 = require("@tracekeeper/core");
+const core_3 = require("@tracekeeper/core");
+const source_request_operation_1 = require("./application/source-request-operation");
+const core_4 = require("@tracekeeper/core");
+const core_5 = require("@tracekeeper/core");
+const core_6 = require("@tracekeeper/core");
+const core_7 = require("@tracekeeper/core");
 const fs = __importStar(require("node:fs"));
 const path = __importStar(require("node:path"));
 const crypto = __importStar(require("node:crypto"));
-const core_2 = require("@tracekeeper/core");
+const core_8 = require("@tracekeeper/core");
 const contracts_1 = require("@tracekeeper/contracts");
 const protocol_1 = require("./protocol");
 const result_validation_1 = require("./result-validation");
@@ -75,22 +81,22 @@ exports.LOCAL_TRUST_CAPABILITIES = [
     'vault.write',
     'memory.propose',
 ];
-const REVIEW_QUEUE_PREFIX = core_2.TRACEKEEPER_REVIEW_QUEUE_DIR;
-const AGENT_ACTIVITY_PATH = core_2.TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH;
+const REVIEW_QUEUE_PREFIX = core_8.TRACEKEEPER_REVIEW_QUEUE_DIR;
+const AGENT_ACTIVITY_PATH = core_8.TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH;
 const MAX_LIST_QUEUE_ITEMS = 20;
 const MAX_AUDIT_ITEMS = 20;
 const MAX_APPROVED_WRITEBACKS = 20;
 const MAX_PROJECT_TOOL_ITEMS = 20;
-const CONTEXT_PACK_DIR = core_2.TRACEKEEPER_CONTEXT_PACKS_DIR;
-const SESSION_NOTE_DIR = core_2.TRACEKEEPER_SESSIONS_DIR;
-const AGENT_TASK_DIR = core_2.TRACEKEEPER_TASKS_DIR;
-const PROJECT_MEMORY_DIRS = [core_2.KNOWLEDGE_PROJECTS_MEMORY_DIR, '05_projects', '04_projects'];
+const CONTEXT_PACK_DIR = core_8.TRACEKEEPER_CONTEXT_PACKS_DIR;
+const SESSION_NOTE_DIR = core_8.TRACEKEEPER_SESSIONS_DIR;
+const AGENT_TASK_DIR = core_8.TRACEKEEPER_TASKS_DIR;
+const PROJECT_MEMORY_DIRS = [core_8.KNOWLEDGE_PROJECTS_MEMORY_DIR, '05_projects', '04_projects'];
 const PROJECT_MEMORY_READ_DIRS = PROJECT_MEMORY_DIRS;
-const GLOBAL_MEMORY_DIRS = [core_2.KNOWLEDGE_GLOBAL_MEMORY_DIR, '04_memory', '05_memory'];
-const SOURCE_REQUESTS_DIR = core_2.TRACEKEEPER_AGENT_REQUESTS_DIR;
-const SOURCES_DIR = core_2.KNOWLEDGE_SOURCES_DIR;
-const SOURCE_ANALYSIS_REPORT_DIR = core_2.TRACEKEEPER_SOURCE_ANALYSIS_DIR;
-const MEMORY_PROPOSAL_DIR = core_2.TRACEKEEPER_REVIEW_QUEUE_DIR;
+const GLOBAL_MEMORY_DIRS = [core_8.KNOWLEDGE_GLOBAL_MEMORY_DIR, '04_memory', '05_memory'];
+const SOURCE_REQUESTS_DIR = core_8.TRACEKEEPER_AGENT_REQUESTS_DIR;
+const SOURCES_DIR = core_8.KNOWLEDGE_SOURCES_DIR;
+const SOURCE_ANALYSIS_REPORT_DIR = core_8.TRACEKEEPER_SOURCE_ANALYSIS_DIR;
+const MEMORY_PROPOSAL_DIR = core_8.TRACEKEEPER_REVIEW_QUEUE_DIR;
 const MAX_RECALL_RELATIONS = 8;
 const DEFAULT_FINISH_TASK_REVIEW_MODE = 'auto_propose';
 function normalizeContentLanguage(value) {
@@ -690,6 +696,8 @@ function buildProposeMemoryActions(payload) {
         }];
 }
 function classifyToolError(message) {
+    if (/TASK_MIGRATION_REQUIRED/.test(message))
+        return { code: 'TASK_MIGRATION_REQUIRED', retryable: false };
     if (/note_content_changed/i.test(message))
         return { code: 'NOTE_CHANGED', retryable: true };
     if (/knowledge_index_not_ready/i.test(message)) {
@@ -729,6 +737,8 @@ function safeToolErrorDescription(code, reasonCode) {
         return 'The supplied project identity is not an exact current Vault identity; use Runtime-resolved identity evidence instead of guessing.';
     }
     switch (code) {
+        case 'TASK_MIGRATION_REQUIRED':
+            return 'Preview, back up and migrate this task in Obsidian before new writes.';
         case 'NOTE_CHANGED':
             return 'The note changed between windows. Restart the read with its current content hash.';
         case 'INDEX_NOT_READY':
@@ -921,7 +931,7 @@ function pathSafetyOptions(context) {
     };
 }
 function graphProfileFromArgs(value, context) {
-    return (0, core_2.normalizeGraphProfile)(value ?? context.graphProfile);
+    return (0, core_8.normalizeGraphProfile)(value ?? context.graphProfile);
 }
 function coerceRecallScope(value) {
     const normalized = coerceOptionalString(value).toLowerCase();
@@ -967,7 +977,7 @@ function scanVaultForContext(vaultRoot, context) {
     if (snapshot) {
         return snapshot;
     }
-    return (0, core_2.scanVault)(vaultRoot, pathSafetyOptions(context));
+    return (0, core_8.scanVault)(vaultRoot, pathSafetyOptions(context));
 }
 async function knowledgeReadViewForContext(vaultRoot, context) {
     if (!context.knowledgeReadViewPromise) {
@@ -976,7 +986,7 @@ async function knowledgeReadViewForContext(vaultRoot, context) {
             if (provided)
                 return provided;
             const scan = scanVaultForContext(vaultRoot, context);
-            const index = new core_2.InMemoryKnowledgeIndex({ vaultRoot, initialScan: scan });
+            const index = new core_8.InMemoryKnowledgeIndex({ vaultRoot, initialScan: scan });
             const view = await index.readView();
             return scan.index
                 ? view
@@ -997,7 +1007,7 @@ function projectMemoryRepository(vaultRoot, context) {
     if (context.vaultRepository) {
         return context.vaultRepository;
     }
-    return new core_2.NodeFsVaultRepository({
+    return new core_8.NodeFsVaultRepository({
         vaultRoot,
         protectedDirectoryName: context.vaultConfigDir,
     });
@@ -1186,7 +1196,7 @@ function normalizeMemoryScope(proposalKind, targetNote, projectHint, memoryScope
 }
 function buildArchitectureStatus(vaultRoot, context) {
     const scan = scanVaultForContext(vaultRoot, context);
-    const graphHealth = (0, core_2.analyzeGraphHealth)(scan.notes, { maxItems: 20, semanticOnly: true });
+    const graphHealth = (0, core_8.analyzeGraphHealth)(scan.notes, { maxItems: 20, semanticOnly: true });
     const missingGraphBridges = [
         graphHealth.missing_recommended_entry,
     ].filter((value) => Boolean(value));
@@ -1206,7 +1216,7 @@ function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint,
     const plannedWikiTargetCounts = new Map();
     if (taskId) {
         for (const note of scan.notes) {
-            if (!(0, core_2.startsWithPathPrefix)(note.relativePath, MEMORY_PROPOSAL_DIR))
+            if (!(0, core_8.startsWithPathPrefix)(note.relativePath, MEMORY_PROPOSAL_DIR))
                 continue;
             if (readFrontmatterString(note.frontmatter, ['task_id', 'taskId']) !== taskId)
                 continue;
@@ -1221,7 +1231,7 @@ function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint,
             catch {
                 continue;
             }
-            if (!(0, core_2.isKnowledgeWikiPath)(target))
+            if (!(0, core_8.isKnowledgeWikiPath)(target))
                 continue;
             const key = target.toLowerCase();
             const current = plannedWikiTargetCounts.get(key);
@@ -1282,8 +1292,8 @@ function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint,
         return null;
     };
     for (const reference of relatedWiki) {
-        const resolvedPath = resolveReference(reference, core_2.isKnowledgeWikiPath);
-        if (resolvedPath && (0, core_2.isKnowledgeWikiPath)(resolvedPath)) {
+        const resolvedPath = resolveReference(reference, core_8.isKnowledgeWikiPath);
+        if (resolvedPath && (0, core_8.isKnowledgeWikiPath)(resolvedPath)) {
             resolved.push(resolvedPath);
         }
         else {
@@ -1291,8 +1301,8 @@ function resolveProjectMemoryBridgeMetadata(vaultRoot, memoryScope, projectHint,
         }
     }
     for (const reference of relatedSources) {
-        const resolvedPath = resolveReference(reference, core_2.isKnowledgeSourcePath);
-        if (resolvedPath && (0, core_2.isKnowledgeSourcePath)(resolvedPath)) {
+        const resolvedPath = resolveReference(reference, core_8.isKnowledgeSourcePath);
+        if (resolvedPath && (0, core_8.isKnowledgeSourcePath)(resolvedPath)) {
             resolvedSources.push(resolvedPath);
         }
         else {
@@ -1477,7 +1487,7 @@ function assertMemoryProposalAllowed(proposalKind, targetNote, projectHint, cont
 }
 function buildDefaultProjectMemoryTarget(vaultRoot, projectHint) {
     void vaultRoot;
-    return (0, core_2.projectMemoryPath)(projectHint || 'project');
+    return (0, core_8.projectMemoryPath)(projectHint || 'project');
 }
 function inferAutoMemoryAllowedDir(targetNote, projectScoped, context) {
     const normalized = (0, safety_1.normalizeNotePath)(targetNote, pathSafetyOptions(context));
@@ -1745,14 +1755,14 @@ function resolveFrontmatterRelationEdge(note, reference, allNotes) {
 function buildRecallRelationEvidence(note, allNotes) {
     const relationMap = new Map();
     const explicitSourceTargets = new Set();
-    const sourceNote = (0, core_2.isKnowledgeSourcePath)(note.relativePath) || (note.type ?? '').toLowerCase().includes('source');
+    const sourceNote = (0, core_8.isKnowledgeSourcePath)(note.relativePath) || (note.type ?? '').toLowerCase().includes('source');
     const addResolvedRelation = (resolved, declaredVia) => {
         if (!resolved) {
             return;
         }
-        const relationKind = (0, core_2.isKnowledgeWikiPath)(resolved.relativePath)
+        const relationKind = (0, core_8.isKnowledgeWikiPath)(resolved.relativePath)
             ? 'related_wiki'
-            : (0, core_2.isKnowledgeSourcePath)(resolved.relativePath)
+            : (0, core_8.isKnowledgeSourcePath)(resolved.relativePath)
                 ? 'related_sources'
                 : null;
         if (!relationKind) {
@@ -1782,6 +1792,13 @@ function buildRecallRelationEvidence(note, allNotes) {
             explicitSourceTargets.add(resolved.relativePath.toLowerCase());
         addResolvedRelation(resolved, 'frontmatter');
     };
+    const taskRecord = (0, core_6.parseTaskRecord)(note.frontmatter);
+    if (taskRecord) {
+        for (const relation of (0, core_4.resolveTaskRelations)(taskRecord, allNotes.map((item) => ({ path: item.relativePath, frontmatter: item.frontmatter, contentHash: item.contentHash })))) {
+            if (relation.status === 'resolved' && relation.current_path)
+                addResolvedRelation(findSnapshotNoteByPath(relation.current_path, allNotes), 'frontmatter');
+        }
+    }
     for (const key of ['related_wiki', 'relatedWiki', 'wiki']) {
         for (const value of relationValues(note.frontmatter[key])) {
             addFrontmatterRelation(value);
@@ -1792,7 +1809,7 @@ function buildRecallRelationEvidence(note, allNotes) {
             addFrontmatterRelation(value);
         }
     }
-    for (const edge of note.edges) {
+    for (const edge of taskRecord ? [] : note.edges) {
         if (edge.source !== 'body') {
             continue;
         }
@@ -1821,12 +1838,12 @@ function buildRecallRelationEvidence(note, allNotes) {
 function recallContentOrigin(relativePath, noteType) {
     const normalizedPath = relativePath.replace(/\\/g, '/').replace(/^\.\//, '');
     const normalizedType = (noteType ?? '').trim().toLowerCase();
-    if (normalizedPath === core_2.KNOWLEDGE_SOURCES_DIR ||
-        normalizedPath.startsWith(`${core_2.KNOWLEDGE_SOURCES_DIR}/`) ||
+    if (normalizedPath === core_8.KNOWLEDGE_SOURCES_DIR ||
+        normalizedPath.startsWith(`${core_8.KNOWLEDGE_SOURCES_DIR}/`) ||
         normalizedType.includes('source')) {
         return 'captured_source';
     }
-    if (normalizedPath === core_2.TRACEKEEPER_ROOT || normalizedPath.startsWith(`${core_2.TRACEKEEPER_ROOT}/`)) {
+    if (normalizedPath === core_8.TRACEKEEPER_ROOT || normalizedPath.startsWith(`${core_8.TRACEKEEPER_ROOT}/`)) {
         return 'tracekeeper_generated';
     }
     return 'vault_note';
@@ -1855,10 +1872,10 @@ async function readOperationOwnerFromNote(vaultRoot, notePath, operationField, c
     if (content === null) {
         return '';
     }
-    return stripYamlQuotes(readFrontmatterString((0, core_2.parseMarkdown)(content).frontmatter.fields, [operationField]));
+    return stripYamlQuotes(readFrontmatterString((0, core_8.parseMarkdown)(content).frontmatter.fields, [operationField]));
 }
 function proposalIdFromOperation(operationId, discriminator) {
-    return (0, core_2.buildStableProposalId)(`${operationId}\0${discriminator}`);
+    return (0, core_8.buildStableProposalId)(`${operationId}\0${discriminator}`);
 }
 function generateProposalMarkdownLink(context, proposalPath, sourcePath) {
     const repository = context.vaultRepository;
@@ -1873,17 +1890,17 @@ function explicitProposalId(frontmatter) {
 async function ensureOperationOwnedProposalIdentity(vaultRoot, proposalPath, proposalId, operationField, operationId, context) {
     const current = await readCurrentVaultTextState(vaultRoot, proposalPath, context);
     if (!current) {
-        throw new core_2.OperationConflictError(`Proposal is unavailable: ${proposalPath}`);
+        throw new core_8.OperationConflictError(`Proposal is unavailable: ${proposalPath}`);
     }
-    const frontmatter = (0, core_2.parseMarkdown)(current.content).frontmatter.fields;
+    const frontmatter = (0, core_8.parseMarkdown)(current.content).frontmatter.fields;
     if (stripYamlQuotes(readFrontmatterString(frontmatter, [operationField]))
         !== operationId) {
-        throw new core_2.OperationConflictError(`Proposal is not owned by the current operation: ${proposalPath}`);
+        throw new core_8.OperationConflictError(`Proposal is not owned by the current operation: ${proposalPath}`);
     }
     const currentProposalId = explicitProposalId(frontmatter);
     if (currentProposalId) {
         if (currentProposalId !== proposalId) {
-            throw new core_2.OperationConflictError(`Proposal identity changed for operation-owned note: ${proposalPath}`);
+            throw new core_8.OperationConflictError(`Proposal identity changed for operation-owned note: ${proposalPath}`);
         }
         return;
     }
@@ -1892,7 +1909,7 @@ async function ensureOperationOwnedProposalIdentity(vaultRoot, proposalPath, pro
     });
     if (context.vaultRepository) {
         if (!current.version) {
-            throw new core_2.OperationConflictError('Proposal version is unavailable.');
+            throw new core_8.OperationConflictError('Proposal version is unavailable.');
         }
         await context.vaultRepository.replaceText(current.path, current.version, next);
         return;
@@ -1905,7 +1922,7 @@ async function readRequiredProposalId(vaultRoot, proposalPath, context) {
     if (content === null) {
         throw new safety_1.ToolInputError(`Proposal artifact is missing: ${proposalPath}`);
     }
-    const proposalId = explicitProposalId((0, core_2.parseMarkdown)(content).frontmatter.fields);
+    const proposalId = explicitProposalId((0, core_8.parseMarkdown)(content).frontmatter.fields);
     if (!proposalId) {
         throw new safety_1.ToolInputError(`Proposal artifact has no stable proposal_id: ${proposalPath}`);
     }
@@ -1983,7 +2000,7 @@ async function createFinishTaskProposal(vaultRoot, taskId, sessionNotePath, oper
         `## ${label}`,
         writebackContent,
         '',
-        (0, core_2.renderProposalWritebackSection)(contentText(context, '## 写回内容', '## Writeback'), proposalId, writebackContent),
+        (0, core_8.renderProposalWritebackSection)(contentText(context, '## 写回内容', '## Writeback'), proposalId, writebackContent),
     ].filter(Boolean).join('\n');
     return buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.finish_task', MEMORY_PROPOSAL_DIR, filename, {
         tool: 'tracekeeper.finish_task',
@@ -2030,7 +2047,7 @@ async function readFinishTaskProjectMemoryStepReceipt(vaultRoot, operationId, co
         || !Array.isArray(result.memory_kinds)
         || !result.memory_kinds.every((value) => typeof value === 'string')
         || (result.write_status !== 'written' && result.write_status !== 'skipped')) {
-        throw new core_2.OperationConflictError('Finish-task project-memory step receipt is invalid.');
+        throw new core_8.OperationConflictError('Finish-task project-memory step receipt is invalid.');
     }
     return {
         outcome: 'immutable',
@@ -2051,7 +2068,7 @@ async function verifyFinishTaskProjectMemoryStepReceipt(vaultRoot, operationId, 
     if (!content) {
         throw new safety_1.ToolInputError(`Finish-task project-memory artifact is missing: ${safePath}`);
     }
-    const frontmatter = (0, core_2.parseMarkdown)(content).frontmatter.fields;
+    const frontmatter = (0, core_8.parseMarkdown)(content).frontmatter.fields;
     const recordType = readFrontmatterString(frontmatter, ['type']);
     const commonMismatch = readFrontmatterString(frontmatter, ['project_id']) !== receipt.project_id
         || readFrontmatterString(frontmatter, ['agent_type']) !== receipt.agent_type
@@ -2068,7 +2085,7 @@ async function verifyFinishTaskProjectMemoryStepReceipt(vaultRoot, operationId, 
         || (recordType !== 'project_memory_entry' && recordType !== 'memory_record')
         || legacyMismatch
         || v2Mismatch) {
-        throw new core_2.OperationConflictError('Finish-task project-memory artifact no longer matches its operation receipt.');
+        throw new core_8.OperationConflictError('Finish-task project-memory artifact no longer matches its operation receipt.');
     }
 }
 async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, proposalMode, projectHint, projectId, repoPath, rawMemoryScope, relatedWiki, relatedSources, architectureStatus, closeout, memoryCandidateRecords, context, operationId, expectImmutableProjectMemory = false) {
@@ -2098,7 +2115,7 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
     const autoAppliedMemoryUpdates = [];
     const projectMemoryReceipt = await readFinishTaskProjectMemoryStepReceipt(vaultRoot, operationId, context);
     if (expectImmutableProjectMemory && !projectMemoryReceipt) {
-        throw new core_2.OperationConflictError('Finish-task project-memory step receipt is missing.');
+        throw new core_8.OperationConflictError('Finish-task project-memory step receipt is missing.');
     }
     if (projectMemoryReceipt?.outcome === 'immutable') {
         await verifyFinishTaskProjectMemoryStepReceipt(vaultRoot, operationId, projectMemoryReceipt, context);
@@ -2132,7 +2149,7 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
                 && projectMemoryReceipt !== null) {
                 if (projectMemoryReceipt?.outcome === 'immutable'
                     && !projectMemoryReceipt.memory_kinds.includes(group.kind)) {
-                    throw new core_2.OperationConflictError('Finish-task project-memory receipt is missing an eligible memory kind.');
+                    throw new core_8.OperationConflictError('Finish-task project-memory receipt is missing an eligible memory kind.');
                 }
                 if (projectMemoryReceipt?.outcome === 'immutable'
                     && !projectMemoryReceiptCollected) {
@@ -2231,7 +2248,7 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
         };
         const result = await handleProposeMemory(rawCandidate, proposalContext);
         if (!(0, protocol_1.isRecord)(result)) {
-            throw new core_2.OperationConflictError(`Structured finish-task memory result is invalid for candidate ${index}.`);
+            throw new core_8.OperationConflictError(`Structured finish-task memory result is invalid for candidate ${index}.`);
         }
         const resultRecord = result;
         const predictedRecord = (0, protocol_1.isRecord)(resultRecord.predicted_record)
@@ -2282,7 +2299,7 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
         }
         if (autoApplied) {
             if (typeof resultRecord.path !== 'string' || typeof resultRecord.status !== 'string') {
-                throw new core_2.OperationConflictError(`Structured finish-task auto-write receipt is invalid for candidate ${index}.`);
+                throw new core_8.OperationConflictError(`Structured finish-task auto-write receipt is invalid for candidate ${index}.`);
             }
             autoAppliedMemoryUpdates.push({
                 kind: candidate.proposal_kind,
@@ -2297,7 +2314,7 @@ async function collectFinishTaskArtifacts(vaultRoot, taskId, sessionNotePath, pr
         }
         if (typeof resultRecord.proposal_id !== 'string'
             || typeof resultRecord.proposal_path !== 'string') {
-            throw new core_2.OperationConflictError(`Structured finish-task proposal receipt is invalid for candidate ${index}.`);
+            throw new core_8.OperationConflictError(`Structured finish-task proposal receipt is invalid for candidate ${index}.`);
         }
         const link = generateProposalMarkdownLink(context, resultRecord.proposal_path, sessionNotePath);
         proposals.push({
@@ -2475,7 +2492,7 @@ function assertSourceRequestPath(relativePath) {
 }
 function parseSourceRequest(data) {
     assertSourceRequestPath(data.path);
-    const parsed = (0, core_2.parseMarkdown)(data.text);
+    const parsed = (0, core_8.parseMarkdown)(data.text);
     const frontmatter = parsed.frontmatter.fields;
     const sourceKind = readFrontmatterString(frontmatter, ['source_kind', 'sourceKind', 'source-kind']);
     const status = readFrontmatterString(frontmatter, ['status']) || 'pending';
@@ -2541,7 +2558,7 @@ function memoryProposalDocumentFromText(vaultRoot, proposalPath, text, context) 
     const absolutePath = (0, safety_1.resolveSafeNotePath)(vaultRoot, normalized, options);
     const relative = (0, safety_1.relativeFromAbsolute)(vaultRoot, absolutePath);
     assertReviewQueuePath(relative);
-    const parsed = (0, core_2.parseMarkdown)(text);
+    const parsed = (0, core_8.parseMarkdown)(text);
     const frontmatter = parsed.frontmatter.fields;
     if (!isMemoryProposalFrontmatter(frontmatter)) {
         throw new safety_1.ToolInputError(`Knowledge Change Review record is not a memory proposal: ${relative}`);
@@ -2574,7 +2591,7 @@ async function findMemoryProposalPathById(vaultRoot, proposalId, context) {
     }
     const view = await knowledgeReadViewForContext(vaultRoot, context);
     const records = [...view.catalog.values()].flatMap((note) => {
-        const location = (0, core_2.proposalHistoryLocation)(note.path);
+        const location = (0, core_8.proposalHistoryLocation)(note.path);
         const noteProposalId = explicitProposalId(note.frontmatter);
         if (!location || !noteProposalId || !isMemoryProposalFrontmatter(note.frontmatter)) {
             return [];
@@ -2586,7 +2603,7 @@ async function findMemoryProposalPathById(vaultRoot, proposalId, context) {
                 contentHash: note.contentHash,
             }];
     });
-    const resolution = (0, core_2.resolveProposalHistoryById)(records, normalizedId);
+    const resolution = (0, core_8.resolveProposalHistoryById)(records, normalizedId);
     if (resolution.status === 'missing') {
         throw new safety_1.ToolInputError(`Approved writeback proposal not found: ${normalizedId}`);
     }
@@ -2658,7 +2675,7 @@ function normalizeWritebackPlanEffect(effectValue) {
     }
 }
 function isWritebackCreationConflict(error) {
-    if (error instanceof core_2.OperationConflictError) {
+    if (error instanceof core_8.OperationConflictError) {
         return true;
     }
     if (error instanceof Error) {
@@ -2690,17 +2707,17 @@ function resolveWritebackPlanEffect(proposal, targetState) {
     if (declared) {
         return declared;
     }
-    if (proposal.targetNote && (0, core_2.isKnowledgeWikiPath)(proposal.targetNote) && targetState === null) {
+    if (proposal.targetNote && (0, core_8.isKnowledgeWikiPath)(proposal.targetNote) && targetState === null) {
         return 'create_wiki_note';
     }
     const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
-    if (claimKey && (!proposal.targetNote || !(0, core_2.isKnowledgeWikiPath)(proposal.targetNote))) {
+    if (claimKey && (!proposal.targetNote || !(0, core_8.isKnowledgeWikiPath)(proposal.targetNote))) {
         return 'create_memory_record';
     }
     return 'append';
 }
 function buildWritebackPlanForTarget(proposal, targetState) {
-    const writeback = (0, core_2.resolveProposalWriteback)({
+    const writeback = (0, core_8.resolveProposalWriteback)({
         body: proposal.body,
         proposalId: proposal.proposalId,
         frontmatterContent: stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['writeback_content', 'writebackContent'])),
@@ -2803,13 +2820,13 @@ const proposalScalarField = (frontmatter, keys, label) => {
         if (value !== undefined
             && value !== null
             && (typeof value === 'object' || typeof value === 'function')) {
-            throw new core_2.ProposalTransitionValidationError(`${label} is invalid.`);
+            throw new core_8.ProposalTransitionValidationError(`${label} is invalid.`);
         }
         return proposalScalarText(value).trim();
     })
         .filter(Boolean);
     if (new Set(values).size > 1) {
-        throw new core_2.ProposalTransitionValidationError(`${label} fields conflict.`);
+        throw new core_8.ProposalTransitionValidationError(`${label} fields conflict.`);
     }
     return values[0] || '';
 };
@@ -2823,13 +2840,13 @@ const proposalMultilineField = (frontmatter, keys, label) => {
         if (value !== undefined
             && value !== null
             && (typeof value === 'object' || typeof value === 'function')) {
-            throw new core_2.ProposalTransitionValidationError(`${label} is invalid.`);
+            throw new core_8.ProposalTransitionValidationError(`${label} is invalid.`);
         }
         return proposalScalarText(value).replace(/\\n/g, '\n').trim();
     })
         .filter(Boolean);
     if (new Set(values).size > 1) {
-        throw new core_2.ProposalTransitionValidationError(`${label} fields conflict.`);
+        throw new core_8.ProposalTransitionValidationError(`${label} fields conflict.`);
     }
     return values[0] || '';
 };
@@ -2840,7 +2857,7 @@ const proposalTransitionStatus = (frontmatter) => {
         if (value !== undefined
             && value !== null
             && (typeof value === 'object' || typeof value === 'function')) {
-            throw new core_2.ProposalTransitionValidationError('Proposal status is invalid.');
+            throw new core_8.ProposalTransitionValidationError('Proposal status is invalid.');
         }
         const normalized = proposalScalarText(value)
             .trim()
@@ -2860,17 +2877,17 @@ const proposalTransitionStatus = (frontmatter) => {
         'revision_requested',
         'applied',
     ].includes(value))) {
-        throw new core_2.ProposalTransitionValidationError('Proposal status is invalid.');
+        throw new core_8.ProposalTransitionValidationError('Proposal status is invalid.');
     }
     if (new Set(values).size > 1) {
-        throw new core_2.ProposalTransitionValidationError('Proposal status fields conflict.');
+        throw new core_8.ProposalTransitionValidationError('Proposal status fields conflict.');
     }
     return values[0];
 };
 function proposalTransitionSnapshot(proposal) {
-    const parsed = (0, core_2.parseMarkdown)(proposal.text);
+    const parsed = (0, core_8.parseMarkdown)(proposal.text);
     if (parsed.frontmatter.errors.length > 0) {
-        throw new core_2.ProposalTransitionValidationError('Proposal frontmatter is invalid.');
+        throw new core_8.ProposalTransitionValidationError('Proposal frontmatter is invalid.');
     }
     const frontmatter = parsed.frontmatter.fields;
     const proposalKind = proposalScalarField(frontmatter, ['proposal_kind', 'proposalKind'], 'Proposal kind');
@@ -2882,27 +2899,27 @@ function proposalTransitionSnapshot(proposal) {
             ? 'memory_proposal'
             : null;
     if (!classification) {
-        throw new core_2.ProposalTransitionValidationError('Proposal is not a memory proposal.');
+        throw new core_8.ProposalTransitionValidationError('Proposal is not a memory proposal.');
     }
     const proposalId = proposalScalarField(frontmatter, ['proposal_id', 'proposalId'], 'Proposal id') || path.basename(proposal.path, path.extname(proposal.path));
     const frontmatterWriteback = proposalMultilineField(frontmatter, ['writeback_content', 'writebackContent'], 'Proposal writeback content');
     const rawWritebackEffect = readWritebackPlanEffectValue(frontmatter);
     const writebackEffect = normalizeWritebackPlanEffect(rawWritebackEffect);
     if (rawWritebackEffect !== null && writebackEffect === null) {
-        throw new core_2.ProposalTransitionValidationError(`Unknown writeback_effect value: ${rawWritebackEffect}`);
+        throw new core_8.ProposalTransitionValidationError(`Unknown writeback_effect value: ${rawWritebackEffect}`);
     }
-    const writeback = (0, core_2.resolveProposalWriteback)({
+    const writeback = (0, core_8.resolveProposalWriteback)({
         body: parsed.body,
         proposalId,
         frontmatterContent: frontmatterWriteback,
     });
     if (writeback.error === 'conflicting_sources') {
-        throw new core_2.ProposalTransitionConflictError('Proposal writeback sources conflict.');
+        throw new core_8.ProposalTransitionConflictError('Proposal writeback sources conflict.');
     }
     if (writeback.error || writeback.ambiguous) {
-        throw new core_2.ProposalTransitionValidationError(`Proposal writeback boundary is ${writeback.error || 'ambiguous'}.`);
+        throw new core_8.ProposalTransitionValidationError(`Proposal writeback boundary is ${writeback.error || 'ambiguous'}.`);
     }
-    const lastTransition = (0, core_2.proposalTransitionReceiptFromFrontmatter)(frontmatter);
+    const lastTransition = (0, core_8.proposalTransitionReceiptFromFrontmatter)(frontmatter);
     return {
         path: proposal.path,
         classification,
@@ -2941,7 +2958,7 @@ async function readCurrentVaultTextState(vaultRoot, relativePath, context) {
         absolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, normalized, pathSafetyOptions(context));
     }
     catch (error) {
-        if (error instanceof core_2.VaultPathError && /not found/i.test(error.message)) {
+        if (error instanceof core_8.VaultPathError && /not found/i.test(error.message)) {
             return null;
         }
         throw error;
@@ -3164,10 +3181,10 @@ function buildApprovedWritebackBlock(proposalId, writebackContent) {
         marker,
     };
 }
-function buildApprovedWikiNoteWritebackBlock(proposalId, writebackContent, operationId) {
+function buildApprovedWikiNoteWritebackBlock(proposalId, writebackContent, operationId, withIdentity = false) {
     const marker = `^writeback-${proposalId.replace(/[^A-Za-z0-9._-]/g, '-')}`;
     return {
-        block: `${writebackContent.trim()}\n\n<!-- writeback operation: ${operationId} -->\n${marker}`,
+        block: `${withIdentity ? (0, core_5.ensureWikiIdentity)(writebackContent.trim(), proposalId) : writebackContent.trim()}\n\n<!-- writeback operation: ${operationId} -->\n${marker}`,
         marker,
     };
 }
@@ -3202,17 +3219,17 @@ function validateApprovedWritebackTransition(snapshot, operationId, targetPath, 
         || approval.kind !== 'status'
         || approval.nextStatus !== 'approved'
         || !approval.operationId) {
-        throw new core_2.ProposalTransitionValidationError('Approved proposal is missing its committed approval operation.');
+        throw new core_8.ProposalTransitionValidationError('Approved proposal is missing its committed approval operation.');
     }
-    (0, core_2.transitionProposal)(snapshot, {
-        expectedRevision: (0, core_2.computeProposalRevision)(snapshot),
-        expectedContentHash: (0, core_2.computeProposalContentHash)(snapshot),
+    (0, core_8.transitionProposal)(snapshot, {
+        expectedRevision: (0, core_8.computeProposalRevision)(snapshot),
+        expectedContentHash: (0, core_8.computeProposalContentHash)(snapshot),
         operationId,
         action: { kind: 'apply' },
     }, {
         now,
         actor: context.agentId || 'tracekeeper-runtime',
-        targetAllowed: core_2.isAllowedProposalTargetPath,
+        targetAllowed: core_8.isAllowedProposalTargetPath,
         targetExists: (relativePath) => relativePath === targetPath && targetExists(relativePath),
         targetCreationAllowed: (relativePath) => relativePath === targetPath && targetCreationAllowed(relativePath),
     });
@@ -3222,7 +3239,7 @@ async function resolveApprovedMemoryRecordTargetPath(vaultRoot, proposal, contex
     if (!scope) {
         throw new safety_1.ToolInputError('Approved memory proposal requires an explicit memory_scope.');
     }
-    const agentType = (0, core_2.normalizeProjectAgentType)(context.observedClientType ?? context.clientName ?? 'custom');
+    const agentType = (0, core_8.normalizeProjectAgentType)(context.observedClientType ?? context.clientName ?? 'custom');
     const safeProposalId = proposal.proposalId
         .replace(/[^A-Za-z0-9._-]+/g, '-')
         .replace(/-+/g, '-')
@@ -3234,12 +3251,12 @@ async function resolveApprovedMemoryRecordTargetPath(vaultRoot, proposal, contex
     if (scope === 'global') {
         if (proposal.targetNote) {
             const explicit = (0, safety_1.normalizeNotePath)(proposal.targetNote, pathSafetyOptions(context));
-            if (!isCanonicalMemoryAgentTarget(explicit, `${core_2.KNOWLEDGE_GLOBAL_MEMORY_DIR}/agents/`)) {
+            if (!isCanonicalMemoryAgentTarget(explicit, `${core_8.KNOWLEDGE_GLOBAL_MEMORY_DIR}/agents/`)) {
                 throw new safety_1.ToolInputError('Approved Global MemoryRecord target must use the canonical Global agent namespace.');
             }
             return explicit;
         }
-        return `${core_2.KNOWLEDGE_GLOBAL_MEMORY_DIR}/agents/${agentType}/approved-${safeProposalId}.md`;
+        return `${core_8.KNOWLEDGE_GLOBAL_MEMORY_DIR}/agents/${agentType}/approved-${safeProposalId}.md`;
     }
     if (scope !== 'project') {
         throw new safety_1.ToolInputError('Approved memory proposal scope must be global or project.');
@@ -3278,14 +3295,14 @@ function isCanonicalMemoryAgentTarget(targetPath, agentsRoot) {
         return false;
     const [agentType, filename] = segments;
     return Boolean(agentType)
-        && agentType === (0, core_2.normalizeProjectAgentType)(agentType)
+        && agentType === (0, core_8.normalizeProjectAgentType)(agentType)
         && /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(filename);
 }
 function memoryAgentTypeFromTarget(targetPath) {
     const segments = targetPath.split('/');
     const agentsIndex = segments.lastIndexOf('agents');
     const agentType = agentsIndex >= 0 ? segments[agentsIndex + 1] : '';
-    if (!agentType || agentType !== (0, core_2.normalizeProjectAgentType)(agentType)) {
+    if (!agentType || agentType !== (0, core_8.normalizeProjectAgentType)(agentType)) {
         throw new safety_1.ToolInputError('Approved MemoryRecord target has an invalid Agent namespace.');
     }
     return agentType;
@@ -3317,7 +3334,7 @@ function buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, targetPath, oper
     const evidence = [...new Set([...relatedSources, ...relatedWiki])];
     const proposedAuthority = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['proposed_authority'])).toLowerCase();
     const proposedConfidence = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['proposed_confidence'])).toLowerCase();
-    const governance = (0, core_2.deriveMemoryGovernance)({
+    const governance = (0, core_8.deriveMemoryGovernance)({
         proposed_authority: proposedAuthority === 'user' || proposedAuthority === 'source'
             ? proposedAuthority
             : 'agent',
@@ -3346,11 +3363,11 @@ function buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, targetPath, oper
         : `[[${target.replace(/\.md$/i, '')}]]`;
     const relations = [
         ...(projectHub ? [`- Project hub: ${memoryLink(projectHub)}`] : []),
-        ...(scope === 'global' ? [`- Global hub: ${memoryLink(core_2.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH)}`] : []),
+        ...(scope === 'global' ? [`- Global hub: ${memoryLink(core_8.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH)}`] : []),
         ...relatedWiki.map((target) => `- Wiki: ${memoryLink(target)}`),
         ...relatedSources.map((target) => `- Source: ${memoryLink(target)}`),
     ];
-    return (0, core_2.buildMemoryRecord)({
+    return (0, core_8.buildMemoryRecord)({
         path: targetPath,
         memory_id: memoryId,
         scope,
@@ -3370,7 +3387,7 @@ function buildApprovedMemoryRecordMarkdown(vaultRoot, proposal, targetPath, oper
         supersedes: readFrontmatterStringList(proposal.frontmatter, 'supersedes'),
         contradicts: readFrontmatterStringList(proposal.frontmatter, 'contradicts'),
         project_hub: projectHub,
-        global_hub: scope === 'global' ? core_2.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH : null,
+        global_hub: scope === 'global' ? core_8.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH : null,
         related_wiki: relatedWiki,
         related_sources: relatedSources,
         body: ['# Approved memory record', '', '## Relations', '', ...relations, '', '## Memory', '', proposalTransitionSnapshot(proposal).writebackContent].join('\n'),
@@ -3397,7 +3414,7 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
         if (target) {
             throw new safety_1.ToolInputError('Create wiki note writeback requires a missing target.');
         }
-        if (!(0, core_2.isKnowledgeWikiPath)(targetPath)) {
+        if (!(0, core_8.isKnowledgeWikiPath)(targetPath)) {
             throw new safety_1.ToolInputError(`Create wiki note writeback requires a wiki target: ${targetPath}`);
         }
     }
@@ -3406,22 +3423,40 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
     }
     if (plan.effectKind === 'update_managed_relations' && target) {
         try {
-            (0, core_2.applyManagedRelationsBlock)(target.content, batchOverride?.block || snapshot.writebackContent);
+            (0, core_8.applyManagedRelationsBlock)(target.content, batchOverride?.block || snapshot.writebackContent);
         }
         catch (error) {
             throw new safety_1.ToolInputError(error instanceof Error ? error.message : 'Managed relations writeback is invalid.');
         }
     }
-    const taskPath = taskId ? buildTaskNotePath(taskId) : null;
+    const taskPath = taskId ? await taskPathForIdAsync(vaultRoot, taskId, context) : null;
     const task = taskPath
         ? await readCurrentVaultTextState(vaultRoot, taskPath, context)
         : null;
     if (taskPath && !task) {
         throw new safety_1.ToolInputError(`Writeback confirmation is stale because the task does not exist: ${taskPath}`);
     }
+    if (task) {
+        const fields = (0, core_8.parseMarkdown)(task.content).frontmatter.fields;
+        if (!(0, core_6.parseTaskRecord)(fields))
+            throw new core_6.TaskMigrationRequiredError(taskId);
+        await (0, core_1.assertTaskMigrationCommitted)(operationJournalForVault(vaultRoot, context), fields);
+    }
+    const proposalRevision = (0, core_8.computeProposalRevision)(snapshot);
+    const effectivePreviewNonce = batchOverride?.previewNonce || previewNonce;
+    const identity = buildApprovedWritebackOperationIdentity(proposal, proposalRevision, effectivePreviewNonce);
+    const taskRelationTarget = task && (0, core_6.parseTaskRecord)((0, core_8.parseMarkdown)(task.content).frontmatter.fields)
+        ? target ? (0, core_5.taskTargetIdentity)({ path: targetPath, frontmatter: (0, core_8.parseMarkdown)(target.content).frontmatter.fields })
+            : plan.effectKind === CREATE_WIKI_NOTE_EFFECT ? (0, core_5.taskTargetIdentity)({ path: targetPath, frontmatter: (0, core_8.parseMarkdown)((0, core_5.ensureWikiIdentity)(snapshot.writebackContent, proposal.proposalId)).frontmatter.fields })
+                : { kind: 'memory', id: `memory-${hashText(`${proposal.proposalId}\0${stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']))}`).slice(0, 32)}` }
+        : undefined;
+    if (taskRelationTarget?.kind === 'wiki' && !taskRelationTarget.id)
+        throw new safety_1.ToolInputError('Writeback target identity changed or is missing; preview and backfill wiki_id in Task maintenance first.');
     const taskLinkPlan = task
-        ? planApprovedWritebackTaskLink({
+        ? (0, core_5.planApprovedWritebackTaskLink)({
             taskContent: task.content,
+            targetIdentity: taskRelationTarget,
+            operationId: context.wikiBatchWritebackOverride?.batchOperationId || identity.operationId,
             targetPath,
             proposalId: proposal.proposalId,
             proposalPath: proposal.path,
@@ -3435,9 +3470,6 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
     const taskHadAppliedProposalReference = taskLinkPlan?.hadAppliedProposalReference ?? false;
     const taskHadProposalReference = taskLinkPlan?.hadProposalReference ?? false;
     const taskLinkedContent = taskLinkPlan?.content ?? '';
-    const proposalRevision = (0, core_2.computeProposalRevision)(snapshot);
-    const effectivePreviewNonce = batchOverride?.previewNonce || previewNonce;
-    const identity = buildApprovedWritebackOperationIdentity(proposal, proposalRevision, effectivePreviewNonce);
     const createsMemoryRecord = plan.effectKind === 'create_memory_record';
     const createsWikiNote = plan.effectKind === CREATE_WIKI_NOTE_EFFECT;
     const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
@@ -3458,7 +3490,7 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
             marker: `memory-record:${snapshot.proposalId}`,
         }
         : plan.effectKind === CREATE_WIKI_NOTE_EFFECT
-            ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, identity.operationId)
+            ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, identity.operationId, Boolean(taskRelationTarget))
             : plan.effectKind === 'update_managed_relations'
                 ? {
                     block: batchOverride?.block || snapshot.writebackContent,
@@ -3474,14 +3506,15 @@ async function prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, c
     return {
         binding: {
             schemaVersion: WRITEBACK_CONFIRMATION_SCHEMA_VERSION,
+            ...(taskRelationTarget ? { taskRelationTarget, taskRelationOperationId: context.wikiBatchWritebackOverride?.batchOperationId || identity.operationId } : {}),
             previewNonce: effectivePreviewNonce,
             operationId: identity.operationId,
             idempotencyKey: identity.idempotencyKey,
             proposalId: proposal.proposalId,
             proposalPath: proposal.path,
             proposalRevision,
-            proposalContentHash: (0, core_2.computeProposalContentHash)(snapshot),
-            proposalFileHash: (0, core_2.computePayloadHash)(proposal.text),
+            proposalContentHash: (0, core_8.computeProposalContentHash)(snapshot),
+            proposalFileHash: (0, core_8.computePayloadHash)(proposal.text),
             approvalOperationId: snapshot.lastTransition?.operationId || '',
             targetPath,
             targetContentHash: target?.contentHash || 'absent',
@@ -3525,6 +3558,7 @@ function writebackBindingPayload(binding, confirmationToken) {
         taskPath: binding.taskPath,
         taskContentHash: binding.taskContentHash,
         taskLinkedContentHash: binding.taskLinkedContentHash,
+        ...(binding.taskRelationTarget ? { taskRelationTarget: binding.taskRelationTarget, taskRelationOperationId: binding.taskRelationOperationId } : {}),
         taskHadTargetReference: binding.taskHadTargetReference,
         taskHadProposalReference: binding.taskHadProposalReference,
         ...(typeof binding.taskHadProposalIdReference === 'boolean'
@@ -3700,7 +3734,7 @@ function replaceTextFileAtomically(absolutePath, content, expectedContent) {
     try {
         fs.writeFileSync(tempPath, content, { encoding: 'utf8', mode });
         if (expectedContent !== undefined && fs.readFileSync(absolutePath, 'utf8') !== expectedContent) {
-            throw new core_2.OperationConflictError('File changed before atomic replace.');
+            throw new core_8.OperationConflictError('File changed before atomic replace.');
         }
         fs.renameSync(tempPath, absolutePath);
     }
@@ -3715,7 +3749,7 @@ function replaceTextFileAtomically(absolutePath, content, expectedContent) {
     }
 }
 function assertAllowedWritebackTarget(relativePath) {
-    if (!(0, core_2.isAllowedProposalTargetPath)(relativePath)) {
+    if (!(0, core_8.isAllowedProposalTargetPath)(relativePath)) {
         throw new safety_1.ToolInputError(`Approved writeback target is outside the allowed Memory or Wiki boundary: ${relativePath}`);
     }
     const forbiddenPrefixes = [
@@ -3875,7 +3909,7 @@ function contextPackFromReadViewRecall(vaultRoot, query, result, view, staleAfte
     const matches = 'matches' in result ? result.matches : result.entries;
     const staleCutoff = Date.now() - staleAfterDays * 86400000;
     const sourceCandidates = matches
-        .filter((match) => (0, core_2.isKnowledgeSourcePath)(match.path) || match.note_type?.includes('source'))
+        .filter((match) => (0, core_8.isKnowledgeSourcePath)(match.path) || match.note_type?.includes('source'))
         .map((match) => ({ note: match.path, reason: `type=${match.note_type ?? 'source'}` }));
     const staleWarnings = matches
         .filter((match) => Date.parse(view.catalog.get(match.path)?.modifiedAt ?? '') < staleCutoff)
@@ -3895,10 +3929,10 @@ function contextPackFromReadViewRecall(vaultRoot, query, result, view, staleAfte
         gaps: ['Evidence blocks require an explicit targeted note read.'],
         staleWarnings: staleWarnings.length > 0 ? staleWarnings : ['No stale notes found in top matches.'],
         suggestedWritebackTargets: [
-            core_2.TRACEKEEPER_CONTEXT_PACKS_DIR,
-            core_2.TRACEKEEPER_REVIEW_QUEUE_DIR,
-            core_2.KNOWLEDGE_SOURCES_DIR,
-            core_2.TRACEKEEPER_SESSIONS_DIR,
+            core_8.TRACEKEEPER_CONTEXT_PACKS_DIR,
+            core_8.TRACEKEEPER_REVIEW_QUEUE_DIR,
+            core_8.KNOWLEDGE_SOURCES_DIR,
+            core_8.TRACEKEEPER_SESSIONS_DIR,
         ].map((entry) => path.join(vaultRoot, entry)),
         scanErrors: view.errors.map((error) => ({ ...error })),
     };
@@ -3997,10 +4031,10 @@ function toErrorMessage(error) {
 }
 function boundedWritebackErrorMessage(error, vaultRoot) {
     const isExpected = error instanceof safety_1.ToolInputError
-        || error instanceof core_2.VaultPathError
-        || error instanceof core_2.OperationConflictError
-        || error instanceof core_2.ProposalTransitionValidationError
-        || error instanceof core_2.ProposalTransitionStateError;
+        || error instanceof core_8.VaultPathError
+        || error instanceof core_8.OperationConflictError
+        || error instanceof core_8.ProposalTransitionValidationError
+        || error instanceof core_8.ProposalTransitionStateError;
     if (!isExpected) {
         return 'Approved writeback failed at a protected Vault boundary.';
     }
@@ -4035,7 +4069,7 @@ function resolveExistingOrNewAutoMemoryTarget(vaultRoot, targetNote, allowedDir,
         return { absolutePath, relativePath, created: false };
     }
     catch (error) {
-        if (!(error instanceof core_2.VaultPathError)) {
+        if (!(error instanceof core_8.VaultPathError)) {
             throw error;
         }
         const resolved = (0, safety_1.resolveSafeWritableNotePath)(vaultRoot, normalizedTarget, allowedDir, options);
@@ -4044,15 +4078,15 @@ function resolveExistingOrNewAutoMemoryTarget(vaultRoot, targetNote, allowedDir,
     }
 }
 function ensureProjectMemoryIndex(vaultRoot, targetRelativePath, input) {
-    if (!targetRelativePath.startsWith(`${core_2.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)) {
+    if (!targetRelativePath.startsWith(`${core_8.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)) {
         return null;
     }
-    const suffix = targetRelativePath.slice(`${core_2.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`.length);
+    const suffix = targetRelativePath.slice(`${core_8.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`.length);
     const projectSlug = suffix.split('/', 1)[0] || '';
     if (!projectSlug) {
         return null;
     }
-    const indexPath = `${core_2.KNOWLEDGE_PROJECTS_MEMORY_DIR}/${projectSlug}/index.md`;
+    const indexPath = `${core_8.KNOWLEDGE_PROJECTS_MEMORY_DIR}/${projectSlug}/index.md`;
     const absolutePath = path.join(vaultRoot, indexPath);
     if (fs.existsSync(absolutePath)) {
         return indexPath;
@@ -4080,15 +4114,15 @@ async function ensureProjectMemoryIndexAsync(vaultRoot, targetRelativePath, inpu
     if (!input.context.vaultRepository) {
         return ensureProjectMemoryIndex(vaultRoot, targetRelativePath, input);
     }
-    if (!targetRelativePath.startsWith(`${core_2.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)) {
+    if (!targetRelativePath.startsWith(`${core_8.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)) {
         return null;
     }
-    const suffix = targetRelativePath.slice(`${core_2.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`.length);
+    const suffix = targetRelativePath.slice(`${core_8.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`.length);
     const projectSlug = suffix.split('/', 1)[0] || '';
     if (!projectSlug) {
         return null;
     }
-    const indexPath = `${core_2.KNOWLEDGE_PROJECTS_MEMORY_DIR}/${projectSlug}/index.md`;
+    const indexPath = `${core_8.KNOWLEDGE_PROJECTS_MEMORY_DIR}/${projectSlug}/index.md`;
     if (await input.context.vaultRepository.readText(indexPath)) {
         return indexPath;
     }
@@ -4344,7 +4378,7 @@ async function writeImmutableMemoryRecord(vaultRoot, input) {
             warnings: ['Supersession and contradiction transitions require human review.'],
         };
     }
-    const agentType = (0, core_2.normalizeProjectAgentType)(input.agentType);
+    const agentType = (0, core_8.normalizeProjectAgentType)(input.agentType);
     const memoryKind = input.memoryKinds.length === 1 ? input.memoryKinds[0] : 'task_closeout';
     const contentIdentity = crypto.createHash('sha256')
         .update(input.body.replace(/\s+/g, ' ').trim(), 'utf8')
@@ -4357,7 +4391,7 @@ async function writeImmutableMemoryRecord(vaultRoot, input) {
         .slice(0, 32)}`;
     const evidence = [...new Set([...input.relatedSources, ...input.relatedWiki])];
     const hasVerifiedSourceEvidence = input.relatedSources.length > 0;
-    const governance = (0, core_2.deriveMemoryGovernance)({
+    const governance = (0, core_8.deriveMemoryGovernance)({
         proposed_authority: input.proposedAuthority,
         proposed_confidence: input.proposedConfidence,
         evidence_count: new Set([...input.relatedSources, ...input.relatedWiki]).size,
@@ -4390,11 +4424,11 @@ async function writeImmutableMemoryRecord(vaultRoot, input) {
         let projectKey = '';
         let hubStatus = 'existing';
         if (input.scope === 'global') {
-            const hub = await readCanonicalMemoryHub(repository, core_2.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH);
+            const hub = await readCanonicalMemoryHub(repository, core_8.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH);
             if (!hub) {
-                return missingMemoryHubReview(core_2.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH);
+                return missingMemoryHubReview(core_8.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH);
             }
-            globalHub = core_2.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH;
+            globalHub = core_8.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH;
         }
         else {
             const resolution = await projectMemoryApplication(vaultRoot, input.context).ensureWritableProject({
@@ -4417,12 +4451,12 @@ async function writeImmutableMemoryRecord(vaultRoot, input) {
             hubStatus = resolution.hub_status;
         }
         const entryPath = input.scope === 'global'
-            ? (0, core_2.buildGlobalMemoryEntryPath)({
+            ? (0, core_8.buildGlobalMemoryEntryPath)({
                 agentType,
                 operationKind: input.operationKind,
                 operationId: input.operationId,
             })
-            : (0, core_2.buildProjectMemoryEntryPath)({
+            : (0, core_8.buildProjectMemoryEntryPath)({
                 projectKey,
                 agentType,
                 operationKind: input.operationKind,
@@ -4468,7 +4502,7 @@ async function writeImmutableMemoryRecord(vaultRoot, input) {
             ...input.relatedWiki.map((target) => `- Wiki: ${memoryLink(target)}`),
             ...input.relatedSources.map((target) => `- Source: ${memoryLink(target)}`),
         ];
-        const built = (0, core_2.buildMemoryRecord)({
+        const built = (0, core_8.buildMemoryRecord)({
             path: entryPath,
             memory_id: memoryId,
             scope: input.scope,
@@ -4508,7 +4542,7 @@ async function writeImmutableMemoryRecord(vaultRoot, input) {
             await repository.createText(entryPath, built.markdown);
         }
         catch (error) {
-            if (!(error instanceof core_2.OperationConflictError))
+            if (!(error instanceof core_8.OperationConflictError))
                 throw error;
             const existing = await repository.readText(entryPath);
             if (existing?.content !== built.markdown)
@@ -4580,7 +4614,7 @@ async function readCanonicalMemoryHub(repository, hubPath) {
         return await repository.readText(hubPath);
     }
     catch (error) {
-        if (error instanceof core_2.VaultPathError
+        if (error instanceof core_8.VaultPathError
             && error.message.startsWith('Vault path is not a file:')) {
             return null;
         }
@@ -4620,6 +4654,57 @@ function buildTaskNotePath(taskId) {
         throw new safety_1.ToolInputError('task_id must contain at least one safe filename character.');
     }
     return `${AGENT_TASK_DIR}/${safeId}.md`;
+}
+function taskVaultRepository(vaultRoot, context) {
+    return context.vaultRepository ?? new core_8.NodeFsVaultRepository({ vaultRoot, protectedDirectoryName: context.vaultConfigDir });
+}
+async function taskForContext(vaultRoot, taskId, context) {
+    const repository = taskVaultRepository(vaultRoot, context);
+    if (!context.knowledgeReadViewProvider)
+        return (0, core_6.findTaskById)(repository, taskId, true);
+    const view = await knowledgeReadViewForContext(vaultRoot, context);
+    if (view.index_state !== 'ready')
+        throw new safety_1.ToolInputError('knowledge_index_not_ready: task identity inventory is unavailable.');
+    const selected = (0, core_2.resolveTaskIdentity)([...view.catalog.values()].map((row) => ({ path: row.path, frontmatter: row.frontmatter })), taskId, true);
+    const file = await repository.readText(selected || buildTaskNotePath(taskId));
+    if (file && (0, core_8.parseMarkdown)(file.content).frontmatter.fields.task_id !== taskId)
+        throw new core_8.OperationConflictError('Task identity changed against its read snapshot.');
+    if (selected && !file)
+        throw new core_8.OperationConflictError('Task disappeared against its read snapshot.');
+    return file;
+}
+async function requireTaskForContext(vaultRoot, taskId, context) {
+    const file = await taskForContext(vaultRoot, taskId, context);
+    if (file) {
+        const fields = (0, core_8.parseMarkdown)(file.content).frontmatter.fields;
+        if (!(0, core_6.parseTaskRecord)(fields))
+            throw new core_6.TaskMigrationRequiredError(taskId);
+        await (0, core_1.assertTaskMigrationCommitted)(operationJournalForVault(vaultRoot, context), fields);
+    }
+    return file;
+}
+async function taskPathForIdAsync(vaultRoot, taskId, context) {
+    return (await taskForContext(vaultRoot, taskId, context))?.path ?? buildTaskNotePath(taskId);
+}
+async function taskRelationsForReferences(vaultRoot, content, references, context, operationId) {
+    const fields = (0, core_8.parseMarkdown)(content).frontmatter.fields;
+    const task = (0, core_6.parseTaskRecord)(fields);
+    if (!task)
+        throw new core_6.TaskMigrationRequiredError(String(fields.task_id || ''));
+    const result = [];
+    for (const [key, role] of [['source_captures', 'captured_source'], ['memory_writes', 'written_output'], ['proposal_paths', 'review_proposal'], ['related_wiki', 'context_reference'], ['related_sources', 'context_reference']]) {
+        for (const [index, targetPath] of (references[key] || []).entries()) {
+            const target = await readVaultNoteContent(vaultRoot, targetPath, context);
+            const metadata = target === null ? {} : (0, core_8.parseMarkdown)(target).frontmatter.fields;
+            result.push((0, core_6.makeTaskRelation)({ taskId: task.task_id, role, path: targetPath,
+                target: target === null ? undefined : { path: targetPath, frontmatter: metadata, contentHash: hashText(target) },
+                proposalId: key === 'proposal_paths' ? references.proposal_ids?.[index] : undefined,
+                operationId: operationId || String(metadata.source_operation_id || metadata.operation_id || metadata.proposal_operation_id || metadata.finish_operation_id || '') || null,
+                recordedAt: String(metadata.created_at || task.recorded_at || task.started_at || '') || null,
+            }));
+        }
+    }
+    return result;
 }
 function emptyAgentTaskMetadata() {
     return {
@@ -4732,7 +4817,7 @@ function mergeTaskProjectIdentity(taskId, task, explicit) {
 }
 async function readAgentTaskMetadataAsync(vaultRoot, taskId, context) {
     try {
-        const safePath = buildTaskNotePath(taskId);
+        const safePath = await taskPathForIdAsync(vaultRoot, taskId, context);
         let text;
         if (context.vaultRepository) {
             const repositoryFile = await context.vaultRepository.readText(safePath);
@@ -4743,20 +4828,26 @@ async function readAgentTaskMetadataAsync(vaultRoot, taskId, context) {
         }
         else {
             const absolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, safePath, pathSafetyOptions(context));
-            const parsed = (0, core_2.parseMarkdown)(fs.readFileSync(absolute, 'utf8'));
+            const parsed = (0, core_8.parseMarkdown)(fs.readFileSync(absolute, 'utf8'));
             return agentTaskMetadataFromFrontmatter(parsed.frontmatter.fields);
         }
-        const parsed = (0, core_2.parseMarkdown)(text);
+        const parsed = (0, core_8.parseMarkdown)(text);
         return agentTaskMetadataFromFrontmatter(parsed.frontmatter.fields);
     }
     catch (error) {
-        if (error instanceof safety_1.ToolInputError || error instanceof core_2.VaultPathError || error instanceof Error) {
+        if (error instanceof core_8.OperationConflictError || error instanceof core_6.TaskMigrationRequiredError)
+            throw error;
+        if (error instanceof safety_1.ToolInputError || error instanceof core_8.VaultPathError || error instanceof Error) {
             return emptyAgentTaskMetadata();
         }
         return emptyAgentTaskMetadata();
     }
 }
 function readFrontmatterStringList(frontmatter, key) {
+    if (frontmatter.task_record_version !== undefined && core_6.TASK_REFERENCE_FIELDS.includes(key)) {
+        const projected = (0, core_6.taskReferenceFields)(frontmatter)[key];
+        return Array.isArray(projected) ? projected.map(String) : [];
+    }
     const value = frontmatter[key];
     if (Array.isArray(value)) {
         return value
@@ -4780,59 +4871,8 @@ function mergeFrontmatterList(frontmatter, key, values) {
     }
     return Array.from(merged).join(', ');
 }
-/**
- * 规划一次 approved writeback 对任务引用的确定性更新。
- *
- * @description 批次预览和 Runtime 写回必须复用此函数，确保逐项任务哈希链与实际持久化内容完全一致。
- */
-function planApprovedWritebackTaskLink(input) {
-    const frontmatter = (0, core_2.parseMarkdown)(input.taskContent).frontmatter.fields;
-    const memoryWrites = new Set(readFrontmatterStringList(frontmatter, 'memory_writes'));
-    const proposalIds = new Set(readFrontmatterStringList(frontmatter, 'proposal_ids'));
-    const proposalPaths = new Set(readFrontmatterStringList(frontmatter, 'proposal_paths'));
-    const appliedProposalIds = new Set(readFrontmatterStringList(frontmatter, 'durable_output_applied_proposal_ids'));
-    const legacyProposals = new Set(readFrontmatterStringList(frontmatter, 'proposals'));
-    const hadProposalReference = input.usesStableProposalReferences
-        ? proposalIds.has(input.proposalId)
-        : legacyProposals.has(input.proposalPath);
-    const hadProposalPathEvidence = input.usesStableProposalReferences
-        ? proposalPaths.has(input.proposalPath)
-        : true;
-    const hadAppliedProposalReference = input.usesAppliedProposalEvidence
-        ? appliedProposalIds.has(input.proposalId)
-        : true;
-    const needsUpdate = !memoryWrites.has(input.targetPath)
-        || !hadProposalReference
-        || !hadProposalPathEvidence
-        || !hadAppliedProposalReference;
-    const content = needsUpdate
-        ? updateFrontmatterFields(input.taskContent, input.usesStableProposalReferences
-            ? {
-                memory_writes: mergeFrontmatterList(frontmatter, 'memory_writes', [input.targetPath]),
-                proposal_ids: mergeFrontmatterList(frontmatter, 'proposal_ids', [input.proposalId]),
-                proposal_paths: mergeFrontmatterList(frontmatter, 'proposal_paths', [input.proposalPath]),
-                ...(input.usesAppliedProposalEvidence
-                    ? {
-                        durable_output_applied_proposal_ids: mergeFrontmatterList(frontmatter, 'durable_output_applied_proposal_ids', [input.proposalId]),
-                    }
-                    : {}),
-            }
-            : {
-                memory_writes: mergeFrontmatterList(frontmatter, 'memory_writes', [input.targetPath]),
-                proposals: mergeFrontmatterList(frontmatter, 'proposals', [input.proposalPath]),
-            })
-        : input.taskContent;
-    return {
-        content,
-        contentHashBefore: hashText(input.taskContent),
-        contentHashAfter: hashText(content),
-        hadTargetReference: memoryWrites.has(input.targetPath),
-        hadProposalReference,
-        hadProposalIdReference: proposalIds.has(input.proposalId),
-        hadProposalPathEvidence,
-        hadAppliedProposalReference,
-    };
-}
+var core_9 = require("@tracekeeper/core");
+Object.defineProperty(exports, "planApprovedWritebackTaskLink", { enumerable: true, get: function () { return core_9.planApprovedWritebackTaskLink; } });
 function durableProposalStatusFromApproval(status) {
     switch (status.trim().toLowerCase().replace(/[\s-]+/g, '_')) {
         case 'pending':
@@ -4856,7 +4896,7 @@ function normalizedTaskSourceCaptures(values, context) {
     for (const value of values) {
         try {
             const normalized = (0, safety_1.normalizeNotePath)(value, pathSafetyOptions(context));
-            if ((0, core_2.isKnowledgeSourcePath)(normalized)) {
+            if ((0, core_8.isKnowledgeSourcePath)(normalized)) {
                 captures.add(normalized);
             }
         }
@@ -4904,7 +4944,7 @@ async function snapshotExactTaskProposal(vaultRoot, taskId, proposalId, rawPath,
         }
         const rawTargetPath = document.targetNote.trim();
         let targetPath = '';
-        if (rawTargetPath && (0, core_2.isAllowedProposalTargetPath)(rawTargetPath)) {
+        if (rawTargetPath && (0, core_8.isAllowedProposalTargetPath)(rawTargetPath)) {
             try {
                 targetPath = (0, safety_1.normalizeNotePath)(rawTargetPath, pathSafetyOptions(context));
             }
@@ -4958,7 +4998,7 @@ async function snapshotTaskAutoWrites(vaultRoot, taskId, metadata, context) {
     const ids = new Set(metadata.autoWriteOperationIds);
     // 旧任务未保存独立回执引用；只从规范 Memory 路径寻找并验证真实 journal。
     for (const target of metadata.memoryWrites) {
-        if (!target.startsWith(`${core_2.KNOWLEDGE_MEMORY_DIR}/`))
+        if (!target.startsWith(`${core_8.KNOWLEDGE_MEMORY_DIR}/`))
             continue;
         const match = path.posix.basename(target).match(/^propose_memory-(propose-memory-[a-f0-9]{24})\.md$/);
         if (match)
@@ -4977,7 +5017,7 @@ async function snapshotTaskAutoWrites(vaultRoot, taskId, metadata, context) {
             if (operation?.status === 'completed' && (0, protocol_1.isRecord)(payload) && (0, protocol_1.isRecord)(payload.requestSnapshot)
                 && payload.requestSnapshot.task_id === taskId && (0, protocol_1.isRecord)(receipt) && receipt.auto_applied === true
                 && typeof receipt.path === 'string' && metadata.memoryWrites.includes(receipt.path)
-                && (0, core_2.isAllowedProposalTargetPath)(receipt.path)) {
+                && (0, core_8.isAllowedProposalTargetPath)(receipt.path)) {
                 targetPath = (0, safety_1.normalizeNotePath)(receipt.path, pathSafetyOptions(context));
                 if (await readVaultNoteContent(vaultRoot, targetPath, context) !== null)
                     status = 'applied';
@@ -5004,9 +5044,21 @@ async function updateManagedProposalReferences(vaultRoot, recordPath, proposals,
     }
     const current = await readCurrentVaultTextState(vaultRoot, recordPath, context);
     if (!current) {
-        throw new core_2.OperationConflictError(`Tracekeeper-managed proposal reference record is unavailable: ${recordPath}`);
+        throw new core_8.OperationConflictError(`Tracekeeper-managed proposal reference record is unavailable: ${recordPath}`);
     }
-    const frontmatter = (0, core_2.parseMarkdown)(current.content).frontmatter.fields;
+    const frontmatter = (0, core_8.parseMarkdown)(current.content).frontmatter.fields;
+    if ((0, core_6.parseTaskRecord)(frontmatter)) {
+        const facts = await taskRelationsForReferences(vaultRoot, current.content, { proposal_paths: proposals.map((row) => row.path), proposal_ids: proposals.map((row) => row.proposalId) }, context);
+        const next = (0, core_6.updateTaskRelations)(current.content, facts);
+        if (next !== current.content) {
+            const repository = taskVaultRepository(vaultRoot, context);
+            const file = await repository.readText(current.path);
+            if (!file || file.content !== current.content)
+                throw new core_8.OperationConflictError('Task changed during relation update.');
+            await repository.replaceText(file.path, file.version, next);
+        }
+        return;
+    }
     const links = proposals
         .map((proposal) => ({
         ...proposal,
@@ -5039,7 +5091,7 @@ async function updateManagedProposalReferences(vaultRoot, recordPath, proposals,
     }
     if (context.vaultRepository) {
         if (!current.version) {
-            throw new core_2.OperationConflictError(`Tracekeeper-managed proposal reference version is unavailable: ${recordPath}`);
+            throw new core_8.OperationConflictError(`Tracekeeper-managed proposal reference version is unavailable: ${recordPath}`);
         }
         await context.vaultRepository.replaceText(current.path, current.version, next);
         return;
@@ -5047,16 +5099,37 @@ async function updateManagedProposalReferences(vaultRoot, recordPath, proposals,
     const absolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, current.path, pathSafetyOptions(context));
     replaceTextFileAtomically(absolute, next, current.content);
 }
-async function updateAgentTaskRecordAsync(vaultRoot, taskId, fields, context, references = {}, appendBody = '', appendBodyMarker = '') {
+async function updateAgentTaskRecordAsync(vaultRoot, taskId, fields, context, references = {}, appendBody = '', appendBodyMarker = '', referenceOperationId) {
     if (!taskId) {
         return null;
+    }
+    const repository = taskVaultRepository(vaultRoot, context);
+    const located = await taskForContext(vaultRoot, taskId, context);
+    if (!located && Object.values(references).some((values) => values.length))
+        throw new core_8.OperationConflictError('Task disappeared before relation commit.');
+    if (located && (0, core_6.parseTaskRecord)((0, core_8.parseMarkdown)(located.content).frontmatter.fields)) {
+        const facts = await taskRelationsForReferences(vaultRoot, located.content, references, context, referenceOperationId);
+        let next = (0, core_6.updateTaskRelations)(located.content, facts);
+        const metadata = Object.fromEntries(Object.entries(fields).filter(([key]) => !core_6.TASK_REFERENCE_FIELDS.includes(key)));
+        for (const [key, values] of Object.entries(references))
+            if (!core_6.TASK_REFERENCE_FIELDS.includes(key))
+                metadata[key] = [...new Set([...readFrontmatterStringList((0, core_8.parseMarkdown)(located.content).frontmatter.fields, key), ...values])];
+        if (Object.keys(metadata).length) {
+            const normalized = (0, core_8.parseMarkdown)(['---', ...Object.entries(metadata).map(([key, value]) => `${key}: ${formatFrontmatterUpdateValue((value ?? ''))}`), '---'].join('\n')).frontmatter.fields;
+            next = (0, core_6.patchTaskMetadata)(next, normalized);
+        }
+        if (appendBody.trim() && (!appendBodyMarker || !located.content.includes(appendBodyMarker)))
+            next = `${next.replace(/\s*$/, '')}\n\n${appendBody.trim()}\n`;
+        if (next !== located.content)
+            await repository.replaceText(located.path, located.version, next);
+        return located.path;
     }
     let absolute = '';
     try {
         absolute = (0, safety_1.resolveSafeNotePath)(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
     }
     catch (error) {
-        if (error instanceof safety_1.ToolInputError || error instanceof core_2.VaultPathError) {
+        if (error instanceof safety_1.ToolInputError || error instanceof core_8.VaultPathError) {
             return null;
         }
         throw error;
@@ -5066,7 +5139,7 @@ async function updateAgentTaskRecordAsync(vaultRoot, taskId, fields, context, re
         if (!existing) {
             return null;
         }
-        const frontmatter = (0, core_2.parseMarkdown)(existing.content).frontmatter.fields;
+        const frontmatter = (0, core_8.parseMarkdown)(existing.content).frontmatter.fields;
         const nextFields = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value ?? '']));
         for (const [key, values] of Object.entries(references)) {
             const merged = mergeFrontmatterList(frontmatter, key, values);
@@ -5082,7 +5155,7 @@ async function updateAgentTaskRecordAsync(vaultRoot, taskId, fields, context, re
         return existing.path;
     }
     const current = fs.readFileSync(absolute, 'utf8');
-    const frontmatter = (0, core_2.parseMarkdown)(current).frontmatter.fields;
+    const frontmatter = (0, core_8.parseMarkdown)(current).frontmatter.fields;
     const nextFields = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value ?? '']));
     for (const [key, values] of Object.entries(references)) {
         const merged = mergeFrontmatterList(frontmatter, key, values);
@@ -5106,7 +5179,7 @@ async function linkApprovedWritebackTask(vaultRoot, payload, context) {
             || payload.taskHadProposalIdReference === true
             || payload.taskHadProposalPathEvidence === true
             || payload.taskHadAppliedProposalReference === true) {
-            throw new core_2.OperationConflictError('Writeback task binding is invalid.');
+            throw new core_8.OperationConflictError('Writeback task binding is invalid.');
         }
         return {
             taskPath: null,
@@ -5114,19 +5187,21 @@ async function linkApprovedWritebackTask(vaultRoot, payload, context) {
             proposalReferenceAdded: false,
         };
     }
-    const expectedPath = buildTaskNotePath(payload.taskId);
+    const expectedPath = await taskPathForIdAsync(vaultRoot, payload.taskId, context);
     if (payload.taskPath !== expectedPath) {
-        throw new core_2.OperationConflictError('Writeback task binding changed.');
+        throw new core_8.OperationConflictError('Writeback task binding changed.');
     }
     const current = await readCurrentVaultTextState(vaultRoot, expectedPath, context);
     if (!current) {
-        throw new core_2.OperationConflictError('Writeback task is unavailable for the journaled operation.');
+        throw new core_8.OperationConflictError('Writeback task is unavailable for the journaled operation.');
     }
     const usesStableProposalReferences = typeof payload.taskHadProposalIdReference === 'boolean'
         && typeof payload.taskHadProposalPathEvidence === 'boolean';
     const usesAppliedProposalEvidence = typeof payload.taskHadAppliedProposalReference === 'boolean';
-    const taskPlan = planApprovedWritebackTaskLink({
+    const taskPlan = (0, core_5.planApprovedWritebackTaskLink)({
         taskContent: current.content,
+        targetIdentity: payload.taskRelationTarget,
+        operationId: payload.taskRelationOperationId,
         targetPath: payload.targetPath,
         proposalId: payload.proposalId,
         proposalPath: payload.proposalPath,
@@ -5137,7 +5212,7 @@ async function linkApprovedWritebackTask(vaultRoot, payload, context) {
     const proposalReferenceAdded = !payload.taskHadProposalReference;
     if (taskPlan.contentHashBefore === taskPlan.contentHashAfter) {
         if (current.contentHash !== payload.taskLinkedContentHash) {
-            throw new core_2.OperationConflictError('Writeback task changed after its durable update.');
+            throw new core_8.OperationConflictError('Writeback task changed after its durable update.');
         }
         return {
             taskPath: current.path,
@@ -5146,7 +5221,7 @@ async function linkApprovedWritebackTask(vaultRoot, payload, context) {
         };
     }
     if (current.contentHash !== payload.taskContentHash) {
-        throw new core_2.OperationConflictError('Writeback task changed after preview before its durable update.');
+        throw new core_8.OperationConflictError('Writeback task changed after preview before its durable update.');
     }
     if (taskPlan.hadTargetReference !== payload.taskHadTargetReference
         || taskPlan.hadProposalReference !== payload.taskHadProposalReference
@@ -5154,15 +5229,15 @@ async function linkApprovedWritebackTask(vaultRoot, payload, context) {
             && taskPlan.hadProposalPathEvidence !== payload.taskHadProposalPathEvidence)
         || (usesAppliedProposalEvidence
             && taskPlan.hadAppliedProposalReference !== payload.taskHadAppliedProposalReference)) {
-        throw new core_2.OperationConflictError('Writeback task references changed after preview.');
+        throw new core_8.OperationConflictError('Writeback task references changed after preview.');
     }
     const next = taskPlan.content;
     if (hashText(next) !== payload.taskLinkedContentHash) {
-        throw new core_2.OperationConflictError('Writeback task update no longer matches its preview.');
+        throw new core_8.OperationConflictError('Writeback task update no longer matches its preview.');
     }
     if (context.vaultRepository) {
         if (!current.version) {
-            throw new core_2.OperationConflictError('Writeback task version is unavailable.');
+            throw new core_8.OperationConflictError('Writeback task version is unavailable.');
         }
         await context.vaultRepository.replaceText(current.path, current.version, next);
         return {
@@ -5184,7 +5259,7 @@ async function rollbackApprovedWritebackTask(vaultRoot, payload, receipt, contex
         return;
     }
     if (!payload.taskId || receipt.taskPath !== payload.taskPath) {
-        throw new core_2.OperationConflictError('Writeback task compensation binding changed.');
+        throw new core_8.OperationConflictError('Writeback task compensation binding changed.');
     }
     const usesStableProposalReferences = typeof payload.taskHadProposalIdReference === 'boolean'
         && typeof payload.taskHadProposalPathEvidence === 'boolean';
@@ -5192,7 +5267,8 @@ async function rollbackApprovedWritebackTask(vaultRoot, payload, receipt, contex
         && payload.taskHadProposalPathEvidence === false;
     const appliedProposalEvidenceAdded = typeof payload.taskHadAppliedProposalReference === 'boolean'
         && payload.taskHadAppliedProposalReference === false;
-    if (!receipt.targetReferenceAdded
+    if (payload.taskOriginalContent === undefined
+        && !receipt.targetReferenceAdded
         && !receipt.proposalReferenceAdded
         && !proposalPathEvidenceAdded
         && !appliedProposalEvidenceAdded) {
@@ -5200,15 +5276,25 @@ async function rollbackApprovedWritebackTask(vaultRoot, payload, receipt, contex
     }
     const current = await readCurrentVaultTextState(vaultRoot, receipt.taskPath, context);
     if (!current) {
-        throw new core_2.OperationConflictError('Writeback task disappeared before its references could be compensated.');
+        throw new core_8.OperationConflictError('Writeback task disappeared before its references could be compensated.');
     }
     if (current.contentHash === payload.taskContentHash) {
         return;
     }
     if (current.contentHash !== payload.taskLinkedContentHash) {
-        throw new core_2.OperationConflictError('Writeback task changed after its durable effect and cannot be safely compensated.');
+        throw new core_8.OperationConflictError('Writeback task changed after its durable effect and cannot be safely compensated.');
     }
-    const frontmatter = (0, core_2.parseMarkdown)(current.content).frontmatter.fields;
+    if (payload.taskOriginalContent !== undefined) {
+        if (hashText(payload.taskOriginalContent) !== payload.taskContentHash)
+            throw new core_8.OperationConflictError('Task rollback proof is invalid.');
+        const repository = taskVaultRepository(vaultRoot, context);
+        const file = await repository.readText(current.path);
+        if (!file || file.content !== current.content)
+            throw new core_8.OperationConflictError('Task changed before compensation.');
+        await repository.replaceText(file.path, file.version, payload.taskOriginalContent);
+        return;
+    }
+    const frontmatter = (0, core_8.parseMarkdown)(current.content).frontmatter.fields;
     const memoryWrites = readFrontmatterStringList(frontmatter, 'memory_writes');
     const proposalIds = readFrontmatterStringList(frontmatter, 'proposal_ids');
     const proposalPaths = readFrontmatterStringList(frontmatter, 'proposal_paths');
@@ -5257,7 +5343,7 @@ async function rollbackApprovedWritebackTask(vaultRoot, payload, receipt, contex
         });
     if (context.vaultRepository) {
         if (!current.version) {
-            throw new core_2.OperationConflictError('Writeback task version is unavailable.');
+            throw new core_8.OperationConflictError('Writeback task version is unavailable.');
         }
         await context.vaultRepository.replaceText(current.path, current.version, next);
         return;
@@ -5266,13 +5352,13 @@ async function rollbackApprovedWritebackTask(vaultRoot, payload, receipt, contex
     replaceTextFileAtomically(absolute, next, current.content);
 }
 async function createAgentTaskRecord(vaultRoot, input) {
-    const taskPath = buildTaskNotePath(input.taskId);
+    const taskPath = await taskPathForIdAsync(vaultRoot, input.taskId, input.context);
     const taskAuditMetadata = {
         target_type: 'agent_task',
         task_stage: 'start',
     };
     const trackingMetadataFromContent = (content) => {
-        const fields = (0, core_2.parseMarkdown)(content).frontmatter.fields;
+        const fields = (0, core_8.parseMarkdown)(content).frontmatter.fields;
         const startedAt = stripYamlQuotes(readFrontmatterString(fields, ['started_at']));
         const trackingStartedAt = stripYamlQuotes(readFrontmatterString(fields, ['tracking_started_at'])) || startedAt;
         const recordedAt = stripYamlQuotes(readFrontmatterString(fields, ['recorded_at']))
@@ -5314,20 +5400,20 @@ async function createAgentTaskRecord(vaultRoot, input) {
         (0, safety_1.assertNoSymlinkSegments)(vaultRoot, taskAbsolute);
         if (fs.existsSync(taskAbsolute)) {
             const existingContent = fs.readFileSync(taskAbsolute, 'utf8');
-            const existing = (0, core_2.parseMarkdown)(existingContent);
+            const existing = (0, core_8.parseMarkdown)(existingContent);
             const existingOperationId = stripYamlQuotes(readFrontmatterString(existing.frontmatter.fields, ['start_operation_id']));
             if (existingOperationId === input.operationId) {
                 return returnExistingTask(existingContent);
             }
-            throw new core_2.OperationConflictError(`Task path already exists for another operation: ${taskPath}`);
+            throw new core_8.OperationConflictError(`Task path already exists for another operation: ${taskPath}`);
         }
     }
     if (existingTask) {
-        const existingOperationId = stripYamlQuotes(readFrontmatterString((0, core_2.parseMarkdown)(existingTask.content).frontmatter.fields, ['start_operation_id']));
+        const existingOperationId = stripYamlQuotes(readFrontmatterString((0, core_8.parseMarkdown)(existingTask.content).frontmatter.fields, ['start_operation_id']));
         if (existingOperationId === input.operationId) {
             return returnExistingTask(existingTask.content);
         }
-        throw new core_2.OperationConflictError(`Task path already exists for another operation: ${taskPath}`);
+        throw new core_8.OperationConflictError(`Task path already exists for another operation: ${taskPath}`);
     }
     const now = new Date().toISOString();
     const startedAt = input.clientStartedAt || now;
@@ -5349,6 +5435,8 @@ async function createAgentTaskRecord(vaultRoot, input) {
     const note = await buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.start_task', AGENT_TASK_DIR, taskPath.slice(`${AGENT_TASK_DIR}/`.length), {
         tool: 'tracekeeper.start_task',
         type: 'agent-task',
+        task_record_version: 2,
+        task_relations: [],
         title: `Task ${input.taskId}`,
         task_id: input.taskId,
         status: 'active',
@@ -5805,6 +5893,18 @@ async function callTool(name, rawParams, context = {}) {
                 (!capabilities.includes('*') && !capabilities.includes(contract.capability)))) {
             throw new safety_1.ToolInputError(`Runtime principal ${context.principalId || 'unknown'} lacks capability ${contract.capability} for ${requestName}.`);
         }
+        const taskIdForWrite = typeof args.task_id === 'string' ? args.task_id.trim() : '';
+        if (taskIdForWrite && ['tracekeeper.capture_source', 'tracekeeper.analyze_source_request', 'tracekeeper.propose_memory', 'tracekeeper.distill_session', 'tracekeeper.write_session_note', 'tracekeeper.write_context_pack', 'tracekeeper.build_context_pack'].includes(requestName) && !context.writebackRecoveryOperationId) {
+            const vaultRoot = configuredVaultRoot(context);
+            const key = typeof args.idempotency_key === 'string' ? args.idempotency_key.trim() : '';
+            const prefix = requestName === 'tracekeeper.capture_source' ? 'capture-source' : requestName === 'tracekeeper.propose_memory' ? 'propose-memory' : null;
+            const existing = key && prefix ? await operationJournalForVault(vaultRoot, context).loadById(buildOperationIdFromIdempotencyKey(prefix, key)) : null;
+            if (!existing) {
+                const task = await requireTaskForContext(vaultRoot, taskIdForWrite, context);
+                if (!task && requestName !== 'tracekeeper.finish_task')
+                    throw new core_8.OperationConflictError('Task record is missing.');
+            }
+        }
         const handler = TOOL_HANDLERS[requestName];
         const result = await handler(args, context);
         toolResult = toolResultWithError(result);
@@ -5814,10 +5914,13 @@ async function callTool(name, rawParams, context = {}) {
         toolResult = validateToolResult(requestName, toolResult);
     }
     catch (error) {
-        if (requestName === 'tracekeeper.apply_approved_writeback') {
+        if (error instanceof core_6.TaskMigrationRequiredError) {
+            toolResult = toolError(`TASK_MIGRATION_REQUIRED: ${error.message}`);
+        }
+        else if (requestName === 'tracekeeper.apply_approved_writeback') {
             toolResult = toolError(boundedWritebackErrorMessage(error, auditVaultRoot));
         }
-        else if (error instanceof safety_1.ToolInputError || error instanceof core_2.VaultPathError) {
+        else if (error instanceof safety_1.ToolInputError || error instanceof core_8.VaultPathError) {
             toolResult = toolError(error.message);
         }
         else if (error instanceof Error) {
@@ -5984,7 +6087,8 @@ async function handleStatus(rawArgs, context) {
     return {
         ok: true,
         read_only: true,
-        log_storage: await (0, core_1.createVaultOperationJournal)(vaultRoot).inspect().catch(() => ({ issues: ['Log storage verification required.'] })),
+        task_relations: { issues: (0, core_4.diagnoseTaskRelations)([...view.catalog.values()].map((note) => ({ path: note.path, frontmatter: note.frontmatter, contentHash: note.contentHash, content: note.frontmatter.task_record_version === 2 ? view.diagnosticReader.read(note.path)?.text : undefined }))) },
+        log_storage: await (0, core_7.createVaultOperationJournal)(vaultRoot).inspect().catch(() => ({ issues: ['Log storage verification required.'] })),
         vault_root: vaultRoot,
         scanned_at: view.createdAt,
         ...readViewProvenance(view),
@@ -6013,11 +6117,11 @@ async function handleGraphHealth(rawArgs, context) {
         };
     }
     const view = await knowledgeReadViewForContext(vaultRoot, context);
-    const graphHealth = (0, core_2.analyzeGraphHealth)(materializeLightweightNotes(view), {
+    const graphHealth = (0, core_8.analyzeGraphHealth)(materializeLightweightNotes(view), {
         maxItems,
         semanticOnly: true,
     });
-    const profileEvaluation = (0, core_2.evaluateGraphProfile)(graphHealth, profile);
+    const profileEvaluation = (0, core_8.evaluateGraphProfile)(graphHealth, profile);
     return {
         ok: true,
         read_only: true,
@@ -6031,10 +6135,10 @@ async function handleGraphHealth(rawArgs, context) {
     };
 }
 function operationJournalForVault(vaultRoot, context) {
-    const operationDirectory = path.resolve(vaultRoot, core_2.TRACEKEEPER_OPERATIONS_DIR);
+    const operationDirectory = path.resolve(vaultRoot, core_8.TRACEKEEPER_OPERATIONS_DIR);
     (0, safety_1.relativeFromAbsolute)(vaultRoot, operationDirectory);
     (0, safety_1.assertNoSymlinkSegments)(vaultRoot, operationDirectory);
-    return context?.operationJournalProvider?.(vaultRoot) ?? (0, core_1.createVaultOperationJournal)(vaultRoot);
+    return context?.operationJournalProvider?.(vaultRoot) ?? (0, core_7.createVaultOperationJournal)(vaultRoot);
 }
 function buildOperationIdFromIdempotencyKey(tool, idempotencyKey) {
     const identity = crypto
@@ -6049,7 +6153,7 @@ function buildToolOperationIdentity(tool, rawIdempotencyKey, payload, context) {
     if (providedKey.length > 512) {
         throw new safety_1.ToolInputError('idempotency_key must be at most 512 characters.');
     }
-    const payloadHash = (0, core_2.computePayloadHash)(payload);
+    const payloadHash = (0, core_8.computePayloadHash)(payload);
     const sessionScope = context.sessionId || context.agentId || 'legacy-client';
     const idempotencyKey = providedKey || `legacy:${tool}:${sessionScope}:${payloadHash}`;
     return {
@@ -6083,7 +6187,7 @@ async function handleStartTask(rawArgs, context) {
     };
     const operationIdentity = buildToolOperationIdentity('start-task', rawArgs.idempotency_key, operationPayload, context);
     const taskId = `obs_task_${operationIdentity.operationId.slice('start-task-'.length)}`;
-    const runner = new core_2.RecoverableOperationRunner({
+    const runner = new core_8.RecoverableOperationRunner({
         operationId: operationIdentity.operationId,
         idempotencyKey: operationIdentity.idempotencyKey,
         payload: operationPayload,
@@ -6249,7 +6353,7 @@ async function handleMemory(rawArgs, context) {
     if (scope === 'project') {
         const matchingHubs = [...readView.catalog.values()].filter((entry) => {
             const normalizedType = (entry.type || '').toLowerCase().replace(/-/g, '_');
-            return entry.path.startsWith(`${core_2.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)
+            return entry.path.startsWith(`${core_8.KNOWLEDGE_PROJECTS_MEMORY_DIR}/`)
                 && normalizedType === 'project_memory_index'
                 && readFrontmatterString(entry.frontmatter, ['project_id', 'projectId']) === projectId;
         });
@@ -6413,7 +6517,7 @@ async function handleReadNote(rawArgs, context) {
     else {
         data = safeReadNote(vaultRoot, safePath, context);
     }
-    const parsed = (0, core_2.parseMarkdown)(data.text);
+    const parsed = (0, core_8.parseMarkdown)(data.text);
     const view = await knowledgeReadViewForContext(vaultRoot, context);
     const contentHash = hashText(data.text);
     if (rawArgs.expected_hash !== undefined && coerceOptionalString(rawArgs.expected_hash) !== contentHash) {
@@ -6523,53 +6627,67 @@ async function handleAnalyzeSourceRequest(rawArgs, context, sourceToolName = 'tr
     const updateStatus = coerceBoolean(rawArgs.update_request_status, 'update_request_status', true);
     const forceReprocess = coerceBoolean(rawArgs.force_reprocess, 'force_reprocess', false);
     const taskId = coerceOptionalString(rawArgs.task_id) || null;
-    const application = new source_request_1.SourceRequestApplicationService({
-        readRequest: async (requestPathValue) => readSourceRequestAsync(vaultRoot, requestPathValue, context),
-        readSourceText: async (sourcePath) => {
-            try {
-                return await safeReadTextFileAsync(vaultRoot, sourcePath, context);
-            }
-            catch (error) {
-                if (error instanceof safety_1.ToolInputError || error instanceof core_2.VaultPathError) {
-                    return null;
+    const request = await readSourceRequestAsync(vaultRoot, requestPath, context);
+    const requestOwner = taskId || request.taskId;
+    if (requestOwner && !await requireTaskForContext(vaultRoot, requestOwner, context))
+        throw new core_8.OperationConflictError('Task record is missing.');
+    const execution = await source_request_operation_1.SourceRequestExecution.begin({ journal: operationJournalForVault(vaultRoot, context), request, args: { ...rawArgs }, tool: sourceToolName, force: forceReprocess, recoveryId: context.writebackRecoveryOperationId, failure: context.operationFailureInjection,
+        beforeNew: async () => { const owner = taskId || request.taskId; if (owner && !await requireTaskForContext(vaultRoot, owner, context))
+            throw new core_8.OperationConflictError('Task record is missing.'); },
+    });
+    return execution.run(async () => {
+        const application = new source_request_1.SourceRequestApplicationService({
+            readRequest: async () => execution.payload.request,
+            readSourceText: (sourcePath) => execution.step(`source-input:${sourcePath}`, async () => {
+                try {
+                    return await safeReadTextFileAsync(vaultRoot, sourcePath, context);
                 }
-                throw error;
-            }
-        },
-        writeNote: (input) => {
-            const allowedDir = input.kind === 'source' || input.kind === 'source_part'
-                ? input.directory || SOURCES_DIR
-                : input.kind === 'report'
-                    ? SOURCE_ANALYSIS_REPORT_DIR
-                    : MEMORY_PROPOSAL_DIR;
-            return buildAndWriteNoteAsync(vaultRoot, input.toolName, allowedDir, input.filename, input.frontmatter, input.body, input.taskId, context, input.metadata);
-        },
-        updateRequestStatus: (requestPathValue, status) => updateRequestStatusAsync(vaultRoot, requestPathValue, status, context),
-        appendAudit: (input) => (0, audit_persistence_1.appendAuditEventAsync)(vaultRoot, input, context),
-        updateTaskRecord: (taskIdValue, notePaths, proposals) => updateAgentTaskRecordAsync(vaultRoot, taskIdValue, {}, context, {
-            source_captures: notePaths,
-            proposal_ids: proposals.map((proposal) => proposal.proposalId),
-            proposal_paths: proposals.map((proposal) => proposal.path),
-            proposal_link_targets: proposals.map((proposal) => proposal.linkTarget),
-        }),
-        updateManagedProposalReferences: (recordPath, proposals) => updateManagedProposalReferences(vaultRoot, recordPath, proposals, context),
-        assertSafeText: assertNoSensitiveText,
-        renderText: (zh, en) => contentText(context, zh, en),
-        contentLanguage: contentLanguageFromContext(context),
-        now: () => new Date().toISOString(),
-        buildFilename: (rawFilename, fallbackPrefix) => buildSafeFilename(rawFilename, fallbackPrefix, context),
-        proposalDirectory: MEMORY_PROPOSAL_DIR,
-        renderMarkdownLink: (targetPath, sourcePath) => projectMemoryRepository(vaultRoot, context).generateMarkdownLink?.(targetPath, sourcePath)
-            ?? `[[${targetPath.replace(/\.md$/i, '')}]]`,
+                catch (error) {
+                    if (error instanceof safety_1.ToolInputError || error instanceof core_8.VaultPathError) {
+                        return null;
+                    }
+                    throw error;
+                }
+            }),
+            writeNote: (input) => execution.step(`write:${input.kind}:${input.filename}`, async () => {
+                const allowedDir = input.kind === 'source' || input.kind === 'source_part'
+                    ? input.directory || SOURCES_DIR
+                    : input.kind === 'report'
+                        ? SOURCE_ANALYSIS_REPORT_DIR
+                        : MEMORY_PROPOSAL_DIR;
+                const owned = await findOperationOwnedNoteAsync(vaultRoot, allowedDir, input.filename, 'source_request_operation_id', execution.record.operation_id, context);
+                if (owned)
+                    return owned;
+                return buildAndWriteNoteAsync(vaultRoot, input.toolName, allowedDir, input.filename, { ...input.frontmatter, source_request_operation_id: execution.record.operation_id, ...(input.kind === 'source' || input.kind === 'source_part' ? { source_operation_id: execution.record.operation_id } : { operation_id: execution.record.operation_id }) }, input.body, input.taskId, context, input.metadata, execution.record.operation_id);
+            }),
+            updateRequestStatus: (requestPathValue, status) => execution.step(`request-status:${status}`, () => updateRequestStatusAsync(vaultRoot, requestPathValue, status, context)),
+            appendAudit: (input) => execution.step(`audit:${input.status}:${input.targetPath}`, () => (0, audit_persistence_1.appendAuditEventAsync)(vaultRoot, { ...input, operationId: execution.record.operation_id }, context)),
+            updateTaskRecord: (taskIdValue, notePaths, proposals) => execution.step('task-relations', () => updateAgentTaskRecordAsync(vaultRoot, taskIdValue, {}, context, {
+                source_captures: notePaths.filter((target) => target.startsWith(`${SOURCES_DIR}/`)),
+                memory_writes: notePaths.filter((target) => !target.startsWith(`${SOURCES_DIR}/`)),
+                proposal_ids: proposals.map((proposal) => proposal.proposalId),
+                proposal_paths: proposals.map((proposal) => proposal.path),
+                proposal_link_targets: proposals.map((proposal) => proposal.linkTarget),
+            })),
+            updateManagedProposalReferences: (recordPath, proposals) => updateManagedProposalReferences(vaultRoot, recordPath, proposals, context),
+            assertSafeText: assertNoSensitiveText,
+            renderText: (zh, en) => contentText(context, zh, en),
+            contentLanguage: contentLanguageFromContext(context),
+            now: () => execution.payload.now,
+            buildFilename: (rawFilename, fallbackPrefix) => buildSafeFilename(rawFilename, fallbackPrefix, context),
+            proposalDirectory: MEMORY_PROPOSAL_DIR,
+            renderMarkdownLink: (targetPath, sourcePath) => projectMemoryRepository(vaultRoot, context).generateMarkdownLink?.(targetPath, sourcePath)
+                ?? `[[${targetPath.replace(/\.md$/i, '')}]]`,
+        });
+        const result = await application.execute({
+            requestPath,
+            taskId,
+            updateRequestStatus: updateStatus,
+            forceReprocess,
+            toolName: sourceToolName,
+        });
+        return { vault_root: vaultRoot, ...result };
     });
-    const result = await application.execute({
-        requestPath,
-        taskId,
-        updateRequestStatus: updateStatus,
-        forceReprocess,
-        toolName: sourceToolName,
-    });
-    return { vault_root: vaultRoot, ...result };
 }
 async function handleReviewQueueUnified(rawArgs, context) {
     const action = coerceReviewQueueAction(rawArgs.action);
@@ -6753,8 +6871,8 @@ function buildApprovedWritebackOperationIdentity(proposal, proposalRevision, pre
     };
 }
 function assertMatchingWritebackBinding(expected, current) {
-    if ((0, core_2.computePayloadHash)(expected) !== (0, core_2.computePayloadHash)(current)) {
-        throw new core_2.OperationConflictError('Writeback confirmation is stale because the approved proposal, target, task, or touched-note plan changed.');
+    if ((0, core_8.computePayloadHash)(expected) !== (0, core_8.computePayloadHash)(current)) {
+        throw new core_8.OperationConflictError('Writeback confirmation is stale because the approved proposal, target, task, or touched-note plan changed.');
     }
 }
 async function resolveApprovedMemoryClaimIdentity(vaultRoot, payload, context) {
@@ -6766,27 +6884,27 @@ async function resolveApprovedMemoryClaimIdentity(vaultRoot, payload, context) {
         return null;
     }
     if (!explicitScope) {
-        throw new core_2.OperationConflictError('Approved MemoryRecord is missing memory_scope.');
+        throw new core_8.OperationConflictError('Approved MemoryRecord is missing memory_scope.');
     }
     const scopeValue = explicitScope;
     if (scopeValue !== 'global' && scopeValue !== 'project') {
-        throw new core_2.OperationConflictError('Approved MemoryRecord has an invalid memory_scope.');
+        throw new core_8.OperationConflictError('Approved MemoryRecord has an invalid memory_scope.');
     }
     const claimKey = explicitClaimKey;
     if (!claimKey) {
-        throw new core_2.OperationConflictError('Approved MemoryRecord is missing claim_key.');
+        throw new core_8.OperationConflictError('Approved MemoryRecord is missing claim_key.');
     }
     if (scopeValue === 'global') {
         return { scope: 'global', projectId: null, claimKey, projectHub: null };
     }
     const requestedProjectId = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['project_id']));
     if (!requestedProjectId) {
-        throw new core_2.OperationConflictError('Approved project MemoryRecord is missing project_id.');
+        throw new core_8.OperationConflictError('Approved project MemoryRecord is missing project_id.');
     }
     const snapshot = await projectMemoryApplication(vaultRoot, context).snapshot();
     const route = (0, project_memory_1.resolveProjectMemoryWritableRoute)(snapshot, { projectId: requestedProjectId });
     if (route.status !== 'existing') {
-        throw new core_2.OperationConflictError(`missing_memory_hub: structure_repair_required for approved project MemoryRecord (${requestedProjectId}).`);
+        throw new core_8.OperationConflictError(`missing_memory_hub: structure_repair_required for approved project MemoryRecord (${requestedProjectId}).`);
     }
     return {
         scope: 'project',
@@ -6798,8 +6916,8 @@ async function resolveApprovedMemoryClaimIdentity(vaultRoot, payload, context) {
 async function validateApprovedMemoryHub(vaultRoot, identity, context) {
     const repository = projectMemoryRepository(vaultRoot, context);
     if (identity.scope === 'global') {
-        if (!await readCanonicalMemoryHub(repository, core_2.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH)) {
-            throw new core_2.OperationConflictError('missing_memory_hub: structure_repair_required for approved global MemoryRecord.');
+        if (!await readCanonicalMemoryHub(repository, core_8.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH)) {
+            throw new core_8.OperationConflictError('missing_memory_hub: structure_repair_required for approved global MemoryRecord.');
         }
         return;
     }
@@ -6808,12 +6926,12 @@ async function validateApprovedMemoryHub(vaultRoot, identity, context) {
     if (route.status !== 'existing'
         || route.binding.project_id !== identity.projectId
         || route.binding.project_hub !== identity.projectHub) {
-        throw new core_2.OperationConflictError('missing_memory_hub: structure_repair_required for approved project MemoryRecord.');
+        throw new core_8.OperationConflictError('missing_memory_hub: structure_repair_required for approved project MemoryRecord.');
     }
 }
 async function validateApprovedMemoryLifecycle(vaultRoot, identity, targetPath, markdown, context) {
-    const parsed = (0, core_2.parseMarkdown)(markdown);
-    const proposed = (0, core_2.parseMemoryRecord)({
+    const parsed = (0, core_8.parseMarkdown)(markdown);
+    const proposed = (0, core_8.parseMemoryRecord)({
         path: targetPath,
         frontmatter: parsed.frontmatter.fields,
         body: parsed.body,
@@ -6822,16 +6940,16 @@ async function validateApprovedMemoryLifecycle(vaultRoot, identity, targetPath, 
         || proposed.project_id !== identity.projectId
         || proposed.claim_key !== identity.claimKey
         || memoryRecordReferencePath(proposed.project_hub) !== identity.projectHub
-        || memoryRecordReferencePath(proposed.global_hub) !== (identity.scope === 'global' ? core_2.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH : null)) {
-        throw new core_2.OperationConflictError('Approved MemoryRecord identity changed outside its claim lock.');
+        || memoryRecordReferencePath(proposed.global_hub) !== (identity.scope === 'global' ? core_8.KNOWLEDGE_GLOBAL_MEMORY_INDEX_PATH : null)) {
+        throw new core_8.OperationConflictError('Approved MemoryRecord identity changed outside its claim lock.');
     }
     const view = await freshKnowledgeReadViewForContext(vaultRoot, context);
     const invalidRelations = [
-        ...proposed.related_wiki.map(memoryRecordReferencePath).filter((relationPath) => !relationPath || !(0, core_2.isKnowledgeWikiPath)(relationPath) || !view.catalog.has(relationPath)),
-        ...proposed.related_sources.map(memoryRecordReferencePath).filter((relationPath) => !relationPath || !(0, core_2.isKnowledgeSourcePath)(relationPath) || !view.catalog.has(relationPath)),
+        ...proposed.related_wiki.map(memoryRecordReferencePath).filter((relationPath) => !relationPath || !(0, core_8.isKnowledgeWikiPath)(relationPath) || !view.catalog.has(relationPath)),
+        ...proposed.related_sources.map(memoryRecordReferencePath).filter((relationPath) => !relationPath || !(0, core_8.isKnowledgeSourcePath)(relationPath) || !view.catalog.has(relationPath)),
     ];
     if (invalidRelations.length > 0) {
-        throw new core_2.OperationConflictError(`Approved MemoryRecord relation evidence is stale or invalid: ${invalidRelations.join(', ')}.`);
+        throw new core_8.OperationConflictError(`Approved MemoryRecord relation evidence is stale or invalid: ${invalidRelations.join(', ')}.`);
     }
     const relevantInvalidRecord = view.memory.invalidPaths.some((invalidPath) => {
         if (invalidPath === targetPath)
@@ -6844,18 +6962,18 @@ async function validateApprovedMemoryLifecycle(vaultRoot, identity, targetPath, 
             && frontmatter?.claim_key === identity.claimKey;
     });
     if (relevantInvalidRecord) {
-        throw new core_2.OperationConflictError('Approved MemoryRecord lifecycle cannot be validated because the relevant claim is invalid.');
+        throw new core_8.OperationConflictError('Approved MemoryRecord lifecycle cannot be validated because the relevant claim is invalid.');
     }
     const records = [...view.memory.byId.values()]
         .filter((record) => record.memory_id !== proposed.memory_id);
-    const lifecycle = (0, core_2.resolveMemoryLifecycle)({
+    const lifecycle = (0, core_8.resolveMemoryLifecycle)({
         generation: view.generation,
         records: [...records, proposed],
         now: new Date().toISOString(),
     });
     const proposedIssues = lifecycle.issues.filter((issue) => issue.memory_ids.includes(proposed.memory_id) || issue.reference === proposed.memory_id);
     if (proposedIssues.length > 0) {
-        throw new core_2.OperationConflictError(`Approved MemoryRecord prospective lifecycle is invalid: ${proposedIssues.map((issue) => issue.code).join(', ')}.`);
+        throw new core_8.OperationConflictError(`Approved MemoryRecord prospective lifecycle is invalid: ${proposedIssues.map((issue) => issue.code).join(', ')}.`);
     }
 }
 function wikiBatchWritebackOverrideFor(context, proposalPath, targetPath, effectKind) {
@@ -6875,7 +6993,7 @@ function wikiBatchWritebackOverrideFor(context, proposalPath, targetPath, effect
     if (effectKind !== 'update_managed_relations') {
         return { block: '', marker: '', previewNonce: override.previewNonce };
     }
-    const parsed = (0, core_2.parseManagedRelationsBlock)(override.writebackBlock.trim());
+    const parsed = (0, core_8.parseManagedRelationsBlock)(override.writebackBlock.trim());
     if (parsed.status !== 'valid' || parsed.start !== 0 || parsed.end !== parsed.content.length) {
         throw new safety_1.ToolInputError('Wiki batch managed relations override is invalid.');
     }
@@ -6886,7 +7004,7 @@ function wikiBatchWritebackOverrideFor(context, proposalPath, targetPath, effect
     };
 }
 function wikiBatchStableBindingHash(binding, batchOperationId) {
-    return (0, core_2.computePayloadHash)({
+    return (0, core_8.computePayloadHash)({
         batchOperationId,
         operationId: binding.operationId,
         idempotencyKey: binding.idempotencyKey,
@@ -6899,6 +7017,7 @@ function wikiBatchStableBindingHash(binding, batchOperationId) {
         taskPath: binding.taskPath,
         taskContentHash: binding.taskContentHash,
         taskLinkedContentHash: binding.taskLinkedContentHash,
+        ...(binding.taskRelationTarget ? { taskRelationTarget: binding.taskRelationTarget, taskRelationOperationId: binding.taskRelationOperationId } : {}),
         writebackBlockHash: binding.writebackBlockHash,
         touchedNotes: binding.touchedNotes,
         effectKind: binding.effectKind,
@@ -6920,14 +7039,14 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
             marker: `memory-record:${snapshot.proposalId}`,
         }
         : createsWikiNote
-            ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, operationId)
+            ? buildApprovedWikiNoteWritebackBlock(snapshot.proposalId, snapshot.writebackContent, operationId, Boolean(payload.taskRelationTarget))
             : payload.effectKind === 'update_managed_relations'
                 ? {
                     block: batchOverride?.block || snapshot.writebackContent,
                     marker: batchOverride?.marker || `managed-relations:${snapshot.proposalId}`,
                 }
                 : buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
-    const currentTaskPath = payload.taskId ? buildTaskNotePath(payload.taskId) : null;
+    const currentTaskPath = payload.taskId ? await taskPathForIdAsync(vaultRoot, payload.taskId, context) : null;
     const currentTask = currentTaskPath
         ? await readCurrentVaultTextState(vaultRoot, currentTaskPath, context)
         : null;
@@ -6935,9 +7054,9 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
     if (snapshot.status !== 'approved'
         || proposal.proposalId !== payload.proposalId
         || proposal.path !== payload.proposalPath
-        || (0, core_2.computeProposalRevision)(snapshot) !== payload.proposalRevision
-        || (0, core_2.computeProposalContentHash)(snapshot) !== payload.proposalContentHash
-        || (0, core_2.computePayloadHash)(proposal.text) !== payload.proposalFileHash
+        || (0, core_8.computeProposalRevision)(snapshot) !== payload.proposalRevision
+        || (0, core_8.computeProposalContentHash)(snapshot) !== payload.proposalContentHash
+        || (0, core_8.computePayloadHash)(proposal.text) !== payload.proposalFileHash
         || (snapshot.lastTransition?.operationId || '') !== payload.approvalOperationId
         || (!createsMemoryRecord && snapshot.targetPath !== payload.targetPath)
         || snapshot.taskId !== payload.proposalTaskId
@@ -6947,7 +7066,7 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
         || currentTaskPath !== payload.taskPath
         || (currentTask?.contentHash || '') !== payload.taskContentHash
         || (!createsMemoryRecord && !createsWikiNote && !target)) {
-        throw new core_2.OperationConflictError('Writeback confirmation is stale because current proposal or task state changed.');
+        throw new core_8.OperationConflictError('Writeback confirmation is stale because current proposal or task state changed.');
     }
     validateApprovedWritebackTransition(snapshot, operationId, payload.targetPath, context, new Date(writebackConfirmationNow(context)).toISOString(), (relativePath) => {
         if (relativePath !== payload.targetPath) {
@@ -6966,8 +7085,8 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
         ...(payload.taskPath ? [payload.taskPath] : []),
         payload.activityPath,
     ];
-    if ((0, core_2.computePayloadHash)(touchedNotes) !== (0, core_2.computePayloadHash)(payload.touchedNotes)) {
-        throw new core_2.OperationConflictError('Writeback confirmation touched-note plan changed.');
+    if ((0, core_8.computePayloadHash)(touchedNotes) !== (0, core_8.computePayloadHash)(payload.touchedNotes)) {
+        throw new core_8.OperationConflictError('Writeback confirmation touched-note plan changed.');
     }
     if (createsMemoryRecord || createsWikiNote) {
         if (!target) {
@@ -6976,18 +7095,18 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
         if (target.contentHash === hashText(writeback.block)) {
             return { target, writebackBlock: writeback.block, alreadyApplied: true };
         }
-        throw new core_2.OperationConflictError('Approved writeback target already exists with different content.');
+        throw new core_8.OperationConflictError('Approved writeback target already exists with different content.');
     }
     if (!target) {
-        throw new core_2.OperationConflictError(`Writeback target does not exist: ${payload.targetPath}`);
+        throw new core_8.OperationConflictError(`Writeback target does not exist: ${payload.targetPath}`);
     }
     if (payload.effectKind === 'update_managed_relations') {
-        const updated = (0, core_2.applyManagedRelationsBlock)(target.content, writeback.block);
+        const updated = (0, core_8.applyManagedRelationsBlock)(target.content, writeback.block);
         if (updated === target.content) {
             return { target, writebackBlock: writeback.block, alreadyApplied: true };
         }
         if (target.contentHash !== payload.targetContentHash) {
-            throw new core_2.OperationConflictError('Writeback confirmation is stale because the managed relations target changed.');
+            throw new core_8.OperationConflictError('Writeback confirmation is stale because the managed relations target changed.');
         }
         return { target, writebackBlock: writeback.block, alreadyApplied: false };
     }
@@ -6999,11 +7118,11 @@ async function currentWritebackEffect(vaultRoot, payload, operationId, context) 
         };
     }
     if (target.contentHash !== payload.targetContentHash) {
-        throw new core_2.OperationConflictError('Writeback confirmation is stale because the target note changed.');
+        throw new core_8.OperationConflictError('Writeback confirmation is stale because the target note changed.');
     }
     if (target.content.includes(payload.writebackMarker)
         || target.content.includes(writeback.block)) {
-        throw new core_2.OperationConflictError(`Writeback marker already exists with different content: ${payload.writebackMarker}`);
+        throw new core_8.OperationConflictError(`Writeback marker already exists with different content: ${payload.writebackMarker}`);
     }
     return {
         target,
@@ -7020,7 +7139,7 @@ async function rollbackRuntimeWritebackTarget(vaultRoot, payload, context) {
             return;
         }
         if (hashText(target.content) !== payload.writebackBlockHash) {
-            throw new core_2.OperationConflictError('Approved memory record changed after creation and cannot be safely compensated.');
+            throw new core_8.OperationConflictError('Approved memory record changed after creation and cannot be safely compensated.');
         }
         await repository.deleteText(payload.targetPath, target.version);
         return;
@@ -7034,11 +7153,11 @@ async function rollbackRuntimeWritebackTarget(vaultRoot, payload, context) {
             return;
         }
         if (hashText(target.content) !== payload.writebackBlockHash) {
-            throw new core_2.OperationConflictError('Approved wiki note was changed after creation and cannot be safely compensated.');
+            throw new core_8.OperationConflictError('Approved wiki note was changed after creation and cannot be safely compensated.');
         }
         if (repository) {
             if (!target.version) {
-                throw new core_2.OperationConflictError('Approved wiki note version is unavailable for compensation.');
+                throw new core_8.OperationConflictError('Approved wiki note version is unavailable for compensation.');
             }
             await repository.deleteText(payload.targetPath, target.version);
             return;
@@ -7060,7 +7179,7 @@ async function rollbackRuntimeWritebackTarget(vaultRoot, payload, context) {
         const target = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
         if (!target || target.contentHash === payload.targetContentHash)
             return;
-        throw new core_2.OperationConflictError('Managed relations update cannot be rolled back without overwriting a later user edit; resume or review the partial operation.');
+        throw new core_8.OperationConflictError('Managed relations update cannot be rolled back without overwriting a later user edit; resume or review the partial operation.');
     }
     const target = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
     if (!target || target.contentHash === payload.targetContentHash) {
@@ -7068,11 +7187,11 @@ async function rollbackRuntimeWritebackTarget(vaultRoot, payload, context) {
     }
     const original = reversibleWritebackTargetPrefix(target.content, payload);
     if (original === null) {
-        throw new core_2.OperationConflictError('Writeback target changed after its durable effect and cannot be safely compensated.');
+        throw new core_8.OperationConflictError('Writeback target changed after its durable effect and cannot be safely compensated.');
     }
     if (context.vaultRepository) {
         if (!target.version) {
-            throw new core_2.OperationConflictError('Writeback target version is unavailable.');
+            throw new core_8.OperationConflictError('Writeback target version is unavailable.');
         }
         await context.vaultRepository.replaceText(payload.targetPath, target.version, original);
         return;
@@ -7093,10 +7212,10 @@ async function commitRuntimeProposalApplyTransition(vaultRoot, payload, operatio
     const targetForTransition = await readCurrentVaultTextState(vaultRoot, payload.targetPath, context);
     if (isCreate) {
         if (!targetForTransition) {
-            throw new core_2.ProposalTransitionValidationError('Writeback target was not created for approved writeback.');
+            throw new core_8.ProposalTransitionValidationError('Writeback target was not created for approved writeback.');
         }
         if (targetForTransition.contentHash !== payload.writebackBlockHash) {
-            throw new core_2.ProposalTransitionValidationError('Writeback target changed after create draft was prepared.');
+            throw new core_8.ProposalTransitionValidationError('Writeback target changed after create draft was prepared.');
         }
     }
     const ownedCreateTargetPath = isCreate ? payload.targetPath : null;
@@ -7115,14 +7234,14 @@ async function commitRuntimeProposalApplyTransition(vaultRoot, payload, operatio
     }
     const proposalState = await readCurrentVaultTextState(vaultRoot, payload.proposalPath, context);
     if (!proposalState) {
-        throw new core_2.ProposalTransitionConflictError('Writeback proposal does not exist.');
+        throw new core_8.ProposalTransitionConflictError('Writeback proposal does not exist.');
     }
     const proposal = memoryProposalDocumentFromText(vaultRoot, payload.proposalPath, proposalState.content, context);
     const claimKey = stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']));
-    const decision = (0, core_2.transitionProposal)(proposalTransitionSnapshot(proposal), transition, {
+    const decision = (0, core_8.transitionProposal)(proposalTransitionSnapshot(proposal), transition, {
         now: new Date().toISOString(),
         actor: context.agentId || 'tracekeeper-runtime',
-        targetAllowed: core_2.isAllowedProposalTargetPath,
+        targetAllowed: core_8.isAllowedProposalTargetPath,
         targetExists: (relativePath) => relativePath === payload.targetPath && (!isCreate ? Boolean(targetForTransition) : false),
         targetCreationAllowed: (relativePath) => relativePath === payload.targetPath
             && (createsWikiNote || (createsMemoryRecord && Boolean(claimKey))),
@@ -7130,13 +7249,13 @@ async function commitRuntimeProposalApplyTransition(vaultRoot, payload, operatio
     if (decision.replayed) {
         return decision.receipt;
     }
-    if ((0, core_2.computePayloadHash)(proposalState.content) !== payload.proposalFileHash) {
-        throw new core_2.ProposalTransitionConflictError('Proposal file changed before the writeback transition.');
+    if ((0, core_8.computePayloadHash)(proposalState.content) !== payload.proposalFileHash) {
+        throw new core_8.ProposalTransitionConflictError('Proposal file changed before the writeback transition.');
     }
     const updated = updateFrontmatterFields(proposalState.content, decision.frontmatter);
     if (context.vaultRepository) {
         if (!proposalState.version) {
-            throw new core_2.ProposalTransitionConflictError('Proposal repository version is unavailable.');
+            throw new core_8.ProposalTransitionConflictError('Proposal repository version is unavailable.');
         }
         await context.vaultRepository.replaceText(payload.proposalPath, proposalState.version, updated);
     }
@@ -7152,16 +7271,16 @@ function assertJournaledWritebackRequest(rawArgs, payload, context) {
         const normalized = (0, safety_1.normalizeNotePath)(explicitPath, pathSafetyOptions(context));
         assertReviewQueuePath(normalized);
         if (normalized !== payload.proposalPath) {
-            throw new core_2.OperationConflictError('Writeback request proposal changed from the journaled operation.');
+            throw new core_8.OperationConflictError('Writeback request proposal changed from the journaled operation.');
         }
     }
     const proposalId = coerceOptionalString(rawArgs.proposal_id);
     if (proposalId && proposalId !== payload.proposalId) {
-        throw new core_2.OperationConflictError('Writeback request proposal changed from the journaled operation.');
+        throw new core_8.OperationConflictError('Writeback request proposal changed from the journaled operation.');
     }
     const taskId = coerceOptionalString(rawArgs.task_id);
     if (taskId && taskId !== payload.taskId) {
-        throw new core_2.OperationConflictError('Writeback request task changed from the journaled operation.');
+        throw new core_8.OperationConflictError('Writeback request task changed from the journaled operation.');
     }
 }
 async function resolveApplyWritebackPlan(vaultRoot, proposal, context) {
@@ -7279,7 +7398,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
     if (recoveryOperationId) {
         existing = await journal.loadById(recoveryOperationId);
         if (!existing) {
-            throw new core_2.OperationConflictError('Writeback recovery journal record is unavailable.');
+            throw new core_8.OperationConflictError('Writeback recovery journal record is unavailable.');
         }
         identity = {
             operationId: existing.operation_id,
@@ -7303,7 +7422,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
             && byKey
             && (byId.operation_id !== byKey.operation_id
                 || byId.idempotency_key !== byKey.idempotency_key)) {
-            throw new core_2.OperationConflictError('Writeback confirmation references conflicting journal records.');
+            throw new core_8.OperationConflictError('Writeback confirmation references conflicting journal records.');
         }
         existing = byId || byKey;
     }
@@ -7311,19 +7430,19 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
         if (existing.operation_id !== identity.operationId
             || existing.idempotency_key !== identity.idempotencyKey
             || !isApplyApprovedWritebackPayload(existing.payload)) {
-            throw new core_2.OperationConflictError('Writeback journal record does not match the requested operation.');
+            throw new core_8.OperationConflictError('Writeback journal record does not match the requested operation.');
         }
         payload = existing.payload;
         assertJournaledWritebackRequest(rawArgs, payload, context);
         if (!recoveryOperationId) {
             if (!rawConfirmationToken) {
-                throw new core_2.OperationConflictError('Writeback confirmation token changed from the journaled operation.');
+                throw new core_8.OperationConflictError('Writeback confirmation token changed from the journaled operation.');
             }
             const decoded = decodeWritebackConfirmationToken(rawConfirmationToken);
             const tokenPayload = writebackBindingPayload(decoded, rawConfirmationToken);
             if (hashText(rawConfirmationToken) !== payload.confirmationTokenHash
-                || (0, core_2.computePayloadHash)(tokenPayload) !== (0, core_2.computePayloadHash)(payload)) {
-                throw new core_2.OperationConflictError('Writeback confirmation token changed from the journaled operation.');
+                || (0, core_8.computePayloadHash)(tokenPayload) !== (0, core_8.computePayloadHash)((({ taskOriginalContent: _before, ...publicPayload }) => publicPayload)(payload))) {
+                throw new core_8.OperationConflictError('Writeback confirmation token changed from the journaled operation.');
             }
         }
     }
@@ -7350,6 +7469,12 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
         const current = await prepareWritebackConfirmation(vaultRoot, proposal, plan, taskId, context, decoded.issuedAt, decoded.expiresAt, decoded.previewNonce);
         assertMatchingWritebackBinding(decoded, current.binding);
         payload = writebackBindingPayload(decoded, rawConfirmationToken);
+        if (payload.taskRelationTarget && payload.taskPath) {
+            const original = await readCurrentVaultTextState(vaultRoot, payload.taskPath, context);
+            if (!original || original.contentHash !== payload.taskContentHash)
+                throw new core_8.OperationConflictError('Task changed while preparing its before image.');
+            payload.taskOriginalContent = original.content;
+        }
         approvalStatus = proposalTransitionSnapshot(proposal).status;
     }
     const service = new apply_approved_writeback_1.ApplyApprovedWritebackService({
@@ -7368,7 +7493,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
                     }
                     if (currentPayload.effectKind === 'create_memory_record') {
                         if (!claimIdentity) {
-                            throw new core_2.OperationConflictError('Approved MemoryRecord claim identity is unavailable.');
+                            throw new core_8.OperationConflictError('Approved MemoryRecord claim identity is unavailable.');
                         }
                         await validateApprovedMemoryLifecycle(vaultRoot, claimIdentity, currentPayload.targetPath, effect.writebackBlock, context);
                         const repository = projectMemoryRepository(vaultRoot, context);
@@ -7400,7 +7525,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
                             }
                             return;
                         }
-                        const writable = (0, safety_1.resolveSafeWritableNotePath)(vaultRoot, currentPayload.targetPath, core_2.KNOWLEDGE_WIKI_DIR, pathSafetyOptions(context));
+                        const writable = (0, safety_1.resolveSafeWritableNotePath)(vaultRoot, currentPayload.targetPath, core_8.KNOWLEDGE_WIKI_DIR, pathSafetyOptions(context));
                         try {
                             (0, safety_1.assertNoSymlinkSegments)(vaultRoot, writable.absolutePath);
                             fs.mkdirSync(path.dirname(writable.absolutePath), { recursive: true });
@@ -7413,19 +7538,19 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
                             }
                             const existing = await readCurrentVaultTextState(vaultRoot, currentPayload.targetPath, context);
                             if (!existing || existing.content !== effect.writebackBlock) {
-                                throw new core_2.OperationConflictError('Approved wiki note was not created exactly.');
+                                throw new core_8.OperationConflictError('Approved wiki note was not created exactly.');
                             }
                         }
                         return;
                     }
                     if (!effect.target) {
-                        throw new core_2.OperationConflictError('Writeback target is unavailable.');
+                        throw new core_8.OperationConflictError('Writeback target is unavailable.');
                     }
                     if (currentPayload.effectKind === 'update_managed_relations') {
-                        const updated = (0, core_2.applyManagedRelationsBlock)(effect.target.content, effect.writebackBlock);
+                        const updated = (0, core_8.applyManagedRelationsBlock)(effect.target.content, effect.writebackBlock);
                         if (context.vaultRepository) {
                             if (!effect.target.version) {
-                                throw new core_2.OperationConflictError('Managed relations target version is unavailable.');
+                                throw new core_8.OperationConflictError('Managed relations target version is unavailable.');
                             }
                             await context.vaultRepository.replaceText(currentPayload.targetPath, effect.target.version, updated);
                             return;
@@ -7437,7 +7562,7 @@ async function handleApplyApprovedWriteback(rawArgs, context) {
                     const targetWithWriteback = `${effect.target.content}${writebackTargetFrame(effect.writebackBlock)}`;
                     if (context.vaultRepository) {
                         if (!effect.target.version) {
-                            throw new core_2.OperationConflictError('Writeback target version is unavailable.');
+                            throw new core_8.OperationConflictError('Writeback target version is unavailable.');
                         }
                         await context.vaultRepository.replaceText(currentPayload.targetPath, effect.target.version, targetWithWriteback);
                         return;
@@ -7575,13 +7700,13 @@ async function handleWriteSessionNote(rawArgs, context) {
 }
 async function handleCaptureSource(rawArgs, context) {
     const vaultRoot = configuredVaultRoot(context);
-    let requestHash = (0, core_2.computePayloadHash)({ ...rawArgs });
+    let requestHash = (0, core_8.computePayloadHash)({ ...rawArgs });
     if (context.writebackRecoveryOperationId?.startsWith('capture-source-')) {
         const owned = await operationJournalForVault(vaultRoot, context).loadById(context.writebackRecoveryOperationId);
         const payload = owned?.payload;
         const { idempotency_key: _key, ...requestBody } = rawArgs;
         const { idempotency_key: _originalKey, ...originalBody } = payload?.requestSnapshot ?? {};
-        if (!owned || owned.idempotency_key !== rawArgs.idempotency_key || !payload?.request_hash || (0, core_2.computePayloadHash)(requestBody) !== (0, core_2.computePayloadHash)(originalBody))
+        if (!owned || owned.idempotency_key !== rawArgs.idempotency_key || !payload?.request_hash || (0, core_8.computePayloadHash)(requestBody) !== (0, core_8.computePayloadHash)(originalBody))
             throw new Error('Source recovery request does not match its saved operation.');
         requestHash = payload.request_hash;
     }
@@ -7628,7 +7753,7 @@ async function handleProposeMemory(rawArgs, context) {
     const preflightScan = lightweightScanFromReadView(vaultRoot, readView);
     const explicitProjectId = coerceOptionalString(rawArgs.project_id);
     const identityScan = explicitProjectId
-        ? (0, core_2.scanVault)(vaultRoot, pathSafetyOptions(invocationContext))
+        ? (0, core_8.scanVault)(vaultRoot, pathSafetyOptions(invocationContext))
         : preflightScan;
     const proposalProjectIdentity = (0, project_identity_1.resolveProjectIdentity)(rawArgs, identityScan.notes);
     if (explicitProjectId && proposalProjectIdentity.confidence === 'uncertain') {
@@ -7674,9 +7799,9 @@ async function handleProposeMemory(rawArgs, context) {
             context: memoryWriteContext,
         }),
         resolveMemoryRecordTarget: async (input) => {
-            const agentType = (0, core_2.normalizeProjectAgentType)(input.agentType);
+            const agentType = (0, core_8.normalizeProjectAgentType)(input.agentType);
             if (input.scope === 'global') {
-                return (0, core_2.buildGlobalMemoryEntryPath)({
+                return (0, core_8.buildGlobalMemoryEntryPath)({
                     agentType,
                     operationKind: 'propose_memory',
                     operationId: input.operationId,
@@ -7690,7 +7815,7 @@ async function handleProposeMemory(rawArgs, context) {
             });
             if (route.status === 'review_required')
                 return null;
-            return (0, core_2.buildProjectMemoryEntryPath)({
+            return (0, core_8.buildProjectMemoryEntryPath)({
                 projectKey: route.binding.project_key,
                 agentType,
                 operationKind: 'propose_memory',
@@ -7715,17 +7840,17 @@ async function handleProposeMemory(rawArgs, context) {
         writeAutoWiki: async (input) => {
             const repository = projectMemoryRepository(vaultRoot, context);
             const targetPath = (0, safety_1.normalizeNotePath)(input.targetNote, pathSafetyOptions(context));
-            if (!(0, core_2.isKnowledgeWikiPath)(targetPath) || !targetPath.endsWith('.md')) {
+            if (!(0, core_8.isKnowledgeWikiPath)(targetPath) || !targetPath.endsWith('.md')) {
                 throw new safety_1.ToolInputError('Auto-managed Wiki target must remain inside the Wiki root.');
             }
             const marker = `<!-- tracekeeper:wiki:auto operation_id="${input.operationId}" -->`;
-            const markdown = `${marker}\n${input.content.trim()}\n`;
+            const markdown = input.identityVersion === 1 ? `${(0, core_5.ensureWikiIdentity)(input.content.trim(), input.operationId)}\n${marker}\n` : `${marker}\n${input.content.trim()}\n`;
             const existingTarget = await repository.readText(targetPath);
             let duplicate = false;
             if (input.effect === 'create_wiki_note') {
                 if (existingTarget) {
                     if (existingTarget.content !== markdown) {
-                        throw new core_2.OperationConflictError(`Auto-managed Wiki target is already occupied: ${targetPath}`);
+                        throw new core_8.OperationConflictError(`Auto-managed Wiki target is already occupied: ${targetPath}`);
                     }
                     duplicate = true;
                 }
@@ -7735,21 +7860,23 @@ async function handleProposeMemory(rawArgs, context) {
             }
             else {
                 if (!existingTarget)
-                    throw new core_2.OperationConflictError(`Managed Wiki target is missing: ${targetPath}`);
-                const proposedRelations = (0, core_2.parseManagedRelationsBlock)(input.content.trim());
-                const currentRelations = (0, core_2.parseManagedRelationsBlock)(existingTarget.content);
+                    throw new core_8.OperationConflictError(`Managed Wiki target is missing: ${targetPath}`);
+                if (input.identityVersion === 1 && !(0, core_8.parseMarkdown)(existingTarget.content).frontmatter.fields.wiki_id)
+                    throw new core_8.OperationConflictError('Wiki identity requires explicit metadata migration.');
+                const proposedRelations = (0, core_8.parseManagedRelationsBlock)(input.content.trim());
+                const currentRelations = (0, core_8.parseManagedRelationsBlock)(existingTarget.content);
                 if (proposedRelations.status !== 'valid') {
-                    throw new core_2.OperationConflictError(`Managed Wiki proposal is invalid: ${targetPath}`);
+                    throw new core_8.OperationConflictError(`Managed Wiki proposal is invalid: ${targetPath}`);
                 }
                 if (currentRelations.status !== 'valid') {
-                    throw new core_2.OperationConflictError(`Managed Wiki target no longer has an intact relation block: ${targetPath}`);
+                    throw new core_8.OperationConflictError(`Managed Wiki target no longer has an intact relation block: ${targetPath}`);
                 }
                 if (currentRelations.hash !== proposedRelations.hash) {
                     if (!input.expectedManagedRelationsHash || currentRelations.hash !== input.expectedManagedRelationsHash) {
-                        throw new core_2.OperationConflictError(`Managed Wiki relation block changed after authorization: ${targetPath}`);
+                        throw new core_8.OperationConflictError(`Managed Wiki relation block changed after authorization: ${targetPath}`);
                     }
                 }
-                const updated = (0, core_2.applyManagedRelationsBlock)(existingTarget.content, input.content);
+                const updated = (0, core_8.applyManagedRelationsBlock)(existingTarget.content, input.content);
                 if (updated === existingTarget.content) {
                     duplicate = true;
                 }
@@ -7786,10 +7913,10 @@ async function handleProposeMemory(rawArgs, context) {
             await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
                 memory_writes: [memoryPath],
                 ...(operationId ? { auto_write_operation_ids: [operationId] } : {}),
-            });
+            }, '', '', operationId);
         },
         updateTaskProposalReference: async (taskId, proposal) => {
-            await updateManagedProposalReferences(vaultRoot, buildTaskNotePath(taskId), [proposal], context);
+            await updateManagedProposalReferences(vaultRoot, await taskPathForIdAsync(vaultRoot, taskId, context), [proposal], context);
         },
         assertSafeText: assertNoSensitiveText,
         renderText: (zh, en) => contentText(context, zh, en),
@@ -7922,7 +8049,7 @@ async function handleLint(rawArgs, context) {
     let offset = 0;
     if (rawArgs.cursor !== undefined) {
         const rawCursor = coerceNonEmptyString(rawArgs.cursor, true, 'cursor');
-        const cursor = (0, core_2.decodeMaintenanceCursor)(rawCursor);
+        const cursor = (0, core_8.decodeMaintenanceCursor)(rawCursor);
         if (cursor.generation !== view.generation) {
             throw new safety_1.ToolInputError(`Maintenance cursor generation ${cursor.generation} is stale against ${view.generation}.`);
         }
@@ -7931,19 +8058,19 @@ async function handleLint(rawArgs, context) {
         }
         offset = cursor.offset;
     }
-    const graphHealth = profile === 'off' ? undefined : (0, core_2.analyzeGraphHealth)(notes, { maxItems, semanticOnly: true });
+    const graphHealth = profile === 'off' ? undefined : (0, core_8.analyzeGraphHealth)(notes, { maxItems, semanticOnly: true });
     const profileEvaluation = graphHealth
-        ? (0, core_2.evaluateGraphProfile)(graphHealth, profile)
+        ? (0, core_8.evaluateGraphProfile)(graphHealth, profile)
         : { profile, disabled: true, profile_issues: [] };
     const staleAfterDays = coercePositiveInt(rawArgs.stale_after_days, 365, 1, 36500);
-    const { issues, doctor } = (0, core_2.lintNotes)(vaultRoot, notes, {
+    const { issues, doctor } = (0, core_8.lintNotes)(vaultRoot, notes, {
         graphHealth,
         graphProfile: profile,
         staleAfterDays,
     });
     const limitedIssues = issues.slice(0, maxItems);
-    const maintenance = (0, core_2.buildMaintenanceSnapshot)(view, {
-        oldToNewParent: await loadSourceConsolidationRelationMap(vaultRoot),
+    const maintenance = (0, core_8.buildMaintenanceSnapshot)(view, {
+        oldToNewParent: await loadSourceConsolidationRelationMap(vaultRoot, view),
         sourceArchiveEvidence: await loadSourceArchiveMetadataEvidence(vaultRoot, view),
     });
     const effectiveMaintenanceCandidates = view.source === 'index'
@@ -7982,12 +8109,12 @@ async function handleLint(rawArgs, context) {
     const maintenanceCandidates = effectiveMaintenanceCandidates.slice(offset, offset + pageSize);
     const nextOffset = offset + maintenanceCandidates.length;
     const maintenanceCursor = nextOffset < effectiveMaintenanceCandidates.length
-        ? (0, core_2.encodeMaintenanceCursor)({ version: 1, generation: view.generation, profile, page_size: pageSize, offset: nextOffset })
+        ? (0, core_8.encodeMaintenanceCursor)({ version: 1, generation: view.generation, profile, page_size: pageSize, offset: nextOffset })
         : null;
     return {
         ok: true,
         read_only: true,
-        log_storage: await (0, core_1.createVaultOperationJournal)(vaultRoot).inspect().catch(() => ({ issues: ['Log storage verification required.'] })),
+        log_storage: await (0, core_7.createVaultOperationJournal)(vaultRoot).inspect().catch(() => ({ issues: ['Log storage verification required.'] })),
         profile: profileEvaluation.profile,
         graph_profile_disabled: profileEvaluation.disabled,
         profile_issues: authoritativeProfileIssues,
@@ -8021,49 +8148,12 @@ async function handleLint(rawArgs, context) {
         fix_plan_summary: buildFixPlanSummary(issues),
     };
 }
-async function loadSourceConsolidationRelationMap(vaultRoot) {
-    const root = `${core_2.TRACEKEEPER_OPERATIONS_DIR}/source-consolidations`;
-    const repository = new core_1.OperationalLogRepository(vaultRoot);
-    const relations = new Map();
-    let entries;
-    try {
-        entries = (await repository.list(root)).map(entry => path.basename(entry)).filter((entry) => entry.endsWith('.json') && !entry.endsWith('.archive.json')).sort();
-    }
-    catch {
-        return relations;
-    }
-    for (const entry of entries) {
-        try {
-            const absolute = `${root}/${entry}`;
-            const raw = await repository.readText(absolute);
-            if (raw === null || Buffer.byteLength(raw) > 2 * 1024 * 1024)
-                continue;
-            const journal = JSON.parse(raw);
-            if (journal.status !== 'completed' || !Array.isArray(journal.outputs))
-                continue;
-            for (const output of journal.outputs) {
-                if (!(0, protocol_1.isRecord)(output) || typeof output.path !== 'string' || typeof output.legacyPath !== 'string')
-                    continue;
-                const parent = (0, core_2.sourceIndexPathForPart)(output.path);
-                if (!parent)
-                    continue;
-                const existing = relations.get(output.legacyPath);
-                if (existing && existing !== parent) {
-                    relations.delete(output.legacyPath);
-                    continue;
-                }
-                relations.set(output.legacyPath, parent);
-            }
-        }
-        catch {
-            // Invalid or oversized journals do not produce relation-replacement authority.
-        }
-    }
-    return relations;
+async function loadSourceConsolidationRelationMap(vaultRoot, view) {
+    return (0, core_3.readVerifiedSourceReplacements)(vaultRoot, new Map([...view.catalog.values()].map((row) => [row.path, row.contentHash])));
 }
 async function loadSourceArchiveMetadataEvidence(vaultRoot, view) {
-    const root = `${core_2.TRACEKEEPER_OPERATIONS_DIR}/source-consolidations`;
-    const repository = new core_1.OperationalLogRepository(vaultRoot);
+    const root = `${core_8.TRACEKEEPER_OPERATIONS_DIR}/source-consolidations`;
+    const repository = new core_7.OperationalLogRepository(vaultRoot);
     let entries;
     try {
         entries = (await repository.list(root)).map(entry => path.basename(entry)).filter((entry) => entry.endsWith('.archive.json')).sort();
@@ -8073,7 +8163,7 @@ async function loadSourceArchiveMetadataEvidence(vaultRoot, view) {
     }
     if (entries.length === 0)
         return [];
-    const wikiEntries = [...view.catalog.values()].filter((entry) => (0, core_2.isKnowledgeWikiPath)(entry.path));
+    const wikiEntries = [...view.catalog.values()].filter((entry) => (0, core_8.isKnowledgeWikiPath)(entry.path));
     const managedSourceRefs = new Set(wikiEntries.flatMap((entry) => [...entry.managedSources]));
     const result = [];
     for (const archiveEntry of entries) {
@@ -8097,7 +8187,7 @@ async function loadSourceArchiveMetadataEvidence(vaultRoot, view) {
             for (const output of outputs) {
                 if (typeof output.path !== 'string' || typeof output.legacyPath !== 'string')
                     continue;
-                const parent = (0, core_2.sourceIndexPathForPart)(output.path);
+                const parent = (0, core_8.sourceIndexPathForPart)(output.path);
                 if (!parent)
                     continue;
                 const rows = partsByLegacy.get(output.legacyPath) ?? [];
@@ -8113,7 +8203,7 @@ async function loadSourceArchiveMetadataEvidence(vaultRoot, view) {
                     continue;
                 const parts = partsByLegacy.get(archiveItem.oldPath) ?? [];
                 const part = parts[0];
-                const parent = part ? (0, core_2.sourceIndexPathForPart)(part.path) ?? '' : '';
+                const parent = part ? (0, core_8.sourceIndexPathForPart)(part.path) ?? '' : '';
                 const parentEntry = view.catalog.get(parent);
                 const manifest = parentEntry?.frontmatter.part_manifest;
                 const partManifest = Array.isArray(manifest) ? manifest.filter((item) => typeof item === 'string') : [];
@@ -8178,10 +8268,10 @@ async function handleRequestMaintenance(rawArgs, context) {
     if (taskId && taskId.length > 256)
         throw new safety_1.ToolInputError('task_id must be at most 256 characters.');
     const requestId = `maintenance-request-${crypto.createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 24)}`;
-    const requestPath = `${core_2.TRACEKEEPER_AGENT_REQUESTS_DIR}/${requestId}.md`;
+    const requestPath = `${core_8.TRACEKEEPER_AGENT_REQUESTS_DIR}/${requestId}.md`;
     const existing = await readVaultNoteContent(vaultRoot, requestPath, context);
     if (existing !== null) {
-        const parsedRequest = (0, core_2.parseMaintenanceRequestMarkdown)(existing);
+        const parsedRequest = (0, core_8.parseMaintenanceRequestMarkdown)(existing);
         if (!parsedRequest.valid) {
             throw new safety_1.ToolInputError(`Existing maintenance request is invalid: ${parsedRequest.validationError}.`);
         }
@@ -8209,7 +8299,7 @@ async function handleRequestMaintenance(rawArgs, context) {
     }
     if (taskId) {
         const taskContent = await readVaultNoteContent(vaultRoot, buildTaskNotePath(taskId), context);
-        if (taskContent === null || readFrontmatterString((0, core_2.parseMarkdown)(taskContent).frontmatter.fields, ['task_id']) !== taskId) {
+        if (taskContent === null || readFrontmatterString((0, core_8.parseMarkdown)(taskContent).frontmatter.fields, ['task_id']) !== taskId) {
             throw new safety_1.ToolInputError(`Maintenance request task is missing or does not match: ${taskId}.`);
         }
     }
@@ -8217,8 +8307,8 @@ async function handleRequestMaintenance(rawArgs, context) {
     if (view.source !== 'index' || view.generation !== rawArgs.snapshot_generation) {
         throw new safety_1.ToolInputError(`Maintenance snapshot generation ${rawArgs.snapshot_generation} is stale against ${view.generation}.`);
     }
-    const snapshot = (0, core_2.buildMaintenanceSnapshot)(view, {
-        oldToNewParent: await loadSourceConsolidationRelationMap(vaultRoot),
+    const snapshot = (0, core_8.buildMaintenanceSnapshot)(view, {
+        oldToNewParent: await loadSourceConsolidationRelationMap(vaultRoot, view),
         sourceArchiveEvidence: await loadSourceArchiveMetadataEvidence(vaultRoot, view),
     });
     const byId = new Map(snapshot.candidates.map((item) => [item.candidate_id, item]));
@@ -8231,14 +8321,14 @@ async function handleRequestMaintenance(rawArgs, context) {
         }
         return item;
     });
-    const manifest = (0, core_2.maintenanceRequestManifest)(selected);
-    const requestBindingHash = (0, core_2.maintenanceRequestBindingHash)({
+    const manifest = (0, core_8.maintenanceRequestManifest)(selected);
+    const requestBindingHash = (0, core_8.maintenanceRequestBindingHash)({
         snapshot_generation: snapshot.generation,
         candidate_ids: candidateIds,
         task_id: taskId,
         manifest,
     });
-    const record = await buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.request_maintenance', core_2.TRACEKEEPER_AGENT_REQUESTS_DIR, `${requestId}.md`, {
+    const record = await buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.request_maintenance', core_8.TRACEKEEPER_AGENT_REQUESTS_DIR, `${requestId}.md`, {
         type: 'maintenance_request',
         schema_version: 1,
         request_id: requestId,
@@ -8247,7 +8337,7 @@ async function handleRequestMaintenance(rawArgs, context) {
         candidate_ids: candidateIds,
         task_id: taskId,
         request_binding_hash: requestBindingHash,
-        manifest_hash: (0, core_2.maintenanceRequestManifestHash)(manifest),
+        manifest_hash: (0, core_8.maintenanceRequestManifestHash)(manifest),
         candidate_manifest: manifest,
         created_at: new Date().toISOString(),
     }, [
@@ -8272,7 +8362,7 @@ async function handleRequestMaintenance(rawArgs, context) {
     };
 }
 function buildLegacyStructureSummary(vaultRoot, notes) {
-    const legacyRoots = core_2.LEGACY_TOP_LEVEL_DIRS.filter((root) => fs.existsSync(path.join(vaultRoot, root)));
+    const legacyRoots = core_8.LEGACY_TOP_LEVEL_DIRS.filter((root) => fs.existsSync(path.join(vaultRoot, root)));
     const legacyNoteCount = notes.filter((note) => legacyRoots.some((root) => note.relativePath === root || note.relativePath.startsWith(`${root}/`))).length;
     return {
         detected: legacyRoots.length > 0,
@@ -8439,14 +8529,14 @@ async function createDistillProposal(vaultRoot, taskId, proposalKind, kindLabel,
     const writebackContent = contentItems.map((item) => `- ${item}`).join('\n');
     const now = new Date().toISOString();
     const creationNonce = crypto.randomUUID();
-    const proposalId = (0, core_2.buildStableProposalId)(`distill-session\0${taskId}\0${proposalKind}\0${creationNonce}`);
+    const proposalId = (0, core_8.buildStableProposalId)(`distill-session\0${taskId}\0${proposalKind}\0${creationNonce}`);
     const body = [
         contentText(context, `## 提炼内容：${kindLabel}`, `## Distilled ${kindLabel}`),
         writebackContent,
         '',
         `- task_id: ${taskId}`,
         '',
-        (0, core_2.renderProposalWritebackSection)(contentText(context, '## 写回内容', '## Writeback'), proposalId, writebackContent),
+        (0, core_8.renderProposalWritebackSection)(contentText(context, '## 写回内容', '## Writeback'), proposalId, writebackContent),
     ].join('\n');
     const filenameToken = `${proposalKind}-${taskId}-${now.replace(/[:.]/g, '-')}-${creationNonce.slice(0, 8)}`;
     const proposal = await buildAndWriteNoteAsync(vaultRoot, 'tracekeeper.distill_session', MEMORY_PROPOSAL_DIR, buildSafeFilename(filenameToken, proposalKind, context), {
@@ -8639,32 +8729,32 @@ function buildFinishTaskCompletionBody(input, context, operationId) {
     ].join('\n');
 }
 function assertFinishTaskRecordBinding(taskPath, content, taskId, operationId, expectedRequestHash, requireOperationBinding = false, requireRequestBinding = false) {
-    const frontmatter = (0, core_2.parseMarkdown)(content).frontmatter.fields;
+    const frontmatter = (0, core_8.parseMarkdown)(content).frontmatter.fields;
     const storedTaskId = stripYamlQuotes(readFrontmatterString(frontmatter, ['task_id']));
     const recordType = stripYamlQuotes(readFrontmatterString(frontmatter, ['type']));
     const finishOperationId = stripYamlQuotes(readFrontmatterString(frontmatter, ['finish_operation_id']));
     const finishRequestHash = stripYamlQuotes(readFrontmatterString(frontmatter, ['finish_request_hash']));
     if (storedTaskId !== taskId || (recordType && recordType !== 'agent-task')) {
-        throw new core_2.OperationConflictError(`Task path is not the canonical record for task ${taskId}: ${taskPath}`);
+        throw new core_8.OperationConflictError(`Task path is not the canonical record for task ${taskId}: ${taskPath}`);
     }
     if (finishOperationId && finishOperationId !== operationId) {
-        throw new core_2.OperationConflictError(`Task record is bound to another finish-task operation: ${taskPath}`);
+        throw new core_8.OperationConflictError(`Task record is bound to another finish-task operation: ${taskPath}`);
     }
     if (requireOperationBinding && finishOperationId !== operationId) {
-        throw new core_2.OperationConflictError(`Task record is not bound to the current finish-task operation: ${taskPath}`);
+        throw new core_8.OperationConflictError(`Task record is not bound to the current finish-task operation: ${taskPath}`);
     }
     if (finishRequestHash && finishRequestHash !== expectedRequestHash) {
-        throw new core_2.OperationConflictError(`Idempotency conflict: task record has a different finish_task request hash: ${taskPath}`);
+        throw new core_8.OperationConflictError(`Idempotency conflict: task record has a different finish_task request hash: ${taskPath}`);
     }
     if (requireRequestBinding && finishRequestHash !== expectedRequestHash) {
-        throw new core_2.OperationConflictError(`Idempotency conflict: task record is not bound to the current finish_task request hash: ${taskPath}`);
+        throw new core_8.OperationConflictError(`Idempotency conflict: task record is not bound to the current finish_task request hash: ${taskPath}`);
     }
 }
 function finishTaskRecordBindingHash(input) {
     return input.requestBindingHash || input.requestHash || '';
 }
 async function ensureFinishTaskRecordExists(input, context, operationId) {
-    const taskPath = buildTaskNotePath(input.taskId);
+    const taskPath = (input.taskPath || buildTaskNotePath(input.taskId));
     const current = await readCurrentVaultTextState(input.vaultRoot, taskPath, context);
     if (current) {
         assertFinishTaskRecordBinding(taskPath, current.content, input.taskId, operationId, finishTaskRecordBindingHash(input), false, finishTaskTrackingMode(input) === 'closeout_only');
@@ -8703,6 +8793,7 @@ async function ensureFinishTaskRecordExists(input, context, operationId) {
     const markdown = buildMarkdownNote({
         tool: 'tracekeeper.finish_task',
         type: 'agent-task',
+        ...(input.taskRelationVersion === 2 ? { task_record_version: 2, task_relations: [] } : {}),
         title: `Task ${input.taskId}`,
         task_id: input.taskId,
         status: 'closing',
@@ -8771,15 +8862,15 @@ function assertFinishTaskLifecycleRequestBinding(input, lifecycle, operationId) 
     if (lifecycle?.finishOperationId === operationId
         && (lifecycle.status === 'closing' || lifecycle.status === 'completed')
         && lifecycle.finishRequestHash !== finishTaskRecordBindingHash(input)) {
-        throw new core_2.OperationConflictError(`Idempotency conflict: task lifecycle has a different finish_task request hash: ${input.taskId}`);
+        throw new core_8.OperationConflictError(`Idempotency conflict: task lifecycle has a different finish_task request hash: ${input.taskId}`);
     }
 }
 async function synchronizeFinishTaskTimestampFromRecord(input, context) {
-    const current = await readCurrentVaultTextState(input.vaultRoot, buildTaskNotePath(input.taskId), context);
+    const current = await readCurrentVaultTextState(input.vaultRoot, (input.taskPath || buildTaskNotePath(input.taskId)), context);
     if (!current) {
         return;
     }
-    const fields = (0, core_2.parseMarkdown)(current.content).frontmatter.fields;
+    const fields = (0, core_8.parseMarkdown)(current.content).frontmatter.fields;
     const recordedAt = stripYamlQuotes(readFrontmatterString(fields, ['finish_recorded_at'])) || (finishTaskTrackingMode(input) === 'closeout_only'
         ? stripYamlQuotes(readFrontmatterString(fields, ['recorded_at']))
         : '');
@@ -8830,7 +8921,7 @@ async function markFinishTaskRecordClosing(input, context, operationId) {
             }
         }
     }
-    throw new core_2.OperationConflictError(`Task record could not be reconstructed for finish-task operation: ${buildTaskNotePath(input.taskId)}`);
+    throw new core_8.OperationConflictError(`Task record could not be reconstructed for finish-task operation: ${(input.taskPath || buildTaskNotePath(input.taskId))}`);
 }
 function projectIdentityFromFinishPayload(input) {
     return input.projectIdentity ?? {
@@ -8901,7 +8992,7 @@ async function buildFinishTaskDurableOutput(input, proposalResult, context) {
         counts.applied += 1;
         try {
             const normalized = (0, safety_1.normalizeNotePath)(update.path, pathSafetyOptions(context));
-            if ((0, core_2.isAllowedProposalTargetPath)(normalized)) {
+            if ((0, core_8.isAllowedProposalTargetPath)(normalized)) {
                 targetPaths.add(normalized);
             }
         }
@@ -9065,7 +9156,7 @@ function isFinishTaskDurableOutputEvidenceConsistent(evidence, context) {
     }
     return summary.target_paths.every((targetPath) => {
         const normalized = exactNormalizedPath(targetPath);
-        return Boolean(normalized && (0, core_2.isAllowedProposalTargetPath)(normalized));
+        return Boolean(normalized && (0, core_8.isAllowedProposalTargetPath)(normalized));
     });
 }
 function durableOutputFromFrontmatter(frontmatter, context) {
@@ -9136,12 +9227,12 @@ function durableOutputFromFrontmatter(frontmatter, context) {
 }
 async function readFinishTaskDurableOutputEvidence(input, finishRecordPath, context, mode) {
     const finishRecord = await readCurrentVaultTextState(input.vaultRoot, finishRecordPath, context);
-    const task = await readCurrentVaultTextState(input.vaultRoot, buildTaskNotePath(input.taskId), context);
+    const task = await readCurrentVaultTextState(input.vaultRoot, (input.taskPath || buildTaskNotePath(input.taskId)), context);
     const finishRecordFrontmatter = finishRecord
-        ? (0, core_2.parseMarkdown)(finishRecord.content).frontmatter.fields
+        ? (0, core_8.parseMarkdown)(finishRecord.content).frontmatter.fields
         : {};
     const taskFrontmatter = task
-        ? (0, core_2.parseMarkdown)(task.content).frontmatter.fields
+        ? (0, core_8.parseMarkdown)(task.content).frontmatter.fields
         : {};
     const finishRecordEvidence = finishRecord
         ? durableOutputFromFrontmatter(finishRecordFrontmatter, context)
@@ -9155,24 +9246,24 @@ async function readFinishTaskDurableOutputEvidence(input, finishRecordPath, cont
         .some((key) => key.startsWith('durable_output_'));
     if (finishTaskUsesSingleTaskRecord(input)) {
         if (mode === 'finalize' && !taskEvidence) {
-            throw new core_2.OperationConflictError('Finish-task durable-output evidence is not complete in the task record.');
+            throw new core_8.OperationConflictError('Finish-task durable-output evidence is not complete in the task record.');
         }
         if (taskEvidence) {
             return taskEvidence;
         }
         if (finishRecordHasEvidenceFields || taskHasEvidenceFields) {
-            throw new core_2.OperationConflictError('Finish-task durable-output evidence is incomplete, invalid, or internally inconsistent.');
+            throw new core_8.OperationConflictError('Finish-task durable-output evidence is incomplete, invalid, or internally inconsistent.');
         }
         return null;
     }
     if (finishRecordEvidence
         && taskEvidence
         && JSON.stringify(finishRecordEvidence) !== JSON.stringify(taskEvidence)) {
-        throw new core_2.OperationConflictError('Finish-task durable-output evidence differs between the task and session records.');
+        throw new core_8.OperationConflictError('Finish-task durable-output evidence differs between the task and session records.');
     }
     if (mode === 'finalize') {
         if (!finishRecordEvidence || !taskEvidence) {
-            throw new core_2.OperationConflictError('Finish-task durable-output evidence is not complete in both the task and session records.');
+            throw new core_8.OperationConflictError('Finish-task durable-output evidence is not complete in both the task and session records.');
         }
         return finishRecordEvidence;
     }
@@ -9181,14 +9272,14 @@ async function readFinishTaskDurableOutputEvidence(input, finishRecordPath, cont
         return trustedEvidence;
     }
     if (finishRecordHasEvidenceFields || taskHasEvidenceFields) {
-        throw new core_2.OperationConflictError('Finish-task durable-output evidence is incomplete, invalid, or internally inconsistent.');
+        throw new core_8.OperationConflictError('Finish-task durable-output evidence is incomplete, invalid, or internally inconsistent.');
     }
     return null;
 }
 async function updateManagedRecordFields(vaultRoot, recordPath, fields, context) {
     const current = await readCurrentVaultTextState(vaultRoot, recordPath, context);
     if (!current) {
-        throw new core_2.OperationConflictError(`Tracekeeper-managed record is unavailable: ${recordPath}`);
+        throw new core_8.OperationConflictError(`Tracekeeper-managed record is unavailable: ${recordPath}`);
     }
     const next = updateFrontmatterFields(current.content, fields);
     if (next === current.content) {
@@ -9196,7 +9287,7 @@ async function updateManagedRecordFields(vaultRoot, recordPath, fields, context)
     }
     if (context.vaultRepository) {
         if (!current.version) {
-            throw new core_2.OperationConflictError(`Tracekeeper-managed record version is unavailable: ${recordPath}`);
+            throw new core_8.OperationConflictError(`Tracekeeper-managed record version is unavailable: ${recordPath}`);
         }
         await context.vaultRepository.replaceText(current.path, current.version, next);
         return;
@@ -9264,15 +9355,15 @@ function buildFinishTaskRequestSnapshot(rawArgs) {
 }
 function assertRecoveredStartPayloadMatches(payload, goal, startedAt, client, explicitIdentity) {
     if (coerceOptionalString(payload.goal) !== goal) {
-        throw new core_2.OperationConflictError('Original start_task goal does not match the closeout goal.');
+        throw new core_8.OperationConflictError('Original start_task goal does not match the closeout goal.');
     }
     const startClient = coerceOptionalString(payload.client);
     if (startClient && client && startClient !== client) {
-        throw new core_2.OperationConflictError('Original start_task client does not match the closeout client.');
+        throw new core_8.OperationConflictError('Original start_task client does not match the closeout client.');
     }
     const originalStartedAt = coerceOptionalString(payload.clientStartedAt);
     if (originalStartedAt && coerceIsoTimestamp(originalStartedAt, true, 'started_at') !== startedAt) {
-        throw new core_2.OperationConflictError('Original start_task started_at does not match the closeout started_at.');
+        throw new core_8.OperationConflictError('Original start_task started_at does not match the closeout started_at.');
     }
     for (const [field, startValue, finishValue] of [
         ['project_hint', coerceOptionalString(payload.projectHint), explicitIdentity.projectHint],
@@ -9280,7 +9371,7 @@ function assertRecoveredStartPayloadMatches(payload, goal, startedAt, client, ex
         ['repo_path', coerceOptionalString(payload.repoPath), explicitIdentity.repoPath],
     ]) {
         if (!projectIdentityValueMatches(field, startValue, finishValue)) {
-            throw new core_2.OperationConflictError(`Original start_task ${field} does not match the closeout request.`);
+            throw new core_8.OperationConflictError(`Original start_task ${field} does not match the closeout request.`);
         }
     }
 }
@@ -9331,20 +9422,20 @@ async function resolveFinishTaskRecording(rawArgs, context, operationId, explici
         let taskState = await readCurrentVaultTextState(vaultRoot, buildTaskNotePath(expectedTaskId), context);
         let startRecord = await operationJournalForVault(vaultRoot, context).loadById(startOperationId);
         if (taskState) {
-            const metadata = agentTaskMetadataFromFrontmatter((0, core_2.parseMarkdown)(taskState.content).frontmatter.fields);
+            const metadata = agentTaskMetadataFromFrontmatter((0, core_8.parseMarkdown)(taskState.content).frontmatter.fields);
             if (metadata.startOperationId !== startOperationId) {
-                throw new core_2.OperationConflictError('Recovered task is not bound to the supplied start_idempotency_key.');
+                throw new core_8.OperationConflictError('Recovered task is not bound to the supplied start_idempotency_key.');
             }
             if (metadata.objective && metadata.objective !== goal) {
-                throw new core_2.OperationConflictError('Recovered task goal does not match the closeout goal.');
+                throw new core_8.OperationConflictError('Recovered task goal does not match the closeout goal.');
             }
             if (metadata.client && requestedClient && metadata.client !== requestedClient) {
-                throw new core_2.OperationConflictError('Recovered task client does not match the closeout client.');
+                throw new core_8.OperationConflictError('Recovered task client does not match the closeout client.');
             }
             if (metadata.startedAt
                 && metadata.startedAtSource === 'client_claim'
                 && coerceIsoTimestamp(metadata.startedAt, true, 'started_at') !== startedAt) {
-                throw new core_2.OperationConflictError('Recovered task started_at does not match the closeout started_at.');
+                throw new core_8.OperationConflictError('Recovered task started_at does not match the closeout started_at.');
             }
             const projectIdentity = mergeTaskProjectIdentity(expectedTaskId, metadata, explicitIdentity);
             return finishRecordingFromTaskMetadata(expectedTaskId, metadata, projectIdentity, requestedClient, 'matched', {
@@ -9358,7 +9449,7 @@ async function resolveFinishTaskRecording(rawArgs, context, operationId, explici
         }
         if (startRecord) {
             if (startRecord.idempotency_key !== startIdempotencyKey || !(0, protocol_1.isRecord)(startRecord.payload)) {
-                throw new core_2.OperationConflictError('Original start_task journal binding is incompatible.');
+                throw new core_8.OperationConflictError('Original start_task journal binding is incompatible.');
             }
             assertRecoveredStartPayloadMatches(startRecord.payload, goal, startedAt, requestedClient, explicitIdentity);
             await handleStartTask({
@@ -9373,7 +9464,7 @@ async function resolveFinishTaskRecording(rawArgs, context, operationId, explici
             taskState = await readCurrentVaultTextState(vaultRoot, buildTaskNotePath(expectedTaskId), context);
             startRecord = await operationJournalForVault(vaultRoot, context).loadById(startOperationId);
             const metadata = taskState
-                ? agentTaskMetadataFromFrontmatter((0, core_2.parseMarkdown)(taskState.content).frontmatter.fields)
+                ? agentTaskMetadataFromFrontmatter((0, core_8.parseMarkdown)(taskState.content).frontmatter.fields)
                 : emptyAgentTaskMetadata();
             const startPayload = (0, protocol_1.isRecord)(startRecord?.payload) ? startRecord.payload : {};
             const originalClientStartedAt = coerceOptionalString(startPayload.clientStartedAt);
@@ -9446,6 +9537,8 @@ async function buildFinishTaskOperationPayload(rawArgs, context, operationId, re
         requestSnapshot,
         memoryRecordWriteVersion: 2,
         taskRecordCloseoutVersion: 1,
+        taskRelationVersion: 2,
+        taskPath: await taskPathForIdAsync(vaultRoot, taskId, context),
         taskFinishedAt,
         projectMemoryCreatedAt: taskFinishedAt,
         projectMemoryAgentType: (() => {
@@ -9502,7 +9595,7 @@ function resolveFinishTaskSessionNotePath(input, context) {
 }
 function resolveFinishTaskRecordPath(input, context) {
     return finishTaskUsesSingleTaskRecord(input)
-        ? buildTaskNotePath(input.taskId)
+        ? (input.taskPath || buildTaskNotePath(input.taskId))
         : resolveFinishTaskSessionNotePath(input, context);
 }
 async function findFinishTaskRecord(input, context, operationId) {
@@ -9513,14 +9606,14 @@ async function findFinishTaskRecord(input, context, operationId) {
         }
         return sessionNote;
     }
-    const taskPath = buildTaskNotePath(input.taskId);
+    const taskPath = (input.taskPath || buildTaskNotePath(input.taskId));
     let task = await readCurrentVaultTextState(input.vaultRoot, taskPath, context);
     if (!task) {
         await ensureFinishTaskRecordExists(input, context, operationId);
         task = await readCurrentVaultTextState(input.vaultRoot, taskPath, context);
     }
     if (!task) {
-        throw new core_2.OperationConflictError(`Task record could not be reconstructed for finish-task operation: ${taskPath}`);
+        throw new core_8.OperationConflictError(`Task record could not be reconstructed for finish-task operation: ${taskPath}`);
     }
     assertFinishTaskRecordBinding(taskPath, task.content, input.taskId, operationId, finishTaskRecordBindingHash(input), true, finishTaskTrackingMode(input) === 'closeout_only');
     const audit = await (0, audit_persistence_1.appendAuditEventAsync)(input.vaultRoot, {
@@ -9641,7 +9734,7 @@ async function writeFinishTaskProjectMemoryArtifacts(input, context, operationId
     const createdAt = input.projectMemoryCreatedAt
         ?? operationRecord?.created_at;
     if (!createdAt) {
-        throw new core_2.OperationConflictError('Finish-task project-memory creation time is unavailable.');
+        throw new core_8.OperationConflictError('Finish-task project-memory creation time is unavailable.');
     }
     const observed = input.projectMemoryAgentType
         ?? (0, observed_client_1.normalizeObservedClientType)(input.client);
@@ -9773,7 +9866,7 @@ async function updateFinishTaskRecord(input, context, operationId) {
         ...durableOutputFrontmatterFields(durableOutputEvidence),
     };
     const taskReferences = {
-        memory_writes: finishTaskUsesSingleTaskRecord(input)
+        ...(input.taskRelationVersion === 2 ? { related_wiki: input.relatedWiki, related_sources: input.relatedSources } : {}), memory_writes: finishTaskUsesSingleTaskRecord(input)
             ? autoWritePaths
             : [finishRecord.path, ...autoWritePaths],
         proposal_ids: proposalIds,
@@ -9781,14 +9874,14 @@ async function updateFinishTaskRecord(input, context, operationId) {
         proposal_link_targets: proposalPaths,
     };
     const completionBody = buildFinishTaskCompletionBody(input, context, operationId);
-    const updateTaskRecord = () => updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, taskFields, context, taskReferences, completionBody, `^finish-${operationId}`);
+    const updateTaskRecord = () => updateAgentTaskRecordAsync(input.vaultRoot, input.taskId, taskFields, context, taskReferences, completionBody, `^finish-${operationId}`, operationId);
     let taskPath = await updateTaskRecord();
     if (!taskPath && finishTaskUsesSingleTaskRecord(input)) {
         await ensureFinishTaskRecordExists(input, context, operationId);
         taskPath = await updateTaskRecord();
     }
     if (!taskPath) {
-        throw new safety_1.ToolInputError(`Task record is missing for finish-task operation: ${buildTaskNotePath(input.taskId)}`);
+        throw new safety_1.ToolInputError(`Task record is missing for finish-task operation: ${(input.taskPath || buildTaskNotePath(input.taskId))}`);
     }
     if (!finishTaskUsesSingleTaskRecord(input)) {
         await updateManagedProposalReferences(input.vaultRoot, finishRecord.path, aggregatedProposals, context);
@@ -9810,7 +9903,7 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         && buildFinishTaskProjectMemoryPlan(input, context) !== null);
     const durableOutputEvidence = await readFinishTaskDurableOutputEvidence(input, finishRecord.path, context, 'finalize');
     if (!durableOutputEvidence) {
-        throw new core_2.OperationConflictError('Finish-task durable-output evidence is unavailable at finalization.');
+        throw new core_8.OperationConflictError('Finish-task durable-output evidence is unavailable at finalization.');
     }
     const durableOutput = durableOutputEvidence.summary;
     const aggregatedProposals = aggregateFinishTaskProposalReferences(input, proposalResult, finishRecord.path, context);
@@ -9821,7 +9914,7 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
         operation_id: operationId,
         idempotency_key: idempotencyKey,
         task_id: input.taskId,
-        task_path: buildTaskNotePath(input.taskId),
+        task_path: finishTaskUsesSingleTaskRecord(input) ? finishRecord.path : (input.taskPath || buildTaskNotePath(input.taskId)),
         path: finishRecord.path,
         session_path: finishRecord.path,
         activity_path: finishRecord.activity_path,
@@ -9886,21 +9979,22 @@ async function executeFinishTaskOperation(input, context, operationId, idempoten
     return response;
 }
 async function readTaskLifecycleStateAsync(vaultRoot, taskId, context) {
+    const locatedPath = await taskPathForIdAsync(vaultRoot, taskId, context);
     try {
         if (context.vaultRepository) {
-            const taskFile = await context.vaultRepository.readText(buildTaskNotePath(taskId));
+            const taskFile = await context.vaultRepository.readText(locatedPath);
             if (!taskFile) {
                 return null;
             }
-            const parsed = (0, core_2.parseMarkdown)(taskFile.content);
+            const parsed = (0, core_8.parseMarkdown)(taskFile.content);
             return {
                 status: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['status'])).toLowerCase(),
                 finishOperationId: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['finish_operation_id'])),
                 finishRequestHash: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['finish_request_hash'])),
             };
         }
-        const absolutePath = (0, safety_1.resolveSafeNotePath)(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
-        const parsed = (0, core_2.parseMarkdown)(fs.readFileSync(absolutePath, 'utf8'));
+        const absolutePath = (0, safety_1.resolveSafeNotePath)(vaultRoot, locatedPath, pathSafetyOptions(context));
+        const parsed = (0, core_8.parseMarkdown)(fs.readFileSync(absolutePath, 'utf8'));
         return {
             status: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['status'])).toLowerCase(),
             finishOperationId: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['finish_operation_id'])),
@@ -9908,7 +10002,7 @@ async function readTaskLifecycleStateAsync(vaultRoot, taskId, context) {
         };
     }
     catch (error) {
-        if (error instanceof safety_1.ToolInputError || error instanceof core_2.VaultPathError) {
+        if (error instanceof safety_1.ToolInputError || error instanceof core_8.VaultPathError) {
             return null;
         }
         throw error;
@@ -9926,11 +10020,11 @@ async function releaseIncompatibleFinishTaskBinding(vaultRoot, record, context) 
             : '';
     if (!taskId)
         return;
-    const taskPath = buildTaskNotePath(taskId);
+    const taskPath = await taskPathForIdAsync(vaultRoot, taskId, context);
     const current = await readCurrentVaultTextState(vaultRoot, taskPath, context);
     if (!current)
         return;
-    const frontmatter = (0, core_2.parseMarkdown)(current.content).frontmatter.fields;
+    const frontmatter = (0, core_8.parseMarkdown)(current.content).frontmatter.fields;
     const status = stripYamlQuotes(readFrontmatterString(frontmatter, ['status'])).toLowerCase();
     const finishOperationId = stripYamlQuotes(readFrontmatterString(frontmatter, ['finish_operation_id']));
     if (status !== 'closing' || finishOperationId !== record.operation_id)
@@ -9942,7 +10036,7 @@ async function releaseIncompatibleFinishTaskBinding(vaultRoot, record, context) 
     });
     if (context.vaultRepository) {
         if (!current.version) {
-            throw new core_2.OperationConflictError('Cannot release the unfinished finish_task binding without a task version.');
+            throw new core_8.OperationConflictError('Cannot release the unfinished finish_task binding without a task version.');
         }
         await context.vaultRepository.replaceText(current.path, current.version, next);
         return;
@@ -9955,10 +10049,17 @@ async function handleFinishTask(rawArgs, context) {
     const taskIdentity = coerceOptionalString(rawArgs.task_id)
         || coerceOptionalString(rawArgs.idempotency_key)
         || context.sessionId || context.agentId || 'legacy-closeout';
-    const preparationKey = `finish-preparation:${(0, core_2.computePayloadHash)({ vaultRoot, taskIdentity })}`;
+    const preparationKey = `finish-preparation:${(0, core_8.computePayloadHash)({ vaultRoot, taskIdentity })}`;
     // 准备阶段也读取任务正文；与同任务的提交串行，避免精确重试撞上首个请求的写入。
     const release = await operationJournalForVault(vaultRoot, context).acquireLock(preparationKey, 'finish-preparation');
     try {
+        const suppliedTask = coerceOptionalString(rawArgs.task_id);
+        if (suppliedTask && !context.writebackRecoveryOperationId) {
+            const key = coerceOptionalString(rawArgs.idempotency_key);
+            const existing = key ? await operationJournalForVault(vaultRoot, context).loadById(buildOperationIdFromIdempotencyKey('finish-task', key)) : null;
+            if (!existing)
+                await requireTaskForContext(vaultRoot, suppliedTask, context);
+        }
         return await prepareAndFinishTask(rawArgs, context);
     }
     finally {
@@ -9989,7 +10090,7 @@ async function prepareAndFinishTask(rawArgs, context) {
         validateExistingOperation: (record, payload) => {
             if (record.status !== 'completed'
                 && payload.memoryRecordWriteVersion !== 2) {
-                throw new core_2.OperationConflictError(`Cannot recover unfinished legacy finish_task operation "${record.operation_id}" without MemoryRecord v2 write semantics.`);
+                throw new core_8.OperationConflictError(`Cannot recover unfinished legacy finish_task operation "${record.operation_id}" without MemoryRecord v2 write semantics.`);
             }
         },
         buildPayload: (args, operationId, requestHash, requestSnapshot) => buildFinishTaskOperationPayload(args, context, operationId, requestHash, requestSnapshot),

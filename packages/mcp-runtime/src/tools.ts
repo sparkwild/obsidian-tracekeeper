@@ -1,3 +1,10 @@
+import { assertTaskMigrationCommitted } from '@tracekeeper/core';
+import { resolveTaskIdentity, type VaultTextFile } from '@tracekeeper/core';
+import { readVerifiedSourceReplacements } from '@tracekeeper/core';
+import { SourceRequestExecution } from './application/source-request-operation';
+import { resolveTaskRelations, diagnoseTaskRelations } from '@tracekeeper/core';
+import { planApprovedWritebackTaskLink, taskTargetIdentity, ensureWikiIdentity, type TaskTargetKind } from '@tracekeeper/core';
+import { parseTaskRecord, taskReferenceFields, TASK_REFERENCE_FIELDS, makeTaskRelation, updateTaskRelations, patchTaskMetadata, findTaskById, requireWritableTaskV2, TaskMigrationRequiredError, type TaskRelationFact } from '@tracekeeper/core';
 import { createVaultOperationJournal, OperationalLogRepository } from '@tracekeeper/core';
 import type { OperationJournalProvider } from './infrastructure/operation-journal-provider';
 import * as fs from 'node:fs';
@@ -1407,6 +1414,7 @@ function buildProposeMemoryActions(payload: Record<string, unknown>): AgentActio
 }
 
 function classifyToolError(message: string): { code: string; retryable: boolean; reasonCode?: AgentAction['reason_code'] } {
+	if (/TASK_MIGRATION_REQUIRED/.test(message)) return { code: 'TASK_MIGRATION_REQUIRED', retryable: false };
 	if (/note_content_changed/i.test(message)) return { code: 'NOTE_CHANGED', retryable: true };
 	if (/knowledge_index_not_ready/i.test(message)) {
 		return { code: 'INDEX_NOT_READY', retryable: true };
@@ -1449,6 +1457,8 @@ function safeToolErrorDescription(
 		return 'The supplied project identity is not an exact current Vault identity; use Runtime-resolved identity evidence instead of guessing.';
 	}
 	switch (code) {
+		case 'TASK_MIGRATION_REQUIRED':
+			return 'Preview, back up and migrate this task in Obsidian before new writes.';
 		case 'NOTE_CHANGED':
 			return 'The note changed between windows. Restart the read with its current content hash.';
 		case 'INDEX_NOT_READY':
@@ -2710,6 +2720,12 @@ function buildRecallRelationEvidence(note: ScannedNote, allNotes: ScannedNote[])
 		addResolvedRelation(resolved, 'frontmatter');
 	};
 
+	const taskRecord = parseTaskRecord(note.frontmatter);
+	if (taskRecord) {
+		for (const relation of resolveTaskRelations(taskRecord, allNotes.map((item) => ({ path: item.relativePath, frontmatter: item.frontmatter, contentHash: item.contentHash })))) {
+			if (relation.status === 'resolved' && relation.current_path) addResolvedRelation(findSnapshotNoteByPath(relation.current_path, allNotes), 'frontmatter');
+		}
+	}
 	for (const key of ['related_wiki', 'relatedWiki', 'wiki']) {
 		for (const value of relationValues(note.frontmatter[key])) {
 			addFrontmatterRelation(value);
@@ -2720,7 +2736,7 @@ function buildRecallRelationEvidence(note: ScannedNote, allNotes: ScannedNote[])
 			addFrontmatterRelation(value);
 		}
 	}
-	for (const edge of note.edges) {
+	for (const edge of taskRecord ? [] : note.edges) {
 		if (edge.source !== 'body') {
 			continue;
 		}
@@ -4056,6 +4072,8 @@ interface CurrentVaultTextState {
 }
 
 interface WritebackConfirmationBinding {
+	taskRelationOperationId?: string;
+	taskRelationTarget?: { kind: TaskTargetKind; id: string | null };
 	schemaVersion: typeof WRITEBACK_CONFIRMATION_SCHEMA_VERSION;
 	previewNonce: string;
 	operationId: string;
@@ -4583,11 +4601,12 @@ function buildApprovedWritebackBlock(
 function buildApprovedWikiNoteWritebackBlock(
 	proposalId: string,
 	writebackContent: string,
-	operationId: string
+	operationId: string,
+	withIdentity = false
 ): { block: string; marker: string } {
 	const marker = `^writeback-${proposalId.replace(/[^A-Za-z0-9._-]/g, '-')}`;
 	return {
-		block: `${writebackContent.trim()}\n\n<!-- writeback operation: ${operationId} -->\n${marker}`,
+		block: `${withIdentity ? ensureWikiIdentity(writebackContent.trim(), proposalId) : writebackContent.trim()}\n\n<!-- writeback operation: ${operationId} -->\n${marker}`,
 		marker,
 	};
 }
@@ -4924,7 +4943,7 @@ async function prepareWritebackConfirmation(
 			throw new ToolInputError(error instanceof Error ? error.message : 'Managed relations writeback is invalid.');
 		}
 	}
-	const taskPath = taskId ? buildTaskNotePath(taskId) : null;
+	const taskPath = taskId ? await taskPathForIdAsync(vaultRoot, taskId, context) : null;
 	const task = taskPath
 		? await readCurrentVaultTextState(vaultRoot, taskPath, context)
 		: null;
@@ -4933,9 +4952,29 @@ async function prepareWritebackConfirmation(
 			`Writeback confirmation is stale because the task does not exist: ${taskPath}`
 		);
 	}
+	if (task) {
+		const fields = parseMarkdown(task.content).frontmatter.fields;
+		if (!parseTaskRecord(fields)) throw new TaskMigrationRequiredError(taskId!);
+		await assertTaskMigrationCommitted(operationJournalForVault(vaultRoot, context), fields);
+	}
+	const proposalRevision = computeProposalRevision(snapshot);
+	const effectivePreviewNonce = batchOverride?.previewNonce || previewNonce;
+	const identity = buildApprovedWritebackOperationIdentity(
+		proposal,
+		proposalRevision,
+		effectivePreviewNonce
+	);
+	const taskRelationTarget = task && parseTaskRecord(parseMarkdown(task.content).frontmatter.fields)
+		? target ? taskTargetIdentity({ path: targetPath, frontmatter: parseMarkdown(target.content).frontmatter.fields })
+			: plan.effectKind === CREATE_WIKI_NOTE_EFFECT ? taskTargetIdentity({ path: targetPath, frontmatter: parseMarkdown(ensureWikiIdentity(snapshot.writebackContent, proposal.proposalId)).frontmatter.fields })
+			: { kind: 'memory' as const, id: `memory-${hashText(`${proposal.proposalId}\0${stripYamlQuotes(readFrontmatterString(proposal.frontmatter, ['claim_key', 'claimKey']))}`).slice(0, 32)}` }
+		: undefined;
+	if (taskRelationTarget?.kind === 'wiki' && !taskRelationTarget.id) throw new ToolInputError('Writeback target identity changed or is missing; preview and backfill wiki_id in Task maintenance first.');
 	const taskLinkPlan = task
 		? planApprovedWritebackTaskLink({
 			taskContent: task.content,
+			targetIdentity: taskRelationTarget,
+			operationId: context.wikiBatchWritebackOverride?.batchOperationId || identity.operationId,
 			targetPath,
 			proposalId: proposal.proposalId,
 			proposalPath: proposal.path,
@@ -4949,13 +4988,6 @@ async function prepareWritebackConfirmation(
 	const taskHadAppliedProposalReference = taskLinkPlan?.hadAppliedProposalReference ?? false;
 	const taskHadProposalReference = taskLinkPlan?.hadProposalReference ?? false;
 	const taskLinkedContent = taskLinkPlan?.content ?? '';
-	const proposalRevision = computeProposalRevision(snapshot);
-	const effectivePreviewNonce = batchOverride?.previewNonce || previewNonce;
-	const identity = buildApprovedWritebackOperationIdentity(
-		proposal,
-		proposalRevision,
-		effectivePreviewNonce
-	);
 	const createsMemoryRecord = plan.effectKind === 'create_memory_record';
 	const createsWikiNote = plan.effectKind === CREATE_WIKI_NOTE_EFFECT;
 	const claimKey = stripYamlQuotes(
@@ -4991,7 +5023,8 @@ async function prepareWritebackConfirmation(
 			? buildApprovedWikiNoteWritebackBlock(
 				snapshot.proposalId,
 				snapshot.writebackContent,
-				identity.operationId
+				identity.operationId,
+				Boolean(taskRelationTarget)
 			)
 			: plan.effectKind === 'update_managed_relations'
 				? {
@@ -5008,6 +5041,7 @@ async function prepareWritebackConfirmation(
 	return {
 		binding: {
 			schemaVersion: WRITEBACK_CONFIRMATION_SCHEMA_VERSION,
+			...(taskRelationTarget ? { taskRelationTarget, taskRelationOperationId: context.wikiBatchWritebackOverride?.batchOperationId || identity.operationId } : {}),
 			previewNonce: effectivePreviewNonce,
 			operationId: identity.operationId,
 			idempotencyKey: identity.idempotencyKey,
@@ -5063,6 +5097,7 @@ function writebackBindingPayload(
 		taskPath: binding.taskPath,
 		taskContentHash: binding.taskContentHash,
 		taskLinkedContentHash: binding.taskLinkedContentHash,
+		...(binding.taskRelationTarget ? { taskRelationTarget: binding.taskRelationTarget, taskRelationOperationId: binding.taskRelationOperationId } : {}),
 		taskHadTargetReference: binding.taskHadTargetReference,
 		taskHadProposalReference: binding.taskHadProposalReference,
 		...(typeof binding.taskHadProposalIdReference === 'boolean'
@@ -6429,6 +6464,54 @@ function buildTaskNotePath(taskId: string): string {
 	return `${AGENT_TASK_DIR}/${safeId}.md`;
 }
 
+function taskVaultRepository(vaultRoot: string, context: ToolContext): VaultRepository {
+	return context.vaultRepository ?? new NodeFsVaultRepository({ vaultRoot, protectedDirectoryName: context.vaultConfigDir });
+}
+
+async function taskForContext(vaultRoot: string, taskId: string, context: ToolContext): Promise<VaultTextFile | null> {
+	const repository = taskVaultRepository(vaultRoot, context);
+	if (!context.knowledgeReadViewProvider) return findTaskById(repository, taskId, true);
+	const view = await knowledgeReadViewForContext(vaultRoot, context);
+	if (view.index_state !== 'ready') throw new ToolInputError('knowledge_index_not_ready: task identity inventory is unavailable.');
+	const selected = resolveTaskIdentity([...view.catalog.values()].map((row) => ({ path: row.path, frontmatter: row.frontmatter })), taskId, true);
+	const file = await repository.readText(selected || buildTaskNotePath(taskId));
+	if (file && parseMarkdown(file.content).frontmatter.fields.task_id !== taskId) throw new OperationConflictError('Task identity changed against its read snapshot.');
+	if (selected && !file) throw new OperationConflictError('Task disappeared against its read snapshot.');
+	return file;
+}
+async function requireTaskForContext(vaultRoot: string, taskId: string, context: ToolContext): Promise<VaultTextFile | null> {
+	const file = await taskForContext(vaultRoot, taskId, context);
+	if (file) {
+		const fields = parseMarkdown(file.content).frontmatter.fields;
+		if (!parseTaskRecord(fields)) throw new TaskMigrationRequiredError(taskId);
+		await assertTaskMigrationCommitted(operationJournalForVault(vaultRoot, context), fields);
+	}
+	return file;
+}
+async function taskPathForIdAsync(vaultRoot: string, taskId: string, context: ToolContext): Promise<string> {
+	return (await taskForContext(vaultRoot, taskId, context))?.path ?? buildTaskNotePath(taskId);
+}
+
+async function taskRelationsForReferences(vaultRoot: string, content: string, references: Record<string, string[]>, context: ToolContext, operationId?: string): Promise<TaskRelationFact[]> {
+	const fields = parseMarkdown(content).frontmatter.fields;
+	const task = parseTaskRecord(fields);
+	if (!task) throw new TaskMigrationRequiredError(String(fields.task_id || ''));
+	const result: TaskRelationFact[] = [];
+	for (const [key, role] of [['source_captures', 'captured_source'], ['memory_writes', 'written_output'], ['proposal_paths', 'review_proposal'], ['related_wiki', 'context_reference'], ['related_sources', 'context_reference']] as const) {
+		for (const [index, targetPath] of (references[key] || []).entries()) {
+			const target = await readVaultNoteContent(vaultRoot, targetPath, context);
+			const metadata = target === null ? {} : parseMarkdown(target).frontmatter.fields;
+			result.push(makeTaskRelation({ taskId: task.task_id, role, path: targetPath,
+				target: target === null ? undefined : { path: targetPath, frontmatter: metadata, contentHash: hashText(target) },
+				proposalId: key === 'proposal_paths' ? references.proposal_ids?.[index] : undefined,
+				operationId: operationId || String(metadata.source_operation_id || metadata.operation_id || metadata.proposal_operation_id || metadata.finish_operation_id || '') || null,
+				recordedAt: String(metadata.created_at || task.recorded_at || task.started_at || '') || null,
+			}));
+		}
+	}
+	return result;
+}
+
 interface AgentTaskMetadata extends ResolvedProjectIdentity {
 	client: string;
 	objective: string;
@@ -6571,7 +6654,7 @@ async function readAgentTaskMetadataAsync(
 	context: ToolContext
 ): Promise<AgentTaskMetadata> {
 	try {
-		const safePath = buildTaskNotePath(taskId);
+		const safePath = await taskPathForIdAsync(vaultRoot, taskId, context);
 		let text: string;
 		if (context.vaultRepository) {
 			const repositoryFile = await context.vaultRepository.readText(safePath);
@@ -6587,6 +6670,7 @@ async function readAgentTaskMetadataAsync(
 		const parsed = parseMarkdown(text);
 		return agentTaskMetadataFromFrontmatter(parsed.frontmatter.fields);
 	} catch (error) {
+		if (error instanceof OperationConflictError || error instanceof TaskMigrationRequiredError) throw error;
 		if (error instanceof ToolInputError || error instanceof VaultPathError || error instanceof Error) {
 			return emptyAgentTaskMetadata();
 		}
@@ -6595,6 +6679,10 @@ async function readAgentTaskMetadataAsync(
 }
 
 function readFrontmatterStringList(frontmatter: Record<string, unknown>, key: string): string[] {
+	if (frontmatter.task_record_version !== undefined && (TASK_REFERENCE_FIELDS as readonly string[]).includes(key)) {
+		const projected = taskReferenceFields(frontmatter)[key];
+		return Array.isArray(projected) ? projected.map(String) : [];
+	}
 	const value = frontmatter[key];
 	if (Array.isArray(value)) {
 		return value
@@ -6620,90 +6708,7 @@ function mergeFrontmatterList(frontmatter: Record<string, unknown>, key: string,
 	return Array.from(merged).join(', ');
 }
 
-export interface ApprovedWritebackTaskLinkPlanInput {
-	taskContent: string;
-	targetPath: string;
-	proposalId: string;
-	proposalPath: string;
-	usesStableProposalReferences: boolean;
-	usesAppliedProposalEvidence: boolean;
-}
-
-export interface ApprovedWritebackTaskLinkPlan {
-	content: string;
-	contentHashBefore: string;
-	contentHashAfter: string;
-	hadTargetReference: boolean;
-	hadProposalReference: boolean;
-	hadProposalIdReference: boolean;
-	hadProposalPathEvidence: boolean;
-	hadAppliedProposalReference: boolean;
-}
-
-/**
- * 规划一次 approved writeback 对任务引用的确定性更新。
- *
- * @description 批次预览和 Runtime 写回必须复用此函数，确保逐项任务哈希链与实际持久化内容完全一致。
- */
-export function planApprovedWritebackTaskLink(
-	input: ApprovedWritebackTaskLinkPlanInput
-): ApprovedWritebackTaskLinkPlan {
-	const frontmatter = parseMarkdown(input.taskContent).frontmatter.fields;
-	const memoryWrites = new Set(readFrontmatterStringList(frontmatter, 'memory_writes'));
-	const proposalIds = new Set(readFrontmatterStringList(frontmatter, 'proposal_ids'));
-	const proposalPaths = new Set(readFrontmatterStringList(frontmatter, 'proposal_paths'));
-	const appliedProposalIds = new Set(
-		readFrontmatterStringList(frontmatter, 'durable_output_applied_proposal_ids')
-	);
-	const legacyProposals = new Set(readFrontmatterStringList(frontmatter, 'proposals'));
-	const hadProposalReference = input.usesStableProposalReferences
-		? proposalIds.has(input.proposalId)
-		: legacyProposals.has(input.proposalPath);
-	const hadProposalPathEvidence = input.usesStableProposalReferences
-		? proposalPaths.has(input.proposalPath)
-		: true;
-	const hadAppliedProposalReference = input.usesAppliedProposalEvidence
-		? appliedProposalIds.has(input.proposalId)
-		: true;
-	const needsUpdate = !memoryWrites.has(input.targetPath)
-		|| !hadProposalReference
-		|| !hadProposalPathEvidence
-		|| !hadAppliedProposalReference;
-	const content = needsUpdate
-		? updateFrontmatterFields(
-			input.taskContent,
-			input.usesStableProposalReferences
-				? {
-					memory_writes: mergeFrontmatterList(frontmatter, 'memory_writes', [input.targetPath]),
-					proposal_ids: mergeFrontmatterList(frontmatter, 'proposal_ids', [input.proposalId]),
-					proposal_paths: mergeFrontmatterList(frontmatter, 'proposal_paths', [input.proposalPath]),
-					...(input.usesAppliedProposalEvidence
-						? {
-							durable_output_applied_proposal_ids: mergeFrontmatterList(
-								frontmatter,
-								'durable_output_applied_proposal_ids',
-								[input.proposalId]
-							),
-						}
-						: {}),
-				}
-				: {
-					memory_writes: mergeFrontmatterList(frontmatter, 'memory_writes', [input.targetPath]),
-					proposals: mergeFrontmatterList(frontmatter, 'proposals', [input.proposalPath]),
-				}
-		)
-		: input.taskContent;
-	return {
-		content,
-		contentHashBefore: hashText(input.taskContent),
-		contentHashAfter: hashText(content),
-		hadTargetReference: memoryWrites.has(input.targetPath),
-		hadProposalReference,
-		hadProposalIdReference: proposalIds.has(input.proposalId),
-		hadProposalPathEvidence,
-		hadAppliedProposalReference,
-	};
-}
+export { planApprovedWritebackTaskLink, type ApprovedWritebackTaskLinkPlanInput, type ApprovedWritebackTaskLinkPlan } from '@tracekeeper/core';
 
 function durableProposalStatusFromApproval(status: string): DurableProposalStatus {
 	switch (status.trim().toLowerCase().replace(/[\s-]+/g, '_')) {
@@ -6923,6 +6928,17 @@ async function updateManagedProposalReferences(
 		);
 	}
 	const frontmatter = parseMarkdown(current.content).frontmatter.fields;
+	if (parseTaskRecord(frontmatter)) {
+		const facts = await taskRelationsForReferences(vaultRoot, current.content, { proposal_paths: proposals.map((row) => row.path), proposal_ids: proposals.map((row) => row.proposalId) }, context);
+		const next = updateTaskRelations(current.content, facts);
+		if (next !== current.content) {
+			const repository = taskVaultRepository(vaultRoot, context);
+			const file = await repository.readText(current.path);
+			if (!file || file.content !== current.content) throw new OperationConflictError('Task changed during relation update.');
+			await repository.replaceText(file.path, file.version, next);
+		}
+		return;
+	}
 	const links = proposals
 		.map((proposal) => ({
 			...proposal,
@@ -6992,12 +7008,29 @@ async function updateAgentTaskRecordAsync(
 	context: ToolContext,
 	references: Record<string, string[]> = {},
 	appendBody = '',
-	appendBodyMarker = ''
+	appendBodyMarker = '',
+	referenceOperationId?: string
 ): Promise<string | null> {
 	if (!taskId) {
 		return null;
 	}
 
+	const repository = taskVaultRepository(vaultRoot, context);
+	const located = await taskForContext(vaultRoot, taskId, context);
+	if (!located && Object.values(references).some((values) => values.length)) throw new OperationConflictError('Task disappeared before relation commit.');
+	if (located && parseTaskRecord(parseMarkdown(located.content).frontmatter.fields)) {
+		const facts = await taskRelationsForReferences(vaultRoot, located.content, references, context, referenceOperationId);
+		let next = updateTaskRelations(located.content, facts);
+		const metadata: Record<string, unknown> = Object.fromEntries(Object.entries(fields).filter(([key]) => !(TASK_REFERENCE_FIELDS as readonly string[]).includes(key)));
+		for (const [key, values] of Object.entries(references)) if (!(TASK_REFERENCE_FIELDS as readonly string[]).includes(key)) metadata[key] = [...new Set([...readFrontmatterStringList(parseMarkdown(located.content).frontmatter.fields, key), ...values])];
+		if (Object.keys(metadata).length) {
+			const normalized = parseMarkdown(['---', ...Object.entries(metadata).map(([key, value]) => `${key}: ${formatFrontmatterUpdateValue((value ?? '') as string | string[])}`), '---'].join('\n')).frontmatter.fields;
+			next = patchTaskMetadata(next, normalized);
+		}
+		if (appendBody.trim() && (!appendBodyMarker || !located.content.includes(appendBodyMarker))) next = `${next.replace(/\s*$/, '')}\n\n${appendBody.trim()}\n`;
+		if (next !== located.content) await repository.replaceText(located.path, located.version, next);
+		return located.path;
+	}
 	let absolute = '';
 	try {
 		absolute = resolveSafeNotePath(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
@@ -7073,7 +7106,7 @@ async function linkApprovedWritebackTask(
 			proposalReferenceAdded: false,
 		};
 	}
-	const expectedPath = buildTaskNotePath(payload.taskId);
+	const expectedPath = await taskPathForIdAsync(vaultRoot, payload.taskId, context);
 	if (payload.taskPath !== expectedPath) {
 		throw new OperationConflictError('Writeback task binding changed.');
 	}
@@ -7088,6 +7121,8 @@ async function linkApprovedWritebackTask(
 		typeof payload.taskHadAppliedProposalReference === 'boolean';
 	const taskPlan = planApprovedWritebackTaskLink({
 		taskContent: current.content,
+		targetIdentity: payload.taskRelationTarget,
+		operationId: payload.taskRelationOperationId,
 		targetPath: payload.targetPath,
 		proposalId: payload.proposalId,
 		proposalPath: payload.proposalPath,
@@ -7173,7 +7208,8 @@ async function rollbackApprovedWritebackTask(
 		typeof payload.taskHadAppliedProposalReference === 'boolean'
 		&& payload.taskHadAppliedProposalReference === false;
 	if (
-		!receipt.targetReferenceAdded
+		payload.taskOriginalContent === undefined
+		&& !receipt.targetReferenceAdded
 		&& !receipt.proposalReferenceAdded
 		&& !proposalPathEvidenceAdded
 		&& !appliedProposalEvidenceAdded
@@ -7193,6 +7229,14 @@ async function rollbackApprovedWritebackTask(
 		throw new OperationConflictError(
 			'Writeback task changed after its durable effect and cannot be safely compensated.'
 		);
+	}
+	if (payload.taskOriginalContent !== undefined) {
+		if (hashText(payload.taskOriginalContent) !== payload.taskContentHash) throw new OperationConflictError('Task rollback proof is invalid.');
+		const repository = taskVaultRepository(vaultRoot, context);
+		const file = await repository.readText(current.path);
+		if (!file || file.content !== current.content) throw new OperationConflictError('Task changed before compensation.');
+		await repository.replaceText(file.path, file.version, payload.taskOriginalContent);
+		return;
 	}
 	const frontmatter = parseMarkdown(current.content).frontmatter.fields;
 	const memoryWrites = readFrontmatterStringList(frontmatter, 'memory_writes');
@@ -7296,7 +7340,7 @@ async function createAgentTaskRecord(
 	recorded_at: string;
 	start_recovery: 'not_requested';
 }> {
-	const taskPath = buildTaskNotePath(input.taskId);
+	const taskPath = await taskPathForIdAsync(vaultRoot, input.taskId, input.context);
 	const taskAuditMetadata = {
 		target_type: 'agent_task',
 		task_stage: 'start',
@@ -7395,6 +7439,8 @@ async function createAgentTaskRecord(
 		{
 			tool: 'tracekeeper.start_task',
 			type: 'agent-task',
+			task_record_version: 2,
+			task_relations: [],
 			title: `Task ${input.taskId}`,
 			task_id: input.taskId,
 			status: 'active',
@@ -7919,6 +7965,14 @@ export async function callTool(
 				`Runtime principal ${context.principalId || 'unknown'} lacks capability ${contract.capability} for ${requestName}.`
 			);
 		}
+		const taskIdForWrite = typeof args.task_id === 'string' ? args.task_id.trim() : '';
+		if (taskIdForWrite && ['tracekeeper.capture_source', 'tracekeeper.analyze_source_request', 'tracekeeper.propose_memory', 'tracekeeper.distill_session', 'tracekeeper.write_session_note', 'tracekeeper.write_context_pack', 'tracekeeper.build_context_pack'].includes(requestName) && !context.writebackRecoveryOperationId) {
+			const vaultRoot = configuredVaultRoot(context);
+			const key = typeof args.idempotency_key === 'string' ? args.idempotency_key.trim() : '';
+			const prefix = requestName === 'tracekeeper.capture_source' ? 'capture-source' : requestName === 'tracekeeper.propose_memory' ? 'propose-memory' : null;
+			const existing = key && prefix ? await operationJournalForVault(vaultRoot, context).loadById(buildOperationIdFromIdempotencyKey(prefix, key)) : null;
+			if (!existing) { const task = await requireTaskForContext(vaultRoot, taskIdForWrite, context); if (!task && requestName !== 'tracekeeper.finish_task') throw new OperationConflictError('Task record is missing.'); }
+		}
 		const handler = TOOL_HANDLERS[requestName];
 		const result = await handler(args, context);
 		toolResult = toolResultWithError(result);
@@ -7927,7 +7981,9 @@ export async function callTool(
 		status = isToolResultFailure(toolResult) ? 'failed' : 'success';
 		toolResult = validateToolResult(requestName, toolResult);
 	} catch (error) {
-		if (requestName === 'tracekeeper.apply_approved_writeback') {
+		if (error instanceof TaskMigrationRequiredError) {
+			toolResult = toolError(`TASK_MIGRATION_REQUIRED: ${error.message}`);
+		} else if (requestName === 'tracekeeper.apply_approved_writeback') {
 			toolResult = toolError(boundedWritebackErrorMessage(error, auditVaultRoot));
 		} else if (error instanceof ToolInputError || error instanceof VaultPathError) {
 			toolResult = toolError(error.message);
@@ -8120,6 +8176,7 @@ async function handleStatus(rawArgs: StatusArgs, context: ToolInvocationContext)
 	return {
 		ok: true,
 		read_only: true,
+		task_relations: { issues: diagnoseTaskRelations([...view.catalog.values()].map((note) => ({ path: note.path, frontmatter: note.frontmatter, contentHash: note.contentHash, content: note.frontmatter.task_record_version === 2 ? view.diagnosticReader.read(note.path)?.text : undefined }))) },
 		log_storage: await createVaultOperationJournal(vaultRoot).inspect().catch(() => ({ issues: ['Log storage verification required.'] })),
 		vault_root: vaultRoot,
 		scanned_at: view.createdAt,
@@ -8785,7 +8842,7 @@ async function handleListSourceRequests(rawArgs: ListSourceRequestsArgs, context
 
 async function handleAnalyzeSourceRequest(
 	rawArgs: AnalyzeSourceRequestArgs,
-	context: ToolContext,
+	context: ToolInvocationContext,
 	sourceToolName = 'tracekeeper.analyze_source_request'
 ) {
 	const vaultRoot = configuredVaultRoot(context);
@@ -8796,9 +8853,16 @@ async function handleAnalyzeSourceRequest(
 	const updateStatus = coerceBoolean(rawArgs.update_request_status, 'update_request_status', true);
 	const forceReprocess = coerceBoolean(rawArgs.force_reprocess, 'force_reprocess', false);
 	const taskId = coerceOptionalString(rawArgs.task_id) || null;
+	const request = await readSourceRequestAsync(vaultRoot, requestPath, context);
+	const requestOwner = taskId || request.taskId;
+	if (requestOwner && !await requireTaskForContext(vaultRoot, requestOwner, context)) throw new OperationConflictError('Task record is missing.');
+	const execution = await SourceRequestExecution.begin({ journal: operationJournalForVault(vaultRoot, context), request, args: { ...rawArgs }, tool: sourceToolName, force: forceReprocess, recoveryId: context.writebackRecoveryOperationId, failure: context.operationFailureInjection,
+		beforeNew: async () => { const owner = taskId || request.taskId; if (owner && !await requireTaskForContext(vaultRoot, owner, context)) throw new OperationConflictError('Task record is missing.'); },
+	});
+	return execution.run(async () => {
 	const application = new SourceRequestApplicationService({
-		readRequest: async (requestPathValue) => readSourceRequestAsync(vaultRoot, requestPathValue, context),
-		readSourceText: async (sourcePath) => {
+		readRequest: async () => execution.payload.request,
+		readSourceText: (sourcePath) => execution.step(`source-input:${sourcePath}`, async () => {
 			try {
 				return await safeReadTextFileAsync(vaultRoot, sourcePath, context);
 			} catch (error) {
@@ -8807,46 +8871,50 @@ async function handleAnalyzeSourceRequest(
 				}
 				throw error;
 			}
-		},
-		writeNote: (input: SourceRequestWriteInput) => {
+		}),
+		writeNote: (input: SourceRequestWriteInput) => execution.step(`write:${input.kind}:${input.filename}`, async () => {
 			const allowedDir = input.kind === 'source' || input.kind === 'source_part'
 				? input.directory || SOURCES_DIR
 				: input.kind === 'report'
 					? SOURCE_ANALYSIS_REPORT_DIR
 					: MEMORY_PROPOSAL_DIR;
+			const owned = await findOperationOwnedNoteAsync(vaultRoot, allowedDir, input.filename, 'source_request_operation_id', execution.record.operation_id, context);
+			if (owned) return owned;
 			return buildAndWriteNoteAsync(
 				vaultRoot,
 				input.toolName,
 				allowedDir,
 				input.filename,
-				input.frontmatter,
+				{ ...input.frontmatter, source_request_operation_id: execution.record.operation_id, ...(input.kind === 'source' || input.kind === 'source_part' ? { source_operation_id: execution.record.operation_id } : { operation_id: execution.record.operation_id }) },
 				input.body,
 				input.taskId,
 				context,
-				input.metadata
+				input.metadata,
+				execution.record.operation_id
 			);
-		},
+		}),
 		updateRequestStatus: (requestPathValue, status) =>
-			updateRequestStatusAsync(vaultRoot, requestPathValue, status, context),
-		appendAudit: (input) => appendAuditEventAsync(vaultRoot, input, context),
-		updateTaskRecord: (taskIdValue, notePaths, proposals) => updateAgentTaskRecordAsync(
+			execution.step(`request-status:${status}`, () => updateRequestStatusAsync(vaultRoot, requestPathValue, status, context)),
+		appendAudit: (input) => execution.step(`audit:${input.status}:${input.targetPath}`, () => appendAuditEventAsync(vaultRoot, { ...input, operationId: execution.record.operation_id }, context)),
+		updateTaskRecord: (taskIdValue, notePaths, proposals) => execution.step('task-relations', () => updateAgentTaskRecordAsync(
 			vaultRoot,
 			taskIdValue,
 			{},
 			context,
 			{
-				source_captures: notePaths,
+				source_captures: notePaths.filter((target) => target.startsWith(`${SOURCES_DIR}/`)),
+				memory_writes: notePaths.filter((target) => !target.startsWith(`${SOURCES_DIR}/`)),
 				proposal_ids: proposals.map((proposal) => proposal.proposalId),
 				proposal_paths: proposals.map((proposal) => proposal.path),
 				proposal_link_targets: proposals.map((proposal) => proposal.linkTarget),
 			}
-		),
+		)),
 		updateManagedProposalReferences: (recordPath, proposals) =>
 			updateManagedProposalReferences(vaultRoot, recordPath, proposals, context),
 		assertSafeText: assertNoSensitiveText,
 		renderText: (zh, en) => contentText(context, zh, en),
 		contentLanguage: contentLanguageFromContext(context),
-		now: () => new Date().toISOString(),
+		now: () => execution.payload.now,
 		buildFilename: (rawFilename, fallbackPrefix) => buildSafeFilename(rawFilename, fallbackPrefix, context),
 		proposalDirectory: MEMORY_PROPOSAL_DIR,
 		renderMarkdownLink: (targetPath, sourcePath) =>
@@ -8861,6 +8929,7 @@ async function handleAnalyzeSourceRequest(
 		toolName: sourceToolName,
 	});
 	return { vault_root: vaultRoot, ...result };
+	});
 }
 
 
@@ -8876,7 +8945,7 @@ async function handleReviewQueueUnified(rawArgs: ReviewQueueArgs, context: ToolI
 	};
 }
 
-async function handleSourceRequest(rawArgs: SourceRequestArgs, context: ToolContext) {
+async function handleSourceRequest(rawArgs: SourceRequestArgs, context: ToolInvocationContext) {
 	const action = coerceSourceRequestAction(rawArgs.action, rawArgs);
 	const result = action === 'analyze'
 		? await handleAnalyzeSourceRequest(rawArgs, context, 'tracekeeper.source_request')
@@ -9289,6 +9358,7 @@ function wikiBatchStableBindingHash(
 		taskPath: binding.taskPath,
 		taskContentHash: binding.taskContentHash,
 		taskLinkedContentHash: binding.taskLinkedContentHash,
+		...(binding.taskRelationTarget ? { taskRelationTarget: binding.taskRelationTarget, taskRelationOperationId: binding.taskRelationOperationId } : {}),
 		writebackBlockHash: binding.writebackBlockHash,
 		touchedNotes: binding.touchedNotes,
 		effectKind: binding.effectKind,
@@ -9334,7 +9404,8 @@ async function currentWritebackEffect(
 			? buildApprovedWikiNoteWritebackBlock(
 				snapshot.proposalId,
 				snapshot.writebackContent,
-				operationId
+				operationId,
+				Boolean(payload.taskRelationTarget)
 			)
 			: payload.effectKind === 'update_managed_relations'
 				? {
@@ -9342,7 +9413,7 @@ async function currentWritebackEffect(
 					marker: batchOverride?.marker || `managed-relations:${snapshot.proposalId}`,
 				}
 			: buildApprovedWritebackBlock(snapshot.proposalId, snapshot.writebackContent);
-	const currentTaskPath = payload.taskId ? buildTaskNotePath(payload.taskId) : null;
+	const currentTaskPath = payload.taskId ? await taskPathForIdAsync(vaultRoot, payload.taskId, context) : null;
 	const currentTask = currentTaskPath
 		? await readCurrentVaultTextState(vaultRoot, currentTaskPath, context)
 		: null;
@@ -9900,7 +9971,7 @@ async function handleApplyApprovedWriteback(rawArgs: ApplyApprovedWritebackArgs,
 			const tokenPayload = writebackBindingPayload(decoded, rawConfirmationToken);
 			if (
 				hashText(rawConfirmationToken) !== payload.confirmationTokenHash
-				|| computePayloadHash(tokenPayload) !== computePayloadHash(payload)
+				|| computePayloadHash(tokenPayload) !== computePayloadHash((({ taskOriginalContent: _before, ...publicPayload }) => publicPayload)(payload))
 			) {
 				throw new OperationConflictError(
 					'Writeback confirmation token changed from the journaled operation.'
@@ -9939,6 +10010,11 @@ async function handleApplyApprovedWriteback(rawArgs: ApplyApprovedWritebackArgs,
 		);
 		assertMatchingWritebackBinding(decoded, current.binding);
 		payload = writebackBindingPayload(decoded, rawConfirmationToken);
+		if (payload.taskRelationTarget && payload.taskPath) {
+			const original = await readCurrentVaultTextState(vaultRoot, payload.taskPath, context);
+			if (!original || original.contentHash !== payload.taskContentHash) throw new OperationConflictError('Task changed while preparing its before image.');
+			payload.taskOriginalContent = original.content;
+		}
 		approvalStatus = proposalTransitionSnapshot(proposal).status;
 	}
 
@@ -10479,7 +10555,7 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolInvo
 				throw new ToolInputError('Auto-managed Wiki target must remain inside the Wiki root.');
 			}
 			const marker = `<!-- tracekeeper:wiki:auto operation_id="${input.operationId}" -->`;
-			const markdown = `${marker}\n${input.content.trim()}\n`;
+			const markdown = input.identityVersion === 1 ? `${ensureWikiIdentity(input.content.trim(), input.operationId)}\n${marker}\n` : `${marker}\n${input.content.trim()}\n`;
 			const existingTarget = await repository.readText(targetPath);
 			let duplicate = false;
 			if (input.effect === 'create_wiki_note') {
@@ -10493,6 +10569,7 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolInvo
 				}
 			} else {
 				if (!existingTarget) throw new OperationConflictError(`Managed Wiki target is missing: ${targetPath}`);
+				if (input.identityVersion === 1 && !parseMarkdown(existingTarget.content).frontmatter.fields.wiki_id) throw new OperationConflictError('Wiki identity requires explicit metadata migration.');
 				const proposedRelations = parseManagedRelationsBlock(input.content.trim());
 				const currentRelations = parseManagedRelationsBlock(existingTarget.content);
 				if (proposedRelations.status !== 'valid') {
@@ -10550,12 +10627,12 @@ async function handleProposeMemory(rawArgs: ProposeMemoryArgs, context: ToolInvo
 			await updateAgentTaskRecordAsync(vaultRoot, taskId, {}, context, {
 				memory_writes: [memoryPath],
 				...(operationId ? { auto_write_operation_ids: [operationId] } : {}),
-			});
+			}, '', '', operationId);
 		},
 		updateTaskProposalReference: async (taskId, proposal) => {
 			await updateManagedProposalReferences(
 				vaultRoot,
-				buildTaskNotePath(taskId),
+				await taskPathForIdAsync(vaultRoot, taskId, context),
 				[proposal],
 				context
 			);
@@ -10732,7 +10809,7 @@ async function handleLint(rawArgs: LintArgs, context: ToolInvocationContext) {
 	});
 	const limitedIssues = issues.slice(0, maxItems);
 	const maintenance = buildMaintenanceSnapshot(view, {
-		oldToNewParent: await loadSourceConsolidationRelationMap(vaultRoot),
+		oldToNewParent: await loadSourceConsolidationRelationMap(vaultRoot, view),
 		sourceArchiveEvidence: await loadSourceArchiveMetadataEvidence(vaultRoot, view),
 	});
 	const effectiveMaintenanceCandidates = view.source === 'index'
@@ -10816,42 +10893,8 @@ async function handleLint(rawArgs: LintArgs, context: ToolInvocationContext) {
 	};
 }
 
-async function loadSourceConsolidationRelationMap(vaultRoot: string): Promise<ReadonlyMap<string, string>> {
-	const root = `${TRACEKEEPER_OPERATIONS_DIR}/source-consolidations`;
-	const repository = new OperationalLogRepository(vaultRoot);
-	const relations = new Map<string, string>();
-	let entries: string[];
-	try {
-		entries = (await repository.list(root)).map(entry => path.basename(entry)).filter((entry) => entry.endsWith('.json') && !entry.endsWith('.archive.json')).sort();
-	} catch {
-		return relations;
-	}
-	for (const entry of entries) {
-		try {
-			const absolute = `${root}/${entry}`;
-			const raw = await repository.readText(absolute);
-			if (raw === null || Buffer.byteLength(raw) > 2 * 1024 * 1024) continue;
-			const journal = JSON.parse(raw) as {
-				status?: unknown;
-				outputs?: unknown;
-			};
-			if (journal.status !== 'completed' || !Array.isArray(journal.outputs)) continue;
-			for (const output of journal.outputs) {
-				if (!isRecord(output) || typeof output.path !== 'string' || typeof output.legacyPath !== 'string') continue;
-				const parent = sourceIndexPathForPart(output.path);
-				if (!parent) continue;
-				const existing = relations.get(output.legacyPath);
-				if (existing && existing !== parent) {
-					relations.delete(output.legacyPath);
-					continue;
-				}
-				relations.set(output.legacyPath, parent);
-			}
-		} catch {
-			// Invalid or oversized journals do not produce relation-replacement authority.
-		}
-	}
-	return relations;
+async function loadSourceConsolidationRelationMap(vaultRoot: string, view: KnowledgeReadView): Promise<ReadonlyMap<string, string>> {
+	return readVerifiedSourceReplacements(vaultRoot, new Map([...view.catalog.values()].map((row) => [row.path, row.contentHash])));
 }
 
 async function loadSourceArchiveMetadataEvidence(
@@ -11015,7 +11058,7 @@ async function handleRequestMaintenance(
 		);
 	}
 	const snapshot = buildMaintenanceSnapshot(view, {
-		oldToNewParent: await loadSourceConsolidationRelationMap(vaultRoot),
+		oldToNewParent: await loadSourceConsolidationRelationMap(vaultRoot, view),
 		sourceArchiveEvidence: await loadSourceArchiveMetadataEvidence(vaultRoot, view),
 	});
 	const byId = new Map(snapshot.candidates.map((item) => [item.candidate_id, item]));
@@ -11359,6 +11402,8 @@ async function createDistillProposal(
 }
 
 interface FinishTaskOperationPayload {
+	taskPath?: string;
+	taskRelationVersion?: 2;
 	requestHash?: string;
 	requestBindingHash?: string;
 	requestSnapshot?: ReturnType<typeof buildFinishTaskRequestSnapshot>;
@@ -11678,7 +11723,7 @@ async function ensureFinishTaskRecordExists(
 	context: ToolContext,
 	operationId: string
 ): Promise<string> {
-	const taskPath = buildTaskNotePath(input.taskId);
+	const taskPath = (input.taskPath || buildTaskNotePath(input.taskId));
 	const current = await readCurrentVaultTextState(input.vaultRoot, taskPath, context);
 	if (current) {
 		assertFinishTaskRecordBinding(
@@ -11727,6 +11772,7 @@ async function ensureFinishTaskRecordExists(
 		{
 			tool: 'tracekeeper.finish_task',
 			type: 'agent-task',
+			...(input.taskRelationVersion === 2 ? { task_record_version: 2, task_relations: [] } : {}),
 			title: `Task ${input.taskId}`,
 			task_id: input.taskId,
 			status: 'closing',
@@ -11829,7 +11875,7 @@ async function synchronizeFinishTaskTimestampFromRecord(
 ): Promise<void> {
 	const current = await readCurrentVaultTextState(
 		input.vaultRoot,
-		buildTaskNotePath(input.taskId),
+		(input.taskPath || buildTaskNotePath(input.taskId)),
 		context
 	);
 	if (!current) {
@@ -11905,7 +11951,7 @@ async function markFinishTaskRecordClosing(
 		}
 	}
 	throw new OperationConflictError(
-		`Task record could not be reconstructed for finish-task operation: ${buildTaskNotePath(input.taskId)}`
+		`Task record could not be reconstructed for finish-task operation: ${(input.taskPath || buildTaskNotePath(input.taskId))}`
 	);
 }
 
@@ -12270,7 +12316,7 @@ async function readFinishTaskDurableOutputEvidence(
 	const finishRecord = await readCurrentVaultTextState(input.vaultRoot, finishRecordPath, context);
 	const task = await readCurrentVaultTextState(
 		input.vaultRoot,
-		buildTaskNotePath(input.taskId),
+		(input.taskPath || buildTaskNotePath(input.taskId)),
 		context
 	);
 	const finishRecordFrontmatter = finishRecord
@@ -12729,6 +12775,8 @@ async function buildFinishTaskOperationPayload(
 		requestSnapshot,
 		memoryRecordWriteVersion: 2,
 		taskRecordCloseoutVersion: 1,
+		taskRelationVersion: 2,
+		taskPath: await taskPathForIdAsync(vaultRoot, taskId, context),
 		taskFinishedAt,
 		projectMemoryCreatedAt: taskFinishedAt,
 		projectMemoryAgentType: (() => {
@@ -12793,7 +12841,7 @@ function resolveFinishTaskRecordPath(
 	context: ToolContext
 ): string {
 	return finishTaskUsesSingleTaskRecord(input)
-		? buildTaskNotePath(input.taskId)
+		? (input.taskPath || buildTaskNotePath(input.taskId))
 		: resolveFinishTaskSessionNotePath(input, context);
 }
 
@@ -12819,7 +12867,7 @@ async function findFinishTaskRecord(
 		return sessionNote;
 	}
 
-	const taskPath = buildTaskNotePath(input.taskId);
+	const taskPath = (input.taskPath || buildTaskNotePath(input.taskId));
 	let task = await readCurrentVaultTextState(input.vaultRoot, taskPath, context);
 	if (!task) {
 		await ensureFinishTaskRecordExists(input, context, operationId);
@@ -13271,7 +13319,7 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 		...durableOutputFrontmatterFields(durableOutputEvidence),
 	};
 	const taskReferences = {
-		memory_writes: finishTaskUsesSingleTaskRecord(input)
+		...(input.taskRelationVersion === 2 ? { related_wiki: input.relatedWiki, related_sources: input.relatedSources } : {}),		memory_writes: finishTaskUsesSingleTaskRecord(input)
 			? autoWritePaths
 			: [finishRecord.path, ...autoWritePaths],
 		proposal_ids: proposalIds,
@@ -13286,7 +13334,8 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 		context,
 		taskReferences,
 		completionBody,
-		`^finish-${operationId}`
+		`^finish-${operationId}`,
+		operationId
 	);
 	let taskPath = await updateTaskRecord();
 	if (!taskPath && finishTaskUsesSingleTaskRecord(input)) {
@@ -13294,7 +13343,7 @@ async function updateFinishTaskRecord(input: FinishTaskOperationPayload, context
 		taskPath = await updateTaskRecord();
 	}
 	if (!taskPath) {
-		throw new ToolInputError(`Task record is missing for finish-task operation: ${buildTaskNotePath(input.taskId)}`);
+		throw new ToolInputError(`Task record is missing for finish-task operation: ${(input.taskPath || buildTaskNotePath(input.taskId))}`);
 	}
 	if (!finishTaskUsesSingleTaskRecord(input)) {
 		await updateManagedProposalReferences(
@@ -13434,7 +13483,7 @@ async function executeFinishTaskOperation(
 		operation_id: operationId,
 		idempotency_key: idempotencyKey,
 		task_id: input.taskId,
-		task_path: buildTaskNotePath(input.taskId),
+		task_path: finishTaskUsesSingleTaskRecord(input) ? finishRecord.path : (input.taskPath || buildTaskNotePath(input.taskId)),
 		path: finishRecord.path,
 		session_path: finishRecord.path,
 		activity_path: finishRecord.activity_path,
@@ -13507,9 +13556,10 @@ async function readTaskLifecycleStateAsync(
 	taskId: string,
 	context: ToolContext
 ): Promise<{ status: string; finishOperationId: string; finishRequestHash: string } | null> {
+	const locatedPath = await taskPathForIdAsync(vaultRoot, taskId, context);
 	try {
 		if (context.vaultRepository) {
-			const taskFile = await context.vaultRepository.readText(buildTaskNotePath(taskId));
+			const taskFile = await context.vaultRepository.readText(locatedPath);
 			if (!taskFile) {
 				return null;
 			}
@@ -13520,7 +13570,7 @@ async function readTaskLifecycleStateAsync(
 				finishRequestHash: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['finish_request_hash'])),
 			};
 		}
-		const absolutePath = resolveSafeNotePath(vaultRoot, buildTaskNotePath(taskId), pathSafetyOptions(context));
+		const absolutePath = resolveSafeNotePath(vaultRoot, locatedPath, pathSafetyOptions(context));
 		const parsed = parseMarkdown(fs.readFileSync(absolutePath, 'utf8'));
 		return {
 			status: stripYamlQuotes(readFrontmatterString(parsed.frontmatter.fields, ['status'])).toLowerCase(),
@@ -13554,7 +13604,7 @@ async function releaseIncompatibleFinishTaskBinding(
 			? requestSnapshot.task_id
 			: '';
 	if (!taskId) return;
-	const taskPath = buildTaskNotePath(taskId);
+	const taskPath = await taskPathForIdAsync(vaultRoot, taskId, context);
 	const current = await readCurrentVaultTextState(vaultRoot, taskPath, context);
 	if (!current) return;
 	const frontmatter = parseMarkdown(current.content).frontmatter.fields;
@@ -13589,7 +13639,15 @@ async function handleFinishTask(rawArgs: FinishTaskArgs, context: ToolInvocation
 	const preparationKey = `finish-preparation:${computePayloadHash({ vaultRoot, taskIdentity })}`;
 	// 准备阶段也读取任务正文；与同任务的提交串行，避免精确重试撞上首个请求的写入。
 	const release = await operationJournalForVault(vaultRoot, context).acquireLock(preparationKey, 'finish-preparation');
-	try { return await prepareAndFinishTask(rawArgs, context); }
+	try {
+		const suppliedTask = coerceOptionalString(rawArgs.task_id);
+		if (suppliedTask && !context.writebackRecoveryOperationId) {
+			const key = coerceOptionalString(rawArgs.idempotency_key);
+			const existing = key ? await operationJournalForVault(vaultRoot, context).loadById(buildOperationIdFromIdempotencyKey('finish-task', key)) : null;
+			if (!existing) await requireTaskForContext(vaultRoot, suppliedTask, context);
+		}
+		return await prepareAndFinishTask(rawArgs, context);
+	}
 	finally { await release(); }
 }
 

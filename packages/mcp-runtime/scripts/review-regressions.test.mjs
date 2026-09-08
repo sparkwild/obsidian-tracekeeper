@@ -172,7 +172,7 @@ test('project name and returned project id apply the same repository conflict ru
 	assert.equal(reused.confidence, initial.confidence);
 });
 
-test('managed proposal links use YAML arrays and replace an existing block sequence cleanly', async (t) => {
+test('V2 proposal relations append without reviving legacy link fields', async (t) => {
 	const f = await fixture(t);
 	f.write('01_knowledge/memory/global/index.md', '# Global');
 	const repository = new NodeFsVaultRepository({ vaultRoot: f.vaultRoot });
@@ -187,16 +187,15 @@ test('managed proposal links use YAML arrays and replace an existing block seque
 	const { parseMarkdown } = await import('@tracekeeper/core');
 	const taskPath = `00_tracekeeper/work/tasks/${start.task_id}.md`;
 	let text = fs.readFileSync(path.join(f.vaultRoot, taskPath), 'utf8');
-	const links = parseMarkdown(text).frontmatter.fields.proposal_links;
-	assert.equal(Array.isArray(links), true);
-	assert.equal(links.length, 2);
-	text = text.replace(/^proposal_links:.*$/m, 'proposal_links:\n' + links.map(link => `  - ${JSON.stringify(link)}`).join('\n'));
-	f.write(taskPath, text);
+	const { parseTaskRecord } = await import('@tracekeeper/core');
+	assert.equal(parseTaskRecord(parseMarkdown(text).frontmatter.fields).relations.length, 2);
+	assert.doesNotMatch(text, /^proposal_links:/m);
 	success(await callTool('tracekeeper.propose_memory', { task_id: start.task_id, memory_scope: 'global',
 		proposal_kind: 'agent_preference', content: 'Preference 2', claim_key: 'pref:links-2', idempotency_key: 'link-proposal-2' }, context()));
 	const parsed = parseMarkdown(fs.readFileSync(path.join(f.vaultRoot, taskPath), 'utf8'));
 	assert.deepEqual(parsed.frontmatter.errors, []);
-	assert.equal(parsed.frontmatter.fields.proposal_links.length, 3);
+	assert.equal(parseTaskRecord(parsed.frontmatter.fields).relations.length, 3);
+	assert.equal(parsed.frontmatter.fields.proposal_links, undefined);
 });
 
 

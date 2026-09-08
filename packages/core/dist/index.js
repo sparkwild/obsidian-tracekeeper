@@ -42,3 +42,7 @@ __exportStar(require("./maintenance"), exports);
 __exportStar(require("./log-files"), exports);
 __exportStar(require("./log-archive"), exports);
 __exportStar(require("./log-storage"), exports);
+__exportStar(require("./task-record"), exports);
+__exportStar(require("./task-maintenance"), exports);
+__exportStar(require("./task-writeback"), exports);
+__exportStar(require("./source-history"), exports);

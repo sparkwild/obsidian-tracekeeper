@@ -59,8 +59,10 @@ truth. A stale replacement fails instead of silently overwriting newer content.
 `start_task` creates one canonical Markdown record under
 `00_tracekeeper/work/tasks/`. `finish_task` closes that same record by adding
 the final status, summary, execution details, durable-output snapshot, and
-proposal references. If the canonical file is missing at finish time, the
-Runtime exclusively recreates it at the same task path from the stable finish
+proposal references. Identity lookup precedes path construction: a uniquely
+identified task renamed inside the controlled task directory is updated in place;
+duplicates and moves outside that directory block writes. If no task is found, the
+Runtime exclusively recreates it at the default task path from the stable finish
 payload, marks `start_record_missing`, `task_record_origin`, and
 `reconstructed_at`, and then writes the full closeout. It does not invent an
 unknown start time. Normal closeout does not create a second file under
@@ -83,6 +85,70 @@ hashes plus every item boundary, then verifies the nested writeback operation,
 target content, and task content before advancing durable progress. The batch
 journal contains hashes and identities only; writeback content is reconstructed
 from revision-bound proposals when recovery needs it.
+
+## Execution Relations And Navigation
+
+New task records use `task_record_version: 2` and a structured `task_relations`
+YAML sequence in the canonical Markdown. Core owns parsing, legacy aliases,
+validation, relation updates, current-target resolution and the deterministic
+writeback task planner. Legacy CSV columns are import inputs, not parallel V2
+write targets. Record status and project binding remain in the same file.
+
+Each relation retains its role, recorded path, target kind and stable identity,
+operation identity and available historical time/content proof. Roles distinguish
+captured Source, written output, review proposal and explicit context references.
+Resolution describes the current target's identity/location; it does not replace
+an operation's terminal result or the frozen durable-output-at-finish snapshot.
+Unknown historical evidence remains unverified. Duplicate identities never pick
+a winner, and a different file at an old path does not inherit the relationship.
+
+Wiki identity is `wiki_id`. Existing Wiki identity backfill is human-controlled;
+new governed Wiki creation includes identity in its versioned write plan. Source
+identity uses its capture operation, or consolidation migration and shard identity,
+rather than the reusable `source_id` alone. Source replacement evidence is shared
+between Core, Runtime and native Source status and requires verified receipt,
+part and parent-index hashes. Several old references may resolve to one parent;
+their individual recorded paths remain in the task.
+
+Task-history Recall, Activity, Source status and lint consume the same facts.
+Hot Runtime identity lookup uses the bound index catalog and reads only the
+selected task. Diagnostics never initialize a key, directory, anchor or Wiki ID.
+
+`00_tracekeeper/work/index.md` links to project/repository groups under
+`00_tracekeeper/work/task_index/`, then UTC month pages, then unchanged task
+locations. A verified project takes precedence; otherwise an exact repository
+match or repository navigation group is used. Ambiguous identity is a separate
+needs-verification group, and missing dates use `undated`. Grouping creates no
+Memory project identity. Body links and index pages are rebuildable projections,
+with ownership hashes that detect user edits. Derived index changes do not advance
+knowledge pagination generation; task-body and Wiki metadata changes still do.
+Operational navigation stays outside semantic knowledge graph and Memory scopes.
+
+Source analysis now persists an execution round, stable clock, input snapshots
+and step results. Recovery reuses written outputs before finishing task relations.
+A missing relation commit leaves the operation recoverable; a failed derived
+navigation refresh does not repeat business effects. Relation changes mark the
+projection pending. Native link-only rewrites that exactly match authoritative
+rows may refresh the projection hash; additional user text remains a conflict.
+Source-analysis step values are encrypted; progress anchors retain only their
+hashes. Native refresh waits while operations require attention or a native
+edit modal is open; the final native process callback rechecks that deferral
+before replacing a task. This avoids racing Obsidian link-update offsets. V2 approved writeback keeps an encrypted before
+image bound to the task hash for exact, edit-safe compensation. Old journaled
+writeback/closeout plans retain their original serializer and hash boundaries.
+
+Historical task migration is explicit. New writes to an unmigrated task return
+`TASK_MIGRATION_REQUIRED`; pending old operations retain their original recovery
+route. The native maintenance command previews exact files and unresolved evidence,
+pauses Runtime, creates a consistent external whole-Vault backup, then applies
+Wiki IDs, tasks and navigation with compare-and-replace. It yields after each
+100 task records. The approved plan and before/after content are encrypted in the
+existing operation journal; only bounded path/hash progress is in step anchors.
+Converted files retain a migration commit reference; new related writes stay
+blocked until its authenticated terminal commit, including a crash between file
+replacement and progress persistence. Continuation authenticates that plan and
+verifies the original backup. Restore
+always uses a new Vault directory. Startup and reads never migrate old records.
 
 ## Read And Recall Flow
 

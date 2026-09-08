@@ -998,7 +998,7 @@ class NodeFileOperationJournal {
                 completed.push({ name, operationId: meta.operation_id, updatedAt: meta.updated_at });
             else {
                 const pending = await this.readRecord(node_path_1.default.join(this.directory, name));
-                for (const id of JSON.stringify(pending).match(/(?:start-task|finish-task|capture-source|propose-memory|writeback|wiki-review-batch)-[A-Za-z0-9_-]+/g) ?? [])
+                for (const id of JSON.stringify(pending).match(/(?:start-task|finish-task|capture-source|source-request|task-relations|propose-memory|writeback|wiki-review-batch)-[A-Za-z0-9_-]+/g) ?? [])
                     pinned.add(id);
             }
         }

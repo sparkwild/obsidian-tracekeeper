@@ -30,6 +30,10 @@ product and a bounded Agent integration.
   under the activated hidden log store. Node.js gzip and authenticated encryption
   provide bounded compression; no database is introduced. See
   [recoverable writes](../architecture/KNOWLEDGE_RUNTIME.md#recoverable-writes).
+- Versioned task relationships use the existing YAML parser and canonical task
+  Markdown. Project/month pages use native link generation; the maintenance
+  surface uses Obsidian Modal, Setting and Command components without new UI
+  dependencies. Migration reuses the encrypted journal and whole-Vault backup.
 - No hosted database, remote vector store, or cloud control plane is required.
 
 ## Agent Protocol

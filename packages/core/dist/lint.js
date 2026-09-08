@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.lintNotes = lintNotes;
+const task_record_1 = require("./task-record");
 const node_path_1 = __importDefault(require("node:path"));
 const graph_health_1 = require("./graph-health");
 const knowledge_architecture_1 = require("./knowledge-architecture");
@@ -238,6 +239,8 @@ function collectManagedProposalReferenceIssues(note, edges) {
     if (type !== 'agent-task' && type !== 'session-note') {
         return [];
     }
+    if (note.frontmatter.task_record_version !== undefined)
+        return [];
     const proposalIds = readManagedProposalValues(note, 'proposal_ids');
     const proposalPaths = readManagedProposalValues(note, 'proposal_paths');
     const proposalLinks = readManagedProposalValues(note, 'proposal_links');
@@ -297,7 +300,7 @@ function collectManagedProposalReferenceIssues(note, edges) {
     return issues;
 }
 function lintNotes(vaultRoot, notes, options = {}) {
-    const issues = [];
+    const issues = (0, task_record_1.diagnoseTaskRelations)(notes.map((note) => ({ path: note.relativePath, frontmatter: note.frontmatter, contentHash: note.contentHash, content: note.text }))).map((issue) => ({ ...issue, severity: 'warning', line: 1 }));
     const graphProfile = (0, graph_health_1.normalizeGraphProfile)(options.graphProfile);
     const strictStructureSeverity = graphProfile === 'strict' ? 'error' : 'warning';
     const graphStructureEnabled = graphProfile !== 'off';

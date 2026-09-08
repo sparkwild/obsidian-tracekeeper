@@ -2264,6 +2264,7 @@ test('Wiki disabled and auto-managed policies remain independent from Memory rul
 	assert.match(fixture.read(target), /01_knowledge\/sources\/files\/auto-policy-source/);
 
 	fixture.write(WIKI_PATH, [
+		'---', 'wiki_id: wiki-auto-fixture', '---',
 		'# User Wiki',
 		'',
 		'Keep user body.',
@@ -2304,6 +2305,7 @@ test('auto-managed Wiki recovery preserves a later valid user relation edit', as
 	fixture.write(desiredPath, '# Desired\n');
 	fixture.write(userPath, '# User edited\n');
 	fixture.write(WIKI_PATH, [
+		'---', 'wiki_id: wiki-auto-fixture', '---',
 		'# User Wiki',
 		'',
 		'Keep user body.',
@@ -2333,6 +2335,7 @@ test('auto-managed Wiki recovery preserves a later valid user relation edit', as
 	assert.equal(interrupted.isError, true);
 	assert.equal(injected, true);
 	const userEdited = [
+		'---', 'wiki_id: wiki-auto-fixture', '---',
 		'# User Wiki',
 		'',
 		'Keep user body.',

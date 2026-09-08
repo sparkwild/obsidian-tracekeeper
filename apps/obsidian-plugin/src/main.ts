@@ -1,3 +1,5 @@
+import { TaskMaintenanceModal } from './features/activity/task-maintenance-modal';
+import { maintainTaskNavigation } from '@tracekeeper/core';
 import { LogManagementModal } from './features/runtime/log-management-modal';
 import { OperationalLogRepository, isOperationalLogPath, logHash, createVaultOperationJournal, logStorageIsActive } from '@tracekeeper/core';
 import { inspectHistoricalRecords } from './features/observability/historical-record-diagnostics';
@@ -536,6 +538,8 @@ export default class TracekeeperPlugin extends Plugin {
 	private localToolExecutor!: LocalToolExecutor;
 	private readonly operationJournalProvider = createOperationJournalProvider();
 	private vaultRepository!: ObsidianVaultRepository;
+	private taskMaintenanceTimer: number | null = null;
+	private taskMaintenanceBusy = false;
 	private logMaintenanceBusy = false;
 	private logMaintenanceStopped = false;
 	private lastLogMaintenance = 0;
@@ -838,6 +842,7 @@ export default class TracekeeperPlugin extends Plugin {
 		try { await this.operationJournalProvider(this.getVaultRoot()).recoverStorage(); } catch { /* 日志管理保留故障诊断入口，不能因恢复失败卸载整个插件。 */ }
 		await this.startMcpRuntime();
   this.addCommand({ id: 'manage-log-storage', name: ui('日志管理', 'Manage log storage'), callback: () => this.openLogManagement() });
+		this.addCommand({ id: 'manage-task-relations', name: ui('任务关系维护', 'Manage task relations'), callback: () => this.openTaskMaintenance() });
   this.registerInterval(window.setInterval(() => {
    if (this.settings.logAutoArchive === false || this.logMaintenanceBusy || !logStorageIsActive(this.getVaultRoot())) return;
    void (async () => {
@@ -985,6 +990,7 @@ export default class TracekeeperPlugin extends Plugin {
 				.then(async () => {
 					await this.openPendingWikiReviewBatchRecovery();
 					await this.openPendingSourceArchivePurgeRecovery();
+					this.scheduleTaskRelationMaintenance();
 				})
 				.catch((error) => console.error('tracekeeper failed to recover Wiki review batch', error));
 			void this.openOnboardingEntryIfNeeded().catch((error) => {
@@ -1029,6 +1035,52 @@ export default class TracekeeperPlugin extends Plugin {
 		}
 	}
 
+	private scheduleTaskRelationMaintenance(): void {
+		if (this.logMaintenanceStopped || this.taskMaintenanceBusy) return;
+		if (this.taskMaintenanceTimer !== null) window.clearTimeout(this.taskMaintenanceTimer);
+		this.taskMaintenanceTimer = window.setTimeout(() => {
+			this.taskMaintenanceTimer = null;
+			void this.maintainTaskRelations();
+		}, 1500);
+	}
+
+	private async maintainTaskRelations(): Promise<void> {
+		if (this.taskMaintenanceBusy || this.logMaintenanceBusy || this.logMaintenanceStopped) return;
+		// 原生改链在用户确认前保留旧偏移；后台写入必须让出这段编辑窗口。
+		const canWrite = () => !this.logMaintenanceStopped && !this.app.workspace.containerEl.ownerDocument.querySelector('.modal-container');
+		if (!canWrite()) { this.scheduleTaskRelationMaintenance(); return; }
+		this.taskMaintenanceBusy = true;
+		let deferred = false;
+		try {
+			const journal = createVaultOperationJournal(this.getVaultRoot());
+			const health = await journal.inspect();
+			if (health.attention.length || health.issues.length) return;
+			const repository = this.vaultRepository;
+			const result = await maintainTaskNavigation({
+				readText: (path) => repository.readText(path),
+				listMarkdown: (scope) => repository.listMarkdown(scope),
+				createText: (path, content) => repository.createText(path, content),
+				replaceText: (path, version, content) => repository.replaceText(path, version, content, canWrite),
+				deleteText: (path, version) => repository.deleteText(path, version),
+			}, (target, source) => {
+				const file = this.app.vault.getAbstractFileByPath(target);
+				return file instanceof TFile ? this.app.fileManager.generateMarkdownLink(file, source) : `[[${target.replace(/\.md$/, '')}]]`;
+			}, canWrite);
+			deferred = result.deferred === true || !canWrite();
+		} catch (error) { console.error('tracekeeper task navigation requires maintenance', error); }
+		finally { this.taskMaintenanceBusy = false; if (deferred) this.scheduleTaskRelationMaintenance(); }
+	}
+
+	openTaskMaintenance(): void {
+		new TaskMaintenanceModal(this.app, {
+			vaultRoot: this.getVaultRoot(), repository: this.vaultRepository,
+			link: (target, source) => { const file = this.app.vault.getAbstractFileByPath(target); return file instanceof TFile ? this.app.fileManager.generateMarkdownLink(file, source) : `[[${target.replace(/\.md$/, '')}]]`; },
+			pickFolder: async () => { const api = this.getDesktopNodeApi(); if (!api?.dialog) throw new Error('Directory selection is unavailable.'); const result = await api.dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] }); return result.canceled ? null : result.filePaths[0] ?? null; },
+			pause: async () => { if (this.logMaintenanceBusy || this.taskMaintenanceBusy) throw new Error('Maintenance is already running.'); this.logMaintenanceBusy = true; await this.stopMcpRuntime(); },
+			resume: async () => { this.operationJournalProvider.clear?.(); this.logMaintenanceBusy = false; await this.rebuildKnowledgeIndex(false); if (!this.logMaintenanceStopped) await this.startMcpRuntime(); },
+		}).open();
+	}
+
 	openLogManagement(): void {
 		new LogManagementModal(this.app, {
 			getVaultRoot: () => this.getVaultRoot(), automatic: () => this.settings.logAutoArchive !== false,
@@ -1046,6 +1098,7 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		if (this.taskMaintenanceTimer !== null) window.clearTimeout(this.taskMaintenanceTimer);
 		this.logMaintenanceStopped = true;
 		this.stopAutoRefresh();
 		this.oauthApprovalContext = null;
@@ -1325,6 +1378,7 @@ export default class TracekeeperPlugin extends Plugin {
 	}
 
 	private scheduleAutoRefreshForPath(path: string): void {
+		if (/^(00_tracekeeper\/(work\/tasks|inbox\/review_queue)|01_knowledge|02_archive)\//.test(path)) this.scheduleTaskRelationMaintenance();
 		if (!this.settings.autoRefreshEnabled || !this.isAutoRefreshRelevantPath(path) || !this.hasAutoRefreshTargetViews()) {
 			return;
 		}

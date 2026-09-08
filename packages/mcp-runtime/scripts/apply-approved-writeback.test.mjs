@@ -203,11 +203,13 @@ function createFixture(t, options = {}) {
 
 	const targetPath = options.targetPath || TARGET_PATH;
 	if (!options.skipTarget) {
-		writeNote(vaultRoot, targetPath, options.targetText || '# Demo Memory\n');
+		writeNote(vaultRoot, targetPath, targetPath.startsWith('01_knowledge/wiki/') ? require('@tracekeeper/core').ensureWikiIdentity(options.targetText || '# Demo Memory\n', 'fixture-wiki') : options.targetText || '# Demo Memory\n');
 	}
 	writeNote(vaultRoot, TASK_PATH, options.taskText || [
 		'---',
 		'type: agent-task',
+		'task_record_version: 2',
+		'task_relations: []',
 		'task_id: atomic-task',
 		'status: active',
 		'---',
@@ -1318,7 +1320,7 @@ test('proposal drift after the target effect is compensated and becomes a termin
 });
 
 test('proposal drift preserves preexisting stable task references while compensating the added link', async (t) => {
-	const originalTask = [
+	let originalTask = [
 		'---',
 		'type: agent-task',
 		'task_id: atomic-task',
@@ -1332,6 +1334,8 @@ test('proposal drift preserves preexisting stable task references while compensa
 		'',
 	].join('\n');
 	const fixture = createFixture(t, { taskText: originalTask });
+	originalTask = require('@tracekeeper/core').migrateTaskRecord(originalTask, [{ path: PROPOSAL_PATH, frontmatter: parseMarkdown(fixture.read(PROPOSAL_PATH)).frontmatter.fields }]);
+	fixture.write(TASK_PATH, originalTask);
 	const originalTarget = fixture.read(TARGET_PATH);
 	const previewResult = await preview(fixture);
 	fixture.context.operationFailureInjection = (context) => {
@@ -1361,7 +1365,7 @@ test('proposal drift preserves preexisting stable task references while compensa
 
 test('proposal drift compensates noncanonical task-list formatting without dropping prior references', async (t) => {
 	const sessionPath = '00_tracekeeper/work/sessions/atomic-task.md';
-	const originalTask = [
+	let originalTask = [
 		'---',
 		'type: agent-task',
 		'task_id: atomic-task',
@@ -1374,6 +1378,8 @@ test('proposal drift compensates noncanonical task-list formatting without dropp
 		'',
 	].join('\n');
 	const fixture = createFixture(t, { taskText: originalTask });
+	originalTask = require('@tracekeeper/core').migrateTaskRecord(originalTask, [{ path: PROPOSAL_PATH, frontmatter: parseMarkdown(fixture.read(PROPOSAL_PATH)).frontmatter.fields }]);
+	fixture.write(TASK_PATH, originalTask);
 	const originalTarget = fixture.read(TARGET_PATH);
 	const previewResult = await preview(fixture);
 	fixture.context.operationFailureInjection = (context) => {

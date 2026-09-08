@@ -243,6 +243,8 @@ test('capture_source validates mode/content and links a captured note to an exis
 	fixture.write('00_tracekeeper/work/tasks/capture-task.md', [
 		'---',
 		'type: agent_task',
+		'task_record_version: 2',
+		'task_relations: []',
 		'task_id: capture-task',
 		'status: active',
 		'---',

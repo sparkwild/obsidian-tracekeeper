@@ -107,6 +107,8 @@ function boundedWritebackPayload(payload) {
         taskPath: payload.taskPath,
         taskContentHash: payload.taskContentHash,
         taskLinkedContentHash: payload.taskLinkedContentHash,
+        ...(payload.taskOriginalContent !== undefined ? { taskOriginalContent: payload.taskOriginalContent } : {}),
+        ...(payload.taskRelationTarget ? { taskRelationTarget: payload.taskRelationTarget, taskRelationOperationId: payload.taskRelationOperationId } : {}),
         taskHadTargetReference: payload.taskHadTargetReference,
         taskHadProposalReference: payload.taskHadProposalReference,
         ...(hasStableProposalReferenceFlags

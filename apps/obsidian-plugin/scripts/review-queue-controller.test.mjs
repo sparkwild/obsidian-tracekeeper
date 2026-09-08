@@ -21,7 +21,8 @@ globalThis.window = globalThis;
 const hashContent = (value) => createHash('sha256').update(value, 'utf8').digest('hex');
 const proposalPath = '00_tracekeeper/inbox/review_queue/proposal.md';
 const targetPath = '01_knowledge/wiki/stale-target.md';
-const targetContentHash = hashContent('# Stale target\n');
+const fixtureWiki = (content, seed = 'fixture-target') => require('@tracekeeper/core').ensureWikiIdentity(content, seed);
+const targetContentHash = hashContent(fixtureWiki('# Stale target\n'));
 let computeProposalContentHashForTest;
 let computeProposalRevisionForTest;
 let proposalTransitionReceiptFromFrontmatterForTest;
@@ -401,7 +402,7 @@ function createHarness(options = {}) {
 		stat: { mtime: Date.parse('2026-07-30T00:00:00.000Z') },
 		frontmatter: { title: 'Stale target' },
 		body: '# Stale target\n',
-		content: '# Stale target\n',
+		content: fixtureWiki('# Stale target\n'),
 	});
 	files.set('00_tracekeeper/work/tasks/task-1.md', {
 		__tracekeeper_kind: 'file',
@@ -409,7 +410,7 @@ function createHarness(options = {}) {
 		extension: 'md',
 		basename: 'task-1',
 		stat: { mtime: Date.parse('2026-07-30T00:00:00.000Z') },
-		content: '# Task 1\n',
+		content: '---\ntype: agent-task\ntask_id: task-1\ntask_record_version: 2\ntask_relations: []\n---\n# Task 1\n',
 	});
 
 	const beforeMutation = async (kind, file) => {
@@ -435,6 +436,7 @@ function createHarness(options = {}) {
 
 	const app = {
 		vault: {
+			getMarkdownFiles: () => [...files.values()].filter((file) => file.extension === 'md'),
 			getAbstractFileByPath(filePath) {
 				return files.get(filePath) || null;
 			},
@@ -544,6 +546,8 @@ function createHarness(options = {}) {
 						const { planApprovedWritebackTaskLink } = require('@tracekeeper/mcp-runtime');
 						taskFile.content = planApprovedWritebackTaskLink({
 							taskContent: taskFile.content,
+							operationId: override.batchOperationId,
+							targetIdentity: prepared.relationTargetIdentity,
 							targetPath: prepared.target_note,
 							proposalId: currentProposalFromFile(proposalFile).proposalId,
 							proposalPath: args.proposal_path,
@@ -591,9 +595,12 @@ function createHarness(options = {}) {
 				);
 				const proposal = currentProposalFromFile(files.get(args.proposal_path));
 				const taskFile = proposal.taskId ? files.get(`00_tracekeeper/work/tasks/${proposal.taskId}.md`) : null;
+				const relationTargetIdentity = require('@tracekeeper/core').taskTargetIdentity({ path: result.target_note, frontmatter: require('@tracekeeper/core').parseMarkdown(files.get(result.target_note)?.content || fixtureWiki(result.writeback_preview, proposal.proposalId)).frontmatter.fields });
 				const taskPlan = taskFile
 					? require('@tracekeeper/mcp-runtime').planApprovedWritebackTaskLink({
 						taskContent: taskFile.content,
+						operationId: override.batchOperationId,
+						targetIdentity: relationTargetIdentity,
 						targetPath: result.target_note,
 						proposalId: proposal.proposalId,
 						proposalPath: proposal.path,
@@ -602,6 +609,7 @@ function createHarness(options = {}) {
 					})
 					: { contentHashBefore: '', contentHashAfter: '' };
 				const internal = {
+					relationTargetIdentity,
 					...result,
 					batch_writeback_operation_id: `writeback-${override.previewNonce.slice(0, 24)}`,
 					batch_writeback_idempotency_key: `apply-approved-writeback:${override.previewNonce}`,
@@ -781,7 +789,7 @@ function createNativeTransitionHarness(options = {}) {
 			extension: 'md',
 			basename: 'task-1',
 			stat: { mtime: Date.parse('2026-07-30T00:00:00.000Z') },
-			content: '# Task 1\n',
+			content: '---\ntype: agent-task\ntask_id: task-1\ntask_record_version: 2\ntask_relations: []\n---\n# Task 1\n',
 		}],
 	]);
 	let frontmatterWrites = 0;
@@ -790,6 +798,7 @@ function createNativeTransitionHarness(options = {}) {
 	let textCalls = 0;
 	const app = {
 		vault: {
+			getMarkdownFiles: () => [...files.values()].filter((file) => file.extension === 'md'),
 			getAbstractFileByPath(filePath) {
 				return files.get(filePath) || null;
 			},
@@ -962,6 +971,7 @@ try {
 			return folder;
 		};
 		const putFile = (filePath, content) => {
+			if (filePath.startsWith('01_knowledge/wiki/')) content = fixtureWiki(content, filePath);
 			const parentPath = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '';
 			const parent = ensureFolder(parentPath);
 			let record = entries.get(filePath);
@@ -2161,11 +2171,11 @@ try {
 		const taskPath = `00_tracekeeper/work/tasks/${taskId}.md`;
 		const taskContent = await harness.app.vault.read(harness.app.vault.getAbstractFileByPath(taskPath));
 		assert.equal(hashVaultContent(taskContent), preview.taskPlans[0].finalContentHash);
-		const taskFields = parseMarkdown(taskContent).frontmatter.fields;
-		assert.equal(String(taskFields.memory_writes).split(', ').length, 12);
-		assert.equal(String(taskFields.proposal_ids).split(', ').length, 12);
-		assert.equal(String(taskFields.proposal_paths).split(', ').length, 12);
-		assert.equal(String(taskFields.durable_output_applied_proposal_ids).split(', ').length, 12);
+		const taskFields = require('@tracekeeper/core').taskReferenceFields(parseMarkdown(taskContent).frontmatter.fields);
+		assert.equal(taskFields.memory_writes.length, 12);
+		assert.equal(taskFields.proposal_ids.length, 12);
+		assert.equal(taskFields.proposal_paths.length, 12);
+		assert.equal(taskFields.durable_output_applied_proposal_ids.length, 12);
 		for (const targetPathValue of [wikiIndex, mapPath, ...Array.from({ length: 10 }, (_, index) => `01_knowledge/wiki/topic-${index + 1}.md`)]) {
 			const file = harness.app.vault.getAbstractFileByPath(targetPathValue);
 			assert.ok(file, targetPathValue);
@@ -2280,6 +2290,8 @@ try {
 				const taskFile = native.files.get('00_tracekeeper/work/tasks/task-1.md');
 				taskFile.content = require('@tracekeeper/mcp-runtime').planApprovedWritebackTaskLink({
 					taskContent: taskFile.content,
+					operationId: preparedBatchWriteback.relationOperationId,
+					targetIdentity: preparedBatchWriteback.relationTargetIdentity,
 					targetPath: targetPath,
 					proposalId: 'proposal-1',
 					proposalPath,
@@ -2315,8 +2327,11 @@ try {
 					{ wikiBatchWritebackOverride: override }
 				);
 				const taskContent = native.files.get('00_tracekeeper/work/tasks/task-1.md').content;
+				const relationTargetIdentity = require('@tracekeeper/core').taskTargetIdentity({ path: targetPath, frontmatter: require('@tracekeeper/core').parseMarkdown(native.files.get(targetPath).content).frontmatter.fields });
 				const taskPlan = require('@tracekeeper/mcp-runtime').planApprovedWritebackTaskLink({
 					taskContent,
+					operationId: override.batchOperationId,
+					targetIdentity: relationTargetIdentity,
 					targetPath,
 					proposalId: 'proposal-1',
 					proposalPath,
@@ -2324,7 +2339,8 @@ try {
 					usesAppliedProposalEvidence: true,
 				});
 				preparedBatchWriteback = {
-					...result,
+					relationOperationId: override.batchOperationId,
+					relationTargetIdentity,					...result,
 					batch_writeback_operation_id: `writeback-${override.previewNonce.slice(0, 24)}`,
 					batch_writeback_idempotency_key: `apply-approved-writeback:${override.previewNonce}`,
 					batch_stable_binding_hash: hashContent('native-binding'),

@@ -335,6 +335,23 @@ replace the adjacent key material.
 Local Activity diagnostics are derived from retained Agent activity records and
 are never uploaded by Tracekeeper. They describe observed MCP calls only.
 
+## Task Relation Maintenance Boundary
+
+Task facts remain readable Vault Markdown; the identity index and project/month
+navigation are projections. Client-supplied task IDs are resolved before writes,
+with duplicate and out-of-controlled-directory rejection. Missing or conflicting
+historical identities never authorize guessed targets. Native identity backfill
+may change Wiki metadata only through the human preview/backup flow; read APIs
+and Agent capabilities gain no migration, hidden-log-body or deletion authority.
+
+Migration uses the existing authenticated-encrypted operation store for approved
+file changes and verifies an external whole-Vault backup before continuation.
+Task-link compensation uses a server-only encrypted before image authenticated by
+the reviewed task hash; it is not carried in confirmation tokens or public results.
+CAS and managed-region hashes protect later human edits. Target resolution alone
+is not proof that a writeback operation completed. See the
+[relation contract](KNOWLEDGE_RUNTIME.md#execution-relations-and-navigation).
+
 ## Data Handling And User Responsibility
 
 Tracekeeper does not require a hosted backend or upload Vault content by itself.

@@ -787,6 +787,7 @@ const ERROR_DETAIL_SCHEMA = {
 			enum: [
 				'PERMISSION_DENIED',
 				'INDEX_NOT_READY',
+				'TASK_MIGRATION_REQUIRED',
 				'MEMORY_CATALOG_INCOMPLETE',
 				'NOTE_CHANGED',
 				'STALE_CURSOR',
@@ -846,7 +847,8 @@ export const STATUS_OUTPUT_SCHEMA: JsonSchema2020 = {
 				schema_version: { const: SCHEMA_VERSION, type: 'integer' },
 				ok: { const: true, type: 'boolean' },
 				tool: { const: 'tracekeeper.status', type: 'string' },
-				log_storage: OPEN_OBJECT_SCHEMA,
+				task_relations: { type: 'object', additionalProperties: true },
+		log_storage: OPEN_OBJECT_SCHEMA,
 				read_only: { const: true, type: 'boolean' },
 				vault_root: { type: 'string', minLength: 1 },
 				scanned_at: { type: 'string', minLength: 1 },

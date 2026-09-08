@@ -151,6 +151,8 @@ function createFixture(tempRoot, name) {
 	writeNote(vaultRoot, TASK_PATH, [
 		'---',
 		'type: agent-task',
+			'task_record_version: 2',
+			'task_relations: []',
 		`task_id: ${TASK_ID}`,
 		'status: active',
 		'---',
