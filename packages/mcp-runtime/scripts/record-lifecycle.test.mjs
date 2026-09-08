@@ -11,6 +11,7 @@ const require = createRequire(import.meta.url);
 const { callTool } = require('../dist/tools.js');
 const { McpJsonRpcHandler } = require('../dist/handler.js');
 const {
+	parseMarkdown, parseTaskRecord, taskReferenceFields, maintainTaskNavigation, migrateTaskRecord,
 	AGENT_ACTIVITY_HUB_TYPE,
 	AGENT_ACTIVITY_SCHEMA_VERSION,
 	computePayloadHash,
@@ -745,7 +746,7 @@ test('finish task reconstructs a missing canonical task record without creating 
 		assert.match(taskText, /^objective_source: "finish_summary"$/m);
 		assert.match(taskText, /^objective: "This closeout has no matching start record\."$/m);
 		assert.match(taskText, /^reconstructed_at: ".+"$/m);
-		assert.match(taskText, /^finished_at: ".+"$/m);
+		assert.ok(!Number.isNaN(Date.parse(parseMarkdown(taskText).frontmatter.fields.finished_at)));
 		assert.match(taskText, /## Objective\nThis closeout has no matching start record\./);
 		assert.match(taskText, /## Reconstruction\n- start_record: missing/);
 		assert.match(taskText, /## Completion Summary\nThis closeout has no matching start record\./);
@@ -950,9 +951,10 @@ test('finish task stores proposal ids and generated-link handoff in the task rec
 		assert.equal(finished.proposals.length, 1);
 		assert.equal(typeof finished.proposals[0].proposal_id, 'string');
 		const taskText = fixture.read(`00_tracekeeper/work/tasks/${task.task_id}.md`);
-		assert.match(taskText, /proposal_ids:/);
-		assert.match(taskText, /proposal_paths:.*review_queue/);
-		assert.match(taskText, /proposal_link_targets:.*review_queue/);
+		const refs = taskReferenceFields(parseMarkdown(taskText).frontmatter.fields);
+		assert.deepEqual(refs.proposal_ids, [finished.proposals[0].proposal_id]);
+		assert.deepEqual(refs.proposal_paths, [finished.proposals[0].path]);
+		assert.doesNotMatch(taskText, /^proposal_(ids|paths|link_targets):/m);
 		assert.doesNotMatch(taskText, /^proposals: .*review_queue/m);
 		assert.doesNotMatch(taskText, /^session_note:/m);
 		assert.equal(
@@ -982,10 +984,11 @@ test('finish task persists human links returned by a Vault adapter', async () =>
 			idempotency_key: 'record-lifecycle-finish-generated-links',
 		}, fixture.context);
 		const proposalPath = finished.proposals[0].path;
+		await maintainTaskNavigation(fixture.repository, fixture.repository.generateMarkdownLink);
 		const taskText = fixture.read(`00_tracekeeper/work/tasks/${task.task_id}.md`);
-		assert.match(taskText, /proposal_links:/);
+		assert.doesNotMatch(taskText, /^proposal_links:/m);
 		assert.match(taskText, new RegExp(`\\[\\[${proposalPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\|generated-from-${task.task_id}`));
-		assert.match(taskText, /\^tracekeeper-proposal-proposal-/);
+		assert.match(taskText, /tracekeeper:task-relations:start/);
 		assert.doesNotMatch(taskText, /^session_note:/m);
 	} finally {
 		fixture.cleanup();
@@ -1038,7 +1041,7 @@ test('approved writeback joins and compensates task references by proposal id', 
 			targetPath,
 			writebackContent,
 		});
-		fixture.write(targetPath, '# Target\n');
+		fixture.write(targetPath, '---\nwiki_id: wiki-writeback-target\n---\n# Target\n');
 		fixture.write(taskPath, [
 			'---',
 			'type: agent-task',
@@ -1068,6 +1071,7 @@ test('approved writeback joins and compensates task references by proposal id', 
 			writebackContent,
 			'',
 		].join('\n'));
+		fixture.write(taskPath, migrateTaskRecord(fixture.read(taskPath), []));
 		const preview = await invoke('tracekeeper.apply_approved_writeback', {
 			proposal_id: 'proposal-writeback',
 			task_id: 'writeback-task',
@@ -1079,8 +1083,9 @@ test('approved writeback joins and compensates task references by proposal id', 
 			confirmation_token: preview.confirmation_token,
 		}, fixture.context);
 		const taskText = fixture.read(taskPath);
-		assert.match(taskText, /proposal_ids:.*proposal-writeback/);
-		assert.match(taskText, /proposal_paths:.*review_queue\/writeback\.md/);
+		const refs = taskReferenceFields(parseMarkdown(taskText).frontmatter.fields);
+		assert.ok(refs.proposal_ids.includes('proposal-writeback'));
+		assert.ok(refs.proposal_paths.includes(proposalPath));
 		assert.doesNotMatch(taskText, /^proposals: .*review_queue/m);
 	} finally {
 		fixture.cleanup();

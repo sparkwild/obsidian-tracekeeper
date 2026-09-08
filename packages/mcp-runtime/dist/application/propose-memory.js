@@ -301,6 +301,7 @@ class ProposeMemoryApplicationService {
             operationPayload = {
                 requestHash,
                 requestSnapshot: snapshot,
+                ...(wikiTarget ? { wikiIdentityVersion: 1 } : {}),
                 ...(!wikiTarget ? { memoryRecordWriteVersion: 2 } : {}),
                 memoryRule,
                 ...(memoryRule === 'disabled' ? { policyOutcome: 'disabled' } : {}),
@@ -604,6 +605,7 @@ class ProposeMemoryApplicationService {
             && (writebackEffect === 'create_wiki_note' || writebackEffect === 'update_managed_relations')
             && dependencies.writeAutoWiki) {
             const written = await dependencies.writeAutoWiki({
+                identityVersion: operationPayload.wikiIdentityVersion,
                 targetNote,
                 content: proposedWritebackContent,
                 taskId,

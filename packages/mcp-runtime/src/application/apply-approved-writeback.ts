@@ -1,3 +1,4 @@
+import type { TaskTargetKind } from '@tracekeeper/core';
 import {
 	OperationConflictError,
 	type OperationFailureInjection,
@@ -10,6 +11,10 @@ import {
 } from '@tracekeeper/core';
 
 export interface ApplyApprovedWritebackPayload {
+	taskRelationOperationId?: string;
+	/** Server-only before image, authenticated by taskContentHash; never included in the public token. */
+	taskOriginalContent?: string;
+	taskRelationTarget?: { kind: TaskTargetKind; id: string | null };
 	schemaVersion: 1;
 	proposalId: string;
 	proposalPath: string;
@@ -217,6 +222,8 @@ function boundedWritebackPayload(
 		taskPath: payload.taskPath,
 		taskContentHash: payload.taskContentHash,
 		taskLinkedContentHash: payload.taskLinkedContentHash,
+		...(payload.taskOriginalContent !== undefined ? { taskOriginalContent: payload.taskOriginalContent } : {}),
+		...(payload.taskRelationTarget ? { taskRelationTarget: payload.taskRelationTarget, taskRelationOperationId: payload.taskRelationOperationId } : {}),
 		taskHadTargetReference: payload.taskHadTargetReference,
 		taskHadProposalReference: payload.taskHadProposalReference,
 		...(hasStableProposalReferenceFlags

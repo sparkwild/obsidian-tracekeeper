@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { makeTaskRelation, updateTaskRelations } from '@tracekeeper/core';
 import { logDirectory } from '@tracekeeper/core';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -75,13 +76,8 @@ async function proposeForTask(fixture, taskId, suffix) {
 function addTaskReferences(fixture, taskId, proposalIds, proposalPaths) {
 	const taskPath = `00_tracekeeper/work/tasks/${taskId}.md`;
 	const current = fixture.read(taskPath);
-	const closing = current.indexOf('\n---', 4);
-	assert.notEqual(closing, -1);
-	const fields = [
-		`proposal_ids: ${proposalIds.join(', ')}`,
-		`proposal_paths: ${proposalPaths.join(', ')}`,
-	].join('\n');
-	fixture.write(taskPath, `${current.slice(0, closing)}\n${fields}${current.slice(closing)}`);
+	const facts = proposalPaths.map((target, index) => makeTaskRelation({ taskId, role: 'review_proposal', path: target, proposalId: proposalIds[index] }));
+	fixture.write(taskPath, updateTaskRelations(current, facts));
 }
 
 function replaceProposalStatus(fixture, proposalPath, status) {

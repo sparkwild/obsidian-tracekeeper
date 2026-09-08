@@ -680,6 +680,8 @@ export class TracekeeperActivityView extends ItemView {
 
 	private renderTaskEntry(container: HTMLElement, task: AgentTaskRecord, expanded: boolean): void {
 		const item = container.createDiv({ cls: 'tracekeeper-task-card tracekeeper-task-card--latest' });
+		if (task.relationWarning) item.createEl('p', { text: ui('任务关系无法验证，请打开“任务关系维护”检查。', task.relationWarning), attr: { role: 'status' } });
+		if (task.navigationPending) item.createEl('p', { text: ui('任务导航待更新，关系记录已保存。', 'Task navigation is pending; relation facts are saved.'), attr: { role: 'status' } });
 		const header = item.createDiv({ cls: 'tracekeeper-task-card__header' });
 		const title = header.createDiv({ cls: 'tracekeeper-task-card__title' });
 		title.createEl('h4', { text: task.objective || task.taskId || ui('未命名任务', 'Untitled task') });
@@ -835,6 +837,7 @@ export class TracekeeperActivityView extends ItemView {
 	}
 
 	private formatSourceCaptureEvidenceCount(task: AgentTaskRecord): string {
+		if (task.relationWarning) return ui('关系读取不完整', 'Relations unavailable');
 		return ui(
 			`${this.sourceCaptureEvidenceCount(task)} 条 · 仅作为证据，不代表知识已写入`,
 			`${this.sourceCaptureEvidenceCount(task)} items · evidence only, not applied knowledge`

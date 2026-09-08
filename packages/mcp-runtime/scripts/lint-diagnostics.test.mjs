@@ -17,7 +17,7 @@ function fixture(t, extra = []) {
 		absolutePath: path.join(root, relativePath), relativePath, fallbackTitle: relativePath,
 		content, size: Buffer.byteLength(content), modifiedAt: '2026-09-08T00:00:00.000Z',
 	});
-	const notes = [...REQUIRED_ARCHITECTURE_ENTRIES.map(row => [row.path, '# Entry\n']), ...extra]
+	const notes = [...REQUIRED_ARCHITECTURE_ENTRIES.map(row => [row.path, row.path.startsWith('01_knowledge/wiki/') ? '---\nwiki_id: wiki-entry\n---\n# Entry\n' : '# Entry\n']), ...extra]
 		.map(([relativePath, content]) => make(relativePath, content));
 	for (const note of notes) {
 		fs.mkdirSync(path.dirname(note.absolutePath), { recursive: true });
@@ -55,8 +55,8 @@ test('four tasks and 25 valid proposal mirrors agree through indexed and filesys
 		const r = await f.run(view);
 		assert.equal(r.isError, false, JSON.stringify(r.structuredContent));
 		assert.deepEqual(managed(r.structuredContent.issues), []);
-		assert.equal(r.structuredContent.issue_count, 0);
-		assert.match(r.structuredContent.fix_plan_summary.join(' '), /no lint issues were found/);
+		assert.equal(r.structuredContent.issues.every(issue => issue.kind === 'task_migration_required'), true);
+		assert.doesNotMatch(r.structuredContent.fix_plan_summary.join(' '), /no lint issues were found/);
 	}
 });
 

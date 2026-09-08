@@ -363,3 +363,14 @@ The manifest proves content identity only. It does not prove installation, clien
 - `scripts/check_agent_ecosystem.mjs` verifies contract, source bundle, generated artifact, and current distribution target alignment.
 - A behavior change is incomplete until the contract, Skill sources, generated artifact, and checker fixtures agree.
 - Plugin distribution of the complete bundle is a separate Phase 5 responsibility; Phase 3 must report that target without pretending it is already implemented.
+
+## Historical Task Format
+
+When a write returns `TASK_MIGRATION_REQUIRED`, direct the user to Obsidian's
+**Task relation maintenance** command for preview, whole-Vault backup and explicit
+conversion. Preserve the task identity and original retry key; do not create a
+replacement task to bypass the requirement or edit legacy relation fields.
+Existing interrupted operations retain their original recovery route. Newly
+recorded task relations do not change the closeout-only/live trigger policy or
+promote task details to Memory. The [relation contract](../architecture/KNOWLEDGE_RUNTIME.md#execution-relations-and-navigation)
+separates historical facts, current target resolution and derived navigation.

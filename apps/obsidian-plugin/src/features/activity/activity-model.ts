@@ -44,6 +44,8 @@ export type DurableOutputStatusAtFinish =
 	| 'mixed';
 
 export interface AgentTaskRecord {
+	relationWarning?: string;
+	navigationPending?: boolean;
 	path: string;
 	type: string;
 	taskId: string;

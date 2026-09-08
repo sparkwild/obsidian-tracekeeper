@@ -86,6 +86,8 @@ async function main() {
 		writeNote(vaultRoot, '00_tracekeeper/work/tasks/recovery-task.md', [
 			'---',
 			'type: agent-task',
+			'task_record_version: 2',
+			'task_relations: []',
 			'task_id: recovery-task',
 			'status: active',
 			'---',
@@ -280,6 +282,8 @@ async function main() {
 		writeNote(vaultRoot, '00_tracekeeper/work/tasks/auto-recovery-task.md', [
 			'---',
 			'type: agent-task',
+			'task_record_version: 2',
+			'task_relations: []',
 			'task_id: auto-recovery-task',
 			'status: active',
 			'project_hint: recovery',

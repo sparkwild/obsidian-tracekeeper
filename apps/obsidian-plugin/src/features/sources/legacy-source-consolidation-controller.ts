@@ -1,3 +1,4 @@
+import { verifiedSourceReplacements } from '@tracekeeper/core';
 import path from 'node:path';
 
 import {
@@ -283,33 +284,12 @@ export class LegacySourceConsolidationController {
 
 	/** 从已完成且与当前文件哈希一致的迁移回执解析历史资料路径，不修改历史记录。 */
 	async verifiedReplacements(contentHashes: ReadonlyMap<string, string>): Promise<ReadonlyMap<string, string>> {
-		const replacements = new Map<string, string>();
-		const ambiguous = new Set<string>();
-		for (const journalPath of await this.host.listJournalPaths?.() ?? []) {
-			if (!journalPath.startsWith(`${LEGACY_SOURCE_CONSOLIDATION_JOURNAL_ROOT}/`)
-				|| !journalPath.endsWith('.json') || journalPath.endsWith('.archive.json')) continue;
-			try {
-				const raw = await this.host.readText(journalPath);
-				if (raw === null || raw.length > 2 * 1024 * 1024) continue;
-				const journal = parseJournal(raw);
-				if (journal.status !== 'completed') continue;
-				const valid = new Map(journal.outputs.filter((item) => item.state === 'verified'
-					&& contentHashes.get(item.path) === item.expectedHash).map((item) => [item.path, item]));
-				for (const item of valid.values()) {
-					if (item.kind !== 'source_part' || !item.legacyPath.startsWith(`${KNOWLEDGE_SOURCES_DIR}/`)) continue;
-					const parent = sourceIndexPathForPart(item.path);
-					if (!parent || valid.get(parent)?.kind !== 'source_capture' || ambiguous.has(item.legacyPath)) continue;
-					const existing = replacements.get(item.legacyPath);
-					if (existing && existing !== parent) {
-						ambiguous.add(item.legacyPath);
-						replacements.delete(item.legacyPath);
-					} else replacements.set(item.legacyPath, parent);
-				}
-			} catch {
-				// 不完整或损坏的回执不能让缺失资料显示为已迁移。
-			}
+		const receipts = [];
+		for (const path of await this.host.listJournalPaths?.() ?? []) {
+			const content = await this.host.readText(path);
+			if (content !== null) receipts.push({ path, content });
 		}
-		return replacements;
+		return verifiedSourceReplacements(receipts, contentHashes);
 	}
 
 	async preview(migrationId: string): Promise<LegacySourceConsolidationPreview> {

@@ -1,5 +1,13 @@
+import type { TaskTargetKind } from '@tracekeeper/core';
 import { type OperationFailureInjection, type OperationJournal, type ProposalTransitionReceipt } from '@tracekeeper/core';
 export interface ApplyApprovedWritebackPayload {
+    taskRelationOperationId?: string;
+    /** Server-only before image, authenticated by taskContentHash; never included in the public token. */
+    taskOriginalContent?: string;
+    taskRelationTarget?: {
+        kind: TaskTargetKind;
+        id: string | null;
+    };
     schemaVersion: 1;
     proposalId: string;
     proposalPath: string;

@@ -1,8 +1,10 @@
+import { assertTaskMigrationCommitted, resolveTaskIdentity, parseTaskRecord, parseMarkdown, taskTargetIdentity, ensureWikiIdentity, TaskMigrationRequiredError } from '@tracekeeper/core';
 import { createVaultOperationJournal } from '@tracekeeper/core';
 import type { OperationJournalProvider } from '@tracekeeper/mcp-runtime';
 import path from 'node:path';
 import { App, TFile } from 'obsidian';
 import {
+	planApprovedWritebackTaskLink,
 	KNOWLEDGE_WIKI_INDEX_PATH,
 	TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
 	TRACEKEEPER_OPERATIONS_DIR,
@@ -29,7 +31,6 @@ import {
 	type ProposalTransitionDecision,
 } from '@tracekeeper/core';
 import {
-	planApprovedWritebackTaskLink,
 	type ObsidianWikiBatchWritebackPreview,
 } from '@tracekeeper/mcp-runtime';
 import type { ActivityRecordRepository } from '../activity/activity-record-repository';
@@ -417,7 +418,12 @@ const isBatchOperationTarget = (value: unknown): value is WikiReviewBatchOperati
  * @description 批次层只认领操作日志，不持有 Obsidian 文件锁；文件锁由下层原子适配器独占。
  */
 export class WikiReviewBatchApplication {
-	private readonly transientConfirmations = new Map<string, { confirmation_token: string }>();
+	private async taskPathFor(taskId: string): Promise<string> {
+		if (!taskId) return '';
+		const targets = [];
+		for (const file of this.app.vault.getMarkdownFiles()) targets.push({ path: file.path, frontmatter: parseMarkdown(await this.app.vault.read(file)).frontmatter.fields });
+		return resolveTaskIdentity(targets, taskId, true) ?? taskPathFor(taskId);
+	}	private readonly transientConfirmations = new Map<string, { confirmation_token: string }>();
 
 	constructor(
 		private readonly app: App,
@@ -500,7 +506,7 @@ export class WikiReviewBatchApplication {
 				throw new WikiBatchTerminalConflictError(`Wiki proposal is blocked by its current target and relation state: ${current.path}.`);
 			}
 			computedRisks.set(current.path, effectiveRisk);
-			const taskPath = taskPathFor(current.taskId);
+			const taskPath = await this.taskPathFor(current.taskId);
 			const task = taskPath
 				? this.app.vault.getAbstractFileByPath(taskPath)
 				: null;
@@ -508,6 +514,8 @@ export class WikiReviewBatchApplication {
 				throw new WikiBatchTerminalConflictError(`Wiki batch task context is unavailable: ${taskPath}.`);
 			}
 			const taskContent = task instanceof TFile ? await this.app.vault.read(task) : '';
+			if (taskContent && !parseTaskRecord(parseMarkdown(taskContent).frontmatter.fields)) throw new TaskMigrationRequiredError(current.taskId);
+			if (taskContent) await assertTaskMigrationCommitted(createVaultOperationJournal(this.host.getVaultRoot()), parseMarkdown(taskContent).frontmatter.fields);
 			const bucket = targetEntries.get(targetPath) ?? [];
 			bucket.push({
 				proposal: current,
@@ -644,6 +652,8 @@ export class WikiReviewBatchApplication {
 			};
 			const taskPlan = planApprovedWritebackTaskLink({
 				taskContent: chain.content,
+				operationId,
+				targetIdentity: taskTargetIdentity({ path: target.targetPath, frontmatter: parseMarkdown(entry.targetExists ? entry.targetContent : ensureWikiIdentity(current.writebackContent, current.proposalId)).frontmatter.fields }),
 				targetPath: target.targetPath,
 				proposalId: current.proposalId,
 				proposalPath: current.path,
@@ -676,7 +686,7 @@ export class WikiReviewBatchApplication {
 				targetVersion: target.targetVersion,
 				targetResultContentHash: target.targetResultContentHash,
 				taskId: current.taskId,
-				taskPath: taskPathFor(current.taskId),
+				taskPath: targetEntries.get(target.targetPath)?.find((entry) => entry.proposal.path === current.path)?.taskPath || '',
 				expectedTaskContentHashBefore: taskPlan.expectedBefore,
 				expectedTaskContentHashAfter: taskPlan.expectedAfter,
 				previewNonce: taskPlan.previewNonce,
@@ -684,7 +694,7 @@ export class WikiReviewBatchApplication {
 				touchedNotes: uniqueSorted([
 					target.targetPath,
 					current.path,
-					taskPathFor(current.taskId),
+					targetEntries.get(target.targetPath)?.find((entry) => entry.proposal.path === current.path)?.taskPath || '',
 					TRACEKEEPER_AGENT_ACTIVITY_INDEX_PATH,
 				].filter(Boolean)),
 				effectiveRisk: targetEntries.get(target.targetPath)?.find((entry) => entry.proposal.path === current.path)?.effectiveRisk || 'blocked',
@@ -1307,7 +1317,7 @@ export class WikiReviewBatchApplication {
 			if (targetHash !== item.targetContentHash || fileVersion(target instanceof TFile ? target : null, targetContent) !== item.targetVersion) {
 				throw new Error(`Wiki batch target changed before the first write: ${item.targetPath}.`);
 			}
-			const taskPath = taskPathFor(item.taskId);
+			const taskPath = await this.taskPathFor(item.taskId);
 			if (taskPath !== item.taskPath) {
 				throw new Error(`Wiki batch task context changed: ${item.proposalPath}.`);
 			}

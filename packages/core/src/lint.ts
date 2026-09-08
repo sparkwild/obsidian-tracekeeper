@@ -1,3 +1,4 @@
+import { diagnoseTaskRelations, type TaskRelationDiagnostic } from './task-record';
 import path from 'node:path';
 import {
 	DEFAULT_GRAPH_PROFILE,
@@ -31,6 +32,7 @@ import {
 } from './lifecycle-diagnostics';
 
 export type LintIssueKind =
+	| TaskRelationDiagnostic['kind']
 	| 'broken_wikilink'
 	| 'claim_missing_source'
 	| 'architecture_legacy_directory'
@@ -363,6 +365,7 @@ function collectManagedProposalReferenceIssues(
 		return [];
 	}
 
+	if (note.frontmatter.task_record_version !== undefined) return [];
 	const proposalIds = readManagedProposalValues(note, 'proposal_ids');
 	const proposalPaths = readManagedProposalValues(note, 'proposal_paths');
 	const proposalLinks = readManagedProposalValues(note, 'proposal_links');
@@ -432,7 +435,7 @@ function collectManagedProposalReferenceIssues(
 }
 
 export function lintNotes(vaultRoot: string, notes: ScannedNote[], options: LintOptions = {}): LintReport {
-	const issues: LintIssue[] = [];
+	const issues: LintIssue[] = diagnoseTaskRelations(notes.map((note) => ({ path: note.relativePath, frontmatter: note.frontmatter, contentHash: note.contentHash, content: note.text }))).map((issue) => ({ ...issue, severity: 'warning', line: 1 }));
 	const graphProfile = normalizeGraphProfile(options.graphProfile);
 	const strictStructureSeverity = graphProfile === 'strict' ? 'error' : 'warning';
 	const graphStructureEnabled = graphProfile !== 'off';

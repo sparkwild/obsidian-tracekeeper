@@ -94,6 +94,7 @@ interface ProposeMemoryOperationPayload {
 	requestSnapshot: ProposeMemoryRequestSnapshot;
 	writebackEffect?: 'append' | 'create_wiki_note' | 'create_memory_record' | 'update_managed_relations';
 	memoryRecordWriteVersion?: 2;
+	wikiIdentityVersion?: 1;
 	memoryRule?: ProposeMemoryRule;
 	wikiRule?: WikiChangeRule;
 	effectiveRisk?: WikiEffectiveRisk;
@@ -222,6 +223,7 @@ export interface ProposeMemoryWriteInput {
 }
 
 export interface ProposeMemoryAutoWikiWriteInput {
+	identityVersion?: 1;
 	targetNote: string;
 	content: string;
 	taskId: string | null;
@@ -665,6 +667,7 @@ export class ProposeMemoryApplicationService {
 			operationPayload = {
 				requestHash,
 				requestSnapshot: snapshot,
+				...(wikiTarget ? { wikiIdentityVersion: 1 as const } : {}),
 				...(!wikiTarget ? { memoryRecordWriteVersion: 2 as const } : {}),
 				memoryRule,
 				...(memoryRule === 'disabled' ? { policyOutcome: 'disabled' as const } : {}),
@@ -1021,6 +1024,7 @@ export class ProposeMemoryApplicationService {
 			&& dependencies.writeAutoWiki
 		) {
 			const written = await dependencies.writeAutoWiki({
+				identityVersion: operationPayload.wikiIdentityVersion,
 				targetNote,
 				content: proposedWritebackContent,
 				taskId,

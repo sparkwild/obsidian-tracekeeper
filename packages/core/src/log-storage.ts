@@ -259,8 +259,8 @@ export async function backupVault(vault: string, destination: string): Promise<V
 	await writeLogFile(destination, path.join(destination, 'backup.json'), JSON.stringify(manifest));
 	return manifest;
 }
-export async function restoreVaultBackup(backup: string, destination: string): Promise<void> {
-	requireSeparateDirectory(backup, destination);
+/** Read-only validation shared by migration continuation and full restore. */
+export async function verifyVaultBackup(backup: string): Promise<VaultBackupManifest> {
 	const raw = await readLogFile(backup, path.join(backup, 'backup.json'), 32 * 1024 * 1024);
 	if (!raw)
 		throw new Error('A verified backup manifest is required.');
@@ -269,6 +269,11 @@ export async function restoreVaultBackup(backup: string, destination: string): P
 	const actual = await inventory(path.join(backup, 'vault'), directories);
 	if (manifest.version !== 1 || !Array.isArray(manifest.files) || JSON.stringify(actual) !== JSON.stringify(manifest.files) || (manifest.directories && JSON.stringify([...directories].sort()) !== JSON.stringify(manifest.directories)))
 		throw new Error('Backup verification failed.');
+	return manifest;
+}
+export async function restoreVaultBackup(backup: string, destination: string): Promise<void> {
+	requireSeparateDirectory(backup, destination);
+	const manifest = await verifyVaultBackup(backup);
 	await assertLogPath(path.dirname(destination), destination);
 	await fsp.mkdir(destination, { mode: 0o700 });
 	for (const directory of manifest.directories ?? []) {

@@ -7,6 +7,8 @@ function recoveryRequestForRecord(record, dependencies) {
         return null;
     }
     const payload = record.payload;
+    if (record.operation_id.startsWith('source-request-') && payload.kind === 'source-request-v2' && payload.requestSnapshot && typeof payload.requestSnapshot === 'object' && (payload.tool === 'tracekeeper.source_request' || payload.tool === 'tracekeeper.analyze_source_request'))
+        return { tool: payload.tool, args: payload.requestSnapshot };
     if (record.operation_id.startsWith('capture-source-') && payload.requestSnapshot && typeof payload.requestSnapshot === 'object') {
         return { tool: 'tracekeeper.capture_source', args: { ...payload.requestSnapshot, idempotency_key: record.idempotency_key } };
     }
@@ -135,7 +137,7 @@ class RuntimeRecoveryController {
             const request = recoveryRequestForRecord(record, this.dependencies);
             if (!request) {
                 report.skipped.push(record.operation_id);
-                (report.attention ?? (report.attention = [])).push({ operation_id: record.operation_id, reason: record.operation_id.startsWith('wiki-review-batch-')
+                (report.attention ?? (report.attention = [])).push({ operation_id: record.operation_id, reason: record.operation_id.startsWith('task-relations-') ? 'Resume the approved migration in Obsidian Task relation maintenance using its verified backup.' : record.operation_id.startsWith('wiki-review-batch-')
                         ? 'Resume this reviewed batch in the Obsidian review surface.'
                         : 'This record has no safe automatic recovery request; inspect it in log management.' });
                 continue;

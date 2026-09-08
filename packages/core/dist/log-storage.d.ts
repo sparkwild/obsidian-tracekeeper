@@ -23,6 +23,8 @@ export interface VaultBackupManifest {
     directories?: string[];
 }
 export declare function backupVault(vault: string, destination: string): Promise<VaultBackupManifest>;
+/** Read-only validation shared by migration continuation and full restore. */
+export declare function verifyVaultBackup(backup: string): Promise<VaultBackupManifest>;
 export declare function restoreVaultBackup(backup: string, destination: string): Promise<void>;
 export interface LogMigrationPreview {
     version: 1;

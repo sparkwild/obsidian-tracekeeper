@@ -94,7 +94,8 @@ export class ObsidianVaultRepository implements VaultRepository {
 	async replaceText(
 		relativePath: VaultPath,
 		expectedVersion: string,
-		content: string
+		content: string,
+		canWrite?: () => boolean
 	): Promise<VaultWriteReceipt> {
 		if (this.logs && isOperationalLogPath(relativePath)) { await this.logs.replaceText(relativePath, expectedVersion, content); return { path: relativePath, version: logHash(content), size: Buffer.byteLength(content), modifiedAt: new Date().toISOString() }; }
 		const safePath = this.normalizeRelativePath(relativePath);
@@ -104,6 +105,7 @@ export class ObsidianVaultRepository implements VaultRepository {
 				throw new OperationConflictError(`Target does not exist: ${safePath}`);
 			}
 			const writtenContent = await this.vault.process(file, (currentContent) => {
+				if (canWrite && !canWrite()) throw new OperationConflictError('Background maintenance deferred while a native edit decision is open.');
 				if (this.fileVersion(file, currentContent) !== expectedVersion) {
 					throw new OperationConflictError(`CAS check failed for ${safePath}`);
 				}

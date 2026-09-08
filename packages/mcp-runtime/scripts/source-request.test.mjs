@@ -69,6 +69,8 @@ test('a downstream failure cannot relabel a completed source request as failed',
 	write(vaultRoot, taskPath, [
 		'---',
 		'type: agent_task',
+		'task_record_version: 2',
+		'task_relations: []',
 		`task_id: ${taskId}`,
 		'status: active',
 		'---',

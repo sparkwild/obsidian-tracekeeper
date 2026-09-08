@@ -27,3 +27,8 @@ export * from './maintenance';
 export * from './log-files';
 export * from './log-archive';
 export * from './log-storage';
+
+export * from "./task-record";
+export * from "./task-maintenance";
+export * from "./task-writeback";
+export * from "./source-history";

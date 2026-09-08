@@ -29,6 +29,22 @@ provenance and remains readable even when a linked proposal is pending,
 rejected, or abandoned, but it is never presented as proof that the proposed
 Wiki/Memory target was applied.
 
+## Task Relation Maintenance
+
+The Obsidian command **Task relation maintenance** previews historical task
+conversion and Wiki ID backfill, lists unresolved evidence, resumes an approved
+interrupted migration, and rebuilds V2 navigation. Apply requires a whole-Vault
+backup outside the active Vault. Occupied navigation files, edited generated
+regions, duplicate identities and in-flight operations are reported before
+migration; no task is automatically deleted, merged or moved.
+
+Task recording policy is unchanged. Project/month navigation organizes execution
+history; real Source, Memory, Wiki and proposal relations come from the task's
+canonical facts. A task with no knowledge output needs no fabricated knowledge
+links. See [Task relations and navigation](../architecture/KNOWLEDGE_RUNTIME.md#execution-relations-and-navigation)
+for identity, history and recovery semantics. A resolved relation identifies a
+target; applied knowledge status still comes from its governed operation result.
+
 ## Agent Work
 
 Agents may:

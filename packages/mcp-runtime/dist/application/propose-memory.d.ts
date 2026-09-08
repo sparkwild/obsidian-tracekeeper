@@ -164,6 +164,7 @@ export interface ProposeMemoryWriteInput {
     operationId: string;
 }
 export interface ProposeMemoryAutoWikiWriteInput {
+    identityVersion?: 1;
     targetNote: string;
     content: string;
     taskId: string | null;
@@ -323,7 +324,7 @@ export declare class ProposeMemoryApplicationService {
         proposal_id: string;
         proposal_path: string;
         proposal_link_target: string;
-        proposal_destination: "wiki" | "memory";
+        proposal_destination: "memory" | "wiki";
         memory_rule: ProposeMemoryRule | null;
         memory_scope: ProposeMemoryScope | null;
         project_hint: string | null;

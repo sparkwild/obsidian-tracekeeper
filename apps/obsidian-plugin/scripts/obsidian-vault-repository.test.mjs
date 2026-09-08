@@ -345,7 +345,14 @@ try {
 	assert.equal(records.get('03_external/recovered.md').content, '# Recovered');
 	await assert.rejects(() => repository.readText('../outside.md'), /Unsafe vault path/);
 
-	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 44 })}\n`);
+	makeFile('00_tracekeeper/work/tasks/deferred.md', '# Original');
+	const deferredFile = await repository.readText('00_tracekeeper/work/tasks/deferred.md');
+	let permitted = true;
+	beforeProcess = async () => { permitted = false; };
+	await assert.rejects(repository.replaceText(deferredFile.path, deferredFile.version, '# Must not write', () => permitted), /deferred/);
+	assert.equal(records.get(deferredFile.path).content, '# Original');
+	beforeProcess = undefined;
+	process.stdout.write(`${JSON.stringify({ result: 'pass', checks: 46 })}\n`);
 } finally {
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

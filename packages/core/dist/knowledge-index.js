@@ -25,7 +25,7 @@ const SNIPPET_MAX_LENGTH = 160;
 const DEFAULT_MAX_INCREMENTAL_RENAME_IMPACT = 256;
 function isActivityPath(notePath) {
     const normalized = (0, knowledge_note_1.normalizeVaultRelativePath)(notePath);
-    return normalized === knowledge_architecture_1.TRACEKEEPER_AGENT_ACTIVITY_DIR || normalized.startsWith(`${knowledge_architecture_1.TRACEKEEPER_AGENT_ACTIVITY_DIR}/`);
+    return normalized === '00_tracekeeper/work/index.md' || normalized.startsWith('00_tracekeeper/work/task_index/') || normalized === knowledge_architecture_1.TRACEKEEPER_AGENT_ACTIVITY_DIR || normalized.startsWith(`${knowledge_architecture_1.TRACEKEEPER_AGENT_ACTIVITY_DIR}/`);
 }
 function computeFileVersion(size, modifiedAt) {
     return `${modifiedAt}|${size}`;
