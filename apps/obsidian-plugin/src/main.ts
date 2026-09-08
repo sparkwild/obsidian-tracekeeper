@@ -1,5 +1,5 @@
 import { TaskMaintenanceModal } from './features/activity/task-maintenance-modal';
-import { maintainTaskNavigation } from '@tracekeeper/core';
+import { maintainTaskNavigation, inspectTaskMigrationReadiness, readTaskVaultSnapshot } from '@tracekeeper/core';
 import { LogManagementModal } from './features/runtime/log-management-modal';
 import { OperationalLogRepository, isOperationalLogPath, logHash, createVaultOperationJournal, logStorageIsActive } from '@tracekeeper/core';
 import { inspectHistoricalRecords } from './features/observability/historical-record-diagnostics';
@@ -1052,9 +1052,8 @@ export default class TracekeeperPlugin extends Plugin {
 		this.taskMaintenanceBusy = true;
 		let deferred = false;
 		try {
-			const journal = createVaultOperationJournal(this.getVaultRoot());
-			const health = await journal.inspect();
-			if (health.attention.length || health.issues.length) return;
+			const health = await inspectTaskMigrationReadiness(this.getVaultRoot(), await readTaskVaultSnapshot(this.vaultRepository));
+			if (health.blocked.length || health.issues.length) return;
 			const repository = this.vaultRepository;
 			const result = await maintainTaskNavigation({
 				readText: (path) => repository.readText(path),

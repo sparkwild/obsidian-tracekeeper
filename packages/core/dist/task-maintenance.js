@@ -11,6 +11,8 @@ exports.findTaskById = findTaskById;
 exports.requireWritableTaskV2 = requireWritableTaskV2;
 exports.planTaskNavigation = planTaskNavigation;
 exports.previewTaskMigration = previewTaskMigration;
+exports.isRejectedLegacyCapture = isRejectedLegacyCapture;
+exports.inspectTaskMigrationReadiness = inspectTaskMigrationReadiness;
 exports.applyTaskMigration = applyTaskMigration;
 exports.maintainTaskNavigation = maintainTaskNavigation;
 exports.pendingTaskMigrations = pendingTaskMigrations;
@@ -204,6 +206,37 @@ function previewTaskMigration(files, blockedPaths = [], link = linkDefault, sour
     const inventory_hash = inventoryHash(files);
     return { version: 1, id: (0, operation_journal_1.computePayloadHash)([inventory_hash, changes, blocked]), inventory_hash, changes, blocked, unresolved, legacy_tasks: legacyTasks };
 }
+/** 旧捕获的安全校验先于 Source 写入；结合原回执与当前文件证据识别拒绝，保留失败状态。 */
+function isRejectedLegacyCapture(record, files) {
+    const payload = record.payload;
+    return /^capture-source-[a-f0-9]{24}$/.test(record.operation_id)
+        && record.status === 'failed' && record.completed_steps.length === 0 && record.result === undefined
+        && Boolean(payload && Object.keys(payload).length === 1 && typeof payload.request_hash === 'string' && /^[a-f0-9]{64}$/.test(payload.request_hash))
+        && /^Refusing to write potential secret in (source|capture_reason|content|title): (private key block|credential assignment|secret-like URL query parameter|secret key token)\.$/.test(record.error ?? '')
+        && !files.some(file => file.content.includes(record.operation_id));
+}
+/** 只读迁移门禁：校验拒绝回执的认证结果，保留诊断，但不重放被拒绝的请求。 */
+async function inspectTaskMigrationReadiness(vault, files) {
+    const journal = (0, log_storage_1.createVaultOperationJournal)(vault), health = await journal.inspect();
+    const blocked = [], rejected = [], issues = [...health.issues];
+    if (health.attention.length >= 100)
+        issues.push('Operational attention list may be truncated; migration requires complete inspection.');
+    for (const row of health.attention) {
+        const id = row.id.replace(/\.json$/, '');
+        try {
+            const record = await journal.loadById(id);
+            if (record && isRejectedLegacyCapture(record, files))
+                rejected.push(id);
+            else
+                blocked.push(id);
+        }
+        catch {
+            issues.push('Operational receipt authentication failed.');
+            blocked.push(id);
+        }
+    }
+    return { blocked, rejected, issues };
+}
 /** 人类确认入口调用；回执持久化后逐项 CAS，崩溃后只继续同一计划。 */
 async function applyTaskMigration(input) {
     if (input.preview.version !== 1 || input.preview.id !== (0, operation_journal_1.computePayloadHash)([input.preview.inventory_hash, input.preview.changes, input.preview.blocked]))
@@ -229,11 +262,12 @@ async function applyTaskMigration(input) {
                 throw new operation_journal_1.OperationConflictError('Resolve migration blockers before applying.');
             if (inventoryHash(await readTaskVaultSnapshot(input.repository)) !== input.preview.inventory_hash)
                 throw new operation_journal_1.OperationConflictError('Task migration preview is stale.');
-            const health = await journal.inspect();
-            if (health.attention.length || health.issues.length)
+            const files = await readTaskVaultSnapshot(input.repository);
+            const health = await inspectTaskMigrationReadiness(input.vault, files);
+            if (health.blocked.length || health.issues.length)
                 throw new operation_journal_1.OperationConflictError('Inspect unfinished or invalid operational receipts before migration.');
             const pending = await journal.listRecoverable();
-            if (pending.length || journal.getRecoveryIssues().length)
+            if (pending.some(record => !isRejectedLegacyCapture(record, files)) || journal.getRecoveryIssues().length)
                 throw new operation_journal_1.OperationConflictError('Recover unfinished operations before task migration.');
             await (0, log_storage_1.backupVault)(input.vault, input.backup);
             if (inventoryHash(await readTaskVaultSnapshot(input.repository)) !== input.preview.inventory_hash)

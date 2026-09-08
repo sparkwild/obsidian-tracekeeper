@@ -95,12 +95,12 @@ jobs:
         run: npm run verify
 
       - name: Run release-scale 1k knowledge benchmark
-        # The maintainer explicitly waived performance qualification for 0.6.1 and 0.7.0 only.
-        if: steps.semver.outputs.version != '0.6.1' && steps.semver.outputs.version != '0.7.0'
+        # The maintainer explicitly waived performance qualification for 0.6.1, 0.7.0 and 0.7.1 only.
+        if: steps.semver.outputs.version != '0.6.1' && steps.semver.outputs.version != '0.7.0' && steps.semver.outputs.version != '0.7.1'
         run: npm run benchmark:index -- --tier 1k --allow-scale --warmups 1 --repetitions 5
 
       - name: Upload release-scale 1k benchmark report
-        if: always() && steps.semver.outputs.version != '0.6.1' && steps.semver.outputs.version != '0.7.0'
+        if: always() && steps.semver.outputs.version != '0.6.1' && steps.semver.outputs.version != '0.7.0' && steps.semver.outputs.version != '0.7.1'
         uses: actions/upload-artifact@v4
         with:
           name: knowledge-index-1k-${{ steps.semver.outputs.version }}-${{ steps.checkout.outputs.sha }}
@@ -110,7 +110,7 @@ jobs:
           path: tmp/knowledge-index-reports/**
 
       - name: Record version-scoped qualification exception
-        if: steps.semver.outputs.version == '0.6.1' || steps.semver.outputs.version == '0.7.0'
+        if: steps.semver.outputs.version == '0.6.1' || steps.semver.outputs.version == '0.7.0' || steps.semver.outputs.version == '0.7.1'
         run: |
           echo 'Maintainer-authorized ${{ steps.semver.outputs.version }} exception: compatibility matrices and performance benchmarks are not rerun for this release. These checks are waived, not passed. Build, regression, asset-integrity, and attestation checks remain required.' >> "$GITHUB_STEP_SUMMARY"
 
