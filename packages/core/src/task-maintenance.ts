@@ -169,6 +169,32 @@ export function previewTaskMigration(files: readonly VaultTextFile[], blockedPat
 	return { version: 1, id: computePayloadHash([inventory_hash, changes, blocked]), inventory_hash, changes, blocked, unresolved, legacy_tasks: legacyTasks };
 }
 
+/** 旧捕获的安全校验先于 Source 写入；结合原回执与当前文件证据识别拒绝，保留失败状态。 */
+export function isRejectedLegacyCapture(record: OperationRecord, files: readonly VaultTextFile[]): boolean {
+	const payload = record.payload as Record<string, unknown> | undefined;
+	return /^capture-source-[a-f0-9]{24}$/.test(record.operation_id)
+		&& record.status === 'failed' && record.completed_steps.length === 0 && record.result === undefined
+		&& Boolean(payload && Object.keys(payload).length === 1 && typeof payload.request_hash === 'string' && /^[a-f0-9]{64}$/.test(payload.request_hash))
+		&& /^Refusing to write potential secret in (source|capture_reason|content|title): (private key block|credential assignment|secret-like URL query parameter|secret key token)\.$/.test(record.error ?? '')
+		&& !files.some(file => file.content.includes(record.operation_id));
+}
+
+/** 只读迁移门禁：校验拒绝回执的认证结果，保留诊断，但不重放被拒绝的请求。 */
+export async function inspectTaskMigrationReadiness(vault: string, files: readonly VaultTextFile[]): Promise<{ blocked: string[]; rejected: string[]; issues: string[] }> {
+	const journal = createVaultOperationJournal(vault), health = await journal.inspect();
+	const blocked: string[] = [], rejected: string[] = [], issues = [...health.issues];
+	if (health.attention.length >= 100) issues.push('Operational attention list may be truncated; migration requires complete inspection.');
+	for (const row of health.attention) {
+		const id = row.id.replace(/\.json$/, '');
+		try {
+			const record = await journal.loadById(id);
+			if (record && isRejectedLegacyCapture(record, files)) rejected.push(id);
+			else blocked.push(id);
+		} catch { issues.push('Operational receipt authentication failed.'); blocked.push(id); }
+	}
+	return { blocked, rejected, issues };
+}
+
 export interface TaskMigrationReceipt { version: 1; status: 'in_progress' | 'completed'; backup: string; preview: TaskMaintenancePreview; applied: string[] }
 /** 人类确认入口调用；回执持久化后逐项 CAS，崩溃后只继续同一计划。 */
 export async function applyTaskMigration(input: { vault: string; repository: VaultRepository; preview: TaskMaintenancePreview; backup: string; failure?: (phase: string, path: string) => void | Promise<void> }): Promise<TaskMigrationReceipt> {
@@ -189,10 +215,11 @@ export async function applyTaskMigration(input: { vault: string; repository: Vau
 		} else {
 			if (input.preview.blocked.length) throw new OperationConflictError('Resolve migration blockers before applying.');
 			if (inventoryHash(await readTaskVaultSnapshot(input.repository)) !== input.preview.inventory_hash) throw new OperationConflictError('Task migration preview is stale.');
-			const health = await journal.inspect();
-			if (health.attention.length || health.issues.length) throw new OperationConflictError('Inspect unfinished or invalid operational receipts before migration.');
+			const files = await readTaskVaultSnapshot(input.repository);
+			const health = await inspectTaskMigrationReadiness(input.vault, files);
+			if (health.blocked.length || health.issues.length) throw new OperationConflictError('Inspect unfinished or invalid operational receipts before migration.');
 			const pending = await journal.listRecoverable();
-			if (pending.length || journal.getRecoveryIssues().length) throw new OperationConflictError('Recover unfinished operations before task migration.');
+			if (pending.some(record => !isRejectedLegacyCapture(record, files)) || journal.getRecoveryIssues().length) throw new OperationConflictError('Recover unfinished operations before task migration.');
 			await backupVault(input.vault, input.backup);
 			if (inventoryHash(await readTaskVaultSnapshot(input.repository)) !== input.preview.inventory_hash) throw new OperationConflictError('Vault changed after backup.');
 			receipt = { version: 1, status: 'in_progress', backup: input.backup, preview: input.preview, applied: [] };

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { applyTaskMigration, assertTaskMigrationCommitted, createVaultOperationJournal, diagnoseTaskRelations, findTaskById, makeTaskRelation, maintainTaskNavigation, migrateTaskRecord, NodeFsVaultRepository, parseMarkdown, parseTaskRecord, patchTaskMetadata, pendingTaskMigrations, previewTaskMigration, readTaskVaultSnapshot, requireWritableTaskV2, resolveTaskRelations, restoreVaultBackup, renderTaskRelationProjection, taskPresentationFields, taskTargets, updateTaskRelations } from '../dist/index.js';
+import { NodeFileOperationJournal, computePayloadHash, inspectTaskMigrationReadiness, isRejectedLegacyCapture, applyTaskMigration, assertTaskMigrationCommitted, createVaultOperationJournal, diagnoseTaskRelations, findTaskById, makeTaskRelation, maintainTaskNavigation, migrateTaskRecord, NodeFsVaultRepository, parseMarkdown, parseTaskRecord, patchTaskMetadata, pendingTaskMigrations, previewTaskMigration, readTaskVaultSnapshot, requireWritableTaskV2, resolveTaskRelations, restoreVaultBackup, renderTaskRelationProjection, taskPresentationFields, taskTargets, updateTaskRelations } from '../dist/index.js';
 
 const task = (id, extra = '', body = '# User body\n') => `---\ntype: agent-task\ntask_id: ${id}\nstatus: completed\nstarted_at: 2026-09-01T00:00:00Z\nrepo_path: /work/example\n${extra}---\n${body}`;
 async function fixture(t) {
@@ -170,4 +170,48 @@ test('stale migration preview and edited generated navigation never overwrite us
 	await repository.replaceText(nav.path, nav.version, nav.content + 'User edit\n');
 	assert.ok((await maintainTaskNavigation(repository)).issues.length);
 	assert.match((await repository.readText(nav.path)).content, /User edit/);
+});
+
+
+test('legacy rejected captures do not deadlock migration or rewrite their failed result', async (t) => {
+ const f = await fixture(t);
+ await f.repository.createText('00_tracekeeper/work/tasks/old.md', task('old'));
+ const journal = createVaultOperationJournal(f.vault);
+ const payload = { request_hash: 'a'.repeat(64) };
+ const record = { operation_id: 'capture-source-' + 'b'.repeat(24), idempotency_key: 'rejected-capture', payload_hash: computePayloadHash(payload), payload, status: 'failed', failed_at: '2026-08-30T00:00:00Z', created_at: '2026-08-30T00:00:00Z', updated_at: '2026-08-30T00:00:00Z', completed_steps: [], error: 'Refusing to write potential secret in content: credential assignment.' };
+ await journal.save(record);
+ const files = await readTaskVaultSnapshot(f.repository);
+ const before = await journal.loadById(record.operation_id);
+ const readiness = await inspectTaskMigrationReadiness(f.vault, files);
+ assert.deepEqual(readiness, { blocked: [], rejected: [record.operation_id], issues: [] });
+ for (const change of [{ status: 'in_progress' }, { error: 'unknown write failure' }, { completed_steps: [{name:'write',completed_at:record.created_at}] }, { result: {} }, { payload: {...payload,requestSnapshot:{}} }, { operation_id:'finish-task-'+'b'.repeat(24) }]) {
+  assert.equal(isRejectedLegacyCapture({...record,...change}, files), false);
+ }
+ assert.equal(isRejectedLegacyCapture(record, [...files, {path:'02_archive/owned.md',content:record.operation_id,version:'1'}]), false);
+ const preview = previewTaskMigration(files);
+ await applyTaskMigration({ vault:f.vault,repository:f.repository,preview,backup:path.join(f.root,'backup') });
+ assert.deepEqual(await journal.loadById(record.operation_id), before);
+ assert.equal(parseTaskRecord(parseMarkdown((await f.repository.readText(files[0].path)).content).frontmatter.fields).version, 2);
+});
+
+test('migration readiness remains read-only and keeps unknown failures blocking', async (t) => {
+ const f = await fixture(t);
+ assert.deepEqual(await inspectTaskMigrationReadiness(f.vault, []), {blocked:[],rejected:[],issues:[]});
+ assert.deepEqual(await fs.readdir(f.vault), []);
+ const journal = createVaultOperationJournal(f.vault), payload = {request_hash:'a'.repeat(64)};
+ const record = {operation_id:'capture-source-'+'c'.repeat(24),idempotency_key:'unknown-capture',payload_hash:computePayloadHash(payload),payload,status:'failed',failed_at:'2026-08-30T00:00:00Z',created_at:'2026-08-30T00:00:00Z',updated_at:'2026-08-30T00:00:00Z',completed_steps:[],error:'Unknown outcome'};
+ await journal.save(record);
+ await f.repository.createText('00_tracekeeper/work/tasks/old.md', task('old'));
+ const files = await readTaskVaultSnapshot(f.repository);
+ assert.deepEqual((await inspectTaskMigrationReadiness(f.vault, files)).blocked, [record.operation_id]);
+ await assert.rejects(applyTaskMigration({vault:f.vault,repository:f.repository,preview:previewTaskMigration(files),backup:path.join(f.root,'backup')}), /unfinished/);
+ assert.equal((await f.repository.readText(files[0].path)).content, files[0].content);
+});
+
+
+test('a saturated attention summary cannot hide an uninspected operation', async (t) => {
+ const f = await fixture(t), original = NodeFileOperationJournal.prototype.inspect;
+ NodeFileOperationJournal.prototype.inspect = async function () { return {issues:[],attention:Array.from({length:100},(_,i)=>({id:`capture-source-${i.toString(16).padStart(24,'0')}.json`,status:'failed'}))}; };
+ try { assert.match((await inspectTaskMigrationReadiness(f.vault, [])).issues.join(' '), /truncated/); }
+ finally { NodeFileOperationJournal.prototype.inspect = original; }
 });

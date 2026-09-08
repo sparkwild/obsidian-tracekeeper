@@ -1,3 +1,4 @@
+import { type OperationRecord } from './operation-journal';
 import type { VaultRepository, VaultTextFile } from './vault-repository';
 import { type TaskRelationTarget } from './task-record';
 export declare const TASK_INDEX_ROOT = "00_tracekeeper/work/task_index";
@@ -34,6 +35,14 @@ export interface TaskMaintenancePreview {
 /** 导航只表达组织关系，不为无成果任务生成知识引用。 */
 export declare function planTaskNavigation(files: readonly VaultTextFile[], link?: (target: string, source: string) => string): TaskFileChange[];
 export declare function previewTaskMigration(files: readonly VaultTextFile[], blockedPaths?: readonly string[], link?: (target: string, source: string) => string, sourceReplacements?: ReadonlyMap<string, string>): TaskMaintenancePreview;
+/** 旧捕获的安全校验先于 Source 写入；结合原回执与当前文件证据识别拒绝，保留失败状态。 */
+export declare function isRejectedLegacyCapture(record: OperationRecord, files: readonly VaultTextFile[]): boolean;
+/** 只读迁移门禁：校验拒绝回执的认证结果，保留诊断，但不重放被拒绝的请求。 */
+export declare function inspectTaskMigrationReadiness(vault: string, files: readonly VaultTextFile[]): Promise<{
+    blocked: string[];
+    rejected: string[];
+    issues: string[];
+}>;
 export interface TaskMigrationReceipt {
     version: 1;
     status: 'in_progress' | 'completed';

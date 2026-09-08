@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { App, Modal, Setting } from 'obsidian';
-import { applyTaskMigration, readVerifiedSourceReplacements, createVaultOperationJournal, diagnoseTaskRelations, maintainTaskNavigation, pendingTaskMigrations, previewTaskMigration, readTaskVaultSnapshot, taskTargets, type TaskMaintenancePreview, type VaultRepository } from '@tracekeeper/core';
+import { inspectTaskMigrationReadiness, applyTaskMigration, readVerifiedSourceReplacements, diagnoseTaskRelations, maintainTaskNavigation, pendingTaskMigrations, previewTaskMigration, readTaskVaultSnapshot, taskTargets, type TaskMaintenancePreview, type VaultRepository } from '@tracekeeper/core';
 import { ui } from '../../ui/localization';
 
 export interface TaskMaintenanceHost {
@@ -47,14 +47,14 @@ export class TaskMaintenanceModal extends Modal {
 			.addButton(button => button.setButtonText(ui('只读预览', 'Read-only preview')).setDisabled(this.busy).onClick(() => this.action(async () => {
 				const files = await readTaskVaultSnapshot(this.host.repository);
 				this.preview = previewTaskMigration(files, [], this.host.link, await readVerifiedSourceReplacements(this.host.vaultRoot, new Map(taskTargets(files).map((target) => [target.path, target.contentHash!]))));
-				const journal = createVaultOperationJournal(this.host.vaultRoot);
-				const health = await journal.inspect();
-				if (health.attention.length || health.issues.length) {
+				const health = await inspectTaskMigrationReadiness(this.host.vaultRoot, files);
+				if (health.blocked.length || health.issues.length) {
 					this.preview = null;
 					throw new Error(ui('先在对应业务入口恢复未完成操作或检查损坏记录，再生成迁移预览。', 'Recover unfinished operations or inspect corrupt records in their owning workflow before migration.'));
 				}
 				const issues = diagnoseTaskRelations(taskTargets(files));
 				this.message = ui(`诊断 ${issues.length} 项；旧任务 ${this.preview.legacy_tasks} 个，预计修改 ${this.preview.changes.length} 个文件。`, `${issues.length} diagnostics; ${this.preview.legacy_tasks} historical tasks; ${this.preview.changes.length} planned file changes.`);
+				if (health.rejected.length) this.message += ui(` 已保留 ${health.rejected.length} 条历史安全拒绝记录，不重放请求。`, ` Retained ${health.rejected.length} historical security rejections without replay.`);
 			})))
 			.addButton(button => button.setButtonText(ui('检查中断迁移', 'Inspect interrupted migration')).setDisabled(this.busy).onClick(() => this.action(async () => {
 				const pending = await pendingTaskMigrations(this.host.vaultRoot);
@@ -76,8 +76,8 @@ export class TaskMaintenanceModal extends Modal {
 		new Setting(el).setName(ui('任务导航', 'Task navigation')).addButton(button => button.setButtonText(ui('重建导航', 'Rebuild navigation')).setDisabled(this.busy).onClick(() => this.action(async () => {
 			await this.host.pause();
 			try {
-				const journal = createVaultOperationJournal(this.host.vaultRoot);
-				if ((await journal.listRecoverable()).length) throw new Error(ui('先完成在途操作。', 'Finish pending operations first.'));
+				const health = await inspectTaskMigrationReadiness(this.host.vaultRoot, await readTaskVaultSnapshot(this.host.repository));
+				if (health.blocked.length || health.issues.length) throw new Error(ui('先完成在途操作。', 'Finish pending operations first.'));
 				const result = await maintainTaskNavigation(this.host.repository, this.host.link);
 				this.message = ui(`更新 ${result.updated} 个文件；待处理 ${result.issues.length} 项。`, `Updated ${result.updated} files; ${result.issues.length} items need attention.`);
 				if (result.issues.length) this.message += '\n' + result.issues.map((row) => `${row.path}: ${row.reason}`).join('\n');
