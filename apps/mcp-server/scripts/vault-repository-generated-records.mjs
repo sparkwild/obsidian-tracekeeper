@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { callTool } = require('@tracekeeper/mcp-runtime');
-const { NodeFileOperationJournal, NodeFsVaultRepository } = require('@tracekeeper/core');
+const { createVaultOperationJournal, logDirectory, NodeFsVaultRepository } = require('@tracekeeper/core');
 
 const AGENT_ACTIVITY_DIR = '00_tracekeeper/control/agent_activity';
 const AGENT_ACTIVITY_SHARD_PATH_PATTERN =
@@ -128,11 +128,10 @@ function readAuditShards(vaultRoot) {
 }
 
 async function readFinishTaskJournal(vaultRoot) {
-	const operationDirectory = path.join(vaultRoot, '00_tracekeeper/control/operations');
+	const operationDirectory = logDirectory(vaultRoot);
 	const filename = fs.readdirSync(operationDirectory).find((entry) => entry.startsWith('finish-task-') && entry.endsWith('.json'));
 	assert.ok(filename, 'finish_task operation journal should exist');
-	const record = await new NodeFileOperationJournal({ directory: operationDirectory })
-		.loadById(filename.slice(0, -'.json'.length));
+	const record = await createVaultOperationJournal(vaultRoot).loadById(filename.slice(0, -'.json'.length));
 	assert.ok(record, 'finish_task operation journal should be readable');
 	return record;
 }

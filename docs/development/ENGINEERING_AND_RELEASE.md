@@ -315,59 +315,81 @@ material in its established task location.
 
 ## Release Contract
 
-The release workflow is `.github/workflows/release.yml`. Its build job checks
-out a pushed strict version tag with full history, runs the full verification
-and package flow under read-only repository permission, runs the release-scale
-1k knowledge-index benchmark on the GitHub-hosted candidate machine and retains
-its sanitized report artifact, generates release-asset
-attestations, and transfers one exact Actions artifact named by version and
-checked commit. A separate write-enabled job revalidates the tag and default
-branch before creating an unpublished GitHub Draft Release containing exactly
-`main.js`, `manifest.json`, and `styles.css`.
+Use `main` for integration and short feature and fix branches for PRs. Each
+formal version has one protected `X.Y.Z` tag. If an older line needs ongoing
+support, create `maint/X.Y` from its published tag after defining its support
+scope and adding a release gate for that line. The current publication path
+serves the active `main` line.
 
-Formal 20k diagnostics remain a separate manually dispatched workflow on a
-qualified runner. They do not block an ordinary release because a standard
-GitHub-hosted runner does not represent the dedicated-machine performance
-boundary and may hit the worker timeout before returning a sample.
+[Plugin CI](../../.github/workflows/ci.yml) runs `npm ci`, `npm run verify`, and
+the tracked-output check for PRs to `main`, pushes to `main`, and manual
+verification. A manual run takes a full SHA reachable from the selected `main`
+or `release/*` branch. Push and manual runs retain the three plugin files and
+`SHA256SUMS` in a SHA-named Actions artifact for 14 days. This check uses
+read-only repository permissions. Its artifact is for verification in a
+disposable Vault.
 
-The Draft Release is the qualification boundary: install and smoke checks use
-those attached files. An explicit manual workflow dispatch accepts only the
-strict version, downloads the same three draft assets, verifies their
-attestations and manifest version, confirms that the tag remains on the default
-branch and that the default-branch manifest still advertises that version, then
-publishes the existing draft without rebuilding or replacing its assets. The
-workflow refuses to create a release when that version already exists and never
-uses clobbering. This is workflow-enforced no-replacement policy, not a claim
-that repository-level GitHub Immutable Releases is enabled.
+### Publish and promote
 
-For a plugin already listed in Obsidian Community Plugins, publishing a matching
-GitHub Release with the required assets is the normal update distribution path;
-it is not a new registry-submission workflow for every version. Tracekeeper's
-attestations, Draft Release qualification, and install smoke remain stricter
-internal release policy. Community availability and the displayed Scorecard are
-post-publication distribution observations, not reasons to repeat
-pre-publication product or performance qualification.
+Obsidian reads the stable version from the default branch's root `manifest.json`
+and fetches the matching public GitHub Release. Keep that version at the last
+published build until the next Release has its verified attachments.
 
-Release requirements:
+1. From the current `main` head, open one maintainer-owned `release/X.Y.Z` PR
+   to `main`. Put the version change, changelog, and resulting generated files
+   in a single commit. A version bump with `npm version X.Y.Z --no-git-tag-version`
+   runs the version hook and stages its changes. Review them and include any
+   rebuilt tracked output before committing. The tag, root and plugin
+   manifests, workspace and lockfile versions, and MCP metadata must agree.
+   Set the minimum Obsidian version in both manifests. When raising it, keep
+   the last compatible stable version selectable in `versions.json` and add the
+   new boundary. Preserve existing mappings.
+2. When **Verify plugin** passes, push the exact `X.Y.Z` tag for the PR head.
+   Keep `main` and the candidate fixed until promotion. The tag workflow
+   verifies the open PR, builds the exact commit, checks tracked output, runs
+   the 1k knowledge-index benchmark, and attests the three package files.
+   A separate job creates an unpublished draft or resumes an identical
+   partial draft by uploading only the missing files. The manual 5k and 20k
+   benchmark diagnostics remain a separate workflow.
+3. Qualify the draft's `main.js`, `manifest.json`, and `styles.css` in a
+   disposable Vault. Select the product acceptance rows from the change-impact
+   map and record the exact candidate and attachment hashes.
+4. Manually dispatch **Release Plugin** from `main` with the version. The
+   workflow rechecks the PR and tag, downloads and verifies the three draft
+   assets and their attestations, and publishes that draft as the latest
+   GitHub Release.
+5. Rerun the failed **Community release** check on the PR after publication.
+   It checks the tag, proposed merge tree, and public release assets. Merge
+   with **Create a merge commit** to retain the tagged commit in `main` history.
+   Verify public asset hashes, community installation and update, and the
+   displayed Scorecard after the manifest is visible. Test the fallback on an
+   older Obsidian version when the compatibility floor changes.
 
-1. Keep versions aligned across root and plugin manifests, workspace packages,
-   client metadata, and MCP server metadata. Add a `versions.json` entry only
-   when `minAppVersion` changes; an unchanged compatibility floor uses the most
-   recent earlier mapping.
-2. Run `npm run verify` from the intended release commit.
-3. Use a strict `x.y.z` version matching `manifest.json`. Push that exact tag
-   only after the release commit is the default-branch head; the tag workflow
-   performs the full build and creates the Draft Release.
-4. Download the attested `main.js`, `manifest.json`, and `styles.css` directly
-   from the Draft Release for install and smoke qualification. Do not replace
-   or supplement the draft assets after qualification.
-5. After qualification, manually dispatch the workflow with only that version.
-   The publish job verifies the existing draft and its attached attestations,
-   then changes the draft to a public release without another build.
-6. Never overwrite or clobber an existing release. Corrective bytes require a
-   new version, qualification identity, and tag.
-7. Verify release assets, attestations, Community Plugins install/update, and
-   the displayed safety Scorecard; do not substitute unattested local uploads.
+The tag and published assets are the version's identity. A rerun may finish an
+identical draft, while conflicting bytes, a moved tag, or an existing public
+Release stop the write. Corrected bytes require a fresh version and tag. If
+publication succeeds before the PR can merge, Obsidian still uses the previous
+stable version. Resolve the promotion check against the published candidate
+or qualify a new version if the merge tree changed. Fix a public regression
+with a higher patch version. Use a separate Vault backup if recovery requires
+reversing a data migration.
+
+### Repository settings and recovery
+
+- Keep `main` protected by a PR, block forced updates and deletion, and enforce
+  the protections for administrators. Once both checks work on normal and
+  fork PRs, require **Verify plugin** and **Community release** with the branch
+  up to date. A single maintainer can review their own change with zero
+  required approvals and explicitly dispatch publication.
+- Restrict creation of release tags to the maintainer and separately protect
+  them from updates or deletion. Tag workflows come from the tagged commit.
+  Tag new releases only from the verified PR workflow above. GitHub Immutable
+  Releases can lock future releases after the workflow has been exercised.
+- Before retiring legacy refs, inventory open PRs, links, and consumers. Keep
+  a restorable Git copy that retains the exact refs and commits, plus a copy
+  of the published attachments, checksums, and release metadata. Restore a
+  needed branch under its original name and SHA. Actions artifacts expire
+  after their retention period.
 
 Recheck the current official references at release time:
 

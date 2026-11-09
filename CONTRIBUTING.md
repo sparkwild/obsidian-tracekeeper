@@ -33,6 +33,8 @@ Narrower commands are listed in the [engineering guide](./docs/development/ENGIN
 
 ## Pull Requests
 
+- Start a short feature or fix branch from `main` and open the PR against `main`.
+- Leave version bumps to the maintainer's [release PR](./docs/development/ENGINEERING_AND_RELEASE.md#release-contract).
 - Keep changes focused.
 - Explain user-facing behavior changes clearly.
 - Call out changes to vault paths, MCP tools, permissions, review state, or client configuration.
