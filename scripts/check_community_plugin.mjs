@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 
 import { resolveMinimumAppVersion } from './version_compatibility.mjs';
 
@@ -77,48 +78,36 @@ function main() {
 	assert(!communityEntry.description.toLowerCase().includes('this plugin'), 'Description should describe behavior directly, without "this plugin".');
 	assert(/[.?!)]$/.test(communityEntry.description), 'Description must end with punctuation.');
 	assert(communityEntry.description.length <= 250, 'Description must be 250 characters or fewer.');
-	assert(/^\d+\.\d+\.\d+$/.test(manifest.version), 'Version must use strict x.y.z SemVer.');
 	assert(resolveMinimumAppVersion(versions, manifest.version) === manifest.minAppVersion, 'versions.json must resolve the current plugin version to minAppVersion.');
 	assert(manifest.authorUrl !== 'https://obsidian.md', 'authorUrl must not point to the Obsidian website.');
 	assert(!manifest.authorUrl?.toLowerCase().includes(`github.com/${REPOSITORY.toLowerCase()}`), 'authorUrl must not point to the plugin repository.');
 
-	for (const key of ['id', 'name', 'version', 'minAppVersion', 'description', 'author', 'authorUrl', 'isDesktopOnly']) {
-		assert(pluginManifest[key] === manifest[key], `Plugin manifest ${key} must match root manifest.`);
-	}
+	assert(isDeepStrictEqual(pluginManifest, manifest), 'Plugin manifest must match root manifest.');
 	assert(pluginPackage.version === manifest.version, 'Plugin package version must match root manifest.');
 	assert(pluginPackage.description === manifest.description, 'Plugin package description must match root manifest.');
+	assert(rootPackage.version === manifest.version, 'Root package version must match root manifest.');
+	const rootLock = readJson('package-lock.json');
+	assert(rootLock.version === manifest.version && rootLock.packages[''].version === manifest.version, 'Root lockfile version must match root manifest.');
+	for (const workspace of rootPackage.workspaces) {
+		assert(readJson(workspace + '/package.json').version === manifest.version, workspace + ' version must match root manifest.');
+		assert(rootLock.packages[workspace].version === manifest.version, workspace + ' must have the same version in the root lockfile.');
+		const workspaceLockPath = workspace + '/package-lock.json';
+		if (fs.existsSync(workspaceLockPath)) {
+			const lock = readJson(workspaceLockPath);
+			assert(lock.version === manifest.version && lock.packages[''].version === manifest.version, workspace + ' lockfile must match root manifest.');
+		}
+	}
 	assert(mcpHandler.includes(`MCP_SERVER_VERSION = '${manifest.version}'`), 'MCP server version constant must match root manifest.');
 	assert(pluginMain.includes('StreamableHttpMcpRuntime'), 'Plugin must compose the shared MCP runtime package.');
 	assert(releaseWorkflow.includes('workflow_dispatch:'), 'Release workflow must support explicit publication of a qualified draft.');
-	assert(releaseWorkflow.includes("build:\n    if: github.event_name == 'push'"), 'Strict version tag pushes must build the release candidate.');
 	assert(releaseWorkflow.includes('id-token: write'), 'Release workflow must grant id-token: write for artifact attestations.');
 	assert(releaseWorkflow.includes('attestations: write'), 'Release workflow must grant attestations: write.');
 	assert(!releaseWorkflow.includes('artifact-metadata: write'), 'Binary release attestation must not receive unused artifact-metadata write permission.');
 	assert(releaseWorkflow.includes('actions/attest@'), 'Release workflow must generate GitHub artifact attestations.');
-	assert(releaseWorkflow.includes('fetch-depth: 0'), 'Release workflow must fetch the version tag before binding it to the checked commit.');
-	assert(releaseWorkflow.split('refs/tags/$VERSION^{commit}').length - 1 >= 3, 'Build, draft, and publish jobs must resolve the exact version tag commit.');
-	assert(releaseWorkflow.includes('TAG_SHA') && releaseWorkflow.includes('CHECKED_SHA'), 'Release workflow must reject a version tag and checkout SHA mismatch.');
 	assert(releaseWorkflow.includes('actions/upload-artifact@'), 'Release workflow must transfer exact candidate assets without rebuilding them.');
-	assert(releaseWorkflow.includes("draft:\n    needs: build\n    if: github.event_name == 'push'"), 'Tag qualification must create a draft in a separate write-enabled job.');
-	assert(releaseWorkflow.includes('Create GitHub draft release') && releaseWorkflow.includes('--draft'), 'Qualified tag assets must enter an unpublished GitHub draft release.');
-	assert(releaseWorkflow.includes('--generate-notes'), 'Draft release creation must include release notes.');
-	assert(releaseWorkflow.includes("publish:\n    if: github.event_name == 'workflow_dispatch'"), 'Release publication must require an explicit manual workflow dispatch.');
-	assert(releaseWorkflow.includes('gh release download "$VERSION"'), 'Publication must download the exact draft release assets.');
-	assert(releaseWorkflow.includes('gh attestation verify "candidate/$asset"'), 'Publication must verify every downloaded draft asset attestation.');
-	assert(releaseWorkflow.includes('gh release edit "$VERSION" --draft=false'), 'Publication must promote the verified draft without rebuilding or replacing assets.');
-	assert(releaseWorkflow.includes("'.isDraft'"), 'Publication must require the target release to remain an unpublished draft.');
-	assert(!releaseWorkflow.includes('expected_main_sha256') && !releaseWorkflow.includes('expected_manifest_sha256') && !releaseWorkflow.includes('expected_styles_sha256'), 'Publication must not require manually copied candidate hashes.');
-	assert(!releaseWorkflow.includes('sha256sum'), 'Publication must verify the draft assets directly instead of hashing a second build.');
-	assert(releaseWorkflow.split('refs/remotes/origin/$DEFAULT_BRANCH').length - 1 >= 3, 'Build, draft, and publish jobs must validate the default branch.');
-	assert(releaseWorkflow.includes('git merge-base --is-ancestor "$TAG_SHA" "$DEFAULT_SHA"'), 'Publication must require the release tag to remain on the default branch.');
-	assert(releaseWorkflow.includes('DEFAULT_MANIFEST_VERSION') && releaseWorkflow.includes('Default-branch manifest version'), 'Publication must require the default-branch manifest to advertise the release version.');
-	assert(releaseWorkflow.includes('Revalidate draft identity') && releaseWorkflow.includes('refusing draft creation'), 'Draft creation must revalidate tag and default-branch identity after the build.');
-	assert(releaseWorkflow.includes('already exists; refusing to replace its assets'), 'Release workflow must refuse existing release replacement.');
-	assert(releaseWorkflow.includes('--verify-tag'), 'Release creation must require the existing strict version tag.');
-	assert(!releaseWorkflow.includes('--clobber'), 'Release workflow must never clobber existing release assets.');
-	assert(releaseWorkflow.includes('apps/obsidian-plugin/plugin/main.js'), 'Release workflow must upload the packaged main.js.');
-	assert(releaseWorkflow.includes('apps/obsidian-plugin/plugin/manifest.json'), 'Release workflow must upload the packaged manifest.json.');
-	assert(releaseWorkflow.includes('apps/obsidian-plugin/plugin/styles.css'), 'Release workflow must upload the packaged styles.css.');
+	for (const phase of ['source', 'draft', 'publish']) {
+		assert(releaseWorkflow.includes('node scripts/plugin_release.mjs ' + phase), 'Release workflow must use the shared ' + phase + ' policy.');
+	}
 
 	assert(rootPackage.scripts?.['verify:codex-safe'] === 'bash ./scripts/verify_codex_safe.sh', 'Root package must expose the bounded Codex-safe verification lane.');
 	assert(rootPackage.scripts?.['qa:external-loopback'] === 'bash ./scripts/qa_external_loopback.sh', 'Root package must expose the guarded external loopback QA lane.');

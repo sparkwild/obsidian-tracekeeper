@@ -53,6 +53,7 @@ rootPackage.version = targetVersion;
 writeJson('package.json', rootPackage);
 
 const manifest = readJson('manifest.json');
+const previousVersion = manifest.version;
 manifest.version = targetVersion;
 writeJson('manifest.json', manifest);
 
@@ -100,7 +101,7 @@ replaceInFile(
 	`options.runtimeVersion?.trim() || '${targetVersion}';`
 );
 const versions = readJson('versions.json');
-if (ensureVersionCompatibilityBoundary(versions, targetVersion, manifest.minAppVersion)) {
+if (ensureVersionCompatibilityBoundary(versions, targetVersion, manifest.minAppVersion, previousVersion)) {
 	writeJson('versions.json', versions);
 }
 

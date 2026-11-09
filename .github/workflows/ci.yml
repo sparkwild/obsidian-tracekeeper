@@ -1,0 +1,93 @@
+name: Plugin CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full SHA reachable from the selected main or release branch.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
+          persist-credentials: false
+
+      - name: Select manual verification candidate
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main && "$GITHUB_REF" != refs/heads/release/* ]]; then
+            echo "Select main or a release branch for manual verification."
+            exit 1
+          fi
+          if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || ! git merge-base --is-ancestor "$CANDIDATE_SHA" HEAD; then
+            echo "Provide a full commit SHA reachable from the selected branch."
+            exit 1
+          fi
+          git checkout --detach "$CANDIDATE_SHA"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.x
+
+      - name: Verify and package
+        id: verify
+        run: |
+          npm ci
+          npm run verify
+          git diff --exit-code -- apps/mcp-server/dist packages/core/dist packages/contracts/dist packages/mcp-runtime/dist
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          cmp apps/obsidian-plugin/manifest.json apps/obsidian-plugin/plugin/manifest.json
+          cd apps/obsidian-plugin/plugin
+          test -s main.js
+          test -s styles.css
+          sha256sum main.js manifest.json styles.css > SHA256SUMS
+
+      - name: Retain the checked package
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tracekeeper-check-${{ steps.verify.outputs.sha }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: apps/obsidian-plugin/plugin/
+
+  community-release:
+    name: Community release
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.x
+
+      - name: Check the public assets before advancing the community version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/plugin_release.mjs promote

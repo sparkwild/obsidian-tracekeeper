@@ -11,7 +11,7 @@
 		"apps/obsidian-plugin"
 	],
 	"scripts": {
-		"community:check": "node ./scripts/check_community_plugin.mjs && node --test ./scripts/version_compatibility.test.mjs",
+		"community:check": "node ./scripts/check_community_plugin.mjs && node --test ./scripts/version_compatibility.test.mjs ./scripts/plugin_release.test.mjs",
 		"eval:agent-initiative": "node ./evals/agent-initiative/evaluator/run-eval.mjs --check-baseline",
 		"eval:agent-initiative:real": "node ./evals/agent-initiative/real/runner.mjs",
 		"eval:agent-builds": "node ./evals/agent-initiative/real/compare-builds.mjs",
